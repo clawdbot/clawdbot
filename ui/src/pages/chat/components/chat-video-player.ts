@@ -29,6 +29,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
 
   private media: HTMLVideoElement | null = null;
   private readonly sourceController = new ChatMediaSourceController();
+  private currentSourceFailed = false;
   private readinessController: AbortController | null = null;
   private readinessKey = "";
   private readySource = "";
@@ -73,9 +74,9 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
         }
         if (this.media) {
           this.sourceController.reset(this.media);
+          this.currentSourceFailed = false;
         }
       }
-      this.failed = false;
       this.syncSource();
     }
   }
@@ -95,18 +96,22 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       this.playback === "transcode" ? appendChatMediaPlaybackParam(source) : source;
     const hasCurrentAttachmentSource =
       this.sourceController.currentIdentity === this.sourceIdentity.trim();
+    const hasUsableCurrentAttachmentSource =
+      hasCurrentAttachmentSource && !this.currentSourceFailed;
     if (this.playback !== "transcode") {
       this.readinessController?.abort();
       this.readinessController = null;
       this.readinessKey = "";
       this.readySource = playbackSource;
       this.preparing = false;
+      this.failed = false;
+      this.currentSourceFailed = false;
       this.sourceController.updateSource(media, playbackSource, this.sourceIdentity);
       return;
     }
 
     const readinessKey = `${playbackSource}\0${this.authToken?.trim() ?? ""}`;
-    if (!hasCurrentAttachmentSource) {
+    if (!hasUsableCurrentAttachmentSource) {
       this.metadataLoaded = false;
       this.preparing = true;
     }
@@ -124,14 +129,14 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     this.readinessController = controller;
     this.readinessKey = readinessKey;
     this.readySource = "";
-    this.preparing = !hasCurrentAttachmentSource;
+    this.preparing = !hasUsableCurrentAttachmentSource;
     this.failed = false;
     void waitForChatMediaPlayback({
       source: playbackSource,
       authToken: this.authToken,
       signal: controller.signal,
       onPreparing: () => {
-        if (this.readinessController === controller && !hasCurrentAttachmentSource) {
+        if (this.readinessController === controller && !hasUsableCurrentAttachmentSource) {
           this.preparing = true;
         }
       },
@@ -141,7 +146,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       }
       this.preparing = false;
       if (result !== "ready") {
-        if (hasCurrentAttachmentSource) {
+        if (hasUsableCurrentAttachmentSource) {
           this.readySource = this.sourceController.currentSource;
           return;
         }
@@ -150,6 +155,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       }
       this.readySource = playbackSource;
       this.failed = false;
+      this.currentSourceFailed = false;
       this.sourceController.updateSource(media, playbackSource, this.sourceIdentity);
     });
   }
@@ -205,6 +211,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
               this.sourceController.handleLoadedMetadata(this.media);
               this.metadataLoaded = true;
               this.failed = false;
+              this.currentSourceFailed = false;
               this.onMediaLoaded?.();
             }}
             @ended=${() => {
@@ -221,6 +228,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
             @error=${() => {
               if (this.media && !this.sourceController.handleError(this.media)) {
                 this.failed = true;
+                this.currentSourceFailed = true;
               }
             }}
           ></video>

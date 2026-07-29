@@ -107,6 +107,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   private media: HTMLAudioElement | null = null;
   private readonly sourceController = new ChatMediaSourceController();
+  private currentSourceFailed = false;
   private readonly cancelPendingResume = () => this.sourceController.cancelPendingResume();
   private readinessController: AbortController | null = null;
   private readinessKey = "";
@@ -175,9 +176,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         }
         if ((sourceIdentityChanged || changedProperties.has("authToken")) && this.media) {
           this.sourceController.reset(this.media);
+          this.currentSourceFailed = false;
         }
       }
-      this.failed = false;
       this.syncSource();
     }
   }
@@ -200,6 +201,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.playback === "transcode" ? appendChatMediaPlaybackParam(source) : source;
     const hasCurrentAttachmentSource =
       this.sourceController.currentIdentity === this.sourceIdentity.trim();
+    const hasUsableCurrentAttachmentSource =
+      hasCurrentAttachmentSource && !this.currentSourceFailed;
     if (this.playback !== "transcode") {
       this.readinessController?.abort();
       this.readinessController = null;
@@ -208,6 +211,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.preparing = false;
       this.playbackReady = true;
       this.readySource = playbackSource;
+      this.failed = false;
+      this.currentSourceFailed = false;
       this.sourceController.updateSource(media, playbackSource, this.sourceIdentity);
       return;
     }
@@ -221,15 +226,15 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     this.readinessController = controller;
     this.readinessKey = readinessKey;
     this.readySource = "";
-    this.preparing = !hasCurrentAttachmentSource;
-    this.playbackReady = hasCurrentAttachmentSource;
+    this.preparing = !hasUsableCurrentAttachmentSource;
+    this.playbackReady = hasUsableCurrentAttachmentSource;
     this.failed = false;
     const pending = waitForChatMediaPlayback({
       source: playbackSource,
       authToken: this.authToken,
       signal: controller.signal,
       onPreparing: () => {
-        if (this.readinessController === controller && !hasCurrentAttachmentSource) {
+        if (this.readinessController === controller && !hasUsableCurrentAttachmentSource) {
           this.preparing = true;
         }
       },
@@ -239,7 +244,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       }
       this.preparing = false;
       if (result !== "ready") {
-        if (hasCurrentAttachmentSource) {
+        if (hasUsableCurrentAttachmentSource) {
           this.readySource = this.sourceController.currentSource;
           this.playbackReady = true;
           return true;
@@ -251,6 +256,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.readySource = playbackSource;
       this.playbackReady = true;
       this.failed = false;
+      this.currentSourceFailed = false;
       this.sourceController.updateSource(media, playbackSource, this.sourceIdentity);
       return true;
     });
@@ -591,6 +597,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
             this.duration = Number.isFinite(this.media.duration) ? this.media.duration : 0;
             this.currentTime = this.media.currentTime;
             this.failed = false;
+            this.currentSourceFailed = false;
             this.updateBuffered();
             this.onMediaLoaded?.();
           }}
@@ -627,6 +634,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
               releaseChatAudioPlayback(this.media);
               this.playing = false;
               this.failed = true;
+              this.currentSourceFailed = true;
             }
           }}
         ></audio>
