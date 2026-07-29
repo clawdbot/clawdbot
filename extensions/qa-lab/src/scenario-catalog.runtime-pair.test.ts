@@ -31,6 +31,22 @@ describe("QA runtime-pair scenario catalog", () => {
     );
   });
 
+  it("scopes capability-flip image evidence to the current mock request cursor", () => {
+    const scenario = readQaScenarioById("config-restart-capability-flip");
+    const flow = JSON.stringify(scenario.execution.flow);
+    const cursorIndex = flow.indexOf('"set":"requestCursorBeforeImage"');
+    const imageTurnIndex = flow.indexOf('"message":{"expr":"config.imagePrompt"}');
+    const scopedRequests = "/debug/requests?after=${requestCursorBeforeImage}";
+
+    expect(scenario.runtimePairLane).toBe("core");
+    expect(cursorIndex).toBeGreaterThanOrEqual(0);
+    expect(imageTurnIndex).toBeGreaterThanOrEqual(0);
+    expect(cursorIndex).toBeLessThan(imageTurnIndex);
+    expect(flow).toContain("/debug/request-cursor");
+    expect(flow.split(scopedRequests)).toHaveLength(4);
+    expect(flow).not.toContain("`${env.mock.baseUrl}/debug/requests`");
+  });
+
   it("keeps runtime-pair membership independent from provider eligibility", () => {
     const liveRequiredScenarioIds = [
       "issue-109025-completion-policy-live",
