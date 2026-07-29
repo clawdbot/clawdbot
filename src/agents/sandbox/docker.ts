@@ -84,6 +84,7 @@ export async function execDockerRaw(
 }
 
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
@@ -110,6 +111,7 @@ import {
 const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
+const sandboxContainerLifecycleQueue = new KeyedAsyncQueue();
 
 type ExecDockerOptions = ExecDockerRawOptions;
 
@@ -493,17 +495,32 @@ async function readContainerConfigHash(containerName: string): Promise<string | 
   return await readDockerContainerLabel(containerName, "openclaw.configHash");
 }
 
-export async function ensureSandboxContainer(params: {
+type EnsureSandboxContainerParams = {
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
   requireCurrentConfig?: boolean;
-}) {
+};
+
+export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const containerName = buildSandboxContainerName(params.cfg.docker.containerPrefix, slug);
+
+  // Independent agent runs can converge on one Docker resource. Serialize the
+  // full lifecycle so followers re-read state after create, start, or replace.
+  return await sandboxContainerLifecycleQueue.enqueue(containerName, async () => {
+    return await ensureSandboxContainerLifecycle(params, scopeKey, containerName);
+  });
+}
+
+async function ensureSandboxContainerLifecycle(
+  params: EnsureSandboxContainerParams,
+  scopeKey: string,
+  containerName: string,
+) {
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,

@@ -1,10 +1,17 @@
 import type { LiveTransportQaCommandOptions } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaSuiteCommand } from "../../cli.runtime.js";
+import {
+  resolveQaExecutionShard,
+  selectQaExecutionShardScenarioIds,
+} from "../../execution-sharding.js";
 import type { QaProviderMode } from "../../providers/index.js";
-import { normalizeQaProviderMode } from "../../run-config.js";
+import { defaultQaModelForMode, normalizeQaProviderMode } from "../../run-config.js";
+
+const QA_EXECUTION_SHARD_ENV = "OPENCLAW_QA_EXECUTION_SHARD";
 
 type LiveTransportScenarioSelection = (params: {
   profile?: string;
+  primaryModel: string;
   providerMode: QaProviderMode;
   scenarioIds?: readonly string[];
 }) => string[];
@@ -36,6 +43,14 @@ export async function runLiveTransportQaSuiteCommand(params: {
     options.providerMode === undefined
       ? params.defaultProviderMode
       : normalizeQaProviderMode(options.providerMode);
+  const primaryModel = options.primaryModel?.trim() || defaultQaModelForMode(providerMode);
+  const selectedScenarioIds = params.selectScenarioIds({
+    profile: options.profile,
+    primaryModel,
+    providerMode,
+    scenarioIds: options.scenarioIds,
+  });
+  const executionShard = resolveQaExecutionShard(process.env[QA_EXECUTION_SHARD_ENV]);
   return runQaSuiteCommand({
     repoRoot: options.repoRoot,
     outputDir: options.outputDir,
@@ -48,11 +63,9 @@ export async function runLiveTransportQaSuiteCommand(params: {
     channelDriver: "live",
     channel: params.channelId,
     concurrency: 1,
-    scenarioIds: params.selectScenarioIds({
-      profile: options.profile,
-      providerMode,
-      scenarioIds: options.scenarioIds,
-    }),
+    scenarioIds: executionShard
+      ? selectQaExecutionShardScenarioIds(selectedScenarioIds, executionShard)
+      : selectedScenarioIds,
     sutAccountId: options.sutAccountId,
     ...(params.credentialMode === "env-only"
       ? {}

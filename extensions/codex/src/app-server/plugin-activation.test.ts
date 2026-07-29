@@ -129,9 +129,9 @@ describe("Codex plugin activation", () => {
         if (method === "config/mcpServer/reload") {
           return {};
         }
-        if (method === "app/list") {
-          expectBooleanParam(params, "forceRefetch", true);
-          return { data: [], nextCursor: null } satisfies v2.AppsListResponse;
+        if (method === "app/installed") {
+          expectBooleanParam(params, "forceRefresh", true);
+          return { apps: [] } satisfies v2.AppsInstalledResponse;
         }
         throw new Error(`unexpected request ${method}`);
       },
@@ -149,7 +149,7 @@ describe("Codex plugin activation", () => {
       "skills/list",
       "hooks/list",
       "config/mcpServer/reload",
-      "app/list",
+      "app/installed",
     ]);
     expect(pluginListCalls).toBe(2);
     expect(
@@ -182,8 +182,8 @@ describe("Codex plugin activation", () => {
         if (method === "config/mcpServer/reload") {
           return {};
         }
-        if (method === "app/list") {
-          throw new Error("app/list unavailable");
+        if (method === "app/installed") {
+          throw new Error("app/installed unavailable");
         }
         throw new Error(`unexpected request ${method}`);
       },
@@ -196,7 +196,7 @@ describe("Codex plugin activation", () => {
     });
     expect(result.diagnostics).toEqual([
       {
-        message: "Codex app inventory refresh skipped: app/list unavailable",
+        message: "Codex app inventory refresh skipped: app/installed unavailable",
       },
     ]);
     expect(appCache.getRevision()).toBeGreaterThan(0);

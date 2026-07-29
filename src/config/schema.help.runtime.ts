@@ -444,6 +444,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
+  "skills.workshop.autonomous.mode":
+    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals through the normal scanner-gated Workshop path. Default: "auto".',
   "skills.workshop.allowSymlinkTargetWrites":
     "Allows Skill Workshop apply to write through symlinked workspace skill paths whose real target is already trusted by skills.load.allowSymlinkTargets. Keep disabled unless operators intentionally want generated proposal applies to mutate those shared skill roots.",
   approvals:

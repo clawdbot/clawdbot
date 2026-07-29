@@ -255,6 +255,21 @@ export class SessionHistorySseState {
     return this.sentHistory;
   }
 
+  retainRecentMessages(maxMessages: number): PaginatedSessionHistory {
+    if (this.sentHistory.messages.length <= maxMessages) {
+      return this.snapshot();
+    }
+
+    const messages = this.sentHistory.messages.slice(-maxMessages);
+    const firstSeq = resolveMessageSeq(messages[0]);
+    this.sentHistory = buildPaginatedSessionHistory({
+      messages,
+      hasMore: true,
+      ...(firstSeq !== undefined ? { nextCursor: String(firstSeq) } : {}),
+    });
+    return this.snapshot();
+  }
+
   appendInlineMessage(update: {
     message: unknown;
     messageId?: string;

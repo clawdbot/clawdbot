@@ -12,6 +12,7 @@ import {
   resolveTextChunksWithFallback,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   chunkTextForOutbound,
   normalizeStringEntries,
@@ -24,12 +25,6 @@ import { createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
-
-function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
 
@@ -143,7 +138,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       presentation,
       text: payload.text,
     });
-    const msteamsData = asObjectRecord(payload.channelData?.msteams) ?? {};
+    const msteamsData = asOptionalRecord(payload.channelData?.msteams) ?? {};
     return {
       ...payload,
       channelData: {
@@ -168,7 +163,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     onDeliveryResult,
   }) => {
     try {
-      const msteamsData = asObjectRecord(payload.channelData?.msteams);
+      const msteamsData = asOptionalRecord(payload.channelData?.msteams);
       const presentationCard = msteamsData?.presentationCard;
       if (
         presentationCard &&

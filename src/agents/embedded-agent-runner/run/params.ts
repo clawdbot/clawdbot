@@ -155,6 +155,8 @@ export type RunEmbeddedAgentParams = {
   disableTrajectory?: boolean;
   /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
   skillWorkshopProposalOnly?: boolean;
+  /** Mark proposals created by this internal review as autonomous captures. */
+  skillWorkshopAutonomousCapture?: boolean;
   /** Preserve the foreground run as proposal provenance for an internal review run. */
   skillWorkshopOrigin?: SkillProposalOrigin;
   /** Run-scoped mutation budget shared across internal runner attempts. */

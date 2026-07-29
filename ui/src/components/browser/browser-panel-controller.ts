@@ -127,7 +127,8 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private reportError(error: unknown): void {
-    this.setState("errorText", error instanceof Error ? error.message : String(error));
+    const detail = error instanceof Error ? error.message : String(error);
+    this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 
   async refreshAll(): Promise<void> {

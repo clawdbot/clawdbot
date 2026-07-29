@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { pluginSecretRefSetup } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
@@ -76,10 +77,6 @@ function writeLine(message = ""): void {
 
 function writeJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {

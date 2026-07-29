@@ -266,6 +266,16 @@ export async function handleSessionHistoryHttpRequest(
     unsubscribe?: () => void;
   } = {};
 
+  function writeStreamHistory(snapshot: ReturnType<SessionHistorySseState["snapshot"]>) {
+    sseWrite(res, "history", {
+      sessionKey: target.canonicalKey,
+      ...snapshot,
+    });
+    // Send the entire requested page before bounding private live state.
+    // Cursor refreshes reread SQLite, so their next page remains complete.
+    sentHistory = sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
+  }
+
   function releaseStreamResources() {
     if (streamStopped) {
       return;
@@ -338,10 +348,7 @@ export async function handleSessionHistoryHttpRequest(
   if (isStreamClosed()) {
     return true;
   }
-  sseWrite(res, "history", {
-    sessionKey: target.canonicalKey,
-    ...sentHistory,
-  });
+  writeStreamHistory(sentHistory);
   if (isStreamClosed()) {
     return true;
   }
@@ -423,10 +430,7 @@ export async function handleSessionHistoryHttpRequest(
         if (limit === undefined && cursor === undefined) {
           if (sseState.shouldRefreshForTranscriptPath(updatePath)) {
             sentHistory = await sseState.refreshAsync();
-            sseWrite(res, "history", {
-              sessionKey: target.canonicalKey,
-              ...sentHistory,
-            });
+            writeStreamHistory(sentHistory);
             return;
           }
           const nextEvent = sseState.appendInlineMessage({
@@ -439,16 +443,13 @@ export async function handleSessionHistoryHttpRequest(
           }
           if (nextEvent.shouldRefresh) {
             sentHistory = await sseState.refreshAsync();
-            sseWrite(res, "history", {
-              sessionKey: target.canonicalKey,
-              ...sentHistory,
-            });
+            writeStreamHistory(sentHistory);
             return;
           }
           if (nextEvent.message === undefined) {
             return;
           }
-          sentHistory = sseState.snapshot();
+          sentHistory = sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
           sseWrite(res, "message", {
             sessionKey: target.canonicalKey,
             message: nextEvent.message,
@@ -459,10 +460,7 @@ export async function handleSessionHistoryHttpRequest(
         }
       }
       sentHistory = await sseState.refreshAsync();
-      sseWrite(res, "history", {
-        sessionKey: target.canonicalKey,
-        ...sentHistory,
-      });
+      writeStreamHistory(sentHistory);
     });
   });
   return true;

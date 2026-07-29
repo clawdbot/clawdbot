@@ -101,8 +101,16 @@ export function resolveAssistantAttachmentAvailability(
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
-  if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
-    return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
+  // Bootstrap has no client roots yet; authenticated Gateway metadata remains authoritative.
+  if (
+    localMediaPreviewRoots.length > 0 &&
+    !isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)
+  ) {
+    return {
+      status: "unavailable",
+      reason: t("chat.attachments.outsideAllowedFolders"),
+      checkedAt: Date.now(),
+    };
   }
   const normalizedAuthToken = authToken?.trim() ?? "";
   const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
@@ -169,7 +177,7 @@ export function resolveAssistantAttachmentAvailability(
           const mediaTicketExpiresAt = Date.parse(payload.mediaTicketExpiresAt ?? "");
           if (mediaTicket && !Number.isFinite(mediaTicketExpiresAt)) {
             const unavailable = createUnavailableAssistantAttachment(
-              "Attachment unavailable",
+              t("chat.attachments.unavailable"),
               resource.retryAttempted,
             );
             setAssistantAttachmentAvailability(resource, unavailable);
@@ -184,7 +192,7 @@ export function resolveAssistantAttachmentAvailability(
           return availability;
         }
         const unavailable = createUnavailableAssistantAttachment(
-          payload?.reason?.trim() || "Attachment unavailable",
+          payload?.reason?.trim() || t("chat.attachments.unavailable"),
           resource.retryAttempted,
         );
         setAssistantAttachmentAvailability(resource, unavailable);
@@ -192,7 +200,7 @@ export function resolveAssistantAttachmentAvailability(
       })
       .catch(() => {
         const unavailable = createUnavailableAssistantAttachment(
-          "Attachment unavailable",
+          t("chat.attachments.unavailable"),
           resource.retryAttempted,
         );
         setAssistantAttachmentAvailability(resource, unavailable);
@@ -275,7 +283,10 @@ export function renderAssistantAttachments(
             return renderAssistantAttachmentStatusCard({
               kind: "image",
               label: attachment.label,
-              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+              badge:
+                availability.status === "checking"
+                  ? t("chat.attachments.checking")
+                  : t("chat.attachments.unavailable"),
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
@@ -306,7 +317,9 @@ export function renderAssistantAttachments(
                 ${!attachmentUrl
                   ? html`<span
                       class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                      >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
+                      >${availability.status === "checking"
+                        ? t("chat.attachments.checking")
+                        : t("chat.attachments.unavailable")}</span
                     >`
                   : attachment.isVoiceNote
                     ? html`<span class="chat-assistant-attachment-badge"
@@ -334,7 +347,10 @@ export function renderAssistantAttachments(
             return renderAssistantAttachmentStatusCard({
               kind: "video",
               label: attachment.label,
-              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+              badge:
+                availability.status === "checking"
+                  ? t("chat.attachments.checking")
+                  : t("chat.attachments.unavailable"),
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
@@ -360,7 +376,10 @@ export function renderAssistantAttachments(
           return renderAssistantAttachmentStatusCard({
             kind: "document",
             label: attachment.label,
-            badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+            badge:
+              availability.status === "checking"
+                ? t("chat.attachments.checking")
+                : t("chat.attachments.unavailable"),
             reason: availability.status === "unavailable" ? availability.reason : undefined,
           });
         }

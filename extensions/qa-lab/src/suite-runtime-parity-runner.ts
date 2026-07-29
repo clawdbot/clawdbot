@@ -128,6 +128,7 @@ export async function runQaRuntimeParitySuite(params: {
         const parity = await runRuntimeParityScenario({
           scenarioId: scenario.id,
           runtimeParityUsage: scenario.runtimeParityUsage,
+          runtimePair: params.runtimePair,
           runCell: async (runtime) => {
             const cellOutputDir = path.join(
               params.outputDir,

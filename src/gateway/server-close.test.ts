@@ -1,6 +1,8 @@
 /**
  * Gateway server close lifecycle tests.
  */
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
@@ -566,6 +568,64 @@ describe("createGatewayCloseHandler", () => {
         String(message).includes("gateway:shutdown hook timed out after 5000ms"),
       ),
     ).toBe(true);
+  });
+
+  it("cleans up live runtime children when a plugin service never stops", async () => {
+    vi.useFakeTimers();
+    const children = [
+      spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }),
+      spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }),
+    ];
+    const exits = children.map((child) => once(child, "exit"));
+    const spawnEvents = children.map((child) => once(child, "spawn"));
+    const disposeSessionMcpRuntimes = vi.fn(async () => {
+      children[0]?.kill("SIGTERM");
+      await exits[0];
+    });
+    const disposeBundleLspRuntimes = vi.fn(async () => {
+      children[1]?.kill("SIGTERM");
+      await exits[1];
+    });
+    const pluginServices = {
+      stop: vi.fn(() => new Promise<void>(() => {})),
+    };
+    const stopChannel = vi.fn(async () => undefined);
+    const deps = createGatewayCloseTestDeps({
+      channelIds: ["discord"],
+      disposeBundleLspRuntimes,
+      disposeSessionMcpRuntimes,
+      pluginServices,
+      stopChannel,
+    });
+
+    try {
+      await Promise.all(spawnEvents);
+      const close = createGatewayCloseHandler(deps);
+      const closePromise = close({ reason: "SIGINT" });
+
+      await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
+
+      expect(pluginServices.stop).toHaveBeenCalledOnce();
+      expect(disposeSessionMcpRuntimes).toHaveBeenCalledOnce();
+
+      const result = await closePromise;
+      expect(disposeBundleLspRuntimes).toHaveBeenCalledOnce();
+      expect(stopChannel).toHaveBeenCalledWith("discord");
+      expect(result.warnings).toContain("plugin-services");
+      await expect(Promise.all(exits)).resolves.toHaveLength(2);
+      expect(deps.heartbeatRunner.stop).toHaveBeenCalledOnce();
+      expect(
+        mocks.logWarn.mock.calls.some(([message]) =>
+          String(message).includes("plugin-services runtime disposal exceeded 5000ms"),
+        ),
+      ).toBe(true);
+    } finally {
+      for (const child of children) {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGTERM");
+        }
+      }
+    }
   });
 
   it("drains the active-session tracker with reason=shutdown on SIGTERM/SIGINT close", async () => {

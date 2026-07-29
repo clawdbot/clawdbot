@@ -47,6 +47,7 @@ const GROUP_HINTS = [
 
 // docsUrl targets task-oriented or beginner pages; configuration-reference anchors are banned.
 const SECTION_DOCS_URLS = {
+  accessGroups: "https://docs.openclaw.ai/channels/access-groups",
   messages: "https://docs.openclaw.ai/concepts/messages",
   tts: "https://docs.openclaw.ai/tts",
   commands: "https://docs.openclaw.ai/tools/slash-commands",
@@ -85,7 +86,14 @@ const SECTION_DOCS_URLS = {
   presence: "https://docs.openclaw.ai/concepts/presence",
   cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
   worktrees: "https://docs.openclaw.ai/concepts/managed-worktrees",
+  proxy: "https://docs.openclaw.ai/security/network-proxy",
+  transcripts: "https://docs.openclaw.ai/plugins/meeting-plugins",
+  surfaces: "https://docs.openclaw.ai/concepts/messages",
 } as const satisfies Record<string, string>;
+
+// Root sections without beginner-worthy pages stay explicit. Adding a root config key
+// requires choosing a docsUrl or listing it here.
+const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments"] as const;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
@@ -325,4 +333,5 @@ export const testApi = {
   collectMatchingSchemaPaths,
   mapSensitivePaths,
   SECTION_DOCS_URLS,
+  SECTIONS_WITHOUT_DOCS,
 };

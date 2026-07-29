@@ -21,7 +21,7 @@ import type {
   CodexPluginMetadataCache,
   CodexPluginMetadataQueryKind,
 } from "./plugin-metadata-cache.js";
-import type { v2 } from "./protocol.js";
+import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
 
 const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`;
 
@@ -356,7 +356,7 @@ function readCachedAppInventory(
     return undefined;
   }
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    (await params.request(method, requestParams)) as v2.AppsListResponse;
+    (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
   return params.appCache.read({
     key: params.appCacheKey,
     request,

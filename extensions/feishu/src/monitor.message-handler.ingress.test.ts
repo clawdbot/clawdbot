@@ -1,3 +1,4 @@
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Feishu ingress tests cover debounce ownership and constituent claim settlement.
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,10 @@ type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessag
 type DebounceEntry = Parameters<
   Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
 >[0][number];
+type DebounceFlush = ReturnType<
+  Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
+>;
+type DebounceFlushFactory = typeof createTestInboundDebounceFlush;
 
 function createTextEvent(
   eventId: string,
@@ -74,7 +79,9 @@ function createHarness(params: {
   claims: readonly dedup.FeishuMessageProcessingClaim[];
   adoptTurn: boolean;
 }) {
-  let onFlush: ((entries: DebounceEntry[]) => Promise<void>) | undefined;
+  let onFlush:
+    | ((entries: DebounceEntry[], createFlush: DebounceFlushFactory) => DebounceFlush)
+    | undefined;
   let onError: ((err: unknown, entries: DebounceEntry[]) => void) | undefined;
   const entries: DebounceEntry[] = [];
   const runtimeError = vi.fn();
@@ -84,7 +91,7 @@ function createHarness(params: {
       resolveInboundDebounceMs: () => 25,
       createInboundDebouncer: vi.fn(
         (options: {
-          onFlush: (entries: DebounceEntry[]) => Promise<void>;
+          onFlush: (entries: DebounceEntry[], createFlush: DebounceFlushFactory) => DebounceFlush;
           onError: (err: unknown, entries: DebounceEntry[]) => void;
         }) => {
           onFlush = options.onFlush;
@@ -93,6 +100,9 @@ function createHarness(params: {
             enqueue: async (entry: DebounceEntry) => {
               entries.push(entry);
             },
+            flushKey: async () => {},
+            cancelKey: () => false,
+            drain: async () => {},
           };
         },
       ),
@@ -132,7 +142,7 @@ function createHarness(params: {
       if (!onFlush) {
         throw new Error("debouncer flush callback missing");
       }
-      await onFlush(entries.splice(0));
+      await onFlush(entries.splice(0), createTestInboundDebounceFlush).completion;
     },
     failFlush: (err: unknown) => {
       if (!onError) {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
   resolveBundledProviderPolicySurface,
   resolveProviderPolicySurface,
@@ -51,6 +52,15 @@ describe("provider public artifacts", () => {
     vi.doUnmock("./public-surface-loader.js");
     vi.resetModules();
   });
+
+  it.each(["my-ngc:nvidia", "my-ngc/nvidia", "my-ngc\\nvidia", ".", ".."])(
+    "does not treat path-like provider %s as a bundled plugin directory",
+    (providerId) => {
+      expect(resolveDirectBundledProviderPolicySurface(providerId)).toBeNull();
+      expect(resolveBundledProviderPolicySurface(providerId)).toBeNull();
+      expect(resolveProviderPolicySurface(providerId)).toBeNull();
+    },
+  );
 
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
@@ -212,6 +222,40 @@ describe("provider public artifacts", () => {
           ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
           ?.levels.map((level) => level.label),
       ).toEqual([undefined, "on"]);
+    } finally {
+      restoreBundledPluginEnv();
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+      fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves namespaced provider policies from their trusted external plugin root", () => {
+    const bundledPluginsDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-empty-bundled-plugins-"),
+    );
+    const pluginRoot = writeExternalPolicyFixture();
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+      const fixturePlugin = {
+        id: "fixture-provider",
+        origin: "external",
+        trustedOfficialInstall: true,
+        rootDir: pluginRoot,
+        providers: ["fixture:nvidia"],
+        cliBackends: [],
+      } as const;
+
+      const surface = resolveProviderPolicySurface("fixture:nvidia", {
+        manifestRegistry: { plugins: [fixturePlugin as never] },
+      });
+
+      expect(
+        surface
+          ?.resolveThinkingProfile?.({ provider: "fixture:nvidia", modelId: "full" })
+          ?.levels.map((level) => level.id),
+      ).toEqual(["off", "high", "max"]);
     } finally {
       restoreBundledPluginEnv();
       fs.rmSync(pluginRoot, { recursive: true, force: true });

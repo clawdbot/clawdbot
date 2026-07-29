@@ -230,6 +230,44 @@ it("rerenders on connection transitions for unidentified connections", async () 
   expect(page.querySelector(".profile-hero")).not.toBeNull();
 });
 
+it("falls back to the text avatar when the hero image fails to load", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const agentsState = harness.context.agents.state as unknown as {
+    agentsList: {
+      defaultId: string;
+      agents: Array<{
+        id: string;
+        identity: { name: string; emoji: string; avatarUrl: string };
+      }>;
+    };
+  };
+  agentsState.agentsList = {
+    defaultId: "main",
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/unloadable-avatar.png" },
+      },
+    ],
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
+  expect(image?.getAttribute("src")).toBe("/unloadable-avatar.png");
+  expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
+
+  image?.dispatchEvent(new Event("error"));
+  await page.updateComplete;
+
+  expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
+  expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
+});
+
 it("retries the identity bootstrap when users.self returns no profile", async () => {
   const profile: UserProfile = {
     id: "profile-1",

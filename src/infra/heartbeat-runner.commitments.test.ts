@@ -652,6 +652,21 @@ describe("runHeartbeatOnce commitments", () => {
     });
   });
 
+  it("delivers user commitments when automatic heartbeat replies are message-tool-only", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      visibleReplies: "message_tool",
+    });
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
   it("keeps commitment-only delivery on the configured isolated run session", async () => {
     const { result, sendTelegram, store } = await setupCommitmentCase({
       isolatedSession: true,

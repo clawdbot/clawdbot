@@ -2,6 +2,7 @@
  * Exec tool policy, host dispatch, and process lifecycle pipeline.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   type ExecHost,
   loadExecApprovals,
@@ -548,6 +549,7 @@ export function createExecTool(
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
+      let toolAborted = false;
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
@@ -561,6 +563,13 @@ export function createExecTool(
         run.disableUpdates();
         if (yielded || run.session.backgrounded) {
           return;
+        }
+        // Cancellation must win over foreground-to-background promotion while
+        // the child settles; detached background sessions keep their owner.
+        toolAborted = true;
+        if (yieldTimer) {
+          clearTimeout(yieldTimer);
+          yieldTimer = null;
         }
         run.kill();
       };
@@ -584,6 +593,14 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+        const rejectIfAborted = () => {
+          if (!toolAborted) {
+            return false;
+          }
+          reject(createAbortError("Tool execution was aborted", { cause: signal?.reason }));
+          return true;
+        };
+
         const resolveRunning = () => {
           cleanupToolRunListeners();
           resolve({
@@ -607,7 +624,7 @@ export function createExecTool(
         };
 
         const onYieldNow = () => {
-          if (yielded) {
+          if (yielded || toolAborted) {
             return;
           }
           if (settledOutcome) {
@@ -634,7 +651,7 @@ export function createExecTool(
           resolveRunning();
         };
 
-        if (allowBackground && yieldWindow !== null) {
+        if (!toolAborted && allowBackground && yieldWindow !== null) {
           if (yieldWindow === 0) {
             onYieldNow();
           } else {
@@ -647,7 +664,7 @@ export function createExecTool(
         run.promise
           .then((outcome) => {
             cleanupToolRunListeners();
-            if (yielded || run.session.backgrounded) {
+            if (rejectIfAborted() || yielded || run.session.backgrounded) {
               return;
             }
             resolve(
@@ -660,7 +677,7 @@ export function createExecTool(
           })
           .catch((err: unknown) => {
             cleanupToolRunListeners();
-            if (yielded || run.session.backgrounded) {
+            if (rejectIfAborted() || yielded || run.session.backgrounded) {
               return;
             }
             reject(err as Error);
