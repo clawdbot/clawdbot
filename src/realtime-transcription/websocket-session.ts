@@ -426,6 +426,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.ready = false;
     this.readySinceMs = undefined;
     if (this.ws) {
+      this.ws.removeAllListeners();
       this.ws.close(1000, "Transcription session closed");
       this.ws = null;
     }
