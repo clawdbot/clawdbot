@@ -571,6 +571,55 @@ describe("Skill Workshop proposal evaluation", () => {
     await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
   });
 
+  it("persists a blocking evaluation and refuses to apply the proposal", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-block-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Blocked Evaluation",
+      description: "Keep blocking evaluator decisions authoritative",
+      content: "# Blocked Evaluation\n",
+    });
+    hookMocks.evaluate.mockResolvedValue([
+      {
+        evaluatorId: "policy",
+        pluginId: "policy-plugin",
+        status: "completed",
+        result: {
+          decision: "block",
+          decisionReason: "Policy denied the candidate.",
+        },
+      },
+    ]);
+
+    await expect(
+      applySkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).rejects.toThrow("Policy denied the candidate.");
+
+    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
+      {
+        record: {
+          status: "pending",
+          evaluation: {
+            trigger: "apply",
+            outcomes: [
+              {
+                status: "completed",
+                result: { decision: "block" },
+              },
+            ],
+          },
+        },
+      },
+    );
+    await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
+  });
+
   it("omits optional evaluator strings that normalize to empty", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-empty-optionals-");
     const proposal = await proposeCreateSkill({

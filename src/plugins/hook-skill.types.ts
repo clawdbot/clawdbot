@@ -124,7 +124,7 @@ export type PluginHookSkillProposalChangedEvent = {
     skillFile: string;
     source?: string;
   };
-  evaluations?: PluginHookSkillProposalEvaluationOutcome[];
+  evaluations?: readonly PluginHookSkillProposalEvaluationOutcome[];
 };
 
 export type PluginHookSkillContext = {

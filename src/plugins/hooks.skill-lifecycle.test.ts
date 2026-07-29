@@ -3,6 +3,7 @@ import type {
   PluginHookSkillChangedEvent,
   PluginHookSkillContext,
   PluginHookSkillProposalEvaluateEvent,
+  PluginHookSkillProposalChangedEvent,
 } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
@@ -266,7 +267,67 @@ describe("skill lifecycle hooks", () => {
 
     await createHookRunner(registry).runSkillChanged(event, ctx);
 
-    expect(first).toHaveBeenCalledWith(event, ctx);
-    expect(second).toHaveBeenCalledWith(event, ctx);
+    const observed = first.mock.calls[0]?.[0] as PluginHookSkillChangedEvent;
+    expect(observed).not.toBe(event);
+    expect(Object.isFrozen(observed)).toBe(true);
+    expect(Object.isFrozen(observed.before)).toBe(true);
+    expect(first).toHaveBeenCalledWith(observed, ctx);
+    expect(second).toHaveBeenCalledWith(observed, ctx);
+  });
+
+  it("freezes proposal observations so handlers cannot erase blocking outcomes", async () => {
+    const event: PluginHookSkillProposalChangedEvent = {
+      eventId: "event-1",
+      sequence: 1,
+      action: "evaluation_completed",
+      occurredAt: "2026-07-29T00:00:00.000Z",
+      proposal: {
+        id: "proposal-1",
+        kind: "update",
+        status: "pending",
+        revision: "v2",
+        revisionSha256: "sha256:revision",
+        skillName: "Demo Skill",
+        skillKey: "demo-skill",
+        skillFile: "/workspace/skills/demo-skill/SKILL.md",
+      },
+      evaluations: [
+        {
+          evaluatorId: "policy",
+          pluginId: "policy-plugin",
+          status: "completed",
+          result: {
+            decision: "block",
+            decisionReason: "Policy denied the candidate.",
+          },
+        },
+      ],
+    };
+    const first = vi.fn((observed: PluginHookSkillProposalChangedEvent) => {
+      expect(observed).not.toBe(event);
+      expect(Object.isFrozen(observed)).toBe(true);
+      expect(Object.isFrozen(observed.evaluations)).toBe(true);
+      expect(Object.isFrozen(observed.evaluations?.[0])).toBe(true);
+      expect(() => {
+        (observed.evaluations as unknown[]).pop();
+      }).toThrow();
+    });
+    const second = vi.fn((observed: PluginHookSkillProposalChangedEvent) => {
+      expect(observed.evaluations).toHaveLength(1);
+      expect(observed.evaluations?.[0]).toMatchObject({
+        status: "completed",
+        result: { decision: "block" },
+      });
+    });
+    const registry = createMockPluginRegistry([
+      { hookName: "skill_proposal_changed", pluginId: "first", handler: first },
+      { hookName: "skill_proposal_changed", pluginId: "second", handler: second },
+    ]);
+
+    await createHookRunner(registry).runSkillProposalChanged(event, ctx);
+
+    expect(event.evaluations).toHaveLength(1);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
   });
 });

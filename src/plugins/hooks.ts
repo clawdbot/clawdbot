@@ -1575,14 +1575,16 @@ export function createHookRunner(
     event: PluginHookSkillProposalChangedEvent,
     ctx: PluginHookSkillContext,
   ): Promise<void> {
-    return runVoidHook("skill_proposal_changed", event, ctx);
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
+    return runVoidHook("skill_proposal_changed", immutableEvent, ctx);
   }
 
   async function runSkillChanged(
     event: PluginHookSkillChangedEvent,
     ctx: PluginHookSkillContext,
   ): Promise<void> {
-    return runVoidHook("skill_changed", event, ctx);
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
+    return runVoidHook("skill_changed", immutableEvent, ctx);
   }
 
   // =========================================================================
