@@ -406,20 +406,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return window.isVisible || window.isMiniaturized
     }
 
-    /// Commands are deliverable when a document is live or a load is in flight
-    /// (the queue flushes at `didFinish`). A failure page, or a terminally
-    /// cancelled load with no successor, needs a reload before dispatch —
-    /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
-    var canDeliverNativeCommands: Bool {
-        !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading)
-    }
-
-    /// The canonical Dashboard mount URL supplied by the manager. WebKit route
-    /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
-    var dashboardBaseURL: URL {
-        self.currentURL
-    }
-
     func show() {
         if let window {
             let frame = window.frame
@@ -1047,6 +1033,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 }
 
 extension DashboardWindowController {
+    /// Commands are deliverable when a document is live or a load is in flight
+    /// (the queue flushes at `didFinish`). A failure page, or a terminally
+    /// cancelled load with no successor, needs a reload before dispatch —
+    /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
+    var canDeliverNativeCommands: Bool {
+        !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading)
+    }
+
+    /// The canonical Dashboard mount URL supplied by the manager. WebKit route
+    /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
+    var dashboardBaseURL: URL {
+        self.currentURL
+    }
+
     func windowWillClose(_: Notification) {
         self.webView.stopLoading()
         self.closeLinkBrowser(focusDashboard: false)
