@@ -6,7 +6,7 @@ import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
@@ -111,10 +111,10 @@ export async function waitForPluginApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -144,18 +144,4 @@ export function mapExecDecisionToOutcome(
 
 function truncateForGateway(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 3)}...`;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
