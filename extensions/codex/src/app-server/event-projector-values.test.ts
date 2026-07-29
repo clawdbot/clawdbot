@@ -57,12 +57,7 @@ describe("extractRawAssistantText", () => {
   it("skips entries that are not JSON objects", () => {
     expect(
       extractRawAssistantText({
-        content: [
-          { type: "output_text", text: "Only this" },
-          "string entry",
-          42,
-          null,
-        ],
+        content: [{ type: "output_text", text: "Only this" }, "string entry", 42, null],
       }),
     ).toBe("Only this");
   });
