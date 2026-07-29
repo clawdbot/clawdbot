@@ -272,6 +272,7 @@ export async function handleFeishuMessage(params: {
   accountId?: string;
   processingClaimHeld?: boolean;
   messageDedupeKey?: string;
+  abortSignal?: AbortSignal;
 }): Promise<void> {
   const {
     cfg,
@@ -284,6 +285,7 @@ export async function handleFeishuMessage(params: {
     accountId,
     processingClaimHeld = false,
     messageDedupeKey: messageDedupeKeyOverride,
+    abortSignal: _abortSignal,
   } = params;
 
   // Resolve account with merged config

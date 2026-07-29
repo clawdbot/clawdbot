@@ -26,6 +26,7 @@ type FeishuMessageReceiveHandlerContext = {
     accountId?: string;
     processingClaimHeld?: boolean;
     messageDedupeKey?: string;
+    abortSignal?: AbortSignal;
   }) => Promise<void>;
   resolveDebounceText: (params: {
     event: FeishuMessageEvent;
@@ -207,6 +208,7 @@ export function createFeishuMessageReceiveHandler({
         accountId,
         processingClaimHeld: true,
         messageDedupeKey,
+        abortSignal: _signal,
       });
     await enqueue(sequentialKey, task);
   };

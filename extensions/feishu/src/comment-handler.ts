@@ -25,6 +25,7 @@ type HandleFeishuCommentEventParams = {
   runtime?: RuntimeEnv;
   event: FeishuDriveCommentNoticeEvent;
   botOpenId?: string;
+  abortSignal?: AbortSignal;
 };
 
 function buildCommentSessionKey(params: {

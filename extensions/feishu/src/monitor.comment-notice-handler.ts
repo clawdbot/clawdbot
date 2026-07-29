@@ -86,6 +86,7 @@ export function createFeishuDriveCommentNoticeHandler(params: {
             event,
             botOpenId: getBotOpenId(accountId),
             runtime,
+            abortSignal: _signal,
           });
         });
         if (syntheticMessageId) {
