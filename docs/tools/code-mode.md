@@ -997,11 +997,12 @@ The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
 
 - `codeModeEngaged`: `true` only when code mode actually owned the model tool
   surface. This is the reliable engagement signal — do not infer engagement
-  from config or tool names: the shell tool is also named `exec`, the
-  `"auto"` tier engages per model capability, and a model routed through a
-  native harness surface (for example OpenAI-family models on their harness)
-  reports `codeModeEngaged: false` even with `tools.codeMode.enabled=true`,
-  making the silent no-op observable.
+  from config or tool names: the shell tool is also named `exec`, and the
+  `"auto"` tier engages per model capability. Harnesses that bridge OpenClaw's
+  tool surface (Copilot) report their resolved gate, so
+  `codeModeEngaged: false` with `tools.codeMode.enabled=true` makes a silent
+  no-op observable. Harnesses that run their own native tool surface (Codex)
+  never engage OpenClaw code mode and omit the field entirely.
 - `assistantTurns`: completed assistant/provider round trips across the run.
 - `bridgeCalls`: the run's cumulative inner bridge counts
   (`{ search, describe, call }`). These calls never reach the provider;

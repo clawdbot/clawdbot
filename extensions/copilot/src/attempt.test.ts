@@ -521,6 +521,25 @@ describe("runCopilotAttempt", () => {
     expect(result.lastToolError).toEqual(terminalError);
   });
 
+  it("reports the tool bridge's code-mode engagement on the attempt result", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams(), {
+      createToolBridge: vi.fn(async () => ({
+        codeModeEngaged: true,
+        sdkTools: [],
+        sourceTools: [],
+      })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect(result.codeModeEngaged).toBe(true);
+  });
+
   it("clears the host terminal error after matching tool recovery", async () => {
     const terminalError = {
       actionFingerprint: "message:send:room-1",
