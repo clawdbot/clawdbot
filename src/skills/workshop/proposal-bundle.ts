@@ -134,6 +134,7 @@ function snapshotFromFiles(
   skillMdPath: string,
 ): PluginHookSkillBundleSnapshot {
   const files = inputFiles.toSorted((a, b) => a.path.localeCompare(b.path));
+  assertEvaluationBundleWithinLimits(files);
   const skillMd = files.find((file) => file.path === skillMdPath);
   if (!skillMd) {
     throw new Error(`Skill evaluation bundle is missing ${skillMdPath}.`);
@@ -143,6 +144,24 @@ function snapshotFromFiles(
     files: files.filter((file) => file.path !== skillMdPath),
     treeSha256: hashSkillTree(files),
   };
+}
+
+function assertEvaluationBundleWithinLimits(files: readonly PluginHookSkillBundleFile[]): void {
+  if (files.length > MAX_EVALUATION_FILES) {
+    throw new Error(`Skill evaluation bundle exceeds ${MAX_EVALUATION_FILES} files.`);
+  }
+  let totalBytes = 0;
+  for (const file of files) {
+    if (file.sizeBytes > MAX_EVALUATION_FILE_BYTES) {
+      throw new Error(
+        `Skill evaluation bundle file exceeds ${MAX_EVALUATION_FILE_BYTES} bytes: ${file.path}.`,
+      );
+    }
+    totalBytes += file.sizeBytes;
+  }
+  if (totalBytes > MAX_EVALUATION_BUNDLE_BYTES) {
+    throw new Error(`Skill evaluation bundle exceeds ${MAX_EVALUATION_BUNDLE_BYTES} total bytes.`);
+  }
 }
 
 function hashSkillTree(files: readonly PluginHookSkillBundleFile[]): string {

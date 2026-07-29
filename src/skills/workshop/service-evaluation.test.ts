@@ -320,6 +320,91 @@ describe("Skill Workshop proposal evaluation", () => {
     }
   });
 
+  it("rejects an oversized proposed SKILL.md after overlaying the candidate", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-candidate-file-limit-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Candidate File Limit",
+      description: "Validate the final evaluator candidate",
+      content: "# Candidate File Limit\n",
+    });
+
+    await expect(
+      buildSkillProposalEvaluationBundles({
+        proposal: {
+          ...proposal,
+          content: `# Candidate File Limit\n\n${"x".repeat(1024 * 1024)}`,
+        },
+        supportFiles: [],
+      }),
+    ).rejects.toThrow("file exceeds 1048576 bytes: SKILL.md");
+  });
+
+  it("rejects a candidate whose proposed files push it over the file-count limit", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-candidate-count-limit-");
+    const skillDir = path.join(workspaceDir, "skills", "candidate-count-limit");
+    await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: candidate-count-limit\ndescription: Existing skill\n---\n\n# Existing\n",
+    );
+    await Promise.all(
+      Array.from({ length: 254 }, (_, index) =>
+        fs.writeFile(path.join(skillDir, "references", `${index}.txt`), "existing\n"),
+      ),
+    );
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      agentId: "main",
+      skillName: "candidate-count-limit",
+      content: "# Existing\n\nUpdated.\n",
+    });
+
+    await expect(
+      buildSkillProposalEvaluationBundles({
+        proposal,
+        supportFiles: prepareSkillProposalSupportFiles([
+          { path: "references/candidate-a.txt", content: "a\n" },
+          { path: "references/candidate-b.txt", content: "b\n" },
+        ]),
+      }),
+    ).rejects.toThrow("exceeds 256 files");
+  });
+
+  it("rejects a candidate whose proposed files push it over the total-byte limit", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-candidate-byte-limit-");
+    const skillDir = path.join(workspaceDir, "skills", "candidate-byte-limit");
+    await fs.mkdir(path.join(skillDir, "assets"), { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: candidate-byte-limit\ndescription: Existing skill\n---\n\n# Existing\n",
+    );
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        fs.writeFile(
+          path.join(skillDir, "assets", `${index}.bin`),
+          Buffer.alloc(1024 * 1024 - 1024),
+        ),
+      ),
+    );
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      agentId: "main",
+      skillName: "candidate-byte-limit",
+      content: "# Existing\n\nUpdated.\n",
+    });
+
+    await expect(
+      buildSkillProposalEvaluationBundles({
+        proposal,
+        supportFiles: prepareSkillProposalSupportFiles([
+          { path: "references/candidate.txt", content: "x".repeat(9 * 1024) },
+        ]),
+      }),
+    ).rejects.toThrow("exceeds 8388608 total bytes");
+  });
+
   it("rejects a draft file that no longer matches its persisted revision", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-drift-");
     const proposal = await proposeCreateSkill({
