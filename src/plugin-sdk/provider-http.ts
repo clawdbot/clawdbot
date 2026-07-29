@@ -2,6 +2,11 @@
 // capability SDKs do not depend on each other.
 
 export {
+  inspectTlsCertificateError,
+  type TlsCertificateErrorDetails,
+  type TlsCertificateErrorKind,
+} from "@openclaw/ai/internal/shared";
+export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,

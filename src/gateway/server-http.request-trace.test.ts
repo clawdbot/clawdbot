@@ -11,10 +11,10 @@ import {
 } from "../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { getLogger, resetLogger, setLoggerOverride } from "../logging.js";
+import { flushLogger } from "../logging/logger.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -38,7 +38,6 @@ async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): 
 
 afterEach(() => {
   resetDiagnosticEventsForTest();
-  resetDiagnosticTraceContextForTest();
   setLoggerOverride(null);
   resetLogger();
 });
@@ -89,6 +88,8 @@ describe("gateway HTTP request trace scope", () => {
       expect(activeTraceInHandler?.spanId).toMatch(/^[0-9a-f]{16}$/);
       expect(events).toEqual([{ trace: activeTraceInHandler, type: "message.queued" }]);
 
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
       const traceRecord = fs
         .readFileSync(logPath, "utf8")
         .trim()

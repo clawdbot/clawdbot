@@ -14,9 +14,15 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { formatByteSize } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
   scopedAgentParamsForSession,
@@ -55,8 +61,10 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
+  onToggleCustodian?: () => void;
   /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
   onOpenDiff?: () => void;
+  diffNotGit?: boolean;
 };
 
 type SessionWorkspaceState = {
@@ -105,9 +113,8 @@ export type SessionWorkspaceHost = {
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the
- * assistant/default agent. Shared by the workspace and background-tasks rails
- * so both scope their gateway queries the same way. */
-export function paneSessionAgentId(state: SessionScopeHostWithKey): string {
+ * assistant/default agent. */
+function paneSessionAgentId(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
@@ -185,7 +192,7 @@ function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
 }
 
-export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
+function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
   if (!root) {
     return filePath;
   }
@@ -283,6 +290,7 @@ function loadWorkspace(
       current.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
+        ...(typeof files?.gitCheckout === "boolean" ? { gitCheckout: files.gitCheckout } : {}),
         files: fileItems,
         ...(files?.browser ? { browser: files.browser } : {}),
         artifacts: artifactItems,
@@ -646,7 +654,9 @@ export function createSessionWorkspaceProps(
   state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getWorkspaceState(state);
   if (
-    !workspace.collapsed &&
+    // The collapsed header still renders the diff action, so load its checkout
+    // capability eagerly instead of waiting for the file rail to open.
+    (!workspace.collapsed || isGatewayMethodAdvertised(state, "sessions.diff") === true) &&
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
@@ -700,7 +710,7 @@ export function createSessionWorkspaceProps(
     onToggleTerminal: state.terminalAvailable
       ? () => {
           window.dispatchEvent(
-            new CustomEvent("openclaw:terminal-toggle", {
+            new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
               detail: { dock: "right", open: true },
             }),
           );
@@ -708,9 +718,14 @@ export function createSessionWorkspaceProps(
       : undefined,
     onToggleBrowser: state.browserPanelAvailable
       ? () => {
-          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
+          window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
+    onToggleCustodian:
+      state.connected && isGatewayMethodAdvertised(state, "openclaw.chat") === true
+        ? () => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))
+        : undefined,
+    diffNotGit: workspace.list?.gitCheckout === false,
     onOpenDiff:
       isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
         ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
@@ -740,13 +755,12 @@ function formatWorkspaceFileSize(file: { size?: number }): string {
   if (typeof size !== "number" || !Number.isFinite(size) || size < 0) {
     return "";
   }
-  if (size >= 1024 * 1024) {
-    return `${(size / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
-  }
-  if (size >= 1024) {
-    return `${(size / 1024).toFixed(1).replace(/\.0$/, "")} KB`;
-  }
-  return `${size} B`;
+  return formatByteSize(size, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "byte" ? null : Math.round(value * 10) % 10 ? 1 : 0),
+  });
 }
 
 function renderWorkspaceArtifactSize(artifact: { sizeBytes?: number }): string {
@@ -770,7 +784,7 @@ function renderWorkspaceRailSection(
 
 /** Changed-file count shown on the collapsed-rail toggles (pane header /
  * floating opener); 0 until the workspace list has loaded. */
-export function sessionWorkspaceModifiedCount(
+function sessionWorkspaceModifiedCount(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): number {
   return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;
@@ -818,12 +832,14 @@ export function renderSessionDiffToggle(
     return nothing;
   }
   const label = t("chat.sessionDiff.show");
+  const tooltip = sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : label;
   return html`
-    <openclaw-tooltip .content=${label}>
+    <openclaw-tooltip .content=${tooltip}>
       <button
         class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
         type="button"
         aria-label=${label}
+        ?disabled=${sessionWorkspace.diffNotGit === true}
         @click=${sessionWorkspace.onOpenDiff}
       >
         ${icons.gitBranch}
@@ -871,13 +887,32 @@ export function renderSessionWorkspaceRail(
         </openclaw-tooltip>
       `
     : nothing;
+  const custodianButton = sessionWorkspace.onToggleCustodian
+    ? html`
+        <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("custodian.panel.toggle")}
+            @click=${sessionWorkspace.onToggleCustodian}
+          >
+            ${icons.lobster}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
   const diffButton = sessionWorkspace.onOpenDiff
     ? html`
-        <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
+        <openclaw-tooltip
+          .content=${sessionWorkspace.diffNotGit
+            ? t("chat.sessionDiff.notGit")
+            : t("chat.sessionDiff.show")}
+        >
           <button
             type="button"
             class="chat-workspace-rail__terminal chat-session-diff-toggle"
             aria-label=${t("chat.sessionDiff.show")}
+            ?disabled=${sessionWorkspace.diffNotGit === true}
             @click=${sessionWorkspace.onOpenDiff}
           >
             ${icons.gitBranch}
@@ -1174,7 +1209,7 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${diffButton} ${terminalButton} ${browserButton}
+          ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`
@@ -1266,3 +1301,4 @@ export function renderSessionWorkspaceRail(
     </aside>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

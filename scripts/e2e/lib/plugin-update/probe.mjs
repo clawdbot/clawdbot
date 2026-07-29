@@ -286,6 +286,17 @@ function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
   }
 }
 
+function assertDisabledPluginPolicyPreserved(configPath, pluginId) {
+  const config = readJson(configPath);
+  const allow = config.plugins?.allow;
+  if (JSON.stringify(allow) !== JSON.stringify([pluginId])) {
+    throw new Error(`expected plugins.allow to preserve ${pluginId}, got ${JSON.stringify(allow)}`);
+  }
+  if (config.plugins?.entries?.[pluginId]?.enabled !== false) {
+    throw new Error(`expected ${pluginId} to be disabled after update failure`);
+  }
+}
+
 const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
   "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
@@ -297,6 +308,7 @@ const commands = {
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
   "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
+  "assert-disabled-policy-preserved": () => assertDisabledPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];
 await (

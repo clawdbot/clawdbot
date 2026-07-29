@@ -2,11 +2,11 @@
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
+  MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexProviderIdentities,
   resolveMemoryIndexIdentityState,
-  isMemoryIndexIdentityDirty,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 
@@ -20,6 +20,7 @@ function createMeta(overrides: Partial<MemoryIndexMeta> = {}): MemoryIndexMeta {
     chunkTokens: 4000,
     chunkOverlap: 0,
     ftsTokenizer: "unicode61",
+    provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
     ...overrides,
   };
 }
@@ -55,7 +56,24 @@ function createIdentityParams(
   };
 }
 
+function isMemoryIndexIdentityDirty(
+  params: Parameters<typeof resolveMemoryIndexIdentityState>[0],
+): boolean {
+  return resolveMemoryIndexIdentityState(params).status !== "valid";
+}
+
 describe("memory reindex state", () => {
+  it("invalidates indexes written before path provenance classification was versioned", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({ meta: createMeta({ provenanceVersion: undefined }) }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index provenance classifier changed",
+    });
+  });
+
   it("retains the primary provider identity when its model is empty", () => {
     expect(
       resolveMemoryIndexProviderIdentities({

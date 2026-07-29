@@ -156,6 +156,70 @@ describe("sendMessageDiscord", () => {
     });
   });
 
+  it("inherits default_auto_archive_duration for forum threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      type: ChannelType.GuildForum,
+      default_auto_archive_duration: 1440,
+    });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord("chan1", { name: "thread" }, discordClientOpts(rest));
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      name: "thread",
+      auto_archive_duration: 1440,
+      message: { content: "thread" },
+    });
+  });
+
+  it("inherits default_auto_archive_duration for text-channel threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      type: ChannelType.GuildText,
+      default_auto_archive_duration: 10080,
+    });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord("chan1", { name: "thread" }, discordClientOpts(rest));
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      name: "thread",
+      auto_archive_duration: 10080,
+      type: ChannelType.PublicThread,
+    });
+  });
+
+  it("prefers explicit autoArchiveMinutes over channel default", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      type: ChannelType.GuildForum,
+      default_auto_archive_duration: 1440,
+    });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", autoArchiveMinutes: 4320 },
+      discordClientOpts(rest),
+    );
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      name: "thread",
+      auto_archive_duration: 4320,
+      message: { content: "thread" },
+    });
+  });
+
+  it("preserves explicit autoArchiveMinutes for message-attached threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", messageId: "m1", autoArchiveMinutes: 4320 },
+      discordClientOpts(rest),
+    );
+    expect(getMock).not.toHaveBeenCalled();
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      name: "thread",
+      auto_archive_duration: 4320,
+    });
+  });
+
   it("creates media threads with provided content", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     getMock.mockResolvedValue({ type: ChannelType.GuildMedia });

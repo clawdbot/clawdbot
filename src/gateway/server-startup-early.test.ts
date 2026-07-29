@@ -128,7 +128,7 @@ describe("startGatewayEarlyRuntime", () => {
 
     expect(mocks.setSkillsRemoteRegistry).toHaveBeenCalledWith(nodeRegistry);
     await Promise.resolve();
-    expect(mocks.ensureContextWindowCacheLoaded).toHaveBeenCalledWith({});
+    expect(mocks.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
     expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);
     expect(mocks.ensureTaskRuntimeStateReady).toHaveBeenCalledTimes(1);
     expect(mocks.configureTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
@@ -146,20 +146,65 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
   });
 
-  it("does not block gateway early runtime on context-window cache warmup", async () => {
-    const pendingWarmup = new Promise<void>(() => {});
-    mocks.ensureContextWindowCacheLoaded.mockReturnValueOnce(pendingWarmup);
+  it("broadcasts remote-node skill invalidations to operator clients", async () => {
+    const broadcast = vi.fn();
 
-    const earlyRuntime = await startGatewayEarlyRuntime(
+    await startGatewayEarlyRuntime(
       earlyRuntimeInput({
         minimalTestGateway: false,
-        cfgAtStart: { agents: { defaults: { model: "openai/gpt-5.5" } } } as never,
+        broadcast,
       }),
     );
 
-    await Promise.resolve();
-    expect(mocks.ensureContextWindowCacheLoaded).toHaveBeenCalledTimes(1);
-    expect(earlyRuntime).toHaveProperty("startMaintenance");
+    const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0] as
+      | ((event: { reason: "remote-node" }) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+
+    listener?.({ reason: "remote-node" });
+
+    expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason: "remote-node" });
+    expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
+  });
+
+  it("broadcasts local skill changes after the coalesced remote-bin refresh", async () => {
+    vi.useFakeTimers();
+    const broadcast = vi.fn();
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let finishRefresh: (() => void) | undefined;
+    mocks.refreshRemoteBinsForConnectedNodes.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    try {
+      await startGatewayEarlyRuntime(
+        earlyRuntimeInput({
+          minimalTestGateway: false,
+          broadcast,
+          getSkillsRefreshTimer: () => refreshTimer,
+          setSkillsRefreshTimer: (timer) => {
+            refreshTimer = timer;
+          },
+        }),
+      );
+
+      const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0] as
+        | ((event: { reason: "watch" }) => void)
+        | undefined;
+      listener?.({ reason: "watch" });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(mocks.refreshRemoteBinsForConnectedNodes).toHaveBeenCalledWith({});
+      expect(broadcast).not.toHaveBeenCalled();
+
+      finishRefresh?.();
+      await Promise.resolve();
+      expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason: "watch" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails before discovery and task maintenance when task state cannot restore", async () => {

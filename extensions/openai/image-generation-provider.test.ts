@@ -1,4 +1,5 @@
 // Openai tests cover image generation provider plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -726,6 +727,35 @@ describe("openai image generation provider", () => {
     expect(body.model).toBe("gpt-image-1");
     expect(body.size).toBe("2048x1152");
     expect(result.metadata).toBeUndefined();
+  });
+
+  it("falls back to the provider baseUrl when the model catalog is omitted", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    // Plugin-scoped runtime snapshots can carry a built-in provider overlay
+    // before its model catalog is present.
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://openai-compatible.example.com/v1",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Create an image through a provider overlay",
+      cfg,
+    });
+
+    expect(httpConfigCall().baseUrl).toBe("https://openai-compatible.example.com/v1");
+    expect(jsonRequestCall().url).toBe(
+      "https://openai-compatible.example.com/v1/images/generations",
+    );
+    expect(result.images).toHaveLength(1);
   });
 
   it("forwards output and OpenAI-only options on direct generations", async () => {
@@ -1599,6 +1629,79 @@ describe("openai image generation provider", () => {
     });
   });
 
+  it.each([
+    {
+      name: "invalid alphabet from output item",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs!bG8=" },
+      },
+    },
+    {
+      name: "invalid alphabet from completed output",
+      event: {
+        type: "response.completed",
+        response: {
+          output: [{ type: "image_generation_call", result: "aGVs!bG8=" }],
+        },
+      },
+    },
+    {
+      name: "missing canonical padding",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVsbG8" },
+      },
+    },
+    {
+      name: "internal whitespace",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs bG8=" },
+      },
+    },
+    {
+      name: "non-zero trailing bits",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "Zh==" },
+      },
+    },
+  ])("rejects malformed Codex image base64 from $name events", async ({ event }) => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(`data: ${JSON.stringify(event)}\n\n`);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw from malformed image data",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation returned malformed base64 image data");
+  });
+
+  it("accepts Codex-compatible surrounding Unicode whitespace", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      `data: ${JSON.stringify({
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "\u0085aGVsbG8=\u0085" },
+      })}\n\n`,
+    );
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw from valid image data",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("hello"));
+  });
+
   it("honors configured Codex transport overrides for OAuth image generation", async () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });
@@ -2248,3 +2351,4 @@ describe("openai image generation provider", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

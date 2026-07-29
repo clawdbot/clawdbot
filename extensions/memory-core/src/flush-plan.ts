@@ -1,4 +1,5 @@
 // Memory Core plugin module implements flush plan behavior.
+import { createHash } from "node:crypto";
 import {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
@@ -7,24 +8,29 @@ import {
   type MemoryFlushPlan,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  DREAMING_DAILY_PROVENANCE_NAMESPACE,
+  readMemoryCoreWorkspaceEntries,
+  writeMemoryCoreWorkspaceEntry,
+} from "./dreaming-state.js";
 import { resolveMemoryCoreNowMs } from "./time.js";
 
-export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
-export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
+const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
 const MEMORY_FLUSH_TARGET_HINT =
   "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
 const MEMORY_FLUSH_APPEND_ONLY_HINT =
   "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
 const MEMORY_FLUSH_READ_ONLY_HINT =
-  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
+  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
 const MEMORY_FLUSH_REQUIRED_HINTS = [
   MEMORY_FLUSH_TARGET_HINT,
   MEMORY_FLUSH_APPEND_ONLY_HINT,
   MEMORY_FLUSH_READ_ONLY_HINT,
 ];
 
-export const DEFAULT_MEMORY_FLUSH_PROMPT = [
+const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
   MEMORY_FLUSH_TARGET_HINT,
   MEMORY_FLUSH_READ_ONLY_HINT,
@@ -113,21 +119,15 @@ export function buildMemoryFlushPlan(
   const forceFlushTranscriptBytes =
     parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
-  const reserveTokensFloor =
-    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
-    DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
+  const reserveTokensFloor = DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
   const relativePath = `memory/${dateStamp}.md`;
 
-  const promptBase = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
-  );
+  const promptBase = ensureNoReplyHint(ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_PROMPT));
   const systemPrompt = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(
-      defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
-    ),
+    ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT),
   );
 
   return {
@@ -138,5 +138,30 @@ export function buildMemoryFlushPlan(
     prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
     systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,
+    recordWriteProvenance: async (write) => {
+      const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+      const existing = (
+        await readMemoryCoreWorkspaceEntries<{
+          fileHash: string;
+          originClass: "agent" | "untrusted";
+          observedAt: number;
+        }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir: write.workspaceDir })
+      ).find((entry) => entry.key === write.relativePath)?.value;
+      const originClass =
+        write.originClass === "agent" &&
+        (!write.contentBefore ||
+          (existing?.originClass === "agent" && existing.fileHash === hash(write.contentBefore)))
+          ? "agent"
+          : "untrusted";
+      // Provenance is file-level and therefore collapses to the least-trusted
+      // content in the file. Trusted lines in a downgraded file lose promotion
+      // eligibility; untrusted content must never ride an agent-trusted hash.
+      await writeMemoryCoreWorkspaceEntry({
+        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+        workspaceDir: write.workspaceDir,
+        key: write.relativePath,
+        value: { fileHash: hash(write.contentAfter), originClass, observedAt: write.observedAt },
+      });
+    },
   };
 }

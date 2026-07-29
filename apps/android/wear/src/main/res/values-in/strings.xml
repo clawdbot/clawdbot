@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Obrolan"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sesi"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Model"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s sebelumnya"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s berikutnya"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontrol"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bicara"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Audio jam tangan gagal"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikte"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Langsung"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Utas"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Geser →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tahan"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ketuk"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ketuk dua kali"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mulai Live untuk melihat percakapan di sini."</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Baru"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ketik"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pesan"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kirim pesan kepada agen"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kirim"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bicara dengan agen Anda"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Berhenti berbicara"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bacakan balasan terbaru"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang berbicara"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang mendengarkan"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang menghubungkan"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang berpikir"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang mengetik"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sedang mengirim"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agen sedang bekerja"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kesalahan"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Siap"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Anda"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agen"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sistem"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mulai percakapan"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bicara atau ketik di jam tangan Anda. Ponsel yang disandingkan mengirim pesan melalui sesi OpenClaw yang telah diautentikasi."</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sesi saat ini"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tampilan"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gelap"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Terang"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ucapkan balasan secara otomatis"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Notifikasi balasan"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktifkan notifikasi"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Batalkan proses"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Buka pengaturan notifikasi"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktif"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nonaktif"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Koneksi"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keamanan"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikendalikan ponsel"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kredensial dan identitas Gateway tetap berada di ponsel yang disandingkan. Jam tangan hanya menggunakan Wear Data Layer."</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memeriksa ponsel"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Membaca agen, sesi, dan chat"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ponsel siap"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway terhubung"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway offline"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hubungkan kembali Gateway di OpenClaw pada ponsel yang disandingkan."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Buka OpenClaw di ponsel"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Jam tangan tidak pernah memulai atau mengautentikasi Gateway itu sendiri."</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ponsel tidak dapat dijangkau"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Letakkan ponsel yang disandingkan di dekat Anda dan instal aplikasi OpenClaw yang sesuai."</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pilihan tidak lagi tersedia"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tindakan tidak diterima"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Terjadi kesalahan"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Segarkan daftar dan coba lagi."</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Coba lagi dari jam tangan."</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pembaruan diperlukan"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Perbarui OpenClaw di ponsel dan jam tangan."</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Segarkan"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Coba lagi"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Balasan OpenClaw"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Balas"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Balasan OpenClaw"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Balasan tidak terkirim"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ponsel tidak tersedia. Ketuk Balas untuk mencoba lagi."</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Buka OpenClaw untuk membalas"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ponsel pilihan Anda telah berubah. Buka aplikasi untuk memuat ulang sesi sebelum membalas."</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Buka sesi dan balas melalui ponsel yang telah dipasangkan"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"BUKA"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"PROKSI PONSEL"</string>
+</resources>

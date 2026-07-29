@@ -7,10 +7,11 @@ import type { WizardPrompter } from "../../src/wizard/prompts.js";
 /** Create a WizardPrompter with default mocked responses and optional overrides. */
 export function createWizardPrompter(
   overrides?: Partial<WizardPrompter>,
-  options?: { defaultSelect?: string },
+  options?: { defaultSelect?: string; selectValues?: string[] },
 ): WizardPrompter {
+  const selectValues = [...(options?.selectValues ?? [])];
   const select = vi.fn(
-    async () => options?.defaultSelect ?? "quickstart",
+    async () => selectValues.shift() ?? options?.defaultSelect ?? "quickstart",
   ) as unknown as WizardPrompter["select"];
   return {
     intro: vi.fn(async () => {}),

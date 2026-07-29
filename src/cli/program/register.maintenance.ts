@@ -2,10 +2,11 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { resolveDoctorCrossStateDirImports } from "../../commands/doctor-invocation.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
+import { isDoctorMachineOutput } from "../doctor-output-mode.js";
+import { setCommandJsonMode } from "./json-mode.js";
 
 const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "workspaceSuggestions",
@@ -32,7 +33,7 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
 
 /** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(program: Command) {
-  program
+  const doctor = program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and channels")
     .addHelpText(
@@ -171,11 +172,11 @@ export function registerMaintenanceCommands(program: Command) {
           sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
           sessionSqliteGithubIssue: Boolean(opts.githubIssue),
           json: Boolean(opts.json),
-          crossStateDirImports: resolveDoctorCrossStateDirImports(),
         });
         defaultRuntime.exit(0);
       });
     });
+  setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
 
   program
     .command("dashboard")
@@ -186,11 +187,13 @@ export function registerMaintenanceCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`,
     )
     .option("--no-open", "Print URL but do not launch a browser")
+    .option("--json", "Output dashboard connection details as JSON", false)
     .option("--yes", "Start/install the gateway without prompting when needed", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { dashboardCommand } = await import("../../commands/dashboard.js");
         await dashboardCommand(defaultRuntime, {
+          json: Boolean(opts.json),
           noOpen: opts.open === false,
           yes: Boolean(opts.yes),
         });

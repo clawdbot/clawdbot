@@ -145,7 +145,7 @@ export async function exchangeGoogleMeetAuthCode(params: {
   );
 }
 
-export async function refreshGoogleMeetAccessToken(params: {
+async function refreshGoogleMeetAccessToken(params: {
   clientId: string;
   clientSecret?: string;
   refreshToken: string;

@@ -2,19 +2,14 @@
 import { describe, expect, it } from "vitest";
 import {
   hasChromeProxyControlArg,
-  hasExplicitChromeProxyRoutingArg,
   omitChromeProxyEnv,
   resolveBrowserNavigationProxyMode,
 } from "./browser-proxy-mode.js";
 
 describe("browser proxy mode", () => {
-  it("detects Chrome proxy-routing args separately from direct proxy controls", () => {
+  it("detects Chrome proxy control args", () => {
     expect(hasChromeProxyControlArg(["--no-proxy-server"])).toBe(true);
-    expect(hasExplicitChromeProxyRoutingArg(["--no-proxy-server"])).toBe(false);
-    expect(hasExplicitChromeProxyRoutingArg(["--proxy-server=http://127.0.0.1:7890"])).toBe(true);
-    expect(hasExplicitChromeProxyRoutingArg(["--proxy-pac-url", "http://proxy.test/pac"])).toBe(
-      true,
-    );
+    expect(hasChromeProxyControlArg(["--proxy-server=http://127.0.0.1:7890"])).toBe(true);
   });
 
   it("removes proxy env before launching managed Chrome", () => {

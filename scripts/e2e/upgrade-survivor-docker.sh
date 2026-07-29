@@ -286,7 +286,7 @@ fs.writeFileSync(
     {
       id: "brave",
       activation: { onStartup: false },
-      providerAuthEnvVars: { brave: ["BRAVE_API_KEY"] },
+      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
       contracts: { webSearchProviders: ["brave"] },
       configSchema: {
         type: "object",

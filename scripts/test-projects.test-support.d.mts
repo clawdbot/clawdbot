@@ -30,6 +30,9 @@ export type ChangedTestTargetOptions = {
   cwd?: string;
   env?: Record<string, string | undefined>;
   broad?: boolean;
+  combineSiblingWithImportGraph?: boolean;
+  forceFullImportGraph?: boolean;
+  includeExtensionImpact?: boolean;
 };
 
 export type ChangedTestTargetPlan = {
@@ -67,14 +70,6 @@ export function buildVitestRunPlans(
 
 export function buildFullSuiteVitestRunPlans(args: string[], cwd?: string): VitestRunPlan[];
 
-export function shouldUseLocalFullSuiteParallelByDefault(
-  env?: Record<string, string | undefined>,
-): boolean;
-
-export function shouldExpandLocalFullSuiteShardsByDefault(
-  env?: Record<string, string | undefined>,
-): boolean;
-
 export function resolveParallelFullSuiteConcurrency(
   specCount: number,
   env?: Record<string, string | undefined>,
@@ -92,6 +87,12 @@ export function resolveChangedTestTargetPlan(
   changedPaths: string[],
   options?: ChangedTestTargetOptions,
 ): ChangedTestTargetPlan;
+
+export function hasImportGraphImpactOnTargets(
+  changedPaths: string[],
+  targetPaths: string[],
+  cwd?: string,
+): boolean;
 
 export function resolveChangedTestTargetPlanForArgs(
   args: string[],
@@ -112,6 +113,8 @@ export function createVitestRunSpecs(
 ): VitestRunSpec[];
 
 export function createVitestPreflightPnpmArgs(config: string): string[] | null;
+
+export function isTestFileTarget(arg: string): boolean;
 
 export function findUnmatchedExplicitTestTargets(
   args: string[],
@@ -150,13 +153,20 @@ export function applyParallelVitestCachePaths<T extends { config: string; env: N
 ): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }>;
 
 export function shouldRetryVitestNoOutputTimeout(env?: Record<string, string | undefined>): boolean;
+export function withRetryNoOutputTimeout<T extends { env?: Record<string, string | undefined> }>(
+  spec: T,
+): T;
 
 export function shouldAcquireLocalHeavyCheckLock(
   runSpecs: Array<Pick<VitestRunSpec, "config" | "includePatterns" | "watchMode">>,
   env?: Record<string, string | undefined>,
 ): boolean;
 
-export function writeVitestIncludeFile(filePath: string, includePatterns: string[]): void;
+export function writeVitestIncludeFile(
+  filePath: string,
+  includePatterns: string[],
+  options?: { cwd?: string; expandGlobs?: boolean },
+): void;
 
 export function formatFailedShardDigest(
   failures: FailedVitestShard[],

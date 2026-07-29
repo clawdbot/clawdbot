@@ -65,11 +65,5 @@ export function resolveMergedWhatsAppAccountConfig(params: {
     accountId === DEFAULT_ACCOUNT_ID
       ? base
       : resolveMergedNamedWhatsAppAccountConfig({ cfg: params.cfg, accountId });
-  return {
-    accountId,
-    ...merged,
-    // WhatsApp has no nested streaming schema; the flat keys are canonical.
-    chunkMode: merged.chunkMode,
-    blockStreaming: merged.blockStreaming,
-  };
+  return { accountId, ...merged };
 }

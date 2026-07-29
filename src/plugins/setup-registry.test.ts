@@ -22,13 +22,13 @@ vi.mock("./native-module-require.js", () => ({
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
-let clearPluginSetupRegistryCache: typeof import("./setup-registry.js").clearPluginSetupRegistryCache;
+let clearPluginSetupRegistryCache: typeof import("./setup-registry.test-fixtures.js").clearPluginSetupRegistryCache;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
 let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 let setPluginSetupRegistryModuleLoaderFactoryForTest:
-  | typeof import("./setup-registry.js").setPluginSetupRegistryModuleLoaderFactoryForTest
+  | typeof import("./setup-registry.test-fixtures.js").setPluginSetupRegistryModuleLoaderFactoryForTest
   | undefined;
 
 function forceNodeRuntimeVersionsForTest(): () => void {
@@ -217,8 +217,9 @@ describe("setup-registry module loader", () => {
     resetRegistryJitiMocks();
     vi.resetModules();
     const module = await import("./setup-registry.js");
-    module.setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
-    module.clearPluginSetupRegistryCache();
+    const fixtures = await import("./setup-registry.test-fixtures.js");
+    fixtures.setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
+    fixtures.clearPluginSetupRegistryCache();
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -245,20 +246,20 @@ describe("setup-registry module loader", () => {
       filename: mockArg(mocks.createJiti, 0, 0),
       options: requireRecord(mockArg(mocks.createJiti, 0, 1)),
     };
-    module.setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+    fixtures.setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
   });
 
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
     ({
-      clearPluginSetupRegistryCache,
       resolvePluginSetupRegistry,
       resolvePluginSetupProvider,
       resolvePluginSetupCliBackend,
       runPluginSetupConfigMigrations,
-      setPluginSetupRegistryModuleLoaderFactoryForTest,
     } = await import("./setup-registry.js"));
+    ({ clearPluginSetupRegistryCache, setPluginSetupRegistryModuleLoaderFactoryForTest } =
+      await import("./setup-registry.test-fixtures.js"));
     setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginSetupRegistryCache();
   });
@@ -1134,3 +1135,4 @@ describe("setup-registry module loader", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -173,7 +173,7 @@ async function deliverGroupMcpShowReplyPrivately(
 }
 
 /** Creates an MCP command handler with injectable private-route dependencies. */
-export function createMcpCommandHandler(deps: Partial<McpCommandDeps> = {}): CommandHandler {
+function createMcpCommandHandler(deps: Partial<McpCommandDeps> = {}): CommandHandler {
   const resolvedDeps: McpCommandDeps = {
     ...defaultMcpCommandDeps,
     ...deps,

@@ -2,8 +2,9 @@
 // nested completion/delivery shape used by current registry records.
 import { describe, expect, it } from "vitest";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import type { LegacySubagentRunRecord } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+type LegacySubagentRunRecord = SubagentRunRecord & Record<string, unknown>;
 
 function baseRun(overrides: Partial<LegacySubagentRunRecord> = {}): LegacySubagentRunRecord {
   return {

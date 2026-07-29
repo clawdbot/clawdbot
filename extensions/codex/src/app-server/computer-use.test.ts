@@ -26,11 +26,13 @@ import {
   ensureCodexComputerUse,
   installCodexComputerUse,
   readCodexComputerUseStatus,
-  testing,
   type CodexComputerUseStatus,
-  type CodexComputerUseRequest,
 } from "./computer-use.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
+
+type CodexComputerUseRequest = NonNullable<
+  NonNullable<Parameters<typeof ensureCodexComputerUse>[0]>["request"]
+>;
 
 function expectStatusFields(
   status: CodexComputerUseStatus,
@@ -368,6 +370,48 @@ describe("Codex Computer Use setup", () => {
     ).toHaveLength(2);
   });
 
+  it("fails fast when the named MCP server exposes no tools", async () => {
+    const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
+
+    await expectSetupErrorStatus(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            strictReadiness: true,
+            marketplaceName: "desktop-tools",
+          },
+        },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "mcp_missing",
+        mcpServerAvailable: false,
+        tools: [],
+        message: "Computer Use is installed, but the computer-use MCP server exposes no tools.",
+      },
+    );
+    expectRequestMethodNotCalled(request, "thread/start");
+    expectRequestMethodNotCalled(request, "mcpServer/tool/call");
+  });
+
+  it("reloads empty MCP exposure once during install before failing closed", async () => {
+    const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
+
+    await expectSetupErrorStatus(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+        request,
+      }),
+      { ready: false, reason: "mcp_missing", mcpServerAvailable: false },
+    );
+    expect(
+      requestCalls(request).filter(([method]) => method === "config/mcpServer/reload"),
+    ).toHaveLength(1);
+    expectRequestMethodNotCalled(request, "thread/start");
+  });
+
   it("does not repair stale Computer Use MCP children unless autoRepair is enabled", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
     const repairComputerUseMcpChildren = vi.fn(async () => ({
@@ -542,24 +586,6 @@ describe("Codex Computer Use setup", () => {
         mcpServerAvailable: true,
       },
     );
-  });
-
-  it("parses process trees so repair can stay scoped to the app-server child tree", () => {
-    const processes = testing.parsePsOutput(`
-      100 1 /Applications/Codex.app/Contents/MacOS/Codex app-server
-      101 100 /Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp
-      102 1 /Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp
-      103 101 helper
-    `);
-
-    expect(processes).toContainEqual({
-      pid: 101,
-      ppid: 100,
-      command: "/Applications/Codex.app/Contents/Frameworks/SkyComputerUseClient mcp",
-    });
-    expect(testing.isDescendantOfPid(101, 100, processes)).toBe(true);
-    expect(testing.isDescendantOfPid(103, 100, processes)).toBe(true);
-    expect(testing.isDescendantOfPid(102, 100, processes)).toBe(false);
   });
 
   it("reports an installed but disabled Computer Use plugin separately", async () => {
@@ -1024,6 +1050,7 @@ function createComputerUseRequest(params: {
   enabled?: boolean;
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
+  mcpToolsAvailable?: boolean;
 }): CodexComputerUseRequest {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
@@ -1089,12 +1116,15 @@ function createComputerUseRequest(params: {
             ? [
                 {
                   name: "computer-use",
-                  tools: {
-                    list_apps: {
-                      name: "list_apps",
-                      inputSchema: { type: "object" },
-                    },
-                  },
+                  tools:
+                    params.mcpToolsAvailable === false
+                      ? {}
+                      : {
+                          list_apps: {
+                            name: "list_apps",
+                            inputSchema: { type: "object" },
+                          },
+                        },
                   resources: [],
                   resourceTemplates: [],
                   authStatus: "unsupported",
@@ -1419,3 +1449,4 @@ function pluginSummary(
     interface: null,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

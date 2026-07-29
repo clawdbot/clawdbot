@@ -9,9 +9,7 @@ import {
   CircularIncludeError,
   ConfigIncludeError,
   MAX_INCLUDE_DEPTH,
-  MAX_INCLUDE_FILE_BYTES,
-  MAX_INCLUDE_PATH_LENGTH,
-  deepMerge,
+  type ConfigIncludeResolutionEvent,
   type IncludeResolver,
   resolveConfigIncludeWritePath,
   resolveConfigIncludes,
@@ -173,6 +171,91 @@ describe("resolveConfigIncludes", () => {
     expect(resolve(obj, files)).toEqual({
       nested: { deep: "value" },
     });
+  });
+
+  it("reports exact include ownership through arrays, nesting, and sibling overrides", () => {
+    const files = {
+      [configPath("first.json")]: { id: "first" },
+      [configPath("second.json")]: { enabled: true },
+      [configPath("third.json")]: { mode: "strict" },
+    };
+    const events: ConfigIncludeResolutionEvent[] = [];
+    const resolver = createMockResolver(files);
+    resolver.onIncludeResolved = (event) => events.push(event);
+
+    expect(
+      resolveConfigIncludes(
+        {
+          plugins: [
+            { $include: "./first.json" },
+            {
+              policy: {
+                $include: ["./second.json", "./third.json"],
+                enabled: false,
+              },
+            },
+          ],
+        },
+        DEFAULT_BASE_PATH,
+        resolver,
+      ),
+    ).toEqual({
+      plugins: [{ id: "first" }, { policy: { enabled: false, mode: "strict" } }],
+    });
+    expect(events).toEqual([
+      {
+        path: ["plugins", "0"],
+        value: { id: "first" },
+        kind: "single",
+        hasSiblingOverrides: false,
+        targetPath: configPath("first.json"),
+      },
+      {
+        path: ["plugins", "1", "policy"],
+        value: { enabled: true, mode: "strict" },
+        kind: "multiple",
+        hasSiblingOverrides: true,
+      },
+    ]);
+  });
+
+  it("reports the enclosing include after nested delegates at the same logical path", () => {
+    const files = {
+      [configPath("delegating.json")]: { $include: "./nested.json" },
+      [configPath("nested.json")]: { mode: "nested" },
+      [configPath("override.json")]: { mode: "override" },
+    };
+    const events: ConfigIncludeResolutionEvent[] = [];
+    const resolver = createMockResolver(files);
+    resolver.onIncludeResolved = (event) => events.push(event);
+
+    expect(
+      resolveConfigIncludes(
+        {
+          agents: { $include: ["./delegating.json", "./override.json"] },
+        },
+        DEFAULT_BASE_PATH,
+        resolver,
+      ),
+    ).toEqual({ agents: { mode: "override" } });
+    expect(
+      events.map(({ path: logicalPath, kind, targetPath }) => ({
+        path: logicalPath,
+        kind,
+        targetPath,
+      })),
+    ).toEqual([
+      {
+        path: ["agents"],
+        kind: "single",
+        targetPath: configPath("nested.json"),
+      },
+      {
+        path: ["agents"],
+        kind: "multiple",
+        targetPath: undefined,
+      },
+    ]);
   });
 
   it.each([
@@ -722,30 +805,24 @@ describe("security: path traversal protection (CWE-22)", () => {
   });
 
   describe("prototype pollution protection", () => {
-    it("blocks prototype pollution vectors in shallow and nested merges", () => {
-      const cases = [
-        {
-          base: {},
-          incoming: JSON.parse('{"__proto__":{"polluted":true}}'),
-          expected: {},
-        },
-        {
-          base: { safe: 1 },
-          incoming: { prototype: { x: 1 }, constructor: { y: 2 }, normal: 3 },
-          expected: { safe: 1, normal: 3 },
-        },
-        {
-          base: { nested: { a: 1 } },
-          incoming: { nested: JSON.parse('{"__proto__":{"polluted":true}}') },
-          expected: { nested: { a: 1 } },
-        },
-      ] as const;
+    it("blocks prototype pollution vectors in included and sibling config", () => {
+      const includePath = configPath("pollution.json");
+      const included = JSON.parse(
+        '{"__proto__":{"polluted":true},"constructor":{"hidden":true},"normal":3}',
+      ) as Record<string, unknown>;
+      const sibling = JSON.parse('{"__proto__":{"alsoPolluted":true},"safe":1}') as Record<
+        string,
+        unknown
+      >;
 
-      for (const { base, incoming, expected } of cases) {
-        const result = deepMerge(base, incoming);
-        expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
-        expect(result).toEqual(expected);
-      }
+      const result = resolve(
+        { $include: "./pollution.json", ...sibling },
+        { [includePath]: included },
+      );
+
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+      expect((Object.prototype as Record<string, unknown>).alsoPolluted).toBeUndefined();
+      expect(result).toEqual({ normal: 3, safe: 1 });
     });
   });
 
@@ -762,12 +839,15 @@ describe("security: path traversal protection (CWE-22)", () => {
       }
     });
 
-    it("rejects include path at or over maximum length (>= MAX_INCLUDE_PATH_LENGTH)", () => {
-      const overLimit = "a".repeat(MAX_INCLUDE_PATH_LENGTH + 1);
-      expectResolveIncludeError(() => resolve({ $include: overLimit }, {}), /maximum length/);
-      // Boundary: length exactly 4096 must be rejected (Linux PATH_MAX includes NUL)
-      const atLimit = "b".repeat(MAX_INCLUDE_PATH_LENGTH);
-      expectResolveIncludeError(() => resolve({ $include: atLimit }, {}), /maximum length/);
+    it("rejects include paths at or over the platform-safe maximum", () => {
+      expectResolveIncludeError(
+        () => resolve({ $include: "a".repeat(4096) }, {}),
+        /maximum length/,
+      );
+      expectResolveIncludeError(
+        () => resolve({ $include: "b".repeat(4097) }, {}),
+        /maximum length/,
+      );
     });
 
     it("accepts include path at or under maximum length when file exists", () => {
@@ -861,13 +941,15 @@ describe("security: path traversal protection (CWE-22)", () => {
       });
     });
 
-    it("rejects oversized include files", async () => {
+    it("rejects include files larger than the guarded read limit", async () => {
       await withTempDir({ prefix: "openclaw-includes-big-" }, async (tempRoot) => {
         const configDir = path.join(tempRoot, "config");
         await fs.mkdir(configDir, { recursive: true });
-        const includePath = path.join(configDir, "big.json5");
-        const payload = "a".repeat(MAX_INCLUDE_FILE_BYTES + 1);
-        await fs.writeFile(includePath, `{"blob":"${payload}"}`, "utf-8");
+        await fs.writeFile(
+          path.join(configDir, "big.json5"),
+          `{"blob":"${"a".repeat(2 * 1024 * 1024 + 1)}"}`,
+          "utf-8",
+        );
 
         expect(() =>
           resolveConfigIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),

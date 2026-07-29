@@ -10,9 +10,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
-  hasLegacyStreamingAliases,
-  normalizeLegacyChannelAliases,
-  resolveLegacyAliasStreamingMode,
+  defineChannelAliasMigration,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -29,6 +27,14 @@ import {
   type MSTeamsLegacyConversationStoreData,
 } from "./src/conversation-store-state.js";
 import type { StoredConversationReference } from "./src/conversation-store.js";
+import {
+  MSTEAMS_DELEGATED_TOKEN_KEY,
+  MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME,
+  MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+  MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+  normalizeMSTeamsDelegatedTokens,
+} from "./src/delegated-state.js";
+import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 import {
   buildMSTeamsPollStateKey,
   buildMSTeamsPollVoteBucketKey,
@@ -55,46 +61,22 @@ import {
   type MSTeamsSsoStoredToken,
 } from "./src/sso-token-store.js";
 
-export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
-  {
-    path: ["channels", "msteams"],
-    message:
-      'channels.msteams.streamMode, channels.msteams.streaming (scalar), chunkMode, blockStreaming, and blockStreamingCoalesce are legacy; use channels.msteams.streaming.{mode,chunkMode,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyStreamingAliases(value),
-  },
-];
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "msteams",
+  // Teams previews default to partial streaming, matching the runtime default
+  // in reply-dispatcher when no mode is configured.
+  streaming: { defaultMode: "partial" },
+});
+
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =
+  streamingAliasMigration.legacyConfigRules;
 
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const msteams = channels?.msteams;
-  if (!isRecord(msteams)) {
-    return { config: cfg, changes: [] };
-  }
-  const changes: string[] = [];
-  const aliases = normalizeLegacyChannelAliases({
-    entry: msteams,
-    pathPrefix: "channels.msteams",
-    changes,
-    resolveStreamingOptions: (entry) => ({
-      // Teams previews default to partial streaming, matching the runtime
-      // default in reply-dispatcher when no mode is configured.
-      resolvedMode: resolveLegacyAliasStreamingMode(entry, "partial"),
-    }),
-  });
-  if (!aliases.changed) {
-    return { config: cfg, changes: [] };
-  }
-  return {
-    config: {
-      ...cfg,
-      channels: { ...channels, msteams: aliases.entry },
-    } as OpenClawConfig,
-    changes,
-  };
+  return streamingAliasMigration.normalizeChannelConfig({ cfg });
 }
 
 type FeedbackLearningEntry = {
@@ -165,8 +147,15 @@ function resolveLegacySanitizedSessionKey(
   return matches.length === 1 && match ? match : null;
 }
 
-function listAgentIds(config: { agents?: { list?: Array<{ id?: unknown }> } }): string[] {
+function listAgentIds(config: OpenClawConfig): string[] {
   const ids = new Set<string>(["main"]);
+  if (isRecord(config.agents?.entries)) {
+    for (const agentId of Object.keys(config.agents.entries)) {
+      if (agentId.trim()) {
+        ids.add(agentId.trim());
+      }
+    }
+  }
   for (const agent of config.agents?.list ?? []) {
     if (typeof agent.id === "string" && agent.id.trim()) {
       ids.add(agent.id.trim());
@@ -180,7 +169,6 @@ function listCandidateStorePaths(params: {
   env: NodeJS.ProcessEnv;
 }): string[] {
   const paths = new Set<string>();
-  paths.add(resolveStorePath(params.config.session?.store, { env: params.env }));
   for (const agentId of listAgentIds(params.config)) {
     paths.add(resolveStorePath(params.config.session?.store, { agentId, env: params.env }));
   }
@@ -512,6 +500,95 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} SSO-token`,
+        changes,
+        warnings,
+      });
+      return { changes, warnings };
+    },
+  },
+  {
+    id: "msteams-delegated-token-json-to-plugin-state",
+    label: "Microsoft Teams delegated OAuth token",
+    async detectLegacyState(params) {
+      const filePath = resolveStateFilePath(
+        params.stateDir,
+        MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME,
+      );
+      try {
+        const stat = await fs.stat(filePath);
+        return stat.isFile()
+          ? {
+              preview: [
+                `- ${MSTEAMS_PLUGIN_ID} delegated OAuth token -> plugin state (${MSTEAMS_DELEGATED_TOKEN_NAMESPACE})`,
+              ],
+            }
+          : null;
+      } catch {
+        return null;
+      }
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const filePath = resolveStateFilePath(
+        params.stateDir,
+        MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME,
+      );
+      let token: MSTeamsDelegatedTokens | null;
+      try {
+        token = normalizeMSTeamsDelegatedTokens(
+          JSON.parse(await fs.readFile(filePath, "utf8")) as unknown,
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return { changes, warnings };
+        }
+        warnings.push(
+          `Failed reading ${MSTEAMS_PLUGIN_ID} delegated OAuth token legacy source; left it in place`,
+        );
+        return { changes, warnings };
+      }
+      if (!token) {
+        warnings.push(
+          `Invalid ${MSTEAMS_PLUGIN_ID} delegated OAuth token legacy source; left it in place`,
+        );
+        return { changes, warnings };
+      }
+      const store = params.context.openPluginStateKeyedStore<MSTeamsDelegatedTokens>({
+        namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+        maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      const existing = await store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY);
+      if (existing && JSON.stringify(existing) !== JSON.stringify(token)) {
+        warnings.push(
+          `Kept existing ${MSTEAMS_PLUGIN_ID} delegated OAuth token in plugin state; left differing legacy source in place`,
+        );
+        return { changes, warnings };
+      }
+      if (!existing) {
+        try {
+          await store.registerIfAbsent(MSTEAMS_DELEGATED_TOKEN_KEY, token);
+        } catch (error) {
+          warnings.push(
+            `Failed importing ${MSTEAMS_PLUGIN_ID} delegated OAuth token: ${String(error)}; left legacy source in place`,
+          );
+          return { changes, warnings };
+        }
+      }
+      const persisted = normalizeMSTeamsDelegatedTokens(
+        await store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY),
+      );
+      if (!persisted || JSON.stringify(persisted) !== JSON.stringify(token)) {
+        warnings.push(
+          `Failed verifying ${MSTEAMS_PLUGIN_ID} delegated OAuth token in plugin state; left legacy source in place`,
+        );
+        return { changes, warnings };
+      }
+      changes.push(`Migrated ${MSTEAMS_PLUGIN_ID} delegated OAuth token -> plugin state`);
+      await archiveLegacyStateSource({
+        filePath,
+        label: `${MSTEAMS_PLUGIN_ID} delegated OAuth token`,
         changes,
         warnings,
       });

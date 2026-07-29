@@ -16,7 +16,7 @@ OpenClaw Twitch channel plugin for chat and moderation workflows.
 
 ## Surface
 
-channels: twitch
+channels: `twitch`
 
 ## Related docs
 

@@ -1,6 +1,8 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+export type { FastMode } from "@openclaw/normalization-core/string-coerce";
+
 export const DEFAULT_FAST_MODE_AUTO_ON_SECONDS = 60;
 
 export type FastModeSource = "session" | "agent" | "config" | "default";
@@ -66,7 +68,7 @@ export function resolveFastModeModelParams(params: {
   return undefined;
 }
 
-export function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
+function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
@@ -148,12 +150,6 @@ export function formatFastModeCommandOptions(params?: { fastAutoOnSeconds?: numb
   return `on, off, ${formatFastModeAutoLabel({
     fastAutoOnSeconds: params?.fastAutoOnSeconds,
   })}, default, status`;
-}
-
-export function normalizeFastModeSource(value: unknown): FastModeSource | undefined {
-  return value === "session" || value === "agent" || value === "config" || value === "default"
-    ? value
-    : undefined;
 }
 
 export function formatFastModeSourceSuffix(source: FastModeSource | undefined): string {

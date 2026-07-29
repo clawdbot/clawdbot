@@ -173,12 +173,15 @@ export function resolveNodeRunner(): string {
 
 /** Locate the installed OpenClaw package root that should receive update operations. */
 export async function resolveUpdateRoot(): Promise<string> {
+  // Preserve the lexical package path from the invoking shim. pnpm 11 package
+  // modules realpath into a shared store, which is not the install owner.
+  const invocationRoot = process.argv[1]
+    ? await resolveOpenClawPackageRoot({ cwd: path.dirname(path.resolve(process.argv[1])) })
+    : null;
   return (
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    })) ?? process.cwd()
+    invocationRoot ??
+    (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, cwd: process.cwd() })) ??
+    process.cwd()
   );
 }
 

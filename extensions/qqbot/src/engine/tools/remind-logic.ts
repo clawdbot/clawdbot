@@ -121,7 +121,7 @@ export const RemindSchema = {
  *
  * @returns Milliseconds or null if unparseable.
  */
-export function parseRelativeTime(timeStr: string): number | null {
+function parseRelativeTime(timeStr: string): number | null {
   const s = timeStr.trim().toLowerCase();
   if (/^\d+$/.test(s)) {
     return Number.parseInt(s, 10) * 60_000;
@@ -166,7 +166,7 @@ export function parseRelativeTime(timeStr: string): number | null {
  * Check whether a time string is a cron expression (3–6 space-separated fields).
  * 判断时间字符串是否为 cron 表达式。
  */
-export function isCronExpression(timeStr: string): boolean {
+function isCronExpression(timeStr: string): boolean {
   const parts = timeStr.trim().split(/\s+/);
   if (parts.length < 3 || parts.length > 6) {
     return false;
@@ -178,14 +178,14 @@ export function isCronExpression(timeStr: string): boolean {
  * Generate a cron job name from reminder content (first 20 chars).
  * 根据提醒内容生成 cron job 名称。
  */
-export function generateJobName(content: string): string {
+function generateJobName(content: string): string {
   const trimmed = content.trim();
   const short = trimmed.length > 20 ? `${truncateUtf16Safe(trimmed, 20)}…` : trimmed;
   return `Reminder: ${short}`;
 }
 
 /** Build the reminder system prompt sent to the AI. */
-export function buildReminderPrompt(content: string): string {
+function buildReminderPrompt(content: string): string {
   return (
     `You are a warm reminder assistant. Please remind the user about: ${content}. ` +
     `Requirements: (1) do not reply with HEARTBEAT_OK (2) do not explain who you are ` +
@@ -209,6 +209,8 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
       payload: {
         kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
+        // The scheduled turn only renders reminder text; delivery is host-owned.
+        toolsAllow: [],
       },
       delivery: {
         mode: "announce" as const,
@@ -235,6 +237,8 @@ function buildCronJob(params: RemindParams, to: string, accountId: string) {
       payload: {
         kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
+        // The scheduled turn only renders reminder text; delivery is host-owned.
+        toolsAllow: [],
       },
       delivery: {
         mode: "announce" as const,
@@ -247,7 +251,7 @@ function buildCronJob(params: RemindParams, to: string, accountId: string) {
 }
 
 /** Format a delay in milliseconds as a short string (e.g. "5m", "1h30m"). */
-export function formatDelay(ms: number): string {
+function formatDelay(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
   if (totalSeconds < 60) {
     return `${totalSeconds}s`;
@@ -268,7 +272,7 @@ function formatSchedulerError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function prepareRemindCronAction(
+function prepareRemindCronAction(
   params: RemindParams,
   ctx: RemindExecuteContext = {},
 ): RemindCronPlan {

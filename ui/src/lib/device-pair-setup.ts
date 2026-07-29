@@ -6,21 +6,50 @@ type GatewayRequestClient = {
 };
 
 export type DevicePairSetup = DevicePairSetupCodeResult;
+export type DevicePairSetupAccess = "full" | "limited";
 
-export type DevicePairSetupState = {
+type DevicePairSetupState = {
   client: GatewayRequestClient | null;
   connected: boolean;
   devicePairSetupOpen: boolean;
   devicePairSetupLoading: boolean;
   devicePairSetupError: string | null;
   devicePairSetup: DevicePairSetup | null;
+  devicePairSetupAccess: DevicePairSetupAccess;
 };
+
+type DevicePairSetupOverlayState = DevicePairSetupState & { pendingCount: number };
+
+export function createDevicePairSetupState(params: {
+  client: DevicePairSetupState["client"];
+  connected: boolean;
+}): DevicePairSetupOverlayState {
+  return {
+    ...params,
+    devicePairSetupOpen: false,
+    devicePairSetupLoading: false,
+    devicePairSetupError: null,
+    devicePairSetup: null,
+    devicePairSetupAccess: "full",
+    pendingCount: 0,
+  };
+}
+
+export function readDevicePairSetupSnapshot(state: DevicePairSetupOverlayState) {
+  return {
+    devicePairSetupOpen: state.devicePairSetupOpen,
+    devicePairSetupLoading: state.devicePairSetupLoading,
+    devicePairSetupError: state.devicePairSetupError,
+    devicePairSetup: state.devicePairSetup,
+    devicePairSetupAccess: state.devicePairSetupAccess,
+    devicePairPendingCount: state.pendingCount,
+  };
+}
 
 const devicePairSetupRequests = new WeakMap<DevicePairSetupState, object>();
 
 export async function openDevicePairSetup(state: DevicePairSetupState) {
   state.devicePairSetupOpen = true;
-  await refreshDevicePairSetup(state);
 }
 
 export async function refreshDevicePairSetup(state: DevicePairSetupState) {
@@ -33,7 +62,10 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   state.devicePairSetupLoading = true;
   state.devicePairSetupError = null;
   try {
-    const result = await client.request<DevicePairSetup>("device.pair.setupCode", {});
+    const result = await client.request<DevicePairSetup>(
+      "device.pair.setupCode",
+      state.devicePairSetupAccess === "limited" ? { bootstrapProfile: "limited" } : {},
+    );
     if (
       devicePairSetupRequests.get(state) !== requestToken ||
       state.client !== client ||
@@ -41,6 +73,9 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       !state.devicePairSetupOpen
     ) {
       return;
+    }
+    if (result.access === "full" || result.access === "limited") {
+      state.devicePairSetupAccess = result.access;
     }
     state.devicePairSetup = result;
   } catch (err) {
@@ -60,10 +95,28 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   }
 }
 
+export async function setDevicePairSetupAccess(
+  state: DevicePairSetupState,
+  access: DevicePairSetupAccess,
+) {
+  if (
+    state.devicePairSetupAccess === access ||
+    state.devicePairSetupLoading ||
+    state.devicePairSetup !== null
+  ) {
+    return;
+  }
+  // Choose access before minting a bearer setup credential. Once a code exists,
+  // closing the dialog starts a fresh selection instead of implying revocation.
+  state.devicePairSetupAccess = access;
+  state.devicePairSetupError = null;
+}
+
 export function closeDevicePairSetup(state: DevicePairSetupState) {
   devicePairSetupRequests.delete(state);
   state.devicePairSetupOpen = false;
   state.devicePairSetupLoading = false;
   state.devicePairSetupError = null;
   state.devicePairSetup = null;
+  state.devicePairSetupAccess = "full";
 }

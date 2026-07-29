@@ -4,14 +4,19 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const endpointMockState = vi.hoisted(() => ({
-  calls: [] as Array<{ url: string; timeoutSeconds: number; init: RequestInit }>,
+  calls: [] as Array<{
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  }>,
   responses: [] as Response[],
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
   const runEndpoint = async (
-    params: { url: string; timeoutSeconds: number; init: RequestInit },
+    params: { url: string; timeoutSeconds: number; init: RequestInit; signal?: AbortSignal },
     run: (response: Response) => Promise<unknown>,
   ) => {
     endpointMockState.calls.push(params);
@@ -151,6 +156,23 @@ describe("searxng client", () => {
       },
       results: [],
     });
+  });
+
+  it("forwards the abort signal to the guarded endpoint", async () => {
+    endpointMockState.responses.push(
+      new Response(JSON.stringify({ results: [] }), { status: 200 }),
+    );
+    const controller = new AbortController();
+
+    await runSearxngSearch({
+      baseUrl: "http://127.0.0.1:8888",
+      query: "openclaw",
+      categories: "general",
+      signal: controller.signal,
+    });
+
+    expect(endpointMockState.calls).toHaveLength(1);
+    expect(endpointMockState.calls[0]?.signal).toBe(controller.signal);
   });
 
   it("rejects partial response bodies without blaming the size limit", async () => {

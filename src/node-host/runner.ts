@@ -1,5 +1,4 @@
 /** CLI runner for node-host stdin/stdout command dispatch. */
-import fs from "node:fs";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -14,33 +13,15 @@ import {
 } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
-import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import {
-  NODE_EXEC_APPROVALS_COMMANDS,
-  NODE_FS_LIST_DIR_COMMAND,
-  NODE_MCP_TOOLS_CALL_COMMAND,
-  NODE_SYSTEM_RUN_COMMANDS,
-} from "../infra/node-commands.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
-import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
 import {
+  coerceNodeInvokeCancelPayload,
+  coerceNodeInvokeInputPayload,
   coerceNodeInvokePayload,
-  type SkillBinsProvider,
-  buildNodeInvokeResultParams,
-  handleInvoke,
-} from "./invoke.js";
-import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
-import {
-  ensureNodeHostPluginRegistry,
-  listRegisteredNodeHostCapsAndCommands,
-} from "./plugin-node-host.js";
-import { scanNodeHostedSkills } from "./skills.js";
-
-export { buildNodeInvokeResultParams };
-export { buildNodeEventParams } from "./invoke.js";
+} from "./invoke-payload.js";
+import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -51,11 +32,10 @@ type NodeHostRunOptions = {
   gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
 };
 
-const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-
-export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
+function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
   switch (platform) {
     case "darwin":
       return "macos";
@@ -68,7 +48,7 @@ export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): strin
   }
 }
 
-export function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
+function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
   switch (platform) {
     case "darwin":
       return "Mac";
@@ -99,7 +79,7 @@ type NodeHostReconnectPausedDeps = {
   exit?: (code: number) => void;
 };
 
-export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
+function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
   return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
 }
 
@@ -113,7 +93,7 @@ function formatNodeHostReconnectPausedMessage(
   return `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`;
 }
 
-export function handleNodeHostReconnectPaused(
+function handleNodeHostReconnectPaused(
   info: GatewayReconnectPausedInfo,
   deps: NodeHostReconnectPausedDeps = {},
 ): void {
@@ -144,9 +124,6 @@ function isUnsupportedNodeSkillsUpdateError(error: unknown): boolean {
 }
 
 async function publishNodePluginTools(client: GatewayClient, tools: unknown[]): Promise<void> {
-  if (tools.length === 0) {
-    return;
-  }
   try {
     await client.request("node.pluginTools.update", { tools });
   } catch (error) {
@@ -168,93 +145,7 @@ async function publishNodeSkills(client: GatewayClient, skills: unknown[]): Prom
   }
 }
 
-function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
-  if (bin.includes("/") || bin.includes("\\")) {
-    return null;
-  }
-  return resolveExecutableFromPathEnv(bin, pathEnv) ?? null;
-}
-
-function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string): string | null {
-  const resolvedPath = resolveExecutablePathFromEnv(bin, pathEnv);
-  if (!resolvedPath) {
-    return null;
-  }
-  try {
-    return fs.realpathSync(resolvedPath);
-  } catch {
-    return resolvedPath;
-  }
-}
-
-function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
-  const trustEntries: SkillBinTrustEntry[] = [];
-  const seen = new Set<string>();
-  for (const bin of bins) {
-    const name = bin.trim();
-    if (!name) {
-      continue;
-    }
-    const resolvedPath = resolveExecutableTrustPathFromEnv(name, pathEnv);
-    if (!resolvedPath) {
-      continue;
-    }
-    const key = `${name}\u0000${resolvedPath}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    trustEntries.push({ name, resolvedPath });
-  }
-  return trustEntries.toSorted(
-    (left, right) =>
-      left.name.localeCompare(right.name) || left.resolvedPath.localeCompare(right.resolvedPath),
-  );
-}
-
-class SkillBinsCache implements SkillBinsProvider {
-  private bins: SkillBinTrustEntry[] = [];
-  private lastRefresh = 0;
-  private readonly ttlMs = 90_000;
-  private readonly fetch: () => Promise<string[]>;
-  private readonly pathEnv: string;
-
-  constructor(fetch: () => Promise<string[]>, pathEnv: string) {
-    this.fetch = fetch;
-    this.pathEnv = pathEnv;
-  }
-
-  async current(force = false): Promise<SkillBinTrustEntry[]> {
-    if (force || Date.now() - this.lastRefresh > this.ttlMs) {
-      await this.refresh();
-    }
-    return this.bins;
-  }
-
-  private async refresh() {
-    try {
-      const bins = await this.fetch();
-      this.bins = resolveSkillBinTrustEntries(bins, this.pathEnv);
-      this.lastRefresh = Date.now();
-    } catch {
-      if (!this.lastRefresh) {
-        this.bins = [];
-      }
-    }
-  }
-}
-
-function ensureNodePathEnv(): string {
-  ensureOpenClawCliOnPath({ pathEnv: process.env.PATH ?? "" });
-  const current = process.env.PATH ?? "";
-  if (current.trim()) {
-    return current;
-  }
-  process.env.PATH = DEFAULT_NODE_PATH;
-  return DEFAULT_NODE_PATH;
-}
-
-export async function resolveNodeHostGatewayCredentials(params: {
+async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ token?: string; password?: string }> {
@@ -264,8 +155,7 @@ export async function resolveNodeHostGatewayCredentials(params: {
   return await resolveGatewayConnectionAuth({
     config: configForResolution,
     env: params.env,
-    localTokenPrecedence: "env-first",
-    localPasswordPrecedence: "env-first", // pragma: allowlist secret
+    localPrecedence: "env-first",
     remoteTokenPrecedence: "env-first",
     remotePasswordPrecedence: "env-first", // pragma: allowlist secret
   });
@@ -286,34 +176,40 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  const config = await ensureNodeHostConfig();
-  const nodeId = opts.nodeId?.trim() || config.nodeId;
-  if (nodeId !== config.nodeId) {
-    config.nodeId = nodeId;
-  }
-  const displayName =
-    opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
-  config.displayName = displayName;
-
-  const gateway: NodeHostGatewayConfig = {
+  const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
     tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
     contextPath: opts.gatewayContextPath,
   };
-  config.gateway = gateway;
-  await saveNodeHostConfig(config);
+  const fallbackDisplayName = await getMachineDisplayName();
+  const config = await configureNodeHost({
+    nodeId: opts.nodeId,
+    displayName: opts.displayName,
+    fallbackDisplayName,
+    gateway: plannedGateway,
+    installedAppsSharing: opts.installedAppsSharing,
+  });
+  const nodeId = config.nodeId;
+  const displayName = config.displayName ?? fallbackDisplayName;
+  const gateway = config.gateway ?? plannedGateway;
 
   const cfg = getRuntimeConfig();
-  await ensureNodeHostPluginRegistry({ config: cfg, env: process.env });
-  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands({ config: cfg, env: process.env });
+  const preparedRuntime = await prepareNodeHostRuntime({
+    config: cfg,
+    env: process.env,
+    enableAgentRuns: true,
+    installedAppsSharingEnabled: config.installedAppsSharing,
+  });
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
     env: process.env,
   });
 
   const host = gateway.host ?? "127.0.0.1";
+  const urlHost =
+    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
   const contextPath = gateway.contextPath
@@ -321,41 +217,24 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       ? gateway.contextPath
       : `/${gateway.contextPath}`
     : "";
-  const url = `${scheme}://${host}:${port}${contextPath}`;
-  const pathEnv = ensureNodePathEnv();
-  const mcpServers = cfg.nodeHost?.mcp?.servers;
-  const nodeSkills = cfg.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
-  const mcpStartupAbort = new AbortController();
-  const mcpRuntime: {
-    manager?: NodeHostMcpManager;
-    startup?: Promise<NodeHostMcpManager>;
-  } = {};
+  const url = `${scheme}://${urlHost}:${port}${contextPath}`;
+  let inventory: NodeHostInventory = preparedRuntime.initialInventory;
   let gatewayHelloReceived = false;
 
-  const publishNodeToolsWhenReady = () => {
-    if (!gatewayHelloReceived || !mcpRuntime.manager) {
+  const publishInventory = () => {
+    if (!gatewayHelloReceived) {
       return;
     }
-    const nodePluginTools = [
-      ...pluginNodeHost.nodePluginTools,
-      ...mcpRuntime.manager.descriptors,
-    ].toSorted(
-      (left, right) =>
-        left.pluginId.localeCompare(right.pluginId) || left.name.localeCompare(right.name),
-    );
-    void publishNodePluginTools(client, nodePluginTools);
-  };
-  const closeMcpRuntime = async () => {
-    mcpStartupAbort.abort();
-    const manager = mcpRuntime.manager ?? (await mcpRuntime.startup?.catch(() => undefined));
-    await manager?.close();
+    if (inventory.skills) {
+      void publishNodeSkills(client, inventory.skills);
+    }
+    void publishNodePluginTools(client, inventory.pluginTools);
   };
 
   const client = new GatewayClient({
     url,
     token: token || undefined,
     password: password || undefined,
-    preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
@@ -367,19 +246,27 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     scopes: [],
     // Pair the built-in MCP command family up front. Server inventory is
     // restart-scoped availability, not a capability upgrade requiring re-pairing.
-    caps: ["system", "mcp", ...pluginNodeHost.caps],
-    commands: [
-      ...NODE_SYSTEM_RUN_COMMANDS,
-      ...NODE_EXEC_APPROVALS_COMMANDS,
-      NODE_FS_LIST_DIR_COMMAND,
-      NODE_MCP_TOOLS_CALL_COMMAND,
-      ...pluginNodeHost.commands,
-    ],
-    pathEnv,
+    caps: preparedRuntime.manifest.caps,
+    commands: preparedRuntime.manifest.commands,
+    pathEnv: preparedRuntime.manifest.pathEnv,
     permissions: undefined,
     deviceIdentity: loadOrCreateDeviceIdentity(),
     tlsFingerprint: gateway.tlsFingerprint,
     onEvent: (evt) => {
+      if (evt.event === "node.invoke.cancel") {
+        const payload = coerceNodeInvokeCancelPayload(evt.payload);
+        if (payload) {
+          activeRuntime.cancel(payload.invokeId);
+        }
+        return;
+      }
+      if (evt.event === "node.invoke.input") {
+        const payload = coerceNodeInvokeInputPayload(evt.payload);
+        if (payload) {
+          activeRuntime.handleInput(payload.invokeId, payload.seq, payload.payloadJSON);
+        }
+        return;
+      }
       if (evt.event !== "node.invoke.request") {
         return;
       }
@@ -387,20 +274,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       if (!payload) {
         return;
       }
-      void handleInvoke(payload, client, skillBins, mcpRuntime.manager);
+      void activeRuntime.invoke(payload);
     },
     onHelloOk: () => {
       writeStderrLine(`node host gateway connected: ${url}`);
       gatewayHelloReceived = true;
-      if (nodeSkills) {
-        void publishNodeSkills(client, nodeSkills);
-      }
-      if (mcpRuntime.manager) {
-        publishNodeToolsWhenReady();
-      } else {
-        // Do not make existing plugin tools wait for optional MCP discovery.
-        void publishNodePluginTools(client, pluginNodeHost.nodePluginTools);
-      }
+      publishInventory();
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
@@ -412,20 +291,27 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           client.stop();
           // Terminal auth/version pauses restart under a supervisor; close MCP
           // subprocesses first so restart loops cannot orphan server processes.
-          void closeMcpRuntime().finally(() => process.exit(code));
+          void activeRuntime.close().finally(() => process.exit(code));
         },
       });
     },
     onClose: (code, reason) => {
+      gatewayHelloReceived = false;
+      activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
   });
-
-  const skillBins = new SkillBinsCache(async () => {
-    const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});
-    const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
-    return bins;
-  }, pathEnv);
+  const activeRuntime = preparedRuntime.start({
+    client,
+    onInventoryChanged: (nextInventory) => {
+      inventory = nextInventory;
+      publishInventory();
+    },
+    onManifestChanged: (manifest) => {
+      gatewayHelloReceived = false;
+      client.updateNodeManifest(manifest);
+    },
+  });
 
   let stopping = false;
   let resolveStopped: (() => void) | undefined;
@@ -442,7 +328,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const stopClientAndMcp = async () => {
     client.stop();
     try {
-      await closeMcpRuntime();
+      await activeRuntime.close();
     } finally {
       clearInterval(lifetimeInterval);
     }
@@ -465,17 +351,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
-  const readinessPromise = startGatewayClientWhenEventLoopReady(client, {
-    clientOptions: { preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs },
-  });
-  // Gateway startup begins first; optional MCP discovery must not delay core node availability.
-  mcpRuntime.startup = startNodeHostMcpManager(mcpServers, { signal: mcpStartupAbort.signal }).then(
-    (manager) => {
-      mcpRuntime.manager = manager;
-      publishNodeToolsWhenReady();
-      return manager;
-    },
-  );
+  const readinessPromise = startGatewayClientWhenEventLoopReady(client);
   let readiness;
   try {
     readiness = await readinessPromise;

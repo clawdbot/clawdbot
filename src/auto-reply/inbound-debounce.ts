@@ -63,6 +63,7 @@ export type InboundDebounceCreateParams<T> = {
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const keyChains = new Map<string, Promise<void>>();
+  const keyGenerations = new Map<string, number>();
   const defaultDebounceMs = resolveNonNegativeIntegerOption(params.debounceMs, 0);
   const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
 
@@ -84,6 +85,25 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
   };
 
+  const cancelItems = (items: T[]) => {
+    try {
+      params.onCancel?.(items);
+    } catch {
+      // Cancellation observers release caller-owned resources; debounce state
+      // must still drain even if an observer fails.
+    }
+  };
+
+  const resolveKeyGeneration = (key: string) => keyGenerations.get(key) ?? 0;
+
+  const runQueuedFlush = async (key: string, generation: number, items: T[]) => {
+    if (resolveKeyGeneration(key) !== generation) {
+      cancelItems(items);
+      return;
+    }
+    await runFlush(items);
+  };
+
   const enqueueKeyTask = (key: string, task: () => Promise<void>) => {
     const previous = keyChains.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(task);
@@ -92,6 +112,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const cleanup = () => {
       if (keyChains.get(key) === settled) {
         keyChains.delete(key);
+        if (!buffers.has(key)) {
+          keyGenerations.delete(key);
+        }
       }
     };
     settled.then(cleanup, cleanup);
@@ -108,6 +131,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       resolveSettled();
       if (keyChains.get(key) === settled) {
         keyChains.delete(key);
+        if (!buffers.has(key)) {
+          keyGenerations.delete(key);
+        }
       }
     };
     let next: Promise<void>;
@@ -174,8 +200,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const cancelKey = (key: string): boolean => {
     const buffer = buffers.get(key);
-    if (!buffer) {
+    if (!buffer && !keyChains.has(key)) {
       return false;
+    }
+    // Invalidate released tasks still waiting behind an active same-key flush.
+    // The active task has already crossed this check and remains caller-owned.
+    keyGenerations.set(key, resolveKeyGeneration(key) + 1);
+    if (!buffer) {
+      return true;
     }
     if (buffers.get(key) === buffer) {
       buffers.delete(key);
@@ -186,12 +218,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
     const canceledItems = buffer.items;
     buffer.items = [];
-    try {
-      params.onCancel?.(canceledItems);
-    } catch {
-      // Cancellation observers release caller-owned resources; debounce state
-      // must still drain even if an observer fails.
-    }
+    cancelItems(canceledItems);
     releaseBuffer(buffer);
     return true;
   };
@@ -223,8 +250,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         if (buffers.has(key)) {
           // Reserve the keyed immediate slot before forcing the pending buffer
           // to flush so fire-and-forget callers cannot be overtaken.
+          const generation = resolveKeyGeneration(key);
           const reservedTask = enqueueReservedKeyTask(key, async () => {
-            await runFlush([item]);
+            await runQueuedFlush(key, generation, [item]);
           });
           try {
             await flushKey(key);
@@ -235,8 +263,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           return;
         }
         if (keyChains.has(key)) {
+          const generation = resolveKeyGeneration(key);
           await enqueueKeyTask(key, async () => {
-            await runFlush([item]);
+            await runQueuedFlush(key, generation, [item]);
           });
           return;
         }
@@ -263,16 +292,22 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (!canTrackKey(key)) {
       // When the debounce map is saturated, fall back to immediate keyed work
       // instead of buffering, but still preserve same-key ordering.
+      const generation = resolveKeyGeneration(key);
       await enqueueKeyTask(key, async () => {
-        await runFlush([item]);
+        await runQueuedFlush(key, generation, [item]);
       });
       return;
     }
+    const generation = resolveKeyGeneration(key);
     const reservedTask = enqueueReservedKeyTask(key, async () => {
       if (buffer.items.length === 0) {
         return;
       }
-      await runFlush(buffer.items);
+      const items = buffer.items;
+      if (resolveKeyGeneration(key) !== generation) {
+        buffer.items = [];
+      }
+      await runQueuedFlush(key, generation, items);
     });
     const buffer: DebounceBuffer<T> = {
       items: [item],

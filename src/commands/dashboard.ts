@@ -1,11 +1,13 @@
 // Implements `openclaw dashboard` URL resolution, readiness check, clipboard, and browser launch.
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
 import {
   detectBrowserOpenSupport,
@@ -15,9 +17,18 @@ import {
 } from "./onboard-helpers.js";
 
 type DashboardOptions = {
+  json?: boolean;
   noOpen?: boolean;
   yes?: boolean;
 };
+
+const quietRuntime: RuntimeEnv = {
+  log: () => {},
+  error: () => {},
+  exit: () => {},
+};
+
+const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
 async function resolveDashboardTarget() {
   const snapshot = await readConfigFileSnapshot();
@@ -32,8 +43,24 @@ async function resolveDashboardTarget() {
     envFallback: "always",
   });
   const token = resolvedToken.token ?? "";
+  const resolvedGatewayAuth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    env: process.env,
+    tailscaleMode: cfg.gateway?.tailscale?.mode,
+  });
+  const passwordSecretRefConfigured = Boolean(
+    resolveSecretInputRef({
+      value: cfg.gateway?.auth?.password,
+      defaults: cfg.secrets?.defaults,
+    }).ref,
+  );
+  const gatewayAuthHandoff =
+    resolvedGatewayAuth.mode === "password" && !passwordSecretRefConfigured
+      ? resolvedGatewayAuth.password
+      : undefined;
 
-  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+  const tlsConfig = cfg.gateway?.tls;
+  const tlsEnabled = tlsConfig?.enabled === true;
   // A wildcard LAN address is not a browser destination, while plain HTTP on a
   // specific interface fails secure-context checks. Same-host launches use loopback;
   // TLS keeps specific hosts so certificate names continue to match.
@@ -85,10 +112,13 @@ async function resolveDashboardTarget() {
     links,
     resolvedToken,
     token,
+    gatewayAuthHandoff,
     includeTokenInUrl,
     dashboardUrl,
     probeUrl: loopbackAliasHost ? configuredLinks.wsUrl : links.wsUrl,
     loopbackAliasHost,
+    tlsConfig,
+    tlsEnabled,
   };
 }
 
@@ -126,11 +156,76 @@ async function ensureDashboardTargetReady(params: {
   });
 }
 
+function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
+  writeRuntimeJson(runtime, { ok: false, reason }, 0);
+  runtime.exit(1);
+}
+
+async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
+  try {
+    const target = await resolveDashboardTarget();
+    const readiness = await ensureDashboardTargetReady({
+      target,
+      runtime: quietRuntime,
+      allowRecovery: false,
+    });
+    if (!readiness.ready) {
+      dashboardJsonFailure(runtime, readiness.reason);
+      return;
+    }
+    if (!(await hasVerifiedLoopbackAlias(target))) {
+      dashboardJsonFailure(
+        runtime,
+        "Dashboard loopback listener could not be verified as the configured Gateway.",
+      );
+      return;
+    }
+
+    let tlsFingerprint: string | undefined;
+    if (target.tlsEnabled) {
+      const tlsRuntime = await loadGatewayTlsRuntime(target.tlsConfig);
+      if (!tlsRuntime.enabled || !tlsRuntime.fingerprintSha256) {
+        dashboardJsonFailure(
+          runtime,
+          tlsRuntime.error || "Gateway TLS certificate fingerprint is unavailable.",
+        );
+        return;
+      }
+      tlsFingerprint = tlsRuntime.fingerprintSha256;
+    }
+
+    writeRuntimeJson(
+      runtime,
+      {
+        ok: true,
+        url: target.dashboardUrl,
+        httpUrl: target.links.httpUrl,
+        wsUrl: target.links.wsUrl,
+        port: target.port,
+        tokenIncluded: target.includeTokenInUrl,
+        ...(target.gatewayAuthHandoff
+          ? { [gatewayPasswordJsonKey]: target.gatewayAuthHandoff }
+          : {}),
+        ...(tlsFingerprint ? { tlsFingerprint } : {}),
+      },
+      0,
+    );
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    dashboardJsonFailure(runtime, reason || "Dashboard target resolution failed.");
+  }
+}
+
 /** Open or print the Control UI dashboard URL after ensuring the Gateway is reachable. */
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},
 ) {
+  if (options.json) {
+    await dashboardJsonCommand(runtime);
+    return;
+  }
+
   const initialTarget = await resolveDashboardTarget();
   const readiness = await ensureDashboardTargetReady({
     target: initialTarget,

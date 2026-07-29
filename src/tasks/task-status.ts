@@ -119,6 +119,15 @@ export function sanitizeTaskStatusText(
   return sanitized;
 }
 
+/** Sanitize bounded task input for detail views without flattening its layout. */
+export function sanitizeTaskPromptText(value: unknown, maxChars: number): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const sanitized = sanitizeUserFacingText(stripInlineLeakedInternalContext(value));
+  return sanitized ? truncateTaskStatusText(sanitized, maxChars) : "";
+}
+
 export function formatTaskStatusTitleText(value: unknown, fallback = "Background task"): string {
   return sanitizeTaskStatusText(value, { maxChars: TASK_STATUS_TITLE_MAX_CHARS }) || fallback;
 }

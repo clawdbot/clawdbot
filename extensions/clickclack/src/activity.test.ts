@@ -1,10 +1,12 @@
 // Tests for the durable ClickClack agent-activity publisher (coalescing rules).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createClickClackActivityPublisher, type ClickClackActivityClient } from "./activity.js";
+import { createClickClackActivityPublisher } from "./activity.js";
 import type { ClickClackMessage } from "./types.js";
 
+type ActivityClient = Parameters<typeof createClickClackActivityPublisher>[0]["client"];
+
 function createClientMock(): {
-  client: ClickClackActivityClient;
+  client: ActivityClient;
   createActivityMessage: ReturnType<typeof vi.fn>;
   updateMessageBody: ReturnType<typeof vi.fn>;
 } {
@@ -15,7 +17,7 @@ function createClientMock(): {
   });
   const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
   return {
-    client: { createActivityMessage, updateMessageBody } as ClickClackActivityClient,
+    client: { createActivityMessage, updateMessageBody } as ActivityClient,
     createActivityMessage,
     updateMessageBody,
   };
@@ -253,7 +255,7 @@ describe("createClickClackActivityPublisher", () => {
     });
     const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
     const publisher = createClickClackActivityPublisher({
-      client: { createActivityMessage, updateMessageBody } as ClickClackActivityClient,
+      client: { createActivityMessage, updateMessageBody } as ActivityClient,
       target: { channelId: "chn_1" },
       turnId: "msg_turn",
       onError,

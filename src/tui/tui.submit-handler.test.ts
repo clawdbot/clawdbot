@@ -54,7 +54,7 @@ describe("createEditorSubmitHandler", () => {
   it("preserves normal message drafts when chat is busy", () => {
     const { editor, sendMessage, handleCommand, handleBangLine, onBlockedMessageSubmit, onSubmit } =
       createSubmitHarness({
-        canSubmitMessage: () => false,
+        admitMessage: () => "pending",
       });
 
     onSubmit("  wait, use c++ instead  ");
@@ -64,16 +64,18 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", "pending");
   });
 
   it("passes the submitted text to the busy gate", () => {
-    const canSubmitMessage = vi.fn((value: string) => value === "please stop");
-    const { sendMessage, onSubmit } = createSubmitHarness({ canSubmitMessage });
+    const admitMessage = vi.fn((value: string) =>
+      value === "please stop" ? ("allowed" as const) : ("pending" as const),
+    );
+    const { sendMessage, onSubmit } = createSubmitHarness({ admitMessage });
 
     onSubmit("please stop");
 
-    expect(canSubmitMessage).toHaveBeenCalledWith("please stop");
+    expect(admitMessage).toHaveBeenCalledWith("please stop");
     expect(sendMessage).toHaveBeenCalledWith("please stop");
   });
 
@@ -89,7 +91,7 @@ describe("createEditorSubmitHandler", () => {
       sendMessage,
       handleBangLine: vi.fn(),
       onSubmitError: vi.fn(),
-      canSubmitMessage: () => false,
+      admitMessage: () => "pending",
       onBlockedMessageSubmit,
     });
 
@@ -97,13 +99,13 @@ describe("createEditorSubmitHandler", () => {
 
     expect(editor.getText()).toBe("wait, use c++ instead");
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", "pending");
   });
 
   it("continues to route slash commands while chat is busy", () => {
     const { editor, handleCommand, sendMessage, onBlockedMessageSubmit, onSubmit } =
       createSubmitHarness({
-        canSubmitMessage: () => false,
+        admitMessage: () => "pending",
       });
 
     onSubmit("/abort");
@@ -121,6 +123,20 @@ describe("createEditorSubmitHandler", () => {
 
     expect(sendMessage).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
     expect(editor.addToHistory).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "a slash command", input: "/exit\npasted notes" },
+    { name: "a local shell command", input: "!touch pasted-file\npasted notes" },
+    { name: "a whitespace-prefixed slash command", input: "  /abort\npasted notes" },
+  ])("treats a complete multiline paste beginning with $name as chat", ({ input }) => {
+    const { handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+
+    onSubmit(input);
+
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
   });
@@ -174,6 +190,37 @@ describe("createSubmitBurstCoalescer", () => {
 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
+    vi.useRealTimers();
+  });
+
+  it("preserves a newer real editor draft when a buffered message flushes", () => {
+    vi.useFakeTimers();
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const sendMessage = vi.fn();
+    const submit = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage,
+      handleBangLine: vi.fn(),
+      onSubmitError: vi.fn(),
+    });
+    editor.onSubmit = createSubmitBurstCoalescer({
+      submit,
+      enabled: true,
+      burstWindowMs: 50,
+    });
+    editor.setText("submitted message");
+
+    editor.handleInput("\r");
+    for (const character of "new draft") {
+      editor.handleInput(character);
+    }
+
+    vi.advanceTimersByTime(50);
+
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("submitted message");
+    expect(editor.getText()).toBe("new draft");
     vi.useRealTimers();
   });
 

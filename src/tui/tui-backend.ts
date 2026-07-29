@@ -31,7 +31,7 @@ export type TuiChatSendResult = {
 
 export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
 
-export type TuiTaskSuggestionActionCapabilities = {
+type TuiTaskSuggestionActionCapabilities = {
   canAccept: boolean;
   canDismiss: boolean;
 };
@@ -53,7 +53,7 @@ export type TuiPluginApproval = {
 };
 
 /** Options for forwarding a goal command to a backend session. */
-export type TuiGoalCommandOptions = {
+type TuiGoalCommandOptions = {
   sessionKey: string;
   agentId?: string;
   command: string;
@@ -133,6 +133,7 @@ export type TuiAgentsList = {
   scope: SessionScope;
   agents: Array<{
     id: string;
+    kind?: "agent" | "system";
     name?: string;
   }>;
 };
@@ -168,6 +169,7 @@ export type TuiSessionCreateOptions = {
   key: string;
   agentId?: string;
   parentSessionKey?: string;
+  succeedsParent?: boolean;
 };
 
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */

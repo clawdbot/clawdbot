@@ -7,148 +7,14 @@ import {
   hasMigrationConfigPatchConflict,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { childRecord, isRecord, readString, readStringArray } from "./helpers.js";
-
-type HermesProviderConfig = {
-  id: string;
-  baseUrl?: string;
-  apiKeyEnv?: string;
-  models: string[];
-};
-
-function envKeyForProvider(providerId: string): string {
-  return `${providerId.toUpperCase().replaceAll(/[^A-Z0-9]/gu, "_")}_API_KEY`;
-}
-
-function splitProviderModel(modelRef: string | undefined): { provider?: string; model?: string } {
-  if (!modelRef) {
-    return {};
-  }
-  const slash = modelRef.indexOf("/");
-  if (slash > 0 && slash < modelRef.length - 1) {
-    return { provider: modelRef.slice(0, slash), model: modelRef.slice(slash + 1) };
-  }
-  return { model: modelRef };
-}
-
-function modelDefinition(modelId: string, baseUrl?: string): Record<string, unknown> {
-  return {
-    id: modelId,
-    name: modelId,
-    api: baseUrl ? "openai-completions" : "openai-responses",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-    ...(baseUrl ? { baseUrl } : {}),
-    metadataSource: "models-add",
-  };
-}
-
-function providerConfig(entry: HermesProviderConfig): Record<string, unknown> {
-  const models = entry.models.length > 0 ? entry.models : [`${entry.id}/default`];
-  return {
-    baseUrl: entry.baseUrl ?? "",
-    ...(entry.apiKeyEnv
-      ? { apiKey: { source: "env", provider: "default", id: entry.apiKeyEnv } }
-      : {}),
-    api: "openai-completions",
-    models: models.map((modelId) => modelDefinition(modelId, entry.baseUrl)),
-  };
-}
-
-function collectHermesProviders(
-  config: Record<string, unknown>,
-  modelRef?: string,
-): HermesProviderConfig[] {
-  const collected: HermesProviderConfig[] = [];
-  for (const [id, raw] of Object.entries(childRecord(config, "providers"))) {
-    if (!isRecord(raw)) {
-      continue;
-    }
-    const baseUrl =
-      readString(raw.base_url) ??
-      readString(raw.baseUrl) ??
-      readString(raw.url) ??
-      readString(raw.api);
-    const apiKeyEnv =
-      readString(raw.api_key_env) ??
-      readString(raw.apiKeyEnv) ??
-      readString(raw.env) ??
-      envKeyForProvider(id);
-    const models = [
-      ...readStringArray(raw.models),
-      ...Object.keys(childRecord(raw, "models")),
-      readString(raw.model),
-    ].filter((value): value is string => Boolean(value));
-    collected.push({ id, baseUrl, apiKeyEnv, models: uniqueStrings(models) });
-  }
-
-  const customProviders = config.custom_providers;
-  if (Array.isArray(customProviders)) {
-    for (const raw of customProviders) {
-      if (!isRecord(raw)) {
-        continue;
-      }
-      const id = readString(raw.name) ?? readString(raw.id);
-      if (!id) {
-        continue;
-      }
-      const baseUrl = readString(raw.base_url) ?? readString(raw.baseUrl) ?? readString(raw.url);
-      const apiKeyEnv = readString(raw.api_key_env) ?? readString(raw.apiKeyEnv);
-      const models = [
-        ...readStringArray(raw.models),
-        ...Object.keys(childRecord(raw, "models")),
-        readString(raw.model),
-      ].filter((value): value is string => Boolean(value));
-      collected.push({ id, baseUrl, apiKeyEnv, models: uniqueStrings(models) });
-    }
-  }
-
-  const defaultRef = splitProviderModel(modelRef);
-  if (defaultRef.provider && !collected.some((entry) => entry.id === defaultRef.provider)) {
-    collected.push({
-      id: defaultRef.provider,
-      apiKeyEnv: envKeyForProvider(defaultRef.provider),
-      models: defaultRef.model ? [defaultRef.model] : [],
-    });
-  }
-  return collected;
-}
-
-function mapMcpServers(raw: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const mapped: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(raw)) {
-    if (!isRecord(value)) {
-      continue;
-    }
-    const next: Record<string, unknown> = {};
-    for (const key of [
-      "command",
-      "args",
-      "env",
-      "cwd",
-      "workingDirectory",
-      "url",
-      "transport",
-      "headers",
-      "connectionTimeoutMs",
-    ]) {
-      if (value[key] !== undefined) {
-        next[key] = value[key];
-      }
-    }
-    if (Object.keys(next).length > 0) {
-      mapped[name] = next;
-    }
-  }
-  return Object.keys(mapped).length > 0 ? mapped : undefined;
-}
+import { importsMcpSensitiveValues, mapMcpServer, mcpManualItems } from "./config-mcp.js";
+import { providerConfig } from "./config-provider-contract.js";
+import {
+  addSelectedModelToProvider,
+  collectHermesProviders,
+  providerManualItems,
+} from "./config-providers.js";
+import { childRecord, isRecord, readString, sanitizeName } from "./helpers.js";
 
 function mapSkillEntries(config: Record<string, unknown>): Record<string, unknown> | undefined {
   const entries: Record<string, unknown> = {};
@@ -165,6 +31,8 @@ function mapSkillEntries(config: Record<string, unknown>): Record<string, unknow
 export function buildConfigItems(params: {
   ctx: MigrationProviderContext;
   config: Record<string, unknown>;
+  env?: Record<string, string>;
+  runtimeEnv?: Record<string, string>;
   modelRef?: string;
   hasMemoryFiles?: boolean;
 }): MigrationItem[] {
@@ -241,41 +109,76 @@ export function buildConfigItems(params: {
     );
   }
 
-  const providers = collectHermesProviders(params.config, params.modelRef);
-  if (providers.length > 0) {
-    const value = Object.fromEntries(providers.map((entry) => [entry.id, providerConfig(entry)]));
+  const providers = collectHermesProviders(
+    params.config,
+    params.env,
+    Boolean(params.ctx.includeSecrets),
+  );
+  addSelectedModelToProvider(providers, params.modelRef);
+  for (const provider of providers) {
+    const value = { [provider.id]: providerConfig(provider) };
     items.push(
       createMigrationConfigPatchItem({
-        id: "config:model-providers",
-        target: "models.providers",
+        id: `config:model-provider:${sanitizeName(provider.id)}`,
+        target: `models.providers.${provider.id}`,
         path: ["models", "providers"],
         value,
-        message: "Import Hermes provider and custom endpoint config.",
+        message: `Import Hermes provider and custom endpoint config for "${provider.id}".`,
+        sensitive: provider.sensitive,
         conflict:
           !params.ctx.overwrite &&
           hasMigrationConfigPatchConflict(params.ctx.config, ["models", "providers"], value),
       }),
     );
   }
+  items.push(
+    ...providerManualItems(params.config, params.env ?? {}, Boolean(params.ctx.includeSecrets)),
+  );
 
   const mcpConfig = params.config.mcp;
   const rawMcpServers =
     params.config.mcp_servers ??
     (isRecord(mcpConfig) && isRecord(mcpConfig.servers) ? mcpConfig.servers : mcpConfig);
-  const mcpServers = mapMcpServers(rawMcpServers);
-  if (mcpServers) {
-    items.push(
-      createMigrationConfigPatchItem({
-        id: "config:mcp-servers",
-        target: "mcp.servers",
-        path: ["mcp", "servers"],
-        value: mcpServers,
-        message: "Import Hermes MCP server definitions.",
-        conflict:
-          !params.ctx.overwrite &&
-          hasMigrationConfigPatchConflict(params.ctx.config, ["mcp", "servers"], mcpServers),
-      }),
-    );
+  const rawMcpSource =
+    params.config.mcp_servers !== undefined
+      ? "config.yaml:mcp_servers"
+      : isRecord(mcpConfig) && isRecord(mcpConfig.servers)
+        ? "config.yaml:mcp.servers"
+        : "config.yaml:mcp";
+  if (isRecord(rawMcpServers)) {
+    // Hermes loads process env first, then lets its source .env override those values.
+    const mcpEnv = { ...params.runtimeEnv, ...params.env };
+    for (const [name, rawServer] of Object.entries(rawMcpServers)) {
+      if (!isRecord(rawServer)) {
+        continue;
+      }
+      const server = mapMcpServer(rawServer, Boolean(params.ctx.includeSecrets), mcpEnv);
+      if (Object.keys(server).length > 0) {
+        const value = { [name]: server };
+        items.push(
+          createMigrationConfigPatchItem({
+            id: `config:mcp-server:${sanitizeName(name)}`,
+            target: `mcp.servers.${name}`,
+            path: ["mcp", "servers"],
+            value,
+            message: `Import Hermes MCP server definition "${name}".`,
+            sensitive: importsMcpSensitiveValues(rawServer, Boolean(params.ctx.includeSecrets)),
+            conflict:
+              !params.ctx.overwrite &&
+              hasMigrationConfigPatchConflict(params.ctx.config, ["mcp", "servers"], value),
+          }),
+        );
+      }
+      items.push(
+        ...mcpManualItems({
+          name,
+          raw: rawServer,
+          includeSecrets: Boolean(params.ctx.includeSecrets),
+          env: mcpEnv,
+          source: `${rawMcpSource}.${name}`,
+        }),
+      );
+    }
   }
 
   const skillEntries = mapSkillEntries(params.config);

@@ -45,9 +45,16 @@ import {
   resolveTelegramInteractiveTextFallback,
 } from "../interactive-fallback.js";
 import type { TelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
-import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
+import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
+import {
+  isEmptyTelegramRichMessage,
+  splitTelegramRichMessageTextChunks,
+  TELEGRAM_RICH_TEXT_LIMIT,
+  type TelegramInputRichMessage,
+} from "../rich-message.js";
 import { isTelegramHtmlParseError } from "../rich-plain-fallback.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
+import { resolveTelegramTargetChatType } from "../targets.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -91,7 +98,9 @@ type TelegramReplyQuoteForSend = {
 type TelegramDeliveryTextChunk = {
   text: string;
   plainText: string;
-  textMode: "html";
+  textMode: "html" | "markdown";
+  richMessage?: TelegramInputRichMessage;
+  richDegradationReasons?: readonly TelegramRichBlocksDegradationReason[];
 };
 
 type ChunkTextFn = (markdown: string) => TelegramDeliveryTextChunk[];
@@ -104,16 +113,24 @@ function buildChunkTextResolver(params: {
   skipEntityDetection?: boolean;
   textMode?: "html";
 }): ChunkTextFn {
-  if (params.richMessages === true) {
+  // Caller-authored HTML keeps legacy parse_mode HTML semantics even on rich
+  // accounts; the rich blocks path is markdown-only.
+  if (params.richMessages === true && params.textMode !== "html") {
     return (text: string) =>
       splitTelegramRichMessageTextChunks({
         text,
         textLimit: Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT),
-        textMode: params.textMode ?? "markdown",
-        chunkMode: params.chunkMode,
         tableMode: params.tableMode,
         skipEntityDetection: params.skipEntityDetection,
-      });
+      }).map((chunk) => ({
+        // text/textMode describe the non-rich fallback body, not the rich wire
+        // payload; plain text keeps the fallback parse-safe for both inputs.
+        text: chunk.plainText,
+        plainText: chunk.plainText,
+        textMode: "markdown" as const,
+        richMessage: chunk.richMessage,
+        richDegradationReasons: chunk.degradationReasons,
+      }));
   }
   if (params.textMode === "html") {
     return (html: string) =>
@@ -157,10 +174,18 @@ function markDelivered(progress: DeliveryProgress): void {
   progress.deliveredCount += 1;
 }
 
-function filterEmptyTelegramTextChunks<T extends { text: string }>(chunks: readonly T[]): T[] {
+function filterEmptyTelegramTextChunks<
+  T extends { text: string; richMessage?: TelegramInputRichMessage },
+>(chunks: readonly T[]): T[] {
   // Telegram rejects whitespace-only text payloads; drop them before sendMessage so
   // hook-mutated or model-emitted empty replies become a no-op instead of a 400.
-  return chunks.filter((chunk) => chunk.text.trim().length > 0);
+  // Rich chunks gate on the rich payload: valid rich content (media/divider HTML)
+  // can have an empty plain projection and must still send.
+  return chunks.filter((chunk) =>
+    chunk.richMessage
+      ? !isEmptyTelegramRichMessage(chunk.richMessage)
+      : chunk.text.trim().length > 0,
+  );
 }
 
 function resolveReplyQuoteForSend(params: {
@@ -252,6 +277,8 @@ async function deliverTextReply(params: {
           textMode: chunk.textMode,
           plainText: chunk.plainText,
           richMessages: params.richMessages,
+          richMessage: chunk.richMessage,
+          richDegradationReasons: chunk.richDegradationReasons,
           linkPreview: params.linkPreview,
           tableMode: params.tableMode,
           silent: params.silent,
@@ -818,7 +845,9 @@ export async function deliverReplies(params: {
     }),
   );
   for (const originalReply of normalizedReplies) {
-    let reply = canonicalizeTelegramPresentationPayload(originalReply);
+    let reply = canonicalizeTelegramPresentationPayload(originalReply, {
+      allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",
+    });
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
       : reply?.mediaUrl
@@ -1045,3 +1074,4 @@ export async function deliverReplies(params: {
 
   return { delivered: progress.hasDelivered };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

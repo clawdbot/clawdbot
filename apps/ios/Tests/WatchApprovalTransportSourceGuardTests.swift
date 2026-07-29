@@ -17,10 +17,10 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(appSource.contains("id: \"watch-screenshot-approval\""))
         #expect(appSource.contains("pendingApprovalCount: approvals.count"))
         #expect(approvalFace.contains("self.store.isExecApprovalReviewLoading"))
-        #expect(approvalFace.contains("title: \"Loading approval\""))
+        #expect(approvalFace.contains("title: .localized(\"Loading approval\")"))
         #expect(approvalFace.contains(
             "self.approvalCount > 0 || self.store.shouldShowExecApprovalReviewStatus"))
-        #expect(approvalFace.contains("title: \"Approval not loaded\""))
+        #expect(approvalFace.contains("title: .localized(\"Approval not loaded\")"))
         #expect(approvalFace.contains("Approval details have not loaded"))
         #expect(approvalFace.contains("WatchSecondaryButton(title: \"Review again\")"))
     }
@@ -157,6 +157,18 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(!parser.contains("?? []"))
     }
 
+    @Test func `watch preserves semantic approval outcomes through receiver parsing`() throws {
+        let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
+        let parser = try Self.extract(
+            receiverSource,
+            from: "private static func parseExecApprovalResolvedPayload(",
+            to: "private static func parseExecApprovalExpiredPayload(")
+
+        #expect(parser.contains(
+            "WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
+        #expect(parser.contains("outcome: outcome"))
+    }
+
     @Test func `watch reuses exact compound identifier policy`() throws {
         let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
@@ -224,6 +236,7 @@ struct WatchApprovalTransportSourceGuardTests {
 
     @Test func `watch requires full accessible command review before allow`() throws {
         let viewSource = try Self.readWatchSource("WatchInboxView.swift")
+        let detailScrollSource = try Self.readWatchSource("WatchDetailScroll.swift")
         let typographySource = try Self.readWatchSource("WatchClawTypography.swift")
         let approvalFace = try Self.extract(
             viewSource,
@@ -233,17 +246,16 @@ struct WatchApprovalTransportSourceGuardTests {
             viewSource,
             from: "private struct WatchApprovalCommandReview: View",
             to: "private enum WatchExecApprovalDisplay")
-        let approvalDetail = try Self.extract(
-            viewSource,
-            from: "private struct WatchExecApprovalDetailView: View",
-            to: "private struct WatchDetailScroll")
+        let approvalDetailStart = try #require(
+            viewSource.range(of: "private struct WatchExecApprovalDetailView: View"))
+        let approvalDetail = String(viewSource[approvalDetailStart.lowerBound...])
         let decisionButton = try Self.extract(
             viewSource,
             from: "private struct WatchDecisionButton: View",
             to: "private struct WatchTinyStatus")
         let detailScrollStart = try #require(
-            viewSource.range(of: "private struct WatchDetailScroll<Content: View>: View"))
-        let detailScroll = String(viewSource[detailScrollStart.lowerBound...])
+            detailScrollSource.range(of: "struct WatchDetailScroll<Content: View>: View"))
+        let detailScroll = String(detailScrollSource[detailScrollStart.lowerBound...])
 
         #expect(approvalFace.contains("WatchSecondaryLabel(title: \"Review Command\")"))
         #expect(approvalFace.contains(

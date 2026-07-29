@@ -7,10 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  resetHeartbeatWakeStateForTests,
-  setHeartbeatWakeHandler,
-} from "../infra/heartbeat-wake.js";
+import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import {
   peekSystemEventEntries,
@@ -24,11 +21,11 @@ import {
   getFinishedSession,
   markBackgrounded,
   markExited,
-  resetProcessRegistryForTests,
   type ProcessSession,
 } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
-import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
+import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -81,7 +78,6 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 vi.mock("./bash-tools.exec-approval-followup.js", () => ({
-  buildExecApprovalFollowupPrompt: (text: string) => text,
   sendExecApprovalFollowup: vi.fn(async () => false),
 }));
 
@@ -243,7 +239,7 @@ vi.mock("../process/supervisor/index.js", () => {
 const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
-  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+  : process.env.OPENCLAW_TEST_SHELL || getBashShellConfig().shell;
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const POLL_INTERVAL_MS = isWin ? 15 : 2;
@@ -821,13 +817,25 @@ describe("exec exit codes", () => {
 describe("exec notifyOnExit", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
-  beforeEach(() => {
-    resetHeartbeatWakeStateForTests();
-  });
+  async function drainPendingHeartbeatWakes(): Promise<void> {
+    const handler = vi.fn(async () => ({ status: "ran" as const, durationMs: 0 }));
+    const dispose = setHeartbeatWakeHandler(handler);
+    try {
+      requestHeartbeat({
+        source: "other",
+        intent: "immediate",
+        reason: "test-cleanup",
+        coalesceMs: 0,
+      });
+      await expect.poll(() => handler.mock.calls.length, NOTIFY_POLL_OPTIONS).toBeGreaterThan(0);
+    } finally {
+      dispose();
+    }
+  }
 
-  afterEach(() => {
-    resetHeartbeatWakeStateForTests();
-  });
+  beforeEach(drainPendingHeartbeatWakes);
+
+  afterEach(drainPendingHeartbeatWakes);
 
   it("enqueues a system event when a backgrounded exec exits", async () => {
     const tool = createNotifyOnExitExecTool();

@@ -4,6 +4,7 @@ import {
   createTopLevelChannelDmPolicy,
   createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
+  setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
   type ChannelSetupDmPolicy,
@@ -333,11 +334,5 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
   },
   dmPolicy: msteamsDmPolicy,
   groupAccess: msteamsGroupAccess,
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: { ...cfg.channels?.msteams, enabled: false },
-    },
-  }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

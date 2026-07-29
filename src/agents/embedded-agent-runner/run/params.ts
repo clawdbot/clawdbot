@@ -15,15 +15,23 @@ import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
+import type {
+  SkillProposalOrigin,
+  SkillWorkshopProposalMutationBudget,
+  SkillWorkshopRunOptions,
+} from "../../../skills/workshop/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
+import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
 import type {
   BlockReplyChunking,
@@ -35,6 +43,8 @@ import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
+import type { SessionManager } from "../../sessions/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -60,6 +70,8 @@ export type CurrentInboundPromptContext = {
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Caller-owned in-memory transcript for ephemeral helper runs. */
+  sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
@@ -75,6 +87,8 @@ export type RunEmbeddedAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Out-of-band plugin bindings attached by the run initiator. */
+  toolBindings?: Readonly<Record<string, unknown>>;
   chatType?: ChatType;
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
@@ -131,12 +145,24 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
+  /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
+  skillWorkshopProposalOnly?: boolean;
+  /** Preserve the foreground run as proposal provenance for an internal review run. */
+  skillWorkshopOrigin?: SkillProposalOrigin;
+  /** Run-scoped mutation budget shared across internal runner attempts. */
+  skillWorkshopProposalMutationBudget?: SkillWorkshopProposalMutationBudget;
+  /** Optional state environment for isolated Skill Workshop proposal persistence. */
+  skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
+  /** Shared completion latch for proposal-only review runs that checkpoint their batch. */
+  skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -168,6 +194,8 @@ export type RunEmbeddedAgentParams = {
   currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in the current prompt. */
+  media?: MediaFact[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
@@ -208,6 +236,12 @@ export type RunEmbeddedAgentParams = {
   bootstrapContextRunKind?: BootstrapContextRunKind;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Trusted in-process subagent-completion handoff; never derived from public input. */
+  trustedInternalHandoff?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
@@ -229,6 +263,8 @@ export type RunEmbeddedAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+  conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
@@ -298,7 +334,28 @@ export type RunEmbeddedAgentParams = {
    * final answer for silence.
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
+  /**
+   * Whether this run still owes a visible reply after settled non-reporting tools.
+   * Exact configured silence and committed delivery remain terminal outcomes.
+   */
+  terminalReplyExpectation?: "required" | "optional";
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
+  /**
+   * One-shot helper runs may opt in to executing through the provider's CLI
+   * backend instead of the direct-API passthrough when the run targets a CLI
+   * runtime provider whose passthrough credentials are subscription-scoped.
+   * Anthropic routes direct anthropic-messages calls on subscription OAuth to
+   * metered extra-usage billing: without extra-usage balance the passthrough
+   * fails closed with a billing error, and with it the run silently draws
+   * paid usage instead of plan limits. The CLI backend is the plan-limits
+   * path for those credentials. CLI dispatch translates `toolsAllow` into the
+   * selectable-backend surface (no native tools, allowlisted loopback MCP
+   * tools); the same list bounds the loopback MCP grant server-side, so tools
+   * outside it — including the message tool, matching `disableMessageTool`
+   * intent — can be neither listed nor called. Leave unset to keep the
+   * direct-API passthrough.
+   */
+  cliBackendDispatch?: "subscription-auth";
   /**
    * Allow a single run attempt even when all auth profiles are in cooldown,
    * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.
@@ -311,7 +368,10 @@ export type RunEmbeddedAgentParams = {
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   suppressAssistantErrorPersistence?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
+  skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onUserMessagePersistenceInvalidated?: () => void;
   onAssistantErrorMessagePersisted?: (
     message: Extract<AgentMessage, { role: "assistant" }>,
   ) => void;

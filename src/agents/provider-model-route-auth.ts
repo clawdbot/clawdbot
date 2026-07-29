@@ -18,7 +18,7 @@ export type ProviderModelAuthSourceSelection =
   | { kind: "unavailable"; source: ProviderModelAuthProfileSource }
   | { kind: "none" };
 
-export type ProviderModelAuthLogicalAttempt =
+type ProviderModelAuthLogicalAttempt =
   | { kind: "profile"; source: ProviderModelAuthProfileSource }
   | {
       kind: "direct";
@@ -26,7 +26,7 @@ export type ProviderModelAuthLogicalAttempt =
       allowAuthProfileFallback: false;
     };
 
-export type ProviderModelRouteAuthAttempt =
+type ProviderModelRouteAuthAttempt =
   | {
       kind: "profile";
       source: ProviderModelAuthProfileSource;
@@ -41,7 +41,7 @@ export type ProviderModelRouteAuthAttempt =
       allowAuthProfileFallback: false;
     };
 
-export type ProviderModelAuthSourceDecision =
+type ProviderModelAuthSourceDecision =
   | {
       kind: "selected";
       selection: ProviderModelAuthSourceSelection;

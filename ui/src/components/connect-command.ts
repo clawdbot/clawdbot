@@ -1,15 +1,12 @@
 // Control UI component renders a copyable gateway connection command.
 import { html } from "lit";
 import { t } from "../i18n/index.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import "./tooltip.ts";
 
 async function copyCommand(command: string) {
-  try {
-    await navigator.clipboard.writeText(command);
-  } catch {
-    // Best effort only; the explicit copy button provides visible feedback.
-  }
+  await copyToClipboard(command);
 }
 
 export function renderConnectCommand(command: string) {

@@ -6,12 +6,21 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatHelpExamples } from "../help-format.js";
 
 type AgentViaGatewayModule = typeof import("../../commands/agent-via-gateway.js");
+type AgentExecModule = typeof import("../../commands/agent-exec.js");
 type CliUtilsModule = typeof import("../cli-utils.js");
 type GlobalStateModule = typeof import("../../global-state.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
 async function loadAgentCliCommand(): Promise<AgentViaGatewayModule["agentCliCommand"]> {
   return (await import("../../commands/agent-via-gateway.js")).agentCliCommand;
+}
+
+async function loadAgentExecCommand(): Promise<AgentExecModule["agentExecCommand"]> {
+  return (await import("../../commands/agent-exec.js")).agentExecCommand;
+}
+
+function collectFallback(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 async function loadDefaultRuntime(): Promise<RuntimeModule["defaultRuntime"]> {
@@ -31,11 +40,11 @@ export function registerAgentTurnCommand(
   program: Command,
   args: { agentChannelOptions: string },
 ): void {
-  program
+  const agent = program
     .command("agent")
     .description("Run an agent turn via the Gateway (use --local for embedded)")
     .option("-m, --message <text>", "Message body for the agent")
-    .option("--message-file <path>", "Read the agent message body from a UTF-8 file")
+    .option("--message-file <path>", "Read the agent message body from a UTF-8 file (max 4 MiB)")
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-key <key>", "Explicit session key (agent:<id>:<key>, or scoped to --agent)")
     .option("--session-id <id>", "Use an explicit session id")
@@ -107,6 +116,73 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       await runCommandWithRuntime(defaultRuntime, async () => {
         setVerbose(verboseLevel === "on");
         await agentCliCommand(opts, defaultRuntime);
+      });
+    });
+
+  agent
+    .command("exec [message]")
+    .description("Run one isolated headless embedded agent turn")
+    .option("--message-file <path>", "Read the UTF-8 prompt from a file; use - for stdin")
+    .option("--cwd <dir>", "Set both the agent workspace and tool working directory")
+    .option("--state-dir <dir>", "Use an existing state directory without deleting it")
+    .option("--model <provider/model>", "Use an explicit primary model for this run")
+    .option(
+      "--thinking <level>",
+      "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
+    )
+    .option(
+      "--fallback <provider/model>",
+      "Add an ordered fallback model (repeatable; requires --model)",
+      collectFallback,
+      [],
+    )
+    .option("--auth-env-only", "Use provider credentials from environment variables only", true)
+    .option("--no-auth-env-only", "Allow stored and external CLI credential discovery")
+    .option("--timeout <seconds>", "Agent deadline in seconds", "600")
+    .option("--json", "Emit the stable agent-exec JSON envelope", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ['openclaw agent exec "Fix the failing test"', "Run in the current directory."],
+          [
+            "openclaw agent exec --message-file task.md --cwd ./repo",
+            "Read a prompt file and set the workspace.",
+          ],
+          [
+            'openclaw agent exec "Summarize this repo" --model openai/gpt-5.6-sol --fallback anthropic/claude-sonnet-4-6 --json',
+            "Use an explicit fallback chain and JSON output.",
+          ],
+        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agent#agent-exec", "docs.openclaw.ai/cli/agent#agent-exec")}`,
+    )
+    .action(async (message: string | undefined, opts, command): Promise<void> => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            messageFile?: string;
+            model?: string;
+            thinking?: string;
+            timeout?: string;
+            json?: boolean;
+          }
+        | undefined;
+      const execOpts = {
+        ...opts,
+        messageFile: opts.messageFile ?? parentOpts?.messageFile,
+        model: opts.model ?? parentOpts?.model,
+        thinking: opts.thinking ?? parentOpts?.thinking,
+        timeout: parentOpts?.timeout ?? opts.timeout,
+        json: opts.json === true || parentOpts?.json === true,
+      };
+      const [defaultRuntime, runCommandWithRuntime, agentExecCommand] = await Promise.all([
+        loadDefaultRuntime(),
+        loadRunCommandWithRuntime(),
+        loadAgentExecCommand(),
+      ]);
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const result = await agentExecCommand(message, execOpts, defaultRuntime);
+        if (result.exitCode !== 0) {
+          defaultRuntime.exit(result.exitCode, { resetStream: process.stderr });
+        }
       });
     });
 }

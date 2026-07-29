@@ -1,14 +1,12 @@
 // Web Readability plugin module implements web content extractor behavior.
-import type {
-  WebContentExtractionRequest,
-  WebContentExtractionResult,
-  WebContentExtractorPlugin,
-} from "openclaw/plugin-sdk/web-content-extractor";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   htmlToMarkdown,
   normalizeWhitespace,
   sanitizeHtml,
   stripInvisibleUnicode,
+  type WebContentExtractionRequest,
+  type WebContentExtractorPlugin,
 } from "openclaw/plugin-sdk/web-content-extractor";
 
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
@@ -30,65 +28,15 @@ const HTML_VOID_TAGS = new Set([
   "wbr",
 ]);
 
-type ParsedHtml = {
-  document: Document;
-};
-
-type ParseHtml = (html: string) => ParsedHtml;
-
-type ReadabilityResult = {
-  content?: string;
-  textContent?: string | null;
-  title?: string | null;
-};
-
-type ReadabilityInstance = {
-  parse(): ReadabilityResult | null;
-};
-
-type ReadabilityConstructor = new (
-  document: Document,
-  options: { charThreshold: number },
-) => ReadabilityInstance;
-
-type ReadabilityModule = {
-  Readability: ReadabilityConstructor;
-};
-
-type LinkedomModule = {
-  parseHTML: ParseHtml;
-};
-
 const READABILITY_MODULE = "@mozilla/readability";
 const LINKEDOM_MODULE = "linkedom";
 
-let readabilityDepsPromise:
-  | Promise<{
-      Readability: ReadabilityConstructor;
-      parseHTML: ParseHtml;
-    }>
-  | undefined;
-
-async function loadReadabilityDeps(): Promise<{
-  Readability: ReadabilityConstructor;
-  parseHTML: ParseHtml;
-}> {
-  if (!readabilityDepsPromise) {
-    readabilityDepsPromise = Promise.all([
-      import(READABILITY_MODULE) as Promise<ReadabilityModule>,
-      import(LINKEDOM_MODULE) as Promise<LinkedomModule>,
-    ]).then(([readability, linkedom]) => ({
-      Readability: readability.Readability,
-      parseHTML: linkedom.parseHTML,
-    }));
-  }
-  try {
-    return await readabilityDepsPromise;
-  } catch (error) {
-    readabilityDepsPromise = undefined;
-    throw error;
-  }
-}
+const loadReadabilityDeps = createLazyRuntimeModule(() =>
+  Promise.all([
+    import(READABILITY_MODULE) as Promise<typeof import("@mozilla/readability")>,
+    import(LINKEDOM_MODULE) as Promise<typeof import("linkedom")>,
+  ]),
+);
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
@@ -163,9 +111,7 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
   return false;
 }
 
-async function extractWithReadability(
-  request: WebContentExtractionRequest,
-): Promise<WebContentExtractionResult | null> {
+async function extractWithReadability(request: WebContentExtractionRequest) {
   const cleanHtml = await sanitizeHtml(request.html);
   if (
     cleanHtml.length > READABILITY_MAX_HTML_CHARS ||
@@ -174,24 +120,18 @@ async function extractWithReadability(
     return null;
   }
   try {
-    const { Readability, parseHTML } = await loadReadabilityDeps();
-    const { document } = parseHTML(cleanHtml);
-    try {
-      (document as { baseURI?: string }).baseURI = request.url;
-    } catch {
-      // Best-effort base URI for relative links.
-    }
-    const reader = new Readability(document, { charThreshold: 0 });
+    const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
+    const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
+    const reader = new Readability(document);
     const parsed = reader.parse();
     if (!parsed?.content) {
       return null;
     }
     const title = parsed.title || undefined;
-    if (request.extractMode === "text") {
-      const text = stripInvisibleUnicode(normalizeWhitespace(parsed.textContent ?? ""));
-      return text ? { text, title } : null;
-    }
-    const rendered = htmlToMarkdown(parsed.content);
+    const rendered =
+      request.extractMode === "text"
+        ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
+        : htmlToMarkdown(parsed.content);
     const text = stripInvisibleUnicode(rendered.text);
     return text ? { text, title: title ?? rendered.title } : null;
   } catch {

@@ -29,11 +29,6 @@ export function intFlag<T extends FlagArgs>(
   key: string,
   options?: { min?: number },
 ): FlagSpec<T>;
-export function floatFlag<T extends FlagArgs>(
-  flag: string,
-  key: string,
-  options?: { includeMin?: boolean; min?: number },
-): FlagSpec<T>;
 export function booleanFlag<T extends FlagArgs>(
   flag: string,
   key: string,

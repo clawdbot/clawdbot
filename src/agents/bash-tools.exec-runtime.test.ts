@@ -33,34 +33,27 @@ vi.mock("../process/supervisor/index.js", () => ({
 
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
 let getActiveBackgroundExecSessionCount: typeof import("./bash-process-registry.js").getActiveBackgroundExecSessionCount;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
-let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
-let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
-let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
-let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
 let prepareGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").prepareGatewaySuspend;
-let resetGatewaySuspendCoordinatorForTest: typeof import("../infra/gateway-suspend-coordinator.js").resetGatewaySuspendCoordinatorForTest;
+let resetGatewaySuspendCoordinatorForLifecycleRestart: typeof import("../infra/gateway-suspend-coordinator.js").resetGatewaySuspendCoordinatorForLifecycleRestart;
 let resumeGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").resumeGatewaySuspend;
 
 beforeAll(async () => {
-  ({ getActiveBackgroundExecSessionCount, markBackgrounded, resetProcessRegistryForTests } =
+  ({ getActiveBackgroundExecSessionCount, markBackgrounded } =
     await import("./bash-process-registry.js"));
+  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
+  ({ resolveExecTarget, runExecProcess } = await import("./bash-tools.exec-runtime.js"));
   ({
-    buildExecExitOutcome,
-    detectCursorKeyMode,
-    formatExecFailureReason,
-    renderExecUpdateText,
-    resolveExecTarget,
-    runExecProcess,
-  } = await import("./bash-tools.exec-runtime.js"));
-  ({ prepareGatewaySuspend, resetGatewaySuspendCoordinatorForTest, resumeGatewaySuspend } =
-    await import("../infra/gateway-suspend-coordinator.js"));
+    prepareGatewaySuspend,
+    resetGatewaySuspendCoordinatorForLifecycleRestart,
+    resumeGatewaySuspend,
+  } = await import("../infra/gateway-suspend-coordinator.js"));
 });
 
 beforeEach(() => {
-  resetGatewaySuspendCoordinatorForTest();
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
@@ -68,7 +61,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetGatewaySuspendCoordinatorForTest();
   resetProcessRegistryForTests();
 });
 
@@ -80,6 +72,40 @@ function createDeferred<T>() {
     reject = rejectPromise;
   });
   return { promise, reject, resolve };
+}
+
+async function runExecWithExit(params: {
+  exit: RunExit;
+  stdout?: string;
+  timeoutSec?: number | null;
+  usePty?: boolean;
+}) {
+  supervisorMock.spawn.mockImplementationOnce(
+    async (input: { onStdout?: (chunk: string) => void }) => {
+      if (params.stdout) {
+        input.onStdout?.(params.stdout);
+      }
+      return {
+        runId: "run-exit",
+        startedAtMs: Date.now(),
+        pid: 123,
+        wait: async () => params.exit,
+        cancel: vi.fn(),
+      };
+    },
+  );
+  const run = await runExecProcess({
+    command: "test-command",
+    workdir: "/tmp",
+    env: {},
+    usePty: params.usePty ?? false,
+    warnings: [],
+    maxOutput: 1000,
+    pendingMaxOutput: 1000,
+    notifyOnExit: false,
+    timeoutSec: params.timeoutSec ?? null,
+  });
+  return { run, outcome: await run.promise };
 }
 
 function prepareSuspension(requestId: string) {
@@ -140,31 +166,29 @@ function requireHeartbeatCall(): Record<string, unknown> {
   return call[0] as Record<string, unknown>;
 }
 
-describe("detectCursorKeyMode", () => {
-  it("returns null when no toggle found", () => {
-    expect(detectCursorKeyMode("hello world")).toBe(null);
-    expect(detectCursorKeyMode("")).toBe(null);
-  });
+describe("runExecProcess cursor tracking", () => {
+  it.each([
+    { raw: "hello world", expected: "unknown" },
+    { raw: "\x1b[?1h", expected: "application" },
+    { raw: "\x1b[?1h\x1b[?1l", expected: "normal" },
+    { raw: "\x1b[?1l\x1b[?1h", expected: "application" },
+  ])("tracks the last cursor-mode toggle as $expected", async ({ raw, expected }) => {
+    const { run } = await runExecWithExit({
+      stdout: raw,
+      usePty: true,
+      exit: {
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+    });
 
-  it("detects smkx (application mode)", () => {
-    expect(detectCursorKeyMode("\x1b[?1h")).toBe("application");
-    expect(detectCursorKeyMode("\x1b[?1h\x1b=")).toBe("application");
-    expect(detectCursorKeyMode("before \x1b[?1h after")).toBe("application");
-  });
-
-  it("detects rmkx (normal mode)", () => {
-    expect(detectCursorKeyMode("\x1b[?1l")).toBe("normal");
-    expect(detectCursorKeyMode("\x1b[?1l\x1b>")).toBe("normal");
-    expect(detectCursorKeyMode("before \x1b[?1l after")).toBe("normal");
-  });
-
-  it("last toggle wins when both present", () => {
-    // smkx first, then rmkx - should be normal
-    expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l")).toBe("normal");
-    // rmkx first, then smkx - should be application
-    expect(detectCursorKeyMode("\x1b[?1l\x1b[?1h")).toBe("application");
-    // Multiple toggles - last one wins
-    expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l\x1b[?1h")).toBe("application");
+    expect(run.session.cursorKeyMode).toBe(expected);
   });
 });
 
@@ -419,28 +443,6 @@ describe("resolveExecTarget", () => {
   });
 });
 
-describe("renderExecUpdateText", () => {
-  it("uses a non-empty placeholder when an exec update has no output", () => {
-    expect(renderExecUpdateText({ tailText: "", warnings: [] })).toBe("(no output)");
-  });
-
-  it("preserves non-empty exec output", () => {
-    expect(renderExecUpdateText({ tailText: "hello", warnings: [] })).toBe("hello");
-  });
-
-  it("keeps warnings while still avoiding empty output text", () => {
-    expect(renderExecUpdateText({ tailText: "", warnings: ["Warning: retrying"] })).toBe(
-      "Warning: retrying\n\n(no output)",
-    );
-  });
-
-  it("combines warnings with non-empty output", () => {
-    expect(renderExecUpdateText({ tailText: "hello", warnings: ["Warning: retrying"] })).toBe(
-      "Warning: retrying\n\nhello",
-    );
-  });
-});
-
 describe("exec notifyOnExit suppression", () => {
   async function runBackgroundedExit(params: {
     reason: "manual-cancel" | "overall-timeout";
@@ -518,6 +520,9 @@ describe("exec notifyOnExit suppression", () => {
 
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
+    expect(message).toContain("external side effects may already have completed");
+    expect(message).toContain("Verify the resulting state before retrying");
+    expect(message).toContain("Do not automatically rerun non-idempotent commands");
     expect(options.sessionKey).toBe("agent:main:main");
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const heartbeat = requireHeartbeatCall();
@@ -684,43 +689,10 @@ describe("sandbox exec finalization suspension", () => {
   );
 });
 
-describe("formatExecFailureReason", () => {
-  it("formats timeout guidance with the configured timeout", () => {
-    expect(
-      formatExecFailureReason({
-        failureKind: "overall-timeout",
-        exitSignal: "SIGKILL",
-        timeoutSec: 45,
-      }),
-    ).toContain("45 seconds");
-  });
-
-  it("points long-running work to registered exec backgrounding", () => {
-    const reason = formatExecFailureReason({
-      failureKind: "overall-timeout",
-      exitSignal: "SIGKILL",
-      timeoutSec: 45,
-    });
-
-    expect(reason).toContain("background=true");
-    expect(reason).toContain("yieldMs");
-    expect(reason).toContain("Do not rely on shell backgrounding");
-  });
-
-  it("formats shell failures without timeout-specific guidance", () => {
-    expect(
-      formatExecFailureReason({
-        failureKind: "shell-command-not-found",
-        exitSignal: null,
-        timeoutSec: 45,
-      }),
-    ).toBe("Command not found");
-  });
-});
-
-describe("buildExecExitOutcome", () => {
-  it("keeps non-zero normal exits in the completed path", () => {
-    const outcome = buildExecExitOutcome({
+describe("runExecProcess exit outcomes", () => {
+  it("keeps non-zero normal exits in the completed path", async () => {
+    const { outcome } = await runExecWithExit({
+      stdout: "done",
       exit: {
         reason: "exit",
         exitCode: 1,
@@ -731,8 +703,6 @@ describe("buildExecExitOutcome", () => {
         timedOut: false,
         noOutputTimedOut: false,
       },
-      aggregated: "done",
-      durationMs: 123,
       timeoutSec: 30,
     });
     expect(outcome.status).toBe("completed");
@@ -743,8 +713,8 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.aggregated).toBe("done\n\n(Command exited with code 1)");
   });
 
-  it("classifies timed out exits as failures with a reason", () => {
-    const outcome = buildExecExitOutcome({
+  it("classifies timed out exits with registered-background guidance", async () => {
+    const { outcome } = await runExecWithExit({
       exit: {
         reason: "overall-timeout",
         exitCode: null,
@@ -755,8 +725,6 @@ describe("buildExecExitOutcome", () => {
         timedOut: true,
         noOutputTimedOut: false,
       },
-      aggregated: "",
-      durationMs: 123,
       timeoutSec: 30,
     });
     expect(outcome.status).toBe("failed");
@@ -766,32 +734,35 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.failureKind).toBe("overall-timeout");
     expect(outcome.timedOut).toBe(true);
     expect(outcome.reason).toContain("30 seconds");
+    expect(outcome.reason).toContain("external side effects may already have completed");
+    expect(outcome.reason).toContain("Verify the resulting state before retrying");
+    expect(outcome.reason).toContain("Do not automatically rerun non-idempotent commands");
+    expect(outcome.reason).toContain("known to be safe to retry");
+    expect(outcome.reason).toContain("background=true");
+    expect(outcome.reason).toContain("yieldMs");
+    expect(outcome.reason).toContain("Do not rely on shell backgrounding");
   });
 
-  it("keeps timed out shell-backgrounded commands on the failed path", () => {
-    const outcome = buildExecExitOutcome({
+  it("classifies missing shell commands without timeout guidance", async () => {
+    const { outcome } = await runExecWithExit({
       exit: {
-        reason: "overall-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
+        reason: "exit",
+        exitCode: 127,
+        exitSignal: null,
         durationMs: 123,
         stdout: "",
         stderr: "",
-        timedOut: true,
+        timedOut: false,
         noOutputTimedOut: false,
       },
-      aggregated: "started worker",
-      durationMs: 123,
       timeoutSec: 30,
     });
 
     if (outcome.status !== "failed") {
-      throw new Error(`Expected timeout to fail, got ${outcome.status}`);
+      throw new Error(`Expected shell failure, got ${outcome.status}`);
     }
-    expect(outcome.failureKind).toBe("overall-timeout");
-    expect(outcome.timedOut).toBe(true);
-    expect(outcome.reason).toContain("background=true");
-    expect(outcome.reason).toContain("Do not rely on shell backgrounding");
+    expect(outcome.failureKind).toBe("shell-command-not-found");
+    expect(outcome.reason).toBe("Command not found");
   });
 });
 

@@ -1,4 +1,5 @@
 import AppKit
+import KeyboardShortcuts
 import Observation
 import OpenClawDiscovery
 import OpenClawKit
@@ -15,7 +16,7 @@ struct GeneralSettings: View {
 
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = false
+    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = true
     let page: Page
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -25,6 +26,7 @@ struct GeneralSettings: View {
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
+    @State private var computerControlPermissions = ComputerControlPermissionSnapshot.probe()
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -59,6 +61,19 @@ struct GeneralSettings: View {
                 CanvasManager.shared.hideAll()
             }
         }
+        .onChange(of: self.state.quickChatEnabled) { _, enabled in
+            QuickChatController.shared.setEnabled(enabled)
+        }
+        .onChange(of: self.computerControlEnabled) { _, _ in
+            // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
+            self.state.applyPeekabooBridgeHostState()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.refreshComputerControlPermissions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openclawPermissionsChanged)) { _ in
+            self.refreshComputerControlPermissions()
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
 
@@ -89,8 +104,21 @@ struct GeneralSettings: View {
                 SettingsCardToggleRow(
                     title: "Play menu bar icon animations",
                     subtitle: "Enable idle blinks and wiggles on the status icon.",
-                    binding: self.$state.iconAnimationsEnabled,
+                    binding: self.$state.iconAnimationsEnabled)
+
+                SettingsCardToggleRow(
+                    title: "Quick Chat",
+                    subtitle: "Show a floating composer for quick messages, summoned with a global shortcut.",
+                    binding: self.$state.quickChatEnabled)
+
+                SettingsCardRow(
+                    title: "Quick Chat shortcut",
+                    subtitle: "Global shortcut that opens a floating chat bar for the main thread.",
                     showsDivider: false)
+                {
+                    KeyboardShortcuts.Recorder(for: .toggleQuickChat)
+                }
+                .disabled(!self.state.quickChatEnabled)
             }
 
             SettingsCardGroup("Capabilities") {
@@ -107,16 +135,33 @@ struct GeneralSettings: View {
                 SettingsCardToggleRow(
                     title: "Allow Computer Control",
                     subtitle: """
-                    Let an authorized agent move the pointer, click, and type on this Mac. \
-                    Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.
+                    Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can \
+                    move the pointer, click, and type without per-action confirmation. High risk.
                     """,
                     binding: self.$computerControlEnabled)
 
+                SettingsCardRow(
+                    title: "Computer Control access",
+                    subtitle: .verbatim(self.computerControlPermissions.diagnostic.detailText))
+                {
+                    Label {
+                        Text(verbatim: self.computerControlPermissions.diagnostic.statusText)
+                    } icon: {
+                        Image(systemName: self.computerControlPermissionIcon)
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(self.computerControlPermissionColor)
+                }
+
                 SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",
-                    subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-                    binding: self.$state.peekabooBridgeEnabled,
+                    subtitle: """
+                    Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. \
+                    Requires Computer Control; otherwise run Peekaboo's own Mac app.
+                    """,
+                    binding: self.peekabooBridgeBinding,
                     showsDivider: false)
+                    .disabled(!self.computerControlEnabled)
             }
 
             SettingsCardGroup("Browser") {
@@ -247,15 +292,44 @@ struct GeneralSettings: View {
             set: { self.state.isPaused = !$0 })
     }
 
+    /// Reflects the effective bridge state: off (and disabled) whenever Computer Control is off,
+    /// so the row matches the host that actually runs instead of a standalone toggle.
+    private var peekabooBridgeBinding: Binding<Bool> {
+        Binding(
+            get: { self.computerControlEnabled && self.state.peekabooBridgeEnabled },
+            set: { self.state.peekabooBridgeEnabled = $0 })
+    }
+
     private func updateActiveWork(active: Bool) {
         guard !self.isPreview else { return }
         if active {
+            self.refreshComputerControlPermissions()
             self.refreshGatewayStatus()
             if self.page == .connection {
                 self.gatewayDiscovery.start()
             }
         } else {
             self.gatewayDiscovery.stop()
+        }
+    }
+
+    private func refreshComputerControlPermissions() {
+        guard self.page == .general, self.isActive, !self.isPreview else { return }
+        self.computerControlPermissions = .probe()
+    }
+
+    private var computerControlPermissionIcon: String {
+        switch self.computerControlPermissions.diagnostic {
+        case .granted: "checkmark.circle.fill"
+        case .missing: "exclamationmark.circle.fill"
+        case .accessibilityGrantMayBeStale: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var computerControlPermissionColor: Color {
+        switch self.computerControlPermissions.diagnostic {
+        case .granted: .green
+        case .missing, .accessibilityGrantMayBeStale: .orange
         }
     }
 
@@ -446,7 +520,10 @@ struct GeneralSettings: View {
     }
 
     private var controlChannelRow: some View {
-        SettingsCardRow(title: "Control channel", subtitle: self.controlChannelSubtitle) {
+        SettingsCardRow(
+            title: "Control channel",
+            subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim))
+        {
             Text(self.controlStatusLine)
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)

@@ -1,14 +1,13 @@
 // Proves queue caps and depth describe pending work while active identities remain in shared state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  clearFollowupQueue,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   scheduleFollowupDrain,
 } from "./queue.js";
 import { createDeferred, createQueueTestRun as createRun } from "./queue.test-helpers.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
 
 describe("followup queue in-flight ownership", () => {
@@ -45,11 +44,11 @@ describe("followup queue in-flight ownership", () => {
       const calls: FollowupRun[] = [];
       const active = {
         ...createRun({ prompt: "active" }),
-        queuedLifecycle: { onComplete: activeComplete },
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: activeComplete },
       };
       const runFollowup = async (run: FollowupRun) => {
         calls.push(run);
-        await run.queuedLifecycle?.onAdmitted?.();
+        await run.turnAdoptionLifecycle?.onAdopted?.();
         if (run === active) {
           entered.resolve();
           await release.promise;
@@ -69,7 +68,7 @@ describe("followup queue in-flight ownership", () => {
             key,
             {
               ...createRun({ prompt: "pending" }),
-              queuedLifecycle: { onComplete: pendingComplete },
+              turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
             },
             createSettings(dropPolicy),
             "none",
@@ -112,7 +111,7 @@ describe("followup queue in-flight ownership", () => {
     const rejectedComplete = vi.fn();
     const active = createRun({ prompt: "active" });
     const runFollowup = async (run: FollowupRun) => {
-      await run.queuedLifecycle?.onAdmitted?.();
+      await run.turnAdoptionLifecycle?.onAdopted?.();
       if (run === active) {
         entered.resolve();
         await release.promise;
@@ -135,9 +134,10 @@ describe("followup queue in-flight ownership", () => {
           key,
           {
             ...createRun({ prompt: "rejected" }),
-            queuedLifecycle: {
-              onEnqueued: rejectedEnqueued,
-              onComplete: rejectedComplete,
+            turnAdoptionLifecycle: {
+              onAdopted: async () => {},
+              onDeferred: rejectedEnqueued,
+              onSettled: rejectedComplete,
             },
           },
           createSettings("new"),
@@ -180,7 +180,7 @@ describe("followup queue in-flight ownership", () => {
         originatingTo: "channel:A",
         originatingChatType: "channel",
       }),
-      queuedLifecycle: { onComplete },
+      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
     }));
     const runFollowup = async (run: FollowupRun) => {
       if (!aggregate) {
@@ -208,7 +208,7 @@ describe("followup queue in-flight ownership", () => {
           key,
           {
             ...createRun({ prompt: "pending-old" }),
-            queuedLifecycle: { onComplete: pendingComplete },
+            turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
           },
           oldSettings,
           "none",
@@ -222,7 +222,7 @@ describe("followup queue in-flight ownership", () => {
       expect(pendingComplete).toHaveBeenCalledOnce();
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
 
-      await aggregate?.queuedLifecycle?.onAdmitted?.();
+      await aggregate?.turnAdoptionLifecycle?.onAdopted?.();
       expect(queue?.items.map((item) => item.prompt)).toEqual(["survivor"]);
       expect(queue?.inFlight.size).toBe(2);
       expect(getFollowupQueueDepth(key)).toBe(1);
@@ -232,7 +232,7 @@ describe("followup queue in-flight ownership", () => {
           key,
           {
             ...createRun({ prompt: "rejected-new" }),
-            queuedLifecycle: { onComplete: rejectedComplete },
+            turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: rejectedComplete },
           },
           { ...initialSettings, cap: 1, dropPolicy: "new" },
           "none",

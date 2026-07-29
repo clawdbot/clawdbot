@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearActiveSessionsForShutdownTracker } from "../active-sessions-shutdown-tracker.js";
+import {
+  forgetActiveSessionForShutdown,
+  listActiveSessionsForShutdown,
+} from "../active-sessions-shutdown-tracker.js";
 
 const configMocks = vi.hoisted(() => ({
   storePath: "",
@@ -34,6 +37,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../commands/agent.js", () => ({
+  agentCommandFromGatewayIngress: agentIngressMocks.agentCommandFromIngress,
   agentCommandFromIngress: agentIngressMocks.agentCommandFromIngress,
 }));
 
@@ -67,7 +71,9 @@ describe("agent handler session create events", () => {
   });
 
   afterEach(async () => {
-    clearActiveSessionsForShutdownTracker();
+    for (const entry of listActiveSessionsForShutdown()) {
+      forgetActiveSessionForShutdown(entry.sessionId);
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -117,14 +123,17 @@ describe("agent handler session create events", () => {
               string,
               { sessionKey?: string; reason?: string },
               Set<string>,
-              { dropIfSlow?: boolean },
+              { dropIfSlow?: boolean; sessionKeys?: string[] },
             ]
           | undefined;
         expect(call?.[0]).toBe("sessions.changed");
         expect(call?.[1]?.sessionKey).toBe("agent:main:subagent:create-test");
         expect(call?.[1]?.reason).toBe("create");
         expect(call?.[2]).toEqual(new Set(["conn-1"]));
-        expect(call?.[3]).toEqual({ dropIfSlow: true });
+        expect(call?.[3]).toEqual({
+          dropIfSlow: true,
+          sessionKeys: ["agent:main:subagent:create-test"],
+        });
       },
       { timeout: 2_000, interval: 5 },
     );

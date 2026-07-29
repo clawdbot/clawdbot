@@ -34,6 +34,28 @@ type UsageSessionQueryTarget = {
   } | null;
 };
 
+export function currentLocalDate(): string {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+export function toUsageErrorMessage(error: unknown): string {
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  if (error && typeof error === "object") {
+    try {
+      return JSON.stringify(error) || "request failed";
+    } catch {
+      // Fall through to the stable generic message.
+    }
+  }
+  return "request failed";
+}
+
 export function toggleUsageRangeSelection<T>(
   selected: T[],
   value: T,

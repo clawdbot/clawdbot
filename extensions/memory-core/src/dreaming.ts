@@ -1,12 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Memory Core plugin module implements dreaming behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
-  DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
-  DEFAULT_MEMORY_DEEP_DREAMING_LIMIT as DEFAULT_MEMORY_DREAMING_LIMIT,
-  DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT as DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
-  DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE as DEFAULT_MEMORY_DREAMING_MIN_SCORE,
-  DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES as DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS as DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS as DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME as LEGACY_LIGHT_SLEEP_CRON_NAME,
@@ -18,7 +14,6 @@ import {
   MANAGED_MEMORY_DREAMING_CRON_NAME as MANAGED_DREAMING_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG as MANAGED_DREAMING_CRON_TAG,
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT as DREAMING_SYSTEM_EVENT_TEXT,
-  resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -115,6 +110,7 @@ type ShortTermPromotionDreamingConfig = {
   recencyHalfLifeDays?: number;
   maxAgeDays?: number;
   maxPromotedSnippetTokens?: number;
+  maxPriorEntryLossFraction: number;
   verboseLogging: boolean;
   storage?: {
     mode: "inline" | "separate" | "both";
@@ -137,6 +133,7 @@ type LegacyPhaseMigrationMode = "enabled" | "disabled";
 function formatRepairSummary(repair: {
   rewroteStore: boolean;
   removedInvalidEntries: number;
+  removedDanglingEntries?: number;
   removedOverflowEntries?: number;
   removedStaleLock: boolean;
 }): string {
@@ -145,6 +142,9 @@ function formatRepairSummary(repair: {
     const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
     const details = [
       repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
+      (repair.removedDanglingEntries ?? 0) > 0
+        ? `-${repair.removedDanglingEntries} dangling`
+        : null,
       removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
     ]
       .filter(Boolean)
@@ -404,13 +404,14 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     maxPromotedSnippetTokens:
       resolved.maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+    maxPriorEntryLossFraction: resolved.maxPriorEntryLossFraction,
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
     ...(resolved.execution.model ? { execution: { model: resolved.execution.model } } : {}),
   };
 }
 
-export async function reconcileShortTermDreamingCronJob(params: {
+async function reconcileShortTermDreamingCronJob(params: {
   cron: CronServiceLike | null;
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
@@ -496,9 +497,11 @@ export async function reconcileShortTermDreamingCronJob(params: {
   return { status: "updated", removed };
 }
 
-export async function runShortTermDreamingPromotionIfTriggered(params: {
+async function runShortTermDreamingPromotionIfTriggered(params: {
   cleanedBody: string;
   trigger?: string;
+  /** Agent whose heartbeat/cron turn triggered the sweep. */
+  agentId?: string;
   workspaceDir?: string;
   cfg?: OpenClawConfig;
   config: ShortTermPromotionDreamingConfig;
@@ -518,22 +521,38 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   const recencyHalfLifeDays =
     params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
   const fallbackWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
-  const workspaceCandidates = params.cfg
-    ? resolveMemoryDreamingWorkspaces(params.cfg, {
-        primaryWorkspaceDir: fallbackWorkspaceDir,
-        primaryAgentId: "main",
-      }).map((entry) => entry.workspaceDir)
-    : [];
+  // Narrative subagent sessions live in per-agent SQLite stores, so every swept workspace
+  // carries its owning agent. The triggering agent owns whatever the roster cannot attribute.
+  const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const seenWorkspaces = new Set<string>();
-  const workspaces = workspaceCandidates.filter((workspaceDir) => {
-    if (seenWorkspaces.has(workspaceDir)) {
-      return false;
+  const workspaces: Array<{ agentId?: string; workspaceDir: string }> = [];
+  const addWorkspace = (workspaceDir: string, agentId: string): void => {
+    if (!workspaceDir || seenWorkspaces.has(workspaceDir)) {
+      return;
     }
     seenWorkspaces.add(workspaceDir);
-    return true;
-  });
+    workspaces.push({ ...(agentId ? { agentId } : {}), workspaceDir });
+  };
+  // The triggering agent wins its own workspace; otherwise sort so a workspace shared by
+  // several agents always resolves the same owner across sweeps.
+  const resolveWorkspaceOwnerAgentId = (agentIds: readonly string[]): string => {
+    if (triggerAgentId && agentIds.includes(triggerAgentId)) {
+      return triggerAgentId;
+    }
+    return agentIds.toSorted()[0] ?? triggerAgentId;
+  };
+  if (params.cfg) {
+    for (const entry of resolveMemoryDreamingWorkspaces(params.cfg, {
+      primaryWorkspaceDir: fallbackWorkspaceDir,
+      // Attribute the hook's own workspace to the agent whose turn triggered the sweep;
+      // the host falls back to the roster default agent when the turn has no id.
+      ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
+    })) {
+      addWorkspace(entry.workspaceDir, resolveWorkspaceOwnerAgentId(entry.agentIds));
+    }
+  }
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
-    workspaces.push(fallbackWorkspaceDir);
+    addWorkspace(fallbackWorkspaceDir, triggerAgentId);
   }
   if (workspaces.length === 0) {
     params.logger.warn(
@@ -555,11 +574,11 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   let totalCandidates = 0;
   let totalApplied = 0;
   let failedWorkspaces = 0;
-  const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
+  const pluginConfig = params.cfg ? resolveMemoryDreamingPluginConfig(params.cfg) : undefined;
   const detachNarratives = params.trigger === "cron";
   const [
     { writeDeepDreamingReport },
-    { appendFallbackNarrativeEntry, generateAndAppendDreamNarrative, runDetachedDreamNarrative },
+    { appendFallbackNarrativeEntry, runDreamNarrative },
     { runDreamingSweepPhases },
     {
       applyShortTermPromotions,
@@ -572,10 +591,11 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     import("./dreaming-phases.js"),
     import("./short-term-promotion.js"),
   ]);
-  for (const workspaceDir of workspaces) {
+  for (const { agentId, workspaceDir } of workspaces) {
     const sweepNowMs = Date.now();
     try {
       await runDreamingSweepPhases({
+        agentId,
         workspaceDir,
         pluginConfig,
         cfg: params.cfg,
@@ -636,6 +656,12 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         minUniqueQueries: params.config.minUniqueQueries,
         maxAgeDays: params.config.maxAgeDays,
         maxPromotedSnippetTokens: params.config.maxPromotedSnippetTokens,
+        maxPriorEntryLossFraction: params.config.maxPriorEntryLossFraction,
+        consolidation: {
+          ...(params.subagent ? { subagent: params.subagent } : {}),
+          ...(params.config.execution?.model ? { model: params.config.execution.model } : {}),
+          logger: params.logger,
+        },
         timezone: params.config.timezone,
         nowMs: sweepNowMs,
       });
@@ -678,18 +704,9 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             logger: params.logger,
             reason: "subagent runtime is unavailable",
           });
-        } else if (detachNarratives) {
-          runDetachedDreamNarrative({
-            subagent: params.subagent,
-            workspaceDir,
-            data,
-            nowMs: sweepNowMs,
-            timezone: params.config.timezone,
-            model: params.config.execution?.model,
-            logger: params.logger,
-          });
         } else {
-          await generateAndAppendDreamNarrative({
+          await runDreamNarrative({
+            agentId,
             subagent: params.subagent,
             workspaceDir,
             data,
@@ -697,6 +714,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             timezone: params.config.timezone,
             model: params.config.execution?.model,
             logger: params.logger,
+            detached: detachNarratives,
           });
         }
       }
@@ -716,9 +734,14 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       });
     }
   }
-  params.logger.info(
-    `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}).`,
-  );
+  // A summary that reads identically whether the sweep worked or failed everywhere is how
+  // a broken pipeline stays unnoticed; escalate when no workspace produced anything.
+  const summary = `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}).`;
+  if (failedWorkspaces === workspaces.length) {
+    params.logger.warn(summary);
+  } else {
+    params.logger.info(summary);
+  }
 
   return { handled: true, reason: "memory-core: short-term dreaming processed" };
 }
@@ -798,10 +821,10 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
     const pluginConfig =
       params.reason === "startup"
-        ? (resolveMemoryCorePluginConfig(startupCfg) ??
-          resolveMemoryCorePluginConfig(api.config) ??
+        ? (resolveMemoryDreamingPluginConfig(startupCfg) ??
+          resolveMemoryDreamingPluginConfig(api.config) ??
           api.pluginConfig)
-        : resolveMemoryCorePluginConfig(startupCfg);
+        : resolveMemoryDreamingPluginConfig(startupCfg);
     const config = resolveShortTermPromotionDreamingConfig({
       pluginConfig,
       cfg: startupCfg,
@@ -912,7 +935,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   };
 
   const startRuntimeCronReconcileTimer = (): void => {
-    if (runtimeCronReconcileTimer) {
+    if (disposed || runtimeCronReconcileTimer) {
       return;
     }
     runtimeCronReconcileTimer = setInterval(() => {
@@ -933,12 +956,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         startupConfig: ctx.config,
         startupCron: () => resolveCronServiceFromGatewayContext(ctx),
       });
-      startRuntimeCronReconcileTimer();
-      scheduleStartupCronRetry();
     } catch (err) {
       api.logger.error(
         `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
       );
+    } finally {
+      startRuntimeCronReconcileTimer();
+      scheduleStartupCronRetry();
     }
   });
 
@@ -973,6 +997,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       return await runShortTermDreamingPromotionIfTriggered({
         cleanedBody: event.cleanedBody,
         trigger: ctx.trigger,
+        agentId: ctx.agentId,
         workspaceDir: ctx.workspaceDir,
         cfg: currentConfig,
         config,
@@ -985,27 +1010,4 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
   });
 }
-
-export const testing = {
-  buildManagedDreamingCronJob,
-  buildManagedDreamingPatch,
-  isManagedDreamingJob,
-  resolveCronServiceFromGatewayContext,
-  constants: {
-    MANAGED_DREAMING_CRON_NAME,
-    MANAGED_DREAMING_CRON_TAG,
-    DREAMING_SYSTEM_EVENT_TEXT,
-    DEFAULT_DREAMING_CRON_EXPR: DEFAULT_MEMORY_DREAMING_CRON_EXPR,
-    DEFAULT_DREAMING_LIMIT: DEFAULT_MEMORY_DREAMING_LIMIT,
-    DEFAULT_DREAMING_MIN_SCORE: DEFAULT_MEMORY_DREAMING_MIN_SCORE,
-    DEFAULT_DREAMING_MIN_RECALL_COUNT: DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
-    DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
-    DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS:
-      DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-    DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
-    RUNTIME_CRON_RECONCILE_INTERVAL_MS,
-    STARTUP_CRON_RETRY_DELAY_MS,
-    STARTUP_CRON_RETRY_MAX_ATTEMPTS,
-  },
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

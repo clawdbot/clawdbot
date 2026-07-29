@@ -18,13 +18,13 @@ import type {
 import { isJsonObject } from "./protocol.js";
 
 /** Minimal task-runtime surface needed to mirror native subagent lifecycle. */
-export type TaskLifecycleRuntime = Pick<
+type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
   "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
 >;
 
 /** Stable parent/session context used while mirroring native subagent tasks. */
-export type CodexNativeSubagentTaskMirrorParams = {
+type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
   agentId?: string;
@@ -428,7 +428,7 @@ export function codexNativeSubagentRunId(threadId: string): string {
 }
 
 /** Reads a subagent thread-spawn source only when it belongs to the expected parent thread. */
-export function readSubagentThreadSpawnSource(
+function readSubagentThreadSpawnSource(
   source: CodexSessionSource | null | undefined,
   parentThreadId: string,
 ): CodexSubAgentThreadSpawnSource | undefined {

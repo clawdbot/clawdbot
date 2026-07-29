@@ -5,7 +5,7 @@ import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
-export type WizardStepOption = {
+type WizardStepOption = {
   value: unknown;
   label: string;
   hint?: string;
@@ -37,6 +37,8 @@ type WizardNextResult = {
   step?: WizardStep;
   status: WizardSessionStatus;
   error?: string;
+  channels?: string[];
+  accounts?: Array<{ channel: string; accountId: string }>;
 };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
@@ -184,10 +186,24 @@ class WizardSessionPrompter implements WizardPrompter {
     return Boolean(res);
   }
 
-  progress(_label: string): WizardProgress {
+  progress(label: string): WizardProgress {
+    let stopped = false;
+    this.session.pushProgress(label);
     return {
-      update: (_message) => {},
-      stop: (_message) => {},
+      update: (message) => {
+        if (!stopped) {
+          this.session.pushProgress(message);
+        }
+      },
+      stop: (message) => {
+        if (stopped) {
+          return;
+        }
+        stopped = true;
+        if (message) {
+          this.session.pushProgress(message);
+        }
+      },
     };
   }
 
@@ -216,6 +232,8 @@ export class WizardSession {
   private readonly abortController = new AbortController();
   private readonly expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private currentStep: WizardStep | null = null;
+  private progressSteps: WizardStep[] = [];
+  private deliveredProgressStepIds = new Set<string>();
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
   private cancellationLocked = false;
@@ -230,9 +248,14 @@ export class WizardSession {
   >();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
+  private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
 
   constructor(
-    private runner: (prompter: WizardPrompter, signal: AbortSignal) => Promise<void>,
+    private runner: (
+      prompter: WizardPrompter,
+      signal: AbortSignal,
+      session: WizardSession,
+    ) => Promise<void>,
     options?: { timeoutMs?: number },
   ) {
     const prompter = new WizardSessionPrompter(this);
@@ -244,15 +267,20 @@ export class WizardSession {
   }
 
   async next(): Promise<WizardNextResult> {
+    const progressStep = this.progressSteps.shift();
+    if (progressStep) {
+      this.rememberDeliveredProgressStep(progressStep.id);
+      return { done: false, step: progressStep, status: this.status };
+    }
     if (this.currentStep) {
       return { done: false, step: this.currentStep, status: this.status };
     }
     if (this.pendingTerminalResolution) {
       this.pendingTerminalResolution = false;
-      return { done: true, status: this.status, error: this.error };
+      return this.terminalResult();
     }
     if (this.status !== "running") {
-      return { done: true, status: this.status, error: this.error };
+      return this.terminalResult();
     }
     if (!this.stepDeferred) {
       this.stepDeferred = createDeferred();
@@ -261,12 +289,36 @@ export class WizardSession {
     if (step) {
       return { done: false, step, status: this.status };
     }
-    return { done: true, status: this.status, error: this.error };
+    return this.terminalResult();
+  }
+
+  private terminalResult(): WizardNextResult {
+    if (!this.configuredAccounts) {
+      return { done: true, status: this.status, error: this.error };
+    }
+    return {
+      done: true,
+      status: this.status,
+      error: this.error,
+      channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
+      accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
+    };
+  }
+
+  /** Record what the channels flow actually configured (channels flow only). */
+  setConfiguredAccounts(accounts: ReadonlyArray<{ channel: string; accountId: string }>) {
+    this.configuredAccounts = accounts.map((entry) => ({ ...entry }));
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
     const pending = this.answerDeferred.get(stepId);
     if (!pending) {
+      // Gateway-owned progress steps never block the provider run. Older
+      // clients still acknowledge every rendered step, so accept that stale
+      // acknowledgement while newer clients poll without an answer.
+      if (this.deliveredProgressStepIds.delete(stepId)) {
+        return undefined;
+      }
       throw new Error("wizard: no pending step");
     }
     const normalizedValue = pending.text ? normalizeTextAnswer(value) : value;
@@ -297,6 +349,8 @@ export class WizardSession {
       pending.deferred.reject(new WizardCancelledError());
     }
     this.answerDeferred.clear();
+    this.progressSteps = [];
+    this.deliveredProgressStepIds.clear();
     this.resolveStep(null);
     return true;
   }
@@ -315,6 +369,41 @@ export class WizardSession {
     this.resolveStep(step);
   }
 
+  pushProgress(message: string) {
+    if (this.status !== "running") {
+      return;
+    }
+    const step: WizardStep = {
+      id: randomUUID(),
+      type: "progress",
+      message,
+      executor: "gateway",
+    };
+    if (this.stepDeferred) {
+      this.rememberDeliveredProgressStep(step.id);
+      this.resolveStep(step);
+      return;
+    }
+    // Keep the oldest unread event and the newest snapshot. This preserves the
+    // initial label while bounding bursty pull updates between client polls.
+    if (this.progressSteps.length >= 2) {
+      this.progressSteps[this.progressSteps.length - 1] = step;
+      return;
+    }
+    this.progressSteps.push(step);
+  }
+
+  private rememberDeliveredProgressStep(stepId: string) {
+    this.deliveredProgressStepIds.add(stepId);
+    if (this.deliveredProgressStepIds.size <= 64) {
+      return;
+    }
+    const oldest = this.deliveredProgressStepIds.values().next().value;
+    if (oldest) {
+      this.deliveredProgressStepIds.delete(oldest);
+    }
+  }
+
   queueExternalUrl(url: string) {
     this.pendingExternalUrl = url;
   }
@@ -327,7 +416,7 @@ export class WizardSession {
 
   private async run(prompter: WizardPrompter) {
     try {
-      await this.runner(prompter, this.signal);
+      await this.runner(prompter, this.signal, this);
       if (this.status === "running") {
         this.status = "done";
       }

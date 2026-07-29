@@ -10,7 +10,7 @@ read_when:
 
 Most skills configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific visibility lives under
-`agents.defaults.skills` and `agents.list[].skills`.
+`agents.defaults.skills` and `agents.entries.*.skills`.
 
 ```json5
 {
@@ -20,7 +20,6 @@ Most skills configuration lives under `skills` in
       extraDirs: ["~/Projects/agent-scripts/skills"],
       allowSymlinkTargets: ["~/Projects/manager/skills"],
       watch: true,
-      watchDebounceMs: 250,
     },
     install: {
       preferBrew: true,
@@ -30,7 +29,7 @@ Most skills configuration lives under `skills` in
     workshop: {
       autonomous: { enabled: false },
       allowSymlinkTargetWrites: false,
-      approvalPolicy: "pending",
+      approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
     },
@@ -48,7 +47,7 @@ Most skills configuration lives under `skills` in
 ```
 
 <Note>
-  For built-in image generation, use `agents.defaults.imageGenerationModel`
+  For built-in image generation, use `agents.defaults.mediaModels.image`
   plus the core `image_generate` tool instead of `skills.entries`. Skill
   entries are for custom or third-party skill workflows only.
 </Note>
@@ -73,10 +72,6 @@ Most skills configuration lives under `skills` in
   change. Covers nested files under grouped skill roots.
 </ParamField>
 
-<ParamField path="skills.load.watchDebounceMs" type="number" default="250">
-  Debounce window for skill watcher events in milliseconds.
-</ParamField>
-
 ## Install (`skills.install`)
 
 <ParamField path="skills.install.preferBrew" type="boolean" default="true">
@@ -85,8 +80,8 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs — the Gateway runtime should still use Node (Bun is not
-  recommended for WhatsApp/Telegram). `openclaw setup --node-manager` and
+  installs - the OpenClaw CLI and Gateway runtime require Node because the
+  canonical state store uses `node:sqlite`. `openclaw setup --node-manager` and
   `openclaw onboard --node-manager` accept `npm`, `pnpm`, or `bun`; set
   `"yarn"` directly in config for Yarn-backed skill installs.
 </ParamField>
@@ -317,11 +312,11 @@ different visible skill set per agent.
 
 <ParamField path="agents.defaults.skills" type="string[]">
   Shared baseline allowlist inherited by agents that omit
-  `agents.list[].skills`. Omit entirely to leave skills unrestricted by
+  `agents.entries.*.skills`. Omit entirely to leave skills unrestricted by
   default.
 </ParamField>
 
-<ParamField path="agents.list[].skills" type="string[]">
+<ParamField path="agents.entries.*.skills" type="string[]">
   Explicit final skill set for that agent. Explicit lists **replace**
   inherited defaults — they do not merge. Set to `[]` to expose no skills for
   that agent.
@@ -342,14 +337,18 @@ different visible skill set per agent.
 ## Workshop (`skills.workshop`)
 
 <ParamField path="skills.workshop.autonomous.enabled" type="boolean" default="false">
-  When `true`, agents can create pending proposals from durable conversation
-  signals after successful turns. User-prompted skill creation always goes
-  through Skill Workshop regardless of this setting.
+  When `true`, OpenClaw can create pending proposals from durable corrections
+  and can review successful, substantial completed work after the system becomes
+  idle. This can add a background model run after eligible turns. User-prompted
+  skill creation and `/learn` continue to work when the setting is `false`.
 </ParamField>
 
-<ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"pending"'>
-  `pending` requires operator approval before agent-initiated apply, reject,
-  or quarantine. `auto` allows those actions without approval.
+See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,
+proposal-only permissions, and troubleshooting.
+
+<ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"auto"'>
+  `auto` allows agent-initiated apply, reject, or quarantine without an
+  additional approval prompt. `pending` requires operator approval.
 </ParamField>
 
 <ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
@@ -477,6 +476,9 @@ change.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
     Proposal queue for agent-drafted skills.
+  </Card>
+  <Card title="Self-learning" href="/tools/self-learning" icon="brain">
+    Conservative, opt-in proposals from completed work.
   </Card>
   <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
     Native slash-command catalog and chat directives.

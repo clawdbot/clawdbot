@@ -1,12 +1,11 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
 import {
-  clearDeviceAuthTokenFromStore,
   type DeviceAuthEntry,
-  loadDeviceAuthTokenFromStore,
-  storeDeviceAuthTokenInStore,
-} from "../../../../src/shared/device-auth-store.js";
-import type { DeviceAuthStore } from "../../../../src/shared/device-auth.js";
+  type DeviceAuthStore,
+  normalizeDeviceAuthRole,
+  normalizeDeviceAuthScopes,
+} from "../../../../src/shared/device-auth.js";
 import { normalizeGatewayCredentialScope } from "../../app/gateway-scope.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
@@ -69,7 +68,7 @@ export type DevicePairingList = {
   paired: PairedDevice[];
 };
 
-export type ExecApprovalsDefaults = {
+type ExecApprovalsDefaults = {
   security?: string;
   ask?: string;
   askFallback?: string;
@@ -98,14 +97,14 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
-export type FileExecApprovalsSnapshot = {
+type FileExecApprovalsSnapshot = {
   path: string;
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
 };
 
-export type NativeExecApprovalRule = {
+type NativeExecApprovalRule = {
   pattern: string;
   action: "allow" | "deny" | "prompt";
   shells?: string[];
@@ -149,7 +148,7 @@ type DevicesState = NodesRequestState & {
   devicesList: DevicePairingList | null;
 };
 
-export type ExecApprovalsState = NodesRequestState & {
+type ExecApprovalsState = NodesRequestState & {
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;
@@ -170,7 +169,7 @@ type StoredIdentity = {
   createdAtMs: number;
 };
 
-export type DeviceIdentity = {
+type DeviceIdentity = {
   deviceId: string;
   publicKey: string;
   privateKey: string;
@@ -344,13 +343,11 @@ async function reloadInventory(state: InventoryState, opts?: { error?: string })
   }
 }
 
+// Confirmation for these removals lives in the page (in-page dialog): native
+// window.confirm silently returns false in webviews without a dialog bridge.
 export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
-  }
-  const confirmed = window.confirm(`Remove ${entry.name} (${entry.id.slice(0, 12)}…)?`);
-  if (!confirmed) {
     return;
   }
   try {
@@ -367,12 +364,6 @@ export async function removeStaleInventoryEntries(
 ) {
   const client = state.client;
   if (!client || !state.connected || entries.length === 0) {
-    return;
-  }
-  const confirmed = window.confirm(
-    `Remove ${entries.length} stale pairing${entries.length === 1 ? "" : "s"}? Affected clients re-pair silently on their next connection.`,
-  );
-  if (!confirmed) {
     return;
   }
   const failures: string[] = [];
@@ -734,19 +725,34 @@ function writeStore(gatewayUrl: string, store: DeviceAuthStore) {
   }
 }
 
+function canonicalDeviceAuthTokens(tokens: DeviceAuthStore["tokens"]) {
+  const canonical: DeviceAuthStore["tokens"] = {};
+  for (const [rawRole, entry] of Object.entries(tokens)) {
+    const role = normalizeDeviceAuthRole(rawRole);
+    if (!role || !entry || typeof entry.token !== "string") {
+      continue;
+    }
+    canonical[role] = {
+      token: entry.token,
+      role,
+      scopes: normalizeDeviceAuthScopes(Array.isArray(entry.scopes) ? entry.scopes : undefined),
+      updatedAtMs: Number.isFinite(entry.updatedAtMs) ? entry.updatedAtMs : 0,
+    };
+  }
+  return canonical;
+}
+
 export function loadDeviceAuthToken(params: {
   deviceId: string;
   gatewayUrl: string;
   role: string;
 }): DeviceAuthEntry | null {
-  return loadDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+  const store = readStore(params.gatewayUrl);
+  if (!store || store.deviceId !== params.deviceId) {
+    return null;
+  }
+  const role = normalizeDeviceAuthRole(params.role);
+  return canonicalDeviceAuthTokens(store.tokens)[role] ?? null;
 }
 
 export function storeDeviceAuthToken(params: {
@@ -756,16 +762,23 @@ export function storeDeviceAuthToken(params: {
   token: string;
   scopes?: string[];
 }): DeviceAuthEntry {
-  return storeDeviceAuthTokenInStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
+  const existing = readStore(params.gatewayUrl);
+  const role = normalizeDeviceAuthRole(params.role);
+  const entry: DeviceAuthEntry = {
     token: params.token,
-    scopes: params.scopes,
+    role,
+    scopes: normalizeDeviceAuthScopes(params.scopes),
+    updatedAtMs: Date.now(),
+  };
+  writeStore(params.gatewayUrl, {
+    version: 1,
+    deviceId: params.deviceId,
+    tokens: {
+      ...(existing?.deviceId === params.deviceId ? canonicalDeviceAuthTokens(existing.tokens) : {}),
+      [role]: entry,
+    },
   });
+  return entry;
 }
 
 export function clearDeviceAuthToken(params: {
@@ -773,14 +786,17 @@ export function clearDeviceAuthToken(params: {
   gatewayUrl: string;
   role: string;
 }) {
-  clearDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readStore(params.gatewayUrl),
-      writeStore: (store) => writeStore(params.gatewayUrl, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+  const store = readStore(params.gatewayUrl);
+  if (!store || store.deviceId !== params.deviceId) {
+    return;
+  }
+  const role = normalizeDeviceAuthRole(params.role);
+  if (!store.tokens[role]) {
+    return;
+  }
+  const tokens = canonicalDeviceAuthTokens(store.tokens);
+  delete tokens[role];
+  writeStore(params.gatewayUrl, { ...store, tokens });
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -898,3 +914,4 @@ export async function signDevicePayload(privateKeyBase64Url: string, payload: st
   const sig = await signAsync(data, key);
   return base64UrlEncode(sig);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

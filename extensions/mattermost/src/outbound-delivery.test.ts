@@ -1,7 +1,7 @@
 // Mattermost tests cover the shared outbound delivery path.
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
-  deliverOutboundPayloads,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -43,7 +43,7 @@ describe("Mattermost outbound delivery", () => {
       expected: "The pipeline has 3 open deals.",
     },
   ])("sends sanitized $name through the channel handler", async ({ text, expected }) => {
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg: {},
       channel: "mattermost",
       to: "channel:team-1",

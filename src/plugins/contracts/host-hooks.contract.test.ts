@@ -13,7 +13,11 @@ import {
   validateSessionsPluginPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { listSessionEntries, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  clearPluginOwnedSessionState,
+  listSessionEntries,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
@@ -21,21 +25,18 @@ import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { executePluginCommand, validatePluginCommandDefinition } from "../commands.js";
+import { validatePluginCommandDefinition } from "../command-registration.js";
+import { executePluginCommand } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
-import {
-  cleanupReplacedPluginHostRegistry,
-  clearPluginOwnedSessionState,
-  runPluginHostCleanup,
-} from "../host-hook-cleanup.js";
+import { cleanupReplacedPluginHostRegistry, runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
   getPluginRunContext,
-  listPluginSessionSchedulerJobs,
   setPluginRunContext,
 } from "../host-hook-runtime.js";
+import { listPluginSessionSchedulerJobs } from "../host-hook-runtime.test-fixtures.js";
 import {
-  drainPluginNextTurnInjections,
+  drainPluginNextTurnInjectionContext,
   enqueuePluginNextTurnInjection,
   patchPluginSessionExtension,
   projectPluginSessionExtensionsSync,
@@ -43,7 +44,11 @@ import {
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
@@ -87,7 +92,10 @@ function loadSessionStore(
   _options?: { skipCache?: boolean },
 ): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
 }
 
@@ -123,6 +131,7 @@ async function withHostHookState(
   prefix: string,
   run: (fixture: HostHookStateFixture) => Promise<void>,
   createTempConfig: (storePath: string) => HostHookStateFixture["tempConfig"] = (storePath) => ({
+    agents: { entries: { main: { default: true } } },
     session: { store: storePath },
   }),
 ): Promise<void> {
@@ -143,6 +152,7 @@ async function withHostHookState(
 
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
+    releasePinnedPluginSessionExtensionRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginHostRuntimeState();
     resetAgentEventsForTest();
@@ -1799,7 +1809,7 @@ describe("host-hook fixture plugin contract", () => {
           return undefined;
         });
 
-        const drained = await drainPluginNextTurnInjections({
+        const { queuedInjections: drained } = await drainPluginNextTurnInjectionContext({
           cfg: tempConfig,
           sessionKey: "agent:main:main",
           now: 2,
@@ -1877,7 +1887,7 @@ describe("host-hook fixture plugin contract", () => {
         return undefined;
       });
 
-      const drained = await drainPluginNextTurnInjections({
+      const { queuedInjections: drained } = await drainPluginNextTurnInjectionContext({
         cfg: tempConfig,
         sessionKey: "agent:main:main",
         now: 4,
@@ -1990,6 +2000,58 @@ describe("host-hook fixture plugin contract", () => {
         },
       ],
     });
+  });
+
+  it("keeps gateway UI descriptors pinned across agent registry replacement", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "pinned-ui-fixture",
+        name: "Pinned UI Fixture",
+      }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          id: "gateway-panel",
+          surface: "session",
+          label: "Gateway panel",
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    pinActivePluginSessionExtensionRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const calls: Array<[boolean, unknown, unknown]> = [];
+    void expectDefined(
+      pluginHostHookHandlers["plugins.uiDescriptors"],
+      'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
+    )({
+      params: {},
+      respond: (ok: boolean, payload: unknown, error: unknown) => {
+        calls.push([ok, payload, error]);
+      },
+    } as never);
+
+    expect(calls).toEqual([
+      [
+        true,
+        {
+          ok: true,
+          descriptors: [
+            {
+              id: "gateway-panel",
+              pluginId: "pinned-ui-fixture",
+              pluginName: "Pinned UI Fixture",
+              surface: "session",
+              label: "Gateway panel",
+            },
+          ],
+        },
+        undefined,
+      ],
+    ]);
   });
 
   it("enforces command requiredScopes for gateway clients and command owners", async () => {
@@ -3048,3 +3110,4 @@ describe("host-hook fixture plugin contract", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

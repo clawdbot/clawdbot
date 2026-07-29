@@ -1,10 +1,11 @@
 // Keeps manifest providerAuthChoices literals aligned with registered provider.auth methods.
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import pLimit from "p-limit";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { listBundledPluginMetadata } from "../../src/plugins/bundled-plugin-metadata.js";
-import type { PluginManifestProviderAuthChoice } from "../../src/plugins/manifest.js";
+import type { PluginManifest } from "../../src/plugins/manifest.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -21,6 +22,8 @@ type ApiKeyStyleChoice = PluginManifestProviderAuthChoice & {
   cliFlag: string;
 };
 
+type PluginManifestProviderAuthChoice = NonNullable<PluginManifest["providerAuthChoices"]>[number];
+
 type ParityCase = {
   pluginId: string;
   providerId: string;
@@ -30,12 +33,15 @@ type ParityCase = {
   setupEnvVars: readonly string[];
 };
 
+type PluginRegister = (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+type CapturedPluginRegistration = ReturnType<typeof createCapturedPluginRegistration>;
+
 type PluginEntryModule = {
   default?: {
     id?: string;
-    register?: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+    register?: PluginRegister;
   };
-  register?: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+  register?: PluginRegister;
 };
 
 function isApiKeyStyleChoice(
@@ -67,9 +73,7 @@ function listParityCases(): ParityCase[] {
   });
 }
 
-async function loadPluginRegister(
-  pluginId: string,
-): Promise<(api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void> {
+async function loadPluginRegister(pluginId: string): Promise<PluginRegister> {
   // Dynamic import keeps this file out of the unit-fast lane: loading built
   // plugin dists pulls large module graphs into the shared worker cache and
   // breaks co-resident vi.mock-based unit tests (observed with memory-host-sdk).
@@ -155,6 +159,42 @@ const parityCases = listParityCases().toSorted((left, right) => {
 });
 
 const probeAgentDir = mkdtempSync(path.join(tmpdir(), "openclaw-auth-parity-"));
+// Keep at least five imports in flight, but leave CPU headroom on larger CI runners.
+const PLUGIN_LOAD_CONCURRENCY = Math.max(5, Math.min(12, availableParallelism()));
+const parityPluginIds = [...new Set(parityCases.map((entry) => entry.pluginId))];
+const registrationResultByPluginId = new Map<
+  string,
+  Promise<PromiseSettledResult<CapturedPluginRegistration>>
+>();
+
+beforeAll(() => {
+  // Load and register each plugin once. Auth probes stay serial because
+  // provider setup can log or inspect the shared probe directory.
+  const limitPluginLoad = pLimit(PLUGIN_LOAD_CONCURRENCY);
+  for (const pluginId of parityPluginIds) {
+    // Settle each preload independently so one hung or rejected plugin cannot
+    // suppress parity coverage for plugins that loaded successfully.
+    registrationResultByPluginId.set(
+      pluginId,
+      limitPluginLoad(async () => {
+        const register = await loadPluginRegister(pluginId);
+        const captured = createCapturedPluginRegistration({
+          id: pluginId,
+          name: pluginId,
+          source: `bundled:${pluginId}`,
+        });
+        register(captured.api);
+        return captured;
+      }).then(
+        (value): PromiseFulfilledResult<CapturedPluginRegistration> => ({
+          status: "fulfilled",
+          value,
+        }),
+        (reason): PromiseRejectedResult => ({ status: "rejected", reason }),
+      ),
+    );
+  }
+});
 
 afterAll(() => {
   rmSync(probeAgentDir, { recursive: true, force: true });
@@ -170,13 +210,17 @@ describe("bundled provider manifest↔runtime auth literal parity", () => {
     "$pluginId $providerId/$methodId optionKey=$optionKey",
     { timeout: PARITY_TIMEOUT_MS },
     async (parityCase) => {
-      const register = await loadPluginRegister(parityCase.pluginId);
-      const captured = createCapturedPluginRegistration({
-        id: parityCase.pluginId,
-        name: parityCase.pluginId,
-        source: `bundled:${parityCase.pluginId}`,
-      });
-      register(captured.api);
+      const registrationResultPromise = registrationResultByPluginId.get(parityCase.pluginId);
+      if (!registrationResultPromise) {
+        throw new Error(`bundled plugin ${parityCase.pluginId} was not preloaded`);
+      }
+      const registrationResult = await registrationResultPromise;
+      if (registrationResult.status === "rejected") {
+        throw new Error(`bundled plugin ${parityCase.pluginId} preload or registration failed`, {
+          cause: registrationResult.reason,
+        });
+      }
+      const captured = registrationResult.value;
 
       const provider = findRegisteredProvider(captured.providers, parityCase.providerId);
       if (!provider) {

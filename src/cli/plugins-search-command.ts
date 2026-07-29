@@ -7,7 +7,7 @@ import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 
 /** Options accepted by `openclaw plugins search`. */
-export type PluginsSearchOptions = {
+type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };

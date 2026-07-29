@@ -127,6 +127,33 @@ describe("cli program (nodes media)", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps valid cameras when a node also reports malformed device records", async () => {
+    const camera = { id: "front", name: "Front Camera", position: "front" };
+    mockNodeGateway("camera.list", { devices: [null, 7, "invalid", [], camera] });
+
+    await runNodesCommand(["nodes", "camera", "list", "--node", "ios-node"]);
+
+    expect(runtime.log.mock.calls.flat().join("\n")).toContain("Front Camera");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("omits malformed camera device records from JSON output", async () => {
+    const camera = { id: "front", name: "Front Camera", position: "front" };
+    mockNodeGateway("camera.list", { devices: [null, 7, "invalid", [], camera] });
+
+    await runNodesCommand(["nodes", "camera", "list", "--node", "ios-node", "--json"]);
+
+    expect(runtime.writeJson).toHaveBeenCalledWith([camera]);
+  });
+
+  it("reports no cameras when every returned device record is malformed", async () => {
+    mockNodeGateway("camera.list", { devices: [null, 7, "invalid", []] });
+
+    await runNodesCommand(["nodes", "camera", "list", "--node", "ios-node"]);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("No cameras reported."));
+  });
+
   it("runs nodes camera snap and prints two MEDIA paths", async () => {
     mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
 
@@ -168,6 +195,53 @@ describe("cli program (nodes media)", () => {
     }
   });
 
+  it("runs one unknown-position camera snap for a Linux node", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "linux-node",
+              displayName: "Linux Node",
+              platform: "linux",
+              remoteIp: "192.168.0.89",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "linux-node",
+          command: "camera.snap",
+          payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
+        };
+      }
+      return { ok: true };
+    });
+
+    await runNodesCommand([
+      "nodes",
+      "camera",
+      "snap",
+      "--node",
+      "linux-node",
+      "--device-id",
+      "/dev/video2",
+    ]);
+
+    const invokeCalls = nodeInvokeCalls();
+    expect(invokeCalls).toHaveLength(1);
+    expect(invokeCalls[0]?.commandParams.facing).toBeUndefined();
+    expect(invokeCalls[0]?.commandParams.deviceId).toBe("/dev/video2");
+    await expectLoggedSingleMediaFile({
+      expectedPathPattern: /openclaw-camera-snap-unknown-.*\.jpg$/,
+    });
+  });
+
   it("runs nodes camera clip and prints one MEDIA path", async () => {
     mockNodeGateway("camera.clip", {
       format: "mp4",
@@ -191,6 +265,54 @@ describe("cli program (nodes media)", () => {
 
     await expectLoggedSingleMediaFile({
       expectedPathPattern: /openclaw-camera-clip-front-.*\.mp4$/,
+    });
+  });
+
+  it("runs an unknown-position camera clip for a Linux node", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "linux-node",
+              displayName: "Linux Node",
+              platform: "linux",
+              remoteIp: "192.168.0.89",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "linux-node",
+          command: "camera.clip",
+          payload: { format: "mp4", base64: "aGk=", durationMs: 3000, hasAudio: true },
+        };
+      }
+      return { ok: true };
+    });
+
+    await runNodesCommand([
+      "nodes",
+      "camera",
+      "clip",
+      "--node",
+      "linux-node",
+      "--facing",
+      "back",
+      "--device-id",
+      "/dev/video2",
+    ]);
+
+    const invoke = latestNodeInvokeCall();
+    expect(invoke.commandParams.facing).toBeUndefined();
+    expect(invoke.commandParams.deviceId).toBe("/dev/video2");
+    await expectLoggedSingleMediaFile({
+      expectedPathPattern: /openclaw-camera-clip-unknown-.*\.mp4$/,
     });
   });
 

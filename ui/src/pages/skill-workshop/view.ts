@@ -3,57 +3,22 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
-import "../../components/file-preview-modal.ts";
+import "../../components/file-preview-modal-registration.ts";
+import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import "../../styles/plugins.css";
+import "../../styles/skill-workshop.css";
 import {
   filterSkillWorkshopProposals,
-  type SkillWorkshopActionBusy,
   type SkillWorkshopActionNotice,
-  type SkillWorkshopMode,
   type SkillWorkshopProposal,
   type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
-
-type SkillWorkshopEmptyIcon = "search" | "clock" | "check" | "x" | "shield" | "refresh";
-
-type SkillWorkshopProps = {
-  loading: boolean;
-  error: string | null;
-  inspectingKey: string | null;
-  proposals: SkillWorkshopProposal[];
-  selectedKey: string | null;
-  statusFilter: SkillWorkshopStatusFilter;
-  query: string;
-  filePreviewKey: string | null;
-  filePreviewQuery: string;
-  queueWidth: number;
-  mode: SkillWorkshopMode;
-  actionBusy: SkillWorkshopActionBusy | null;
-  actionNotice: SkillWorkshopActionNotice | null;
-  revisionKey: string | null;
-  revisionDraft: string;
-  assistantName: string;
-  workshopAgentName: string;
-  counts: Record<SkillWorkshopStatusFilter, number>;
-  onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
-  onRetry: () => void;
-  onQueryChange: (query: string) => void;
-  onFilePreviewQueryChange: (query: string) => void;
-  onQueueWidthChange: (width: number) => void;
-  onModeChange: (mode: SkillWorkshopMode) => void;
-  onSelect: (key: string) => void;
-  onPrev: () => void;
-  onNext: () => void;
-  onApply: (key: string) => void;
-  onRevise: (key: string) => void;
-  onReject: (key: string) => void;
-  onRevisionDraftChange: (draft: string) => void;
-  onRevisionCancel: () => void;
-  onRevisionSubmit: (key: string) => void;
-  onPreviewFile: (key: string, path: string) => void;
-  onClosePreview: () => void;
-};
+import { renderBoardEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
+import { renderSkillWorkshopHistoryScan } from "./history-scan.ts";
+import { renderSelfLearningError } from "./self-learning.ts";
+import type { SkillWorkshopProps } from "./view-types.ts";
 
 const STATUS_TABS: SkillWorkshopStatusFilter[] = [
   "all",
@@ -98,7 +63,11 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
   const hasNoProposals = props.proposals.length === 0 && !props.loading && !props.error;
 
   const body = hasNoProposals
-    ? renderWorkshopEmptyState(props)
+    ? renderWorkshopEmptyState({
+        agentName: resolveSkillWorkshopAgentName(props, t("skillWorkshop.empty.defaultAgent")),
+        selfLearning: props.selfLearning,
+        onSelfLearningToggle: props.onSelfLearningToggle,
+      })
     : props.mode === "today"
       ? renderToday(props, todayHero, allPending)
       : renderBoard(props, groups, selected);
@@ -113,6 +82,11 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
             </button>
           </div>`
         : nothing}
+      ${renderSelfLearningError(props.selfLearning)}
+      ${renderSkillWorkshopHistoryScan({
+        state: props.historyScan,
+        onScan: props.onHistoryScan,
+      })}
       <div class="sw-view" data-mode=${props.mode}>
         ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
       </div>
@@ -143,14 +117,13 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
     props.mode === "board" ? t("skillWorkshop.actions.revise") : t("skillWorkshop.actions.tweak");
 
   return html`
-    <div class="sw-revision-backdrop" role="presentation" @click=${props.onRevisionCancel}>
-      <section
-        class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="sw-revision-title"
-        @click=${(event: MouseEvent) => event.stopPropagation()}
-      >
+    <openclaw-modal-dialog
+      .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
+      .description=${t("skillWorkshop.revision.description")}
+      style="--openclaw-modal-width: 560px"
+      @modal-cancel=${props.onRevisionCancel}
+    >
+      <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
           <div>
             <div class="sw-revision-dialog__eyebrow">
@@ -160,6 +133,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           </div>
           <openclaw-tooltip content=${t("skillWorkshop.actions.close")}>
             <button
+              type="button"
               class="sw-revision-dialog__close"
               aria-label=${t("skillWorkshop.actions.close")}
               ?disabled=${Boolean(props.actionBusy)}
@@ -189,6 +163,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           : nothing}
         <div class="sw-revision-dialog__actions">
           <button
+            type="button"
             class="sw-btn sw-btn--ghost"
             ?disabled=${Boolean(props.actionBusy)}
             @click=${props.onRevisionCancel}
@@ -196,6 +171,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
             ${t("skillWorkshop.actions.cancel")}
           </button>
           <button
+            type="button"
             class="sw-btn sw-btn--primary ${busy ? "is-busy" : ""}"
             ?disabled=${!canSubmit}
             @click=${() => props.onRevisionSubmit(proposal.key)}
@@ -204,7 +180,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           </button>
         </div>
       </section>
-    </div>
+    </openclaw-modal-dialog>
   `;
 }
 
@@ -217,7 +193,9 @@ function renderBoard(
     ${renderLifecycleTabs(props)}
     <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
       ${renderQueue(props, groups, selected)} ${renderQueueResizer(props)}
-      ${selected ? renderDetail(props, selected) : renderEmpty(props)}
+      ${selected
+        ? renderDetail(props, selected)
+        : renderBoardEmptyDetail(props.query, props.statusFilter)}
     </div>
   `;
 }
@@ -289,7 +267,7 @@ function renderLifecycleTabs(props: SkillWorkshopProps) {
             class="sw-lifecycle-tab ${isActive ? "is-active" : ""}"
             @click=${() => props.onStatusFilterChange(status)}
           >
-            ${t(STATUS_LABEL[status])} <span class="sw-lifecycle-tab__count">${count}</span>
+            ${t(STATUS_LABEL[status])} <span class="settings-count">${count}</span>
           </button>
         `;
       })}
@@ -321,7 +299,7 @@ function renderQueue(
               (group) => html`
                 <div class="sw-queue__group">
                   ${t(group.label)}
-                  <span class="sw-queue__group-pill">${group.items.length}</span>
+                  <span class="settings-count">${group.items.length}</span>
                 </div>
                 ${group.items.map((proposal) => renderRow(props, proposal, selected))}
               `,
@@ -479,147 +457,6 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
           ? t("skillWorkshop.actions.rejecting")
           : t("skillWorkshop.actions.reject")}
       </button>
-    </div>
-  `;
-}
-
-function renderEmpty(props: SkillWorkshopProps) {
-  const empty = resolveBoardEmptyState(props);
-  return html`
-    <div class="sw-detail sw-detail--empty">
-      <div class="sw-filter-empty">
-        <div class="sw-filter-empty__icon" aria-hidden="true">
-          ${renderEmptyStateIcon(empty.icon)}
-        </div>
-        <p class="sw-empty__title">${empty.title}</p>
-        <p class="sw-empty__sub">${empty.body}</p>
-      </div>
-    </div>
-  `;
-}
-
-function resolveBoardEmptyState(props: SkillWorkshopProps): {
-  icon: SkillWorkshopEmptyIcon;
-  title: string;
-  body: string;
-} {
-  if (props.query.trim()) {
-    return {
-      icon: "search",
-      title: t("skillWorkshop.empty.searchTitle"),
-      body: t("skillWorkshop.empty.searchBody"),
-    };
-  }
-
-  switch (props.statusFilter) {
-    case "pending":
-      return {
-        icon: "clock",
-        title: t("skillWorkshop.empty.pendingTitle"),
-        body: t("skillWorkshop.empty.pendingBody"),
-      };
-    case "applied":
-      return {
-        icon: "check",
-        title: t("skillWorkshop.empty.appliedTitle"),
-        body: t("skillWorkshop.empty.appliedBody"),
-      };
-    case "rejected":
-      return {
-        icon: "x",
-        title: t("skillWorkshop.empty.rejectedTitle"),
-        body: t("skillWorkshop.empty.rejectedBody"),
-      };
-    case "quarantined":
-      return {
-        icon: "shield",
-        title: t("skillWorkshop.empty.quarantinedTitle"),
-        body: t("skillWorkshop.empty.quarantinedBody"),
-      };
-    case "stale":
-      return {
-        icon: "refresh",
-        title: t("skillWorkshop.empty.staleTitle"),
-        body: t("skillWorkshop.empty.staleBody"),
-      };
-    case "all":
-      return {
-        icon: "search",
-        title: t("skillWorkshop.empty.allTitle"),
-        body: t("skillWorkshop.empty.allBody"),
-      };
-  }
-  return {
-    icon: "search",
-    title: t("skillWorkshop.empty.allTitle"),
-    body: t("skillWorkshop.empty.allBody"),
-  };
-}
-
-function renderEmptyStateIcon(icon: SkillWorkshopEmptyIcon) {
-  switch (icon) {
-    case "clock":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="8"></circle>
-          <path d="M12 7v5l3 2"></path>
-        </svg>
-      `;
-    case "check":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <path d="M5 12.5l4 4L19 7"></path>
-        </svg>
-      `;
-    case "x":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <path d="M7 7l10 10"></path>
-          <path d="M17 7L7 17"></path>
-        </svg>
-      `;
-    case "shield":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <path d="M12 3l7 3v5c0 4.2-2.8 7.8-7 10-4.2-2.2-7-5.8-7-10V6l7-3z"></path>
-          <path d="M9 12l2 2 4-5"></path>
-        </svg>
-      `;
-    case "refresh":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <path d="M17 2v5h-5"></path>
-          <path d="M7 22v-5h5"></path>
-          <path d="M19 10a7 7 0 0 0-12-4l-2 2"></path>
-          <path d="M5 14a7 7 0 0 0 12 4l2-2"></path>
-        </svg>
-      `;
-    case "search":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <circle cx="11" cy="11" r="6"></circle>
-          <path d="M16 16l4 4"></path>
-        </svg>
-      `;
-  }
-  return nothing;
-}
-
-function renderWorkshopEmptyState(props: SkillWorkshopProps) {
-  const assistantName = resolveSkillWorkshopAgentName(props, t("skillWorkshop.empty.defaultAgent"));
-  return html`
-    <div class="sw-empty-state">
-      <section class="sw-empty-state__panel" aria-label=${t("skillWorkshop.empty.noProposalsAria")}>
-        <div class="sw-empty-state__glyph" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-        <p class="sw-empty-state__eyebrow">${t("skillWorkshop.title")}</p>
-        <h2>${t("skillWorkshop.empty.noProposalsTitle")}</h2>
-        <p>${t("skillWorkshop.empty.noProposalsBody", { agent: assistantName })}</p>
-        <div class="sw-empty-state__footer">${t("skillWorkshop.empty.noProposalsFooter")}</div>
-      </section>
     </div>
   `;
 }
@@ -1135,3 +972,4 @@ function formatRelative(ms: number): string {
   }
   return new Date(ms).toLocaleDateString();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

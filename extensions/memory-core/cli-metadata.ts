@@ -11,6 +11,7 @@ export default definePluginEntry({
         const { registerMemoryCli } = await import("./cli.js");
         registerMemoryCli(program, {
           acquireLocalService: api.runtime.llm?.acquireLocalService,
+          withLease: api.runtime.state.withLease.bind(api.runtime.state),
         });
       },
       {

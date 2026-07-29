@@ -4,6 +4,26 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 
 describe("qa-bus state", () => {
+  it("roundtrips canonical target kinds and rejects non-canonical prefix casing", () => {
+    const state = createQaBusState();
+    const direct = state.addOutboundMessage({ to: "dm:CaseSensitive", text: "direct" });
+    const channel = state.addOutboundMessage({ to: "channel:CaseSensitive", text: "channel" });
+    const group = state.addOutboundMessage({ to: "group:CaseSensitive", text: "group" });
+    const thread = state.addOutboundMessage({
+      to: "thread:CaseSensitive/ThreadCase",
+      text: "thread",
+    });
+
+    expect(direct.conversation).toEqual({ id: "CaseSensitive", kind: "direct" });
+    expect(channel.conversation).toEqual({ id: "CaseSensitive", kind: "channel" });
+    expect(group.conversation).toEqual({ id: "CaseSensitive", kind: "group" });
+    expect(thread.conversation).toEqual({ id: "CaseSensitive", kind: "channel" });
+    expect(thread.threadId).toBe("ThreadCase");
+    expect(() =>
+      state.addOutboundMessage({ to: "CHANNEL:CaseSensitive", text: "invalid" }),
+    ).toThrow("qa-channel target prefixes must be lowercase");
+  });
+
   it("records inbound and outbound traffic in cursor order", () => {
     const state = createQaBusState();
 
@@ -64,6 +84,121 @@ describe("qa-bus state", () => {
     expect(snapshot.messages[0]?.reactions[0]?.emoji).toBe("eyes");
     expect(snapshot.messages[0]?.reactions[0]?.senderId).toBe("alice");
     expect(typeof snapshot.messages[0]?.reactions[0]?.timestamp).toBe("number");
+  });
+
+  it("rejects cross-account message reads and mutations", () => {
+    const state = createQaBusState();
+    const message = state.addOutboundMessage({
+      accountId: "account-a",
+      to: "channel:qa-room",
+      text: "account-owned",
+    });
+
+    expect(() => state.readMessage({ accountId: "account-b", messageId: message.id })).toThrow(
+      "qa-bus message not found",
+    );
+    expect(() =>
+      state.reactToMessage({
+        accountId: "account-b",
+        messageId: message.id,
+        emoji: "eyes",
+      }),
+    ).toThrow("qa-bus message not found");
+    expect(() =>
+      state.editMessage({
+        accountId: "account-b",
+        messageId: message.id,
+        text: "foreign edit",
+      }),
+    ).toThrow("qa-bus message not found");
+    expect(() => state.deleteMessage({ accountId: "account-b", messageId: message.id })).toThrow(
+      "qa-bus message not found",
+    );
+
+    const unchanged = state.readMessage({ accountId: "account-a", messageId: message.id });
+    expect(unchanged.text).toBe("account-owned");
+    expect(unchanged.deleted).not.toBe(true);
+    expect(unchanged.reactions).toEqual([]);
+  });
+
+  it("keeps message conversation identity isolated by account and kind", () => {
+    const state = createQaBusState();
+    const directA = state.addInboundMessage({
+      accountId: "account-a",
+      conversation: { id: "shared", kind: "direct", title: "Direct A" },
+      senderId: "alice",
+      text: "direct a",
+    });
+    const channelA = state.addOutboundMessage({
+      accountId: "account-a",
+      to: "channel:shared",
+      text: "channel a",
+    });
+    const directB = state.addInboundMessage({
+      accountId: "account-b",
+      conversation: { id: "shared", kind: "direct", title: "Direct B" },
+      senderId: "bob",
+      text: "direct b",
+    });
+
+    expect(
+      state.readMessage({ accountId: "account-a", messageId: directA.id }).conversation,
+    ).toEqual({ id: "shared", kind: "direct", title: "Direct A" });
+    expect(
+      state.readMessage({ accountId: "account-a", messageId: channelA.id }).conversation,
+    ).toEqual({ id: "shared", kind: "channel" });
+    expect(
+      state.readMessage({ accountId: "account-b", messageId: directB.id }).conversation,
+    ).toEqual({ id: "shared", kind: "direct", title: "Direct B" });
+    expect(state.getSnapshot().conversations).toEqual(
+      expect.arrayContaining([
+        { accountId: "account-a", id: "shared", kind: "direct", title: "Direct A" },
+        { accountId: "account-a", id: "shared", kind: "channel" },
+        { accountId: "account-b", id: "shared", kind: "direct", title: "Direct B" },
+      ]),
+    );
+  });
+
+  it("applies kind and root-thread search scope before limiting results", () => {
+    const state = createQaBusState();
+    const root = state.addOutboundMessage({
+      to: "channel:shared",
+      text: "needle root",
+    });
+    const direct = state.addOutboundMessage({
+      to: "dm:shared",
+      text: "needle direct",
+    });
+    for (let index = 0; index < 25; index += 1) {
+      state.addOutboundMessage({
+        to: `thread:shared/thread-${String(index)}`,
+        text: `needle thread ${String(index)}`,
+      });
+    }
+
+    expect(
+      state
+        .searchMessages({
+          query: "needle",
+          conversationId: "shared",
+          conversationKind: "channel",
+          threadId: null,
+          limit: 2,
+        })
+        .map((message) => message.id),
+    ).toEqual([root.id]);
+    expect(
+      state
+        .searchMessages({
+          query: "needle",
+          conversationId: "shared",
+          conversationKind: "direct",
+          threadId: null,
+          limit: 2,
+        })
+        .map((message) => message.id),
+    ).toEqual([direct.id]);
+    expect(state.searchMessages({ conversationId: "", limit: 2 })).toEqual([]);
   });
 
   it("waits for a text match and rejects on timeout", async () => {

@@ -63,7 +63,7 @@ private struct ExecApprovalPromptDialogModifier: ViewModifier {
     }
 
     private var presentedPrompt: NodeAppModel.ExecApprovalPrompt? {
-        guard let prompt = self.appModel.pendingExecApprovalPrompt,
+        guard let prompt = appModel.pendingExecApprovalPrompt,
               NodeAppModel.execApprovalInboxKey(prompt) != self.suppressedApproval
         else { return nil }
         return prompt
@@ -107,20 +107,32 @@ private struct ExecApprovalPromptCard: View {
     private var reviewContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Exec approval required")
-                    .font(OpenClawType.headline)
-                Text("Review this exec request before continuing. Your decision will be sent back to the gateway.")
-                    .font(OpenClawType.subhead)
-                    .foregroundStyle(.secondary)
+                if self.isPluginApproval {
+                    Text(verbatim: self.prompt.commandText)
+                        .font(OpenClawType.headline)
+                    if let description = self.normalized(self.prompt.descriptionText) {
+                        Text(verbatim: description)
+                            .font(OpenClawType.subhead)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Exec approval required")
+                        .font(OpenClawType.headline)
+                    Text("Review this exec request before continuing. Your decision will be sent back to the gateway.")
+                        .font(OpenClawType.subhead)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            Text(self.prompt.commandText)
-                .font(OpenClawType.mono)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(
-                    .black.opacity(0.14),
-                    in: RoundedRectangle(cornerRadius: OpenClawRadius.md, style: .continuous))
+            if !self.isPluginApproval {
+                Text(self.prompt.commandText)
+                    .font(OpenClawType.mono)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(
+                        .black.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: OpenClawRadius.md, style: .continuous))
+            }
 
             if let warningText = self.normalized(self.prompt.warningText) {
                 Label {
@@ -134,11 +146,23 @@ private struct ExecApprovalPromptCard: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                if let host = self.normalized(self.prompt.host) {
-                    ExecApprovalPromptMetadataRow(label: "Host", value: host)
-                }
-                if let nodeId = self.normalized(self.prompt.nodeId) {
-                    ExecApprovalPromptMetadataRow(label: "Node", value: nodeId)
+                if self.isPluginApproval {
+                    if let pluginId = self.normalized(self.prompt.pluginId) {
+                        ExecApprovalPromptMetadataRow(label: "Plugin", value: pluginId)
+                    }
+                    if let toolName = self.normalized(self.prompt.toolName) {
+                        ExecApprovalPromptMetadataRow(label: "Tool", value: toolName)
+                    }
+                    if let severity = self.normalized(self.prompt.pluginSeverity) {
+                        ExecApprovalPromptMetadataRow(label: "Severity", value: severity)
+                    }
+                } else {
+                    if let host = self.normalized(self.prompt.host) {
+                        ExecApprovalPromptMetadataRow(label: "Host", value: host)
+                    }
+                    if let nodeId = self.normalized(self.prompt.nodeId) {
+                        ExecApprovalPromptMetadataRow(label: "Node", value: nodeId)
+                    }
                 }
                 if let agentId = self.normalized(self.prompt.agentId) {
                     ExecApprovalPromptMetadataRow(label: "Agent", value: agentId)
@@ -170,6 +194,10 @@ private struct ExecApprovalPromptCard: View {
                 }
             }
         }
+    }
+
+    private var isPluginApproval: Bool {
+        self.prompt.kind == "plugin"
     }
 
     private var actionFooter: some View {
@@ -275,22 +303,28 @@ private struct ExecApprovalPromptCard: View {
         guard let expiresAtMs else { return nil }
         let remainingSeconds = Int((Double(expiresAtMs) / 1000.0) - Date().timeIntervalSince1970)
         if remainingSeconds <= 0 {
-            return "expired"
+            return String(localized: "expired")
         }
         if remainingSeconds < 60 {
-            return "under a minute"
+            return String(localized: "under a minute")
         }
         if remainingSeconds < 3600 {
             let minutes = Int(ceil(Double(remainingSeconds) / 60.0))
-            return minutes == 1 ? "about 1 minute" : "about \(minutes) minutes"
+            return String(
+                AttributedString(
+                    localized: "about ^[\(minutes) minute](inflect: true)")
+                    .characters)
         }
         let hours = Int(ceil(Double(remainingSeconds) / 3600.0))
-        return hours == 1 ? "about 1 hour" : "about \(hours) hours"
+        return String(
+            AttributedString(
+                localized: "about ^[\(hours) hour](inflect: true)")
+                .characters)
     }
 }
 
 private struct ExecApprovalPromptMetadataRow: View {
-    let label: String
+    let label: LocalizedStringKey
     let value: String
 
     var body: some View {
@@ -298,7 +332,7 @@ private struct ExecApprovalPromptMetadataRow: View {
             Text(self.label)
                 .font(OpenClawType.caption)
                 .foregroundStyle(.secondary)
-            Text(self.value)
+            Text(verbatim: self.value)
                 .font(OpenClawType.footnote)
                 .textSelection(.enabled)
         }

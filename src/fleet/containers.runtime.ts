@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -12,27 +12,26 @@ import {
   type CellContainerProfile,
   type FleetContainerRuntimeName,
 } from "./cell-profile.js";
+import { createRedactingStreamWriter } from "./containers.redaction.js";
 
-export type { CellContainerProfile, FleetContainerRuntimeName } from "./cell-profile.js";
-
-export type FleetContainerCommandOptions = {
+type FleetContainerCommandOptions = {
   allowFailure?: boolean;
   redactValues?: readonly string[];
 };
 
-export type FleetContainerCommandResult = {
+type FleetContainerCommandResult = {
   stdout: string;
   stderr: string;
   code: number;
 };
 
-export type FleetContainerCommandExecutor = (
+type FleetContainerCommandExecutor = (
   runtime: FleetContainerRuntimeName,
   args: string[],
   options: FleetContainerCommandOptions,
 ) => Promise<FleetContainerCommandResult>;
 
-export type FleetContainerStreamResult = {
+type FleetContainerStreamResult = {
   code: number | null;
   signal: NodeJS.Signals | null;
 };
@@ -48,22 +47,22 @@ const DELIBERATE_STREAM_STOP_SIGNALS = new Set<NodeJS.Signals>([
   "SIGPIPE",
 ]);
 
-export type FleetContainerStreamExecutor = (
+type FleetContainerStreamExecutor = (
   runtime: FleetContainerRuntimeName,
   args: string[],
   options: { redactValues: readonly string[] },
 ) => Promise<FleetContainerStreamResult>;
 
-export type FleetContainerLogsOptions = {
+type FleetContainerLogsOptions = {
   follow?: boolean;
   tail?: number;
   since?: string;
   redactValues: readonly string[];
 };
-
 export type FleetContainerInspectResult =
   | {
       kind: "ok";
+      containerId: string;
       state: string;
       running: boolean;
       labels: Record<string, string>;
@@ -106,10 +105,6 @@ class InvalidInspectOutputError extends Error {
   constructor() {
     super("container inspect returned an invalid response");
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -284,7 +279,6 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   if (!Array.isArray(parsed) || parsed.length !== 1) {
     throw new InvalidInspectOutputError();
   }
-
   const inspected = requireRecord(parsed[0]);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
@@ -295,6 +289,7 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
 
   return {
     kind: "ok",
+    containerId: requireString(inspected.Id),
     state: requireString(state.Status),
     running: requireBoolean(state.Running),
     labels: readLabels(config.Labels),
@@ -490,68 +485,6 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
   return normalized;
 };
 
-// Longest suffix of `text` that is a proper prefix of any secret. Retaining it
-// across emissions guarantees no complete secret is ever split between two
-// emitted chunks, and emitted text can never grow into a match later.
-function secretPrefixSuffixLength(text: string, redactValues: readonly string[]): number {
-  let longest = 0;
-  for (const value of redactValues) {
-    const max = Math.min(value.length - 1, text.length);
-    for (let length = max; length > longest; length -= 1) {
-      if (value.startsWith(text.slice(text.length - length))) {
-        longest = length;
-        break;
-      }
-    }
-  }
-  return longest;
-}
-
-function createRedactingStreamWriter(
-  target: NodeJS.WriteStream,
-  redactValues: readonly string[],
-): { write: (chunk: Buffer) => boolean; flush: () => void } {
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-  const redact = (text: string): string => {
-    let redacted = text;
-    for (const value of redactValues) {
-      if (value) {
-        redacted = redacted.replaceAll(value, "<redacted>");
-      }
-    }
-    return redacted;
-  };
-  // Returns the raw target.write() backpressure signal so callers can pause
-  // the child stream instead of buffering a noisy follow stream without bound.
-  const emit = (text: string): boolean => {
-    if (!text) {
-      return true;
-    }
-    return target.write(redact(text));
-  };
-  return {
-    // Emit everything except a possible secret prefix at the tail on every
-    // chunk, so unterminated output (progress lines, prompts) streams live
-    // instead of stalling until a newline arrives.
-    write: (chunk) => {
-      pending += decoder.write(chunk);
-      const keep = secretPrefixSuffixLength(pending, redactValues);
-      const cut = pending.length - keep;
-      if (cut <= 0) {
-        return true;
-      }
-      const writable = emit(pending.slice(0, cut));
-      pending = pending.slice(cut);
-      return writable;
-    },
-    flush: () => {
-      emit(pending + decoder.end());
-      pending = "";
-    },
-  };
-}
-
 const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
   runtime,
   args,
@@ -600,9 +533,6 @@ const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
       resolve({ code, signal });
     });
   });
-
-const testApi = { createRedactingStreamWriter };
-export { testApi as __test };
 
 function isMissingContainerError(stderr: string): boolean {
   const normalized = stderr.toLowerCase();
@@ -877,3 +807,4 @@ export function createFleetContainerRuntime(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

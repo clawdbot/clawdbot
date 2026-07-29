@@ -5,10 +5,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
-  resolveManagedCodexAppServerPaths,
   resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand,
-  testing,
 } from "./managed-binary.js";
 
 function startOptions(
@@ -79,7 +77,6 @@ describe("managed Codex app-server binary", () => {
 
   it("keeps the pinned package ahead of stale desktop bundles for ordinary turns", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
-    const paths = resolveManagedCodexAppServerPaths({ platform: "darwin", pluginRoot });
     const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
     const pathExists = vi.fn(
       async (filePath: string) =>
@@ -103,8 +100,6 @@ describe("managed Codex app-server binary", () => {
         MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
       ],
     });
-    expect(paths.commandPath).toBe(pluginLocalCommand);
-    expect(paths.candidateCommandPaths).toContain(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
 
   it("prefers the ChatGPT.app desktop bundle for Computer Use", async () => {
@@ -127,13 +122,6 @@ describe("managed Codex app-server binary", () => {
       commandSource: "resolved-managed",
       managedFallbackCommandPaths: [pluginLocalCommand],
     });
-    expect(
-      resolveManagedCodexAppServerPaths({
-        platform: "darwin",
-        pluginRoot,
-        managedCommandOrder: "desktop-first",
-      }).commandPath,
-    ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
 
   it("falls back to the legacy Codex.app desktop bundle when ChatGPT.app is absent", async () => {
@@ -176,25 +164,6 @@ describe("managed Codex app-server binary", () => {
     });
     expect(pathExists).toHaveBeenCalledWith(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, "darwin");
     expect(pathExists).toHaveBeenCalledWith(MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND, "darwin");
-  });
-
-  it("resolves Windows Codex command shims", () => {
-    const pluginRoot = path.win32.join("C:\\", "OpenClaw", "dist", "extensions", "codex");
-    const paths = resolveManagedCodexAppServerPaths({ platform: "win32", pluginRoot });
-
-    expect(paths.commandPath.endsWith(path.win32.join("node_modules", ".bin", "codex.cmd"))).toBe(
-      true,
-    );
-  });
-
-  it("uses the package root when the resolver is bundled into a dist chunk", () => {
-    expect(testing.resolveDefaultCodexPluginRoot("/repo/openclaw/dist")).toBe("/repo/openclaw");
-    expect(testing.resolveDefaultCodexPluginRoot("/repo/openclaw/dist-runtime")).toBe(
-      "/repo/openclaw",
-    );
-    expect(
-      testing.resolveDefaultCodexPluginRoot("/repo/openclaw/extensions/codex/src/app-server"),
-    ).toBe("/repo/openclaw/extensions/codex");
   });
 
   it("finds Codex in the package install root used by packaged plugins", async () => {

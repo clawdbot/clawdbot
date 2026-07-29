@@ -3,12 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectRegisteredEmbeddingProviderIds } from "./channel-plugin-ids.js";
 import {
   clearEmbeddingProviders,
-  getEmbeddingProvider,
   getRegisteredEmbeddingProvider,
-  listEmbeddingProviders,
   listRegisteredEmbeddingProviders,
   registerEmbeddingProvider,
-  restoreEmbeddingProviders,
   restoreRegisteredEmbeddingProviders,
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
@@ -32,36 +29,6 @@ afterEach(() => {
 });
 
 describe("embedding provider registry", () => {
-  it("registers and lists adapters in insertion order", () => {
-    const alpha = createAdapter("alpha");
-    const beta = createAdapter("beta");
-
-    registerEmbeddingProvider(alpha);
-    registerEmbeddingProvider(beta);
-
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
-      "openai-compatible",
-      "alpha",
-      "beta",
-    ]);
-    expect(getEmbeddingProvider("alpha")).toBe(alpha);
-  });
-
-  it("restores adapter snapshots", () => {
-    const alpha = createAdapter("alpha");
-    const beta = createAdapter("beta");
-    registerEmbeddingProvider(alpha);
-
-    restoreEmbeddingProviders([beta]);
-
-    expect(getEmbeddingProvider("alpha")).toBeUndefined();
-    expect(getEmbeddingProvider("beta")).toBe(beta);
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
-      "openai-compatible",
-      "beta",
-    ]);
-  });
-
   it("preserves owner metadata in registered snapshots", () => {
     const adapter = createAdapter("local-compatible");
     const entry = {

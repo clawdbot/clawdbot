@@ -18,30 +18,25 @@ import type {
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
-import { parsePort } from "../shared/parse-port.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 
-function resolveInstallDaemonFlag(
-  command: unknown,
-  opts: { installDaemon?: boolean },
-): boolean | undefined {
-  if (!command || typeof command !== "object") {
-    return undefined;
-  }
-  const getOptionValueSource =
-    "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
-  if (typeof getOptionValueSource !== "function") {
-    return undefined;
-  }
-
+export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
   // Commander doesn't support option conflicts natively; keep original behavior.
   // If --skip-daemon is explicitly passed, it wins.
-  if (getOptionValueSource.call(command, "skipDaemon") === "cli") {
+  if (command.getOptionValueSource("skipDaemon") === "cli") {
     return false;
   }
-  if (getOptionValueSource.call(command, "installDaemon") === "cli") {
-    return Boolean(opts.installDaemon);
+  if (command.getOptionValueSource("installDaemon") === "cli") {
+    return Boolean(command.getOptionValue("installDaemon"));
   }
   return undefined;
+}
+
+export function resolveTailscaleResetOnExitFlag(command: Command): boolean | undefined {
+  if (command.getOptionValueSource("tailscaleResetOnExit") !== "cli") {
+    return undefined;
+  }
+  return Boolean(command.getOptionValue("tailscaleResetOnExit"));
 }
 
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
@@ -203,8 +198,9 @@ export function registerOnboardCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Open inference-gated Crestodian (kept for compatibility)", false)
+    .option("--modern", "Open inference-gated OpenClaw (kept for compatibility)", false)
     .option("--classic", "Use the classic multi-step setup wizard", false)
+    .option("--tui", "Use the terminal hatch instead of the browser handoff", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -229,10 +225,11 @@ export function registerOnboardCommand(program: Command): void {
     .option("--remote-token <token>", "Remote Gateway token (optional)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
     .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
+    .option("--no-tailscale-reset-on-exit", "Keep tailscale serve/funnel after exit")
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-bootstrap", "Skip creating default agent workspace files")
@@ -247,7 +244,50 @@ export function registerOnboardCommand(program: Command): void {
     .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--json", "Output JSON summary", false);
 
-  command.action(async (opts, commandRuntime) => {
+  const recommendations = command
+    .command("recommendations")
+    .description("Read the app recommendations stored during onboarding")
+    .option("--json", "Output stored recommendation matches as JSON", false)
+    .action(async (opts, recommendationsCommand: Command) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { onboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        onboardRecommendationsCommand(
+          {
+            json: Boolean(opts.json || recommendationsCommand.parent?.opts().json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  recommendations
+    .command("acknowledge")
+    .description("Mark the stored onboarding recommendation offer as answered")
+    .option("--retry <id...>", "Leave failed recommendation IDs pending for a later run")
+    .action(async (opts: { retry?: string[] }) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { acknowledgeOnboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        acknowledgeOnboardRecommendationsCommand({ retry: opts.retry }, defaultRuntime);
+      });
+    });
+
+  recommendations
+    .command("refresh")
+    .description("Clear stored app recommendations so the next onboarding run rescans")
+    .action(async () => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { refreshOnboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        refreshOnboardRecommendationsCommand(defaultRuntime);
+      });
+    });
+
+  command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
@@ -256,7 +296,7 @@ export function registerOnboardCommand(program: Command): void {
           defaultRuntime.error(
             [
               `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
-              "Run those setup options without --modern, or remove them to open Crestodian.",
+              "Run those setup options without --modern, or remove them to open OpenClaw.",
             ].join("\n"),
           );
           defaultRuntime.exit(1);
@@ -273,9 +313,9 @@ export function registerOnboardCommand(program: Command): void {
           defaultRuntime.exit(1);
           return;
         }
-        const { runCrestodianWithInference } =
-          await import("../../commands/crestodian-with-inference.js");
-        await runCrestodianWithInference(
+        const { runSystemAgentWithInference } =
+          await import("../../commands/system-agent-with-inference.js");
+        await runSystemAgentWithInference(
           {
             yes: false,
             json: Boolean(opts.json),
@@ -291,10 +331,9 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
-        installDaemon: Boolean(opts.installDaemon),
-      });
-      const gatewayPort = parsePort(opts.gatewayPort);
+      const installDaemon = resolveInstallDaemonFlag(commandRuntime);
+      const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
+      const gatewayPort = parseGatewayPortOption(opts.gatewayPort, "--gateway-port");
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
         {
@@ -302,10 +341,11 @@ export function registerOnboardCommand(program: Command): void {
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
           classic: Boolean(opts.classic),
+          tui: Boolean(opts.tui),
           flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
           ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),
-          gatewayPort: gatewayPort ?? undefined,
+          gatewayPort,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,
@@ -314,7 +354,7 @@ export function registerOnboardCommand(program: Command): void {
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
           tailscale: opts.tailscale as TailscaleMode | undefined,
-          tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
+          tailscaleResetOnExit,
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,

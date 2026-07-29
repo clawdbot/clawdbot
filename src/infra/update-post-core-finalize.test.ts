@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   foldPostCoreFinalizeIntoResult,
-  type PostCoreFinalizeSpawner,
   runPostCoreFinalizeAfterGatewayUpdate,
 } from "./update-post-core-finalize.js";
 import type { UpdateRunResult } from "./update-runner.js";
@@ -23,6 +22,9 @@ function gitOkResult(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult 
 
 const ENTRYPOINT = "/srv/openclaw/dist/index.mjs";
 const resolveEntrypointOk = async () => ENTRYPOINT;
+type PostCoreFinalizeSpawner = NonNullable<
+  Parameters<typeof runPostCoreFinalizeAfterGatewayUpdate>[0]["spawnFinalize"]
+>;
 
 describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
   it("skips non-git update modes", async () => {

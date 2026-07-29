@@ -2,10 +2,11 @@ title: Telegram repeated command authorization
 
 scenario:
   id: telegram-repeated-command-authorization
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify an allowlisted Telegram bot operator remains authorized across repeated native commands.
   successCriteria:
     - The same operator is blocked while removed from the group allowlist.
@@ -19,8 +20,6 @@ scenario:
     suiteIsolation: isolated
     isolationReason: Mutates the live Telegram group allowlist and restarts the QA gateway.
     summary: Remove and restore the Telegram operator allowlist, then run repeated commands.
-    config:
-      requiredChannelDriver: live
 
 flow:
   steps:

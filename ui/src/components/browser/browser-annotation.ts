@@ -6,7 +6,7 @@ import { t } from "../../i18n/index.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
 
 /** Point in normalized [0..1] coordinates of the captured screenshot. */
-export type AnnotationPoint = { x: number; y: number };
+type AnnotationPoint = { x: number; y: number };
 
 export type AnnotationStroke = { points: AnnotationPoint[] };
 
@@ -41,7 +41,7 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-export function strokeBoundingRegion(stroke: AnnotationStroke): AnnotationRegion | null {
+function strokeBoundingRegion(stroke: AnnotationStroke): AnnotationRegion | null {
   if (stroke.points.length === 0) {
     return null;
   }
@@ -79,7 +79,7 @@ function sanitizeSelectorToken(value: string, maxLength = 40): string {
 }
 
 /** Compact human/agent-readable element descriptor, e.g. `button#save.btn "Save"`. */
-export function describeInspectedNode(node: BrowserInspectedNode): string {
+function describeInspectedNode(node: BrowserInspectedNode): string {
   const classes = node.classes
     .slice(0, 3)
     .map((cls) => sanitizeSelectorToken(cls))
@@ -148,9 +148,9 @@ export function buildAnnotationPrompt(params: {
   return lines.join("\n");
 }
 
-export const ANNOTATION_STROKE_COLOR = "#e0442d";
+const ANNOTATION_STROKE_COLOR = "#e0442d";
 
-export function annotationStrokeWidth(imageWidth: number): number {
+function annotationStrokeWidth(imageWidth: number): number {
   return Math.max(4, Math.round(imageWidth * 0.005));
 }
 

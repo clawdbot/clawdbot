@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import pLimit from "p-limit";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -19,15 +21,6 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
-
-export type {
-  QaEvidenceArtifactView,
-  QaEvidenceGalleryEntryView,
-  QaEvidenceGalleryModel,
-  QaEvidenceMatrixCellView,
-  QaEvidenceProducerContext,
-  QaEvidenceProducerContextFile,
-} from "../shared/evidence-gallery-types.js";
 
 const TEXT_PREVIEW_BYTES = 12 * 1024;
 const ARTIFACT_VIEW_CONCURRENCY = 8;
@@ -404,9 +397,22 @@ async function readPreview(filePath: string, mediaKind: QaEvidenceArtifactView["
   }
   const handle = await fs.open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, TEXT_PREVIEW_BYTES, 0);
-    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (result.bytesRead === 0) {
+        break;
+      }
+      bytesRead += result.bytesRead;
+    }
+    const decoder = new StringDecoder("utf8");
+    let text = decoder.write(buffer.subarray(0, Math.min(bytesRead, TEXT_PREVIEW_BYTES)));
+    // The sentinel distinguishes a capped preview from real EOF. Only real EOF should
+    // flush an incomplete final sequence as a replacement character.
+    if (bytesRead <= TEXT_PREVIEW_BYTES) {
+      text += decoder.end();
+    }
     if (mediaKind !== "json") {
       return text;
     }
@@ -862,25 +868,6 @@ async function buildProducerContext(params: {
   };
 }
 
-function createConcurrencyLimit(limit: number) {
-  let active = 0;
-  const queue: Array<() => void> = [];
-  return async function runLimited<T>(task: () => Promise<T>): Promise<T> {
-    if (active >= limit) {
-      await new Promise<void>((resolve) => {
-        queue.push(resolve);
-      });
-    }
-    active += 1;
-    try {
-      return await task();
-    } finally {
-      active -= 1;
-      queue.shift()?.();
-    }
-  };
-}
-
 export async function buildQaEvidenceGalleryModel(params: {
   evidencePath: string;
   repoRoot: string;
@@ -909,7 +896,7 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
     summaryEntries: summary.entries,
   });
-  const limitArtifactView = createConcurrencyLimit(ARTIFACT_VIEW_CONCURRENCY);
+  const limitArtifactView = pLimit(ARTIFACT_VIEW_CONCURRENCY);
   const entries = await Promise.all(
     summary.entries.map(async (entry, entryIndex): Promise<QaEvidenceGalleryEntryView> => {
       counts[entry.result.status] += 1;
@@ -919,21 +906,19 @@ export async function buildQaEvidenceGalleryModel(params: {
           repoRoot,
         });
       return {
-        artifacts: await Promise.all(
-          (entry.execution?.artifacts ?? []).map((artifact, artifactIndex) =>
-            limitArtifactView(() =>
-              buildArtifactView({
-                allowedArtifactFiles,
-                artifact,
-                artifactIndex,
-                evidenceDir,
-                entryIndex,
-                extraRoots: [requestedRepoRoot],
-                hrefEvidencePath,
-                repoRoot,
-              }),
-            ),
-          ),
+        artifacts: await limitArtifactView.map(
+          entry.execution?.artifacts ?? [],
+          (artifact, artifactIndex) =>
+            buildArtifactView({
+              allowedArtifactFiles,
+              artifact,
+              artifactIndex,
+              evidenceDir,
+              entryIndex,
+              extraRoots: [requestedRepoRoot],
+              hrefEvidencePath,
+              repoRoot,
+            }),
         ),
         coverage: entry.coverage.map((coverage) => ({
           id: sanitizeEntryText(coverage.id),
@@ -974,3 +959,4 @@ export async function buildQaEvidenceGalleryModel(params: {
     schemaVersion: summary.schemaVersion,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

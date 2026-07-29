@@ -225,9 +225,3 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
       }
     : undefined,
 };
-
-export const testing = {
-  resolveSessionSlackOriginTarget,
-  resolveTurnSourceSlackOriginTarget,
-  slackTargetsMatch,
-};

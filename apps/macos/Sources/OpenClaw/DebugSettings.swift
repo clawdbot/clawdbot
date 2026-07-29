@@ -24,7 +24,7 @@ struct DebugSettings: View {
     @State private var tunnelResetStatus: String?
     @State private var pendingKill: DebugActions.PortListener?
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
+    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
 
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
@@ -275,7 +275,7 @@ struct DebugSettings: View {
                     self.gridLabel("App logging")
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Verbosity", selection: self.$appLogLevelRaw) {
-                            ForEach(AppLogLevel.allCases) { level in
+                            ForEach(Logger.Level.allCases, id: \.rawValue) { level in
                                 Text(level.title).tag(level.rawValue)
                             }
                         }

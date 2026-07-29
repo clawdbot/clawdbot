@@ -1,16 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
-} from "./agent-tools.policy.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
+import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tools.policy.js";
+import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "./subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
@@ -31,6 +25,9 @@ export type WebSearchToolPolicyParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  inputProvenance?: InputProvenance;
+  trustedInternalHandoff?: boolean;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
 type WebSearchToolPolicyResolution = {
@@ -66,55 +63,41 @@ export function resolveWebSearchToolPolicy(
   );
   const groupPolicyParams = {
     config: params.config,
-    sessionKey: params.sessionKey,
+    sessionKey: params.scheduledToolPolicy?.ownerSessionKey ?? params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider: params.messageProvider,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    accountId: params.agentAccountId,
+    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
+    requireConfiguredAccount: params.scheduledToolPolicy?.mode === "account",
+    senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
   };
-  const groupPolicy = resolveGroupToolPolicy({
-    ...groupPolicyParams,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const persistentGroupPolicy = resolveGroupToolPolicy(groupPolicyParams);
   const senderPolicyParams = {
     config: params.config,
     agentId,
     messageProvider: params.messageProvider,
   };
-  const senderPolicy = resolveSenderToolPolicy({
-    ...senderPolicyParams,
+  const requesterPolicies = resolveRequesterToolPolicies({
+    ...groupPolicyParams,
+    agentId,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
+    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
-  const persistentSenderPolicy = resolveSenderToolPolicy(senderPolicyParams);
-  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    params.sessionKey &&
-    isSubagentEnvelopeSession(params.sessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
-    params.config,
-    params.sessionKey,
-    {
-      store: subagentStore,
-    },
-  );
+  const persistentGroupPolicy = requesterPolicies.delegated
+    ? undefined
+    : resolveGroupToolPolicy(groupPolicyParams);
+  const persistentSenderPolicy =
+    requesterPolicies.delegated || params.scheduledToolPolicy
+      ? undefined
+      : resolveSenderToolPolicy(senderPolicyParams);
   const fixedPolicies = [
     profilePolicy,
     providerProfilePolicy,
@@ -123,12 +106,16 @@ export function resolveWebSearchToolPolicy(
     agentPolicy,
     agentProviderPolicy,
   ];
-  const trailingPolicies = [params.sandboxToolPolicy, subagentPolicy, inheritedToolPolicy];
+  const trailingPolicies = [
+    params.sandboxToolPolicy,
+    requesterPolicies.subagentPolicy,
+    requesterPolicies.inheritedToolPolicy,
+  ];
   return {
     allowed: isToolAllowedByPolicies("web_search", [
       ...fixedPolicies,
-      groupPolicy,
-      senderPolicy,
+      requesterPolicies.groupPolicy,
+      requesterPolicies.senderPolicy,
       ...trailingPolicies,
     ]),
     persistentAllowed: isToolAllowedByPolicies("web_search", [

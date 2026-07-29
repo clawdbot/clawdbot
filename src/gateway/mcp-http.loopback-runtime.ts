@@ -13,7 +13,7 @@ export type McpLoopbackToolCallOutcome =
   | { outcome: "completed"; result?: unknown }
   | McpLoopbackToolCallTerminalOutcome;
 
-export type McpLoopbackToolCallResult = {
+type McpLoopbackToolCallResult = {
   toolName: string;
   args: Record<string, unknown>;
   correlationId?: string;
@@ -39,13 +39,13 @@ type McpLoopbackToolCallCapture = {
   activityWaiters: Set<() => void>;
 };
 
-export type McpLoopbackRequestCaptureHandle = {
+type McpLoopbackRequestCaptureHandle = {
   capture: McpLoopbackToolCallCapture;
   classified: boolean;
   finished: boolean;
 };
 
-export type McpLoopbackToolCallCaptureHandle = {
+type McpLoopbackToolCallCaptureHandle = {
   capture: McpLoopbackToolCallCapture;
   call: McpLoopbackToolCallStart;
   correlationId?: string;
@@ -347,14 +347,6 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
 /** Clear an unfinished invocation capture. Attempt keys are unique per CLI execution. */
 export function clearMcpLoopbackToolCallCapture(captureKey: string): void {
   deleteMcpLoopbackToolCallCapture(captureKey.trim());
-}
-
-/** Clear transient capture state between isolated tests. */
-export function clearMcpLoopbackToolCallCapturesForTest(): void {
-  for (const captureKey of toolCallCaptures.keys()) {
-    deleteMcpLoopbackToolCallCapture(captureKey);
-  }
-  nextToolCallCaptureGeneration = 0;
 }
 
 /** Return a copy of the active loopback runtime, if one has been installed. */

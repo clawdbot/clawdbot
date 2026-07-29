@@ -8,7 +8,6 @@ import {
   getPrimaryCommand,
   getPositiveIntFlagValue,
   getVerboseFlag,
-  hasHelpOrVersion,
   hasFlag,
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
@@ -21,56 +20,6 @@ import {
 } from "./argv.js";
 
 describe("argv helpers", () => {
-  it.each([
-    {
-      name: "help flag",
-      argv: ["node", "openclaw", "--help"],
-      expected: true,
-    },
-    {
-      name: "version flag",
-      argv: ["node", "openclaw", "-V"],
-      expected: true,
-    },
-    {
-      name: "normal command",
-      argv: ["node", "openclaw", "status"],
-      expected: false,
-    },
-    {
-      name: "root -v alias",
-      argv: ["node", "openclaw", "-v"],
-      expected: true,
-    },
-    {
-      name: "root -v alias with profile",
-      argv: ["node", "openclaw", "--profile", "work", "-v"],
-      expected: true,
-    },
-    {
-      name: "root -v alias with log-level",
-      argv: ["node", "openclaw", "--log-level", "debug", "-v"],
-      expected: true,
-    },
-    {
-      name: "subcommand -v should not be treated as version",
-      argv: ["node", "openclaw", "acp", "-v"],
-      expected: false,
-    },
-    {
-      name: "root -v alias with equals profile",
-      argv: ["node", "openclaw", "--profile=work", "-v"],
-      expected: true,
-    },
-    {
-      name: "subcommand path after global root flags should not be treated as version",
-      argv: ["node", "openclaw", "--dev", "skills", "list", "-v"],
-      expected: false,
-    },
-  ])("detects help/version flags: $name", ({ argv, expected }) => {
-    expect(hasHelpOrVersion(argv)).toBe(expected);
-  });
-
   it.each([
     {
       name: "known command group help command help flag",
@@ -342,6 +291,75 @@ describe("argv helpers", () => {
     {
       name: "version flag after terminator",
       argv: ["node", "openclaw", "nodes", "invoke", "--", "--version"],
+      expected: false,
+    },
+    {
+      name: "root version flag",
+      argv: ["node", "openclaw", "--version"],
+      expected: true,
+    },
+    {
+      name: "root short version flag",
+      argv: ["node", "openclaw", "-V"],
+      expected: true,
+    },
+    {
+      name: "root version alias after profile",
+      argv: ["node", "openclaw", "--profile", "work", "-v"],
+      expected: true,
+    },
+    {
+      name: "root version flag after profile",
+      argv: ["node", "openclaw", "--profile", "work", "--version"],
+      expected: true,
+    },
+    {
+      name: "version-pinned skill install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+      expected: false,
+    },
+    {
+      name: "version-pinned skill verification",
+      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+      expected: false,
+    },
+    {
+      name: "equals-form version-pinned skill install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+      expected: false,
+    },
+    {
+      name: "profiled version-pinned skill verification",
+      argv: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+      ],
+      expected: false,
+    },
+    {
+      name: "help for a version-pinned skill command",
+      argv: [
+        "node",
+        "openclaw",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+        "--help",
+      ],
+      expected: true,
+    },
+    {
+      name: "unknown root option does not turn version into root help",
+      argv: ["node", "openclaw", "--unknown", "--version"],
       expected: false,
     },
   ])("detects help/version invocations: $name", ({ argv, expected }) => {
@@ -709,19 +727,8 @@ describe("argv helpers", () => {
       expected: ["bun", "src/entry.ts", "status"],
     },
   ] as const)("builds parse argv from raw args: $name", ({ rawArgs, expected }) => {
-    const parsed = buildParseArgv({
-      programName: "openclaw",
-      rawArgs: [...rawArgs],
-    });
+    const parsed = buildParseArgv([...rawArgs]);
     expect(parsed).toEqual([...expected]);
-  });
-
-  it("builds parse argv from fallback args", () => {
-    const fallbackArgv = buildParseArgv({
-      programName: "openclaw",
-      fallbackArgv: ["status"],
-    });
-    expect(fallbackArgv).toEqual(["node", "openclaw", "status"]);
   });
 
   it.each([

@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
   resolveManifestToolOwnerInRegistry,
@@ -37,14 +38,33 @@ function isBareParentDefaultHelpArgv(argv: string[]): boolean {
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   // Preserve the old root --update spelling by rewriting before Commander registration.
-  const index = argv.indexOf("--update");
-  if (index === -1) {
+  // Only rewrite --update while scanning the root-option prefix; once a command
+  // or `--` appears, later --update tokens belong to that command's arguments.
+  const updateIndex = argv.indexOf("--update");
+  if (updateIndex === -1) {
     return argv;
   }
 
-  const next = [...argv];
-  next.splice(index, 1, "update");
-  return next;
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return argv;
+    }
+    if (i === updateIndex) {
+      const next = [...argv];
+      next.splice(updateIndex, 1, "update");
+      return next;
+    }
+    const consumed = consumeRootOptionToken(argv, i);
+    if (consumed > 0) {
+      i += consumed - 1;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      return argv;
+    }
+  }
+  return argv;
 }
 
 export function shouldEnsureCliPath(argv: string[]): boolean {

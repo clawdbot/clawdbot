@@ -14,12 +14,23 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   ExecApprovalManager,
-  type ExecApprovalManagerOptions,
+  InvalidApprovalIdError,
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
-import { getOperatorApproval, resolveOperatorApproval } from "./operator-approval-store.js";
+import { getOperatorApprovalDetailed, resolveOperatorApproval } from "./operator-approval-store.js";
 
 type TimeoutCallback = Parameters<typeof setTimeout>[0];
+type ExecApprovalManagerOptions<TPayload> = ConstructorParameters<
+  typeof ExecApprovalManager<TPayload>
+>[0] extends infer T
+  ? NonNullable<T>
+  : never;
+type GetOperatorApprovalParams = Parameters<typeof getOperatorApprovalDetailed>[0];
+
+function getOperatorApproval(params: GetOperatorApprovalParams) {
+  const result = getOperatorApprovalDetailed(params);
+  return result.outcome === "found" ? result.record : null;
+}
 type MockTimerHandle = ReturnType<typeof setTimeout> & {
   unref: ReturnType<typeof vi.fn>;
 };
@@ -574,17 +585,46 @@ describe("ExecApprovalManager", () => {
     await expect(decisionPromise).resolves.toBe("deny");
   });
 
-  it("preserves a protocol-valid provided approval id byte-for-byte", async () => {
-    const { manager, databaseOptions } = createPersistentManager();
-    const id = "\uFEFF";
-    const record = manager.create({ command: "echo exact" }, 60_000, id);
-    const decisionPromise = manager.register(record, 60_000);
+  it.each([
+    ["two-phase exec UUID", "12345678-1234-1234-1234-123456789abc"],
+    ["plugin approval UUID", "plugin:12345678-1234-1234-1234-123456789abc"],
+    ["system-agent approval UUID", "system-agent:12345678-1234-1234-1234-123456789abc"],
+    ["node system.run replay UUID", "abcdefab-1234-5678-9abc-123456789abc"],
+    ["leading dash", "-approval-123"],
+    ["128-character id", "a".repeat(128)],
+  ])("preserves a safe explicit %s byte-for-byte", (_label, id) => {
+    const manager = new ExecApprovalManager();
 
-    expect(record.id).toBe(id);
-    expect(manager.lookupApprovalId(id)).toEqual({ kind: "exact", id });
-    expect(getOperatorApproval({ id, databaseOptions })).toMatchObject({ id, status: "pending" });
-    manager.resolveDetailed(id, "deny", { kind: "system", id: null });
-    await expect(decisionPromise).resolves.toBe("deny");
+    expect(manager.create({ command: "echo exact" }, 60_000, id).id).toBe(id);
+  });
+
+  it.each([[undefined], [null], [""]])("generates an id for an empty id sentinel (%s)", (id) => {
+    const manager = new ExecApprovalManager();
+
+    expect(manager.create({ command: "echo generated" }, 60_000, id).id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it.each([
+    ["URL dot segment", "."],
+    ["URL parent segment", ".."],
+    ["ANSI escape", "approval-\u001b[31mred"],
+    ["ASCII control", "approval-\u0000hidden"],
+    ["Unicode control", "approval-\u202Ehidden"],
+    ["lone surrogate", "approval-\ud800hidden"],
+    ["whitespace", "approval unsafe"],
+    ["trailing line feed", "approval-safe\n"],
+    ["trailing carriage return", "approval-safe\r"],
+    ["trailing line separator", "approval-safe\u2028"],
+    ["trailing paragraph separator", "approval-safe\u2029"],
+    ["overlong value", "a".repeat(129)],
+  ])("rejects an explicit approval id containing an %s", (_label, id) => {
+    const manager = new ExecApprovalManager();
+
+    expect(() => manager.create({ command: "echo unsafe" }, 60_000, id)).toThrow(
+      InvalidApprovalIdError,
+    );
   });
 
   it("rejects unrenderable persistent plugin requests before creating a row or waiter", () => {

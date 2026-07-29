@@ -13,7 +13,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { JsonValue, v2 } from "./protocol.js";
 
 /** Default app inventory cache freshness window. */
-export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
+const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
 const CODEX_TARGETED_APP_INVENTORY_LIMIT = 1_000;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
@@ -35,7 +35,7 @@ export type CodexAppInventoryCacheKeyInput = {
 };
 
 /** Last refresh diagnostic stored with a cache key or snapshot. */
-export type CodexAppInventoryCacheDiagnostic = {
+type CodexAppInventoryCacheDiagnostic = {
   message: string;
   atMs: number;
 };
@@ -51,7 +51,7 @@ export type CodexAppInventorySnapshot = {
 };
 
 /** Freshness state for a cache read. */
-export type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
+type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
 
 /** Cache read result plus refresh scheduling state. */
 export type CodexAppInventoryCacheRead = {

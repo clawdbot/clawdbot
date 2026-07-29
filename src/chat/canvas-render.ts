@@ -9,6 +9,16 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 type CanvasSurface = "assistant_message";
 type CanvasSandbox = "strict" | "scripts";
 
+type McpAppPreviewDescriptor = {
+  viewId: string;
+  serverName?: string;
+  toolName?: string;
+  uiResourceUri?: string;
+  toolCallId?: string;
+  originSessionKey?: string;
+  resultMetaState?: "unavailable";
+};
+
 type CanvasPreview = {
   kind: "canvas";
   surface: CanvasSurface;
@@ -20,7 +30,8 @@ type CanvasPreview = {
   className?: string;
   style?: string;
   sandbox?: CanvasSandbox;
-  mcpApp?: { viewId: string };
+  boardWidgetName?: string;
+  mcpApp?: McpAppPreviewDescriptor;
 };
 
 function getRecordStringField(
@@ -45,6 +56,42 @@ function getNestedRecord(
 ): Record<string, unknown> | undefined {
   const value = record?.[key];
   return asOptionalRecord(value);
+}
+
+function coerceMcpAppDescriptor(
+  record: Record<string, unknown> | undefined,
+): McpAppPreviewDescriptor | undefined {
+  const viewId = getRecordStringField(record, "viewId");
+  if (!viewId || viewId.length > 128) {
+    return undefined;
+  }
+  const serverName = getRecordStringField(record, "serverName");
+  const toolName = getRecordStringField(record, "toolName");
+  const uiResourceUri = getRecordStringField(record, "uiResourceUri");
+  const toolCallId = getRecordStringField(record, "toolCallId");
+  const originSessionKey = getRecordStringField(record, "originSessionKey");
+  const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
+  const hasCompleteDescriptor = Boolean(
+    serverName &&
+    serverName.length <= 256 &&
+    toolName &&
+    toolName.length <= 256 &&
+    uiResourceUri?.startsWith("ui://") &&
+    uiResourceUri.length <= 2048 &&
+    toolCallId &&
+    toolCallId.length <= 512,
+  );
+  return hasCompleteDescriptor
+    ? {
+        viewId,
+        serverName,
+        toolName,
+        uiResourceUri,
+        toolCallId,
+        ...(originSessionKey && originSessionKey.length <= 512 ? { originSessionKey } : {}),
+        ...(resultMetaState ? { resultMetaState } : {}),
+      }
+    : { viewId };
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
@@ -75,7 +122,8 @@ function coerceCanvasPreview(
   const view = getNestedRecord(record, "view");
   const source = getNestedRecord(record, "source");
   const mcpAppRecord = getNestedRecord(record, "mcpApp");
-  const mcpAppViewId = getRecordStringField(mcpAppRecord, "viewId");
+  const mcpApp = coerceMcpAppDescriptor(mcpAppRecord);
+  const mcpAppViewId = mcpApp?.viewId;
   const requestedSurface =
     getRecordStringField(presentation, "target") ?? getRecordStringField(record, "target");
   const surface = requestedSurface ? normalizeSurface(requestedSurface) : "assistant_message";
@@ -96,6 +144,11 @@ function coerceCanvasPreview(
   const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
+  const boardWidgetName =
+    requestedBoardWidgetName && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(requestedBoardWidgetName)
+      ? requestedBoardWidgetName
+      : undefined;
   if (mcpAppViewId && viewId === mcpAppViewId) {
     return {
       kind: "canvas",
@@ -105,7 +158,7 @@ function coerceCanvasPreview(
       ...(title ? { title } : {}),
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(sandbox ? { sandbox } : {}),
-      mcpApp: { viewId: mcpAppViewId },
+      mcpApp,
     };
   }
   if (viewUrl) {
@@ -120,7 +173,8 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
-      ...(mcpAppViewId ? { mcpApp: { viewId: mcpAppViewId } } : {}),
+      ...(boardWidgetName ? { boardWidgetName } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   const sourceType = getRecordStringField(source, "type")?.trim().toLowerCase();
@@ -139,7 +193,7 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
-      ...(mcpAppViewId ? { mcpApp: { viewId: mcpAppViewId } } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   return undefined;

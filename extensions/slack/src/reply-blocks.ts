@@ -28,6 +28,15 @@ import {
 } from "./native-data-blocks.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
 import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
+import {
+  SLACK_APPROVAL_BUTTON_ACTION_ID,
+  SLACK_APPROVAL_SELECT_ACTION_ID,
+  SLACK_CALLBACK_BUTTON_ACTION_ID,
+  SLACK_CALLBACK_SELECT_ACTION_ID,
+  SLACK_REPLY_BUTTON_ACTION_ID,
+  SLACK_REPLY_LINK_ACTION_ID,
+  SLACK_REPLY_SELECT_ACTION_ID,
+} from "./reply-action-ids.js";
 
 export type SlackReplyBlockSegment =
   | { kind: "blocks"; blocks: SlackBlock[] }
@@ -112,7 +121,7 @@ export function resolveSlackReplyDeliveryMessages(params: {
   return messages;
 }
 
-export function resolveSlackReplyText(payload: ReplyPayload, text = payload.text): string {
+function resolveSlackReplyText(payload: ReplyPayload, text = payload.text): string {
   const presentation = normalizeMessagePresentation(payload.presentation);
   return presentation
     ? renderSlackMessagePresentationFallbackText({ text, presentation })
@@ -344,6 +353,73 @@ function appendPresentationPart(
   );
 }
 
+const SLACK_BUTTON_CONTROL_ACTION_IDS = [
+  SLACK_APPROVAL_BUTTON_ACTION_ID,
+  SLACK_CALLBACK_BUTTON_ACTION_ID,
+  SLACK_REPLY_BUTTON_ACTION_ID,
+  SLACK_REPLY_LINK_ACTION_ID,
+] as const;
+const SLACK_SELECT_CONTROL_ACTION_IDS = [
+  SLACK_APPROVAL_SELECT_ACTION_ID,
+  SLACK_CALLBACK_SELECT_ACTION_ID,
+  SLACK_REPLY_SELECT_ACTION_ID,
+] as const;
+
+function readGeneratedSlackControlRowKey(block: SlackBlock): string | undefined {
+  const record = block as { block_id?: unknown; elements?: unknown; type?: unknown };
+  if (record.type !== "actions" || typeof record.block_id !== "string") {
+    return undefined;
+  }
+  const expectedElementType = /^openclaw_reply_buttons_[1-9]\d*$/.test(record.block_id)
+    ? "button"
+    : /^openclaw_reply_select_[1-9]\d*$/.test(record.block_id)
+      ? "static_select"
+      : undefined;
+  if (!expectedElementType || !Array.isArray(record.elements) || record.elements.length === 0) {
+    return undefined;
+  }
+  const actionIds =
+    expectedElementType === "button"
+      ? SLACK_BUTTON_CONTROL_ACTION_IDS
+      : SLACK_SELECT_CONTROL_ACTION_IDS;
+  const elements = record.elements.map((element) => {
+    if (!element || typeof element !== "object" || Array.isArray(element)) {
+      return undefined;
+    }
+    const { action_id: actionId, ...content } = element as Record<string, unknown>;
+    const actionFamily =
+      typeof actionId === "string"
+        ? actionIds.find((candidate) => actionId.startsWith(`${candidate}:`))
+        : undefined;
+    return actionFamily && content.type === expectedElementType
+      ? [actionFamily, content]
+      : undefined;
+  });
+  return elements.some((element) => element === undefined) ? undefined : JSON.stringify(elements);
+}
+
+function subtractMirroredSlackControlRows(params: {
+  interactiveBlocks: readonly SlackBlock[];
+  presentationBlocks: readonly SlackBlock[];
+}): SlackBlock[] {
+  const remainingMirrors = new Map<string, number>();
+  for (const block of params.presentationBlocks) {
+    const key = readGeneratedSlackControlRowKey(block);
+    if (key) {
+      remainingMirrors.set(key, (remainingMirrors.get(key) ?? 0) + 1);
+    }
+  }
+  return params.interactiveBlocks.filter((block) => {
+    const key = readGeneratedSlackControlRowKey(block);
+    const remaining = key ? (remainingMirrors.get(key) ?? 0) : 0;
+    if (!key || remaining === 0) {
+      return true;
+    }
+    remainingMirrors.set(key, remaining - 1);
+    return false;
+  });
+}
+
 /**
  * Resolve reply content into transport-order segments. Each blocks segment is
  * one Slack message; text segments carry complete fallback content between it.
@@ -383,18 +459,28 @@ export function resolveSlackReplyBlockResolution(
   }
 
   const presentation = normalizeMessagePresentation(payload.presentation);
+  const presentationBlockOffset = readAllNativeBlocks(segments).length;
   if (presentation?.title) {
     appendPresentationPart(segments, { title: presentation.title, blocks: [] });
   }
   for (const block of presentation?.blocks ?? []) {
     appendPresentationPart(segments, { blocks: [block] });
   }
+  const renderedPresentationBlocks = readAllNativeBlocks(segments).slice(presentationBlockOffset);
 
   const interactiveBlocks = buildSlackInteractiveBlocks(
     payload.interactive,
     resolveSlackBlockOffsets(readAllNativeBlocks(segments)),
   );
-  appendBlockSegment(segments, interactiveBlocks);
+  // Compare final Slack rows, not source payloads: fallbacks and transport
+  // limits can prevent an apparent source mirror from rendering at all.
+  appendBlockSegment(
+    segments,
+    subtractMirroredSlackControlRows({
+      interactiveBlocks,
+      presentationBlocks: renderedPresentationBlocks,
+    }),
+  );
   const renderedTextFragments = segments.flatMap((segment) => {
     if (segment.kind === "text") {
       return [segment.text];

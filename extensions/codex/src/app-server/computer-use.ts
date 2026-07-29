@@ -2,9 +2,7 @@
  * Computer Use plugin/MCP readiness checks and optional install flow for Codex
  * app-server sessions.
  */
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { promisify } from "node:util";
 import { describeControlFailure } from "./capabilities.js";
 import {
   isCodexAppServerConnectionClosedError,
@@ -12,6 +10,11 @@ import {
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
+import {
+  killStaleComputerUseMcpChildren,
+  scopedRepairUnavailableStatus,
+  type CodexComputerUseRepairStatus,
+} from "./computer-use-process-repair.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -38,7 +41,7 @@ import {
 } from "./shared-client.js";
 
 /** Minimal app-server request function needed by Computer Use setup. */
-export type CodexComputerUseRequest = <T = JsonValue | undefined>(
+type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
   params?: unknown,
   options?: { timeoutMs?: number },
@@ -67,13 +70,13 @@ type CodexComputerUseExposureStatus = "skipped" | "missing" | "available";
 
 type CodexComputerUseLiveTestState = "skipped" | "passed" | "failed";
 
-export type CodexComputerUseStatusSection = {
+type CodexComputerUseStatusSection = {
   status: string;
   ok: boolean;
   message: string;
 };
 
-export type CodexComputerUseLiveTestStatus = {
+type CodexComputerUseLiveTestStatus = {
   status: CodexComputerUseLiveTestState;
   ok: boolean;
   attempted: boolean;
@@ -84,13 +87,6 @@ export type CodexComputerUseLiveTestStatus = {
   message: string;
   error?: string;
   durationMs?: number;
-};
-
-export type CodexComputerUseRepairStatus = {
-  attempted: boolean;
-  killedPids: number[];
-  message: string;
-  warnings: string[];
 };
 
 /** Readiness status for Codex Computer Use plugin and MCP server wiring. */
@@ -191,7 +187,6 @@ const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curated", "local"];
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
 const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
-const execFileAsync = promisify(execFile);
 
 /** Reads Computer Use readiness without installing or mutating app-server state. */
 export async function readCodexComputerUseStatus(
@@ -319,6 +314,7 @@ async function inspectCodexComputerUse(
       }
       client = await getLeasedSharedCodexAppServerClient({
         startOptions: runtime.start,
+        pluginConfig: params.pluginConfig,
         timeoutMs: params.timeoutMs ?? runtime.requestTimeoutMs,
         config: params.config,
         agentDir: params.agentDir,
@@ -482,9 +478,11 @@ async function readComputerUseTools(params: {
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
-  if (!server && params.installPlugin) {
+  let tools = Object.keys(server?.tools ?? {}).toSorted();
+  if ((!server || tools.length === 0) && params.installPlugin) {
     await reloadMcpServers(params.request);
     server = await readMcpServerStatus(params.request, params.config.mcpServerName);
+    tools = Object.keys(server?.tools ?? {}).toSorted();
   }
   if (!server) {
     return statusFromPlugin({
@@ -495,11 +493,20 @@ async function readComputerUseTools(params: {
       message: `Computer Use is installed, but the ${params.config.mcpServerName} MCP server is not available.`,
     });
   }
+  if (tools.length === 0) {
+    return statusFromPlugin({
+      config: params.config,
+      plugin: params.plugin,
+      tools,
+      reason: "mcp_missing",
+      message: `Computer Use is installed, but the ${params.config.mcpServerName} MCP server exposes no tools.`,
+    });
+  }
 
   const status = statusFromPlugin({
     config: params.config,
     plugin: params.plugin,
-    tools: Object.keys(server.tools).toSorted(),
+    tools,
     reason: "ready",
     message: "Computer Use is ready.",
   });
@@ -641,17 +648,6 @@ async function cleanupComputerUseProbeThread(
     request("thread/unsubscribe", { threadId }, { timeoutMs: config.liveTestTimeoutMs }),
     request("thread/archive", { threadId }, { timeoutMs: config.liveTestTimeoutMs }),
   ]);
-}
-
-function scopedRepairUnavailableStatus(): CodexComputerUseRepairStatus {
-  return {
-    attempted: false,
-    killedPids: [],
-    warnings: [
-      "Computer Use auto-repair skipped because no scoped Codex app-server process was available.",
-    ],
-    message: "Computer Use stale child repair requires a scoped local app-server PID.",
-  };
 }
 
 async function resolveMarketplaceRef(params: {
@@ -1097,117 +1093,6 @@ function pluginWarnings(plugin: CodexPluginDetail): string[] {
   return warnings;
 }
 
-export async function killStaleComputerUseMcpChildren(
-  options: { ancestorPid?: number } = {},
-): Promise<CodexComputerUseRepairStatus> {
-  if (process.platform !== "darwin") {
-    return {
-      attempted: true,
-      killedPids: [],
-      warnings: [
-        `Computer Use stale child repair is currently macOS-only, not ${process.platform}.`,
-      ],
-      message: "Computer Use stale child repair skipped on this platform.",
-    };
-  }
-  if (
-    !options.ancestorPid ||
-    !Number.isSafeInteger(options.ancestorPid) ||
-    options.ancestorPid <= 0
-  ) {
-    return scopedRepairUnavailableStatus();
-  }
-  let stdout: string;
-  try {
-    const result = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,command="], {
-      maxBuffer: 5 * 1024 * 1024,
-    });
-    stdout = result.stdout;
-  } catch (error) {
-    return {
-      attempted: true,
-      killedPids: [],
-      warnings: [
-        `Could not list processes for Computer Use repair: ${describeControlFailure(error)}`,
-      ],
-      message: "Computer Use stale child repair could not inspect running processes.",
-    };
-  }
-  const killedPids: number[] = [];
-  const warnings: string[] = [];
-  const processInfos = parsePsOutput(stdout);
-  for (const processInfo of processInfos) {
-    if (!isStaleComputerUseMcpChild(processInfo.command)) {
-      continue;
-    }
-    if (!isDescendantOfPid(processInfo.pid, options.ancestorPid, processInfos)) {
-      continue;
-    }
-    try {
-      process.kill(processInfo.pid, "SIGTERM");
-      killedPids.push(processInfo.pid);
-    } catch (error) {
-      warnings.push(
-        `Could not terminate stale Computer Use MCP child pid ${processInfo.pid}: ${describeControlFailure(error)}`,
-      );
-    }
-  }
-  return {
-    attempted: true,
-    killedPids,
-    warnings,
-    message:
-      killedPids.length === 0
-        ? "No stale Computer Use MCP children were found under the scoped Codex app-server process."
-        : `Terminated ${killedPids.length} stale Computer Use MCP child process${killedPids.length === 1 ? "" : "es"} under the scoped Codex app-server process.`,
-  };
-}
-
-function parsePsOutput(stdout: string): Array<{ pid: number; ppid: number; command: string }> {
-  return stdout
-    .split(/\r?\n/u)
-    .flatMap((line) => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
-      if (!match) {
-        return [];
-      }
-      return [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" }];
-    })
-    .filter(
-      (processInfo) =>
-        Number.isSafeInteger(processInfo.pid) &&
-        processInfo.pid > 0 &&
-        Number.isSafeInteger(processInfo.ppid) &&
-        processInfo.ppid >= 0,
-    );
-}
-
-function isStaleComputerUseMcpChild(command: string): boolean {
-  return command.includes("SkyComputerUseClient") && /(?:^|\s)mcp(?:\s|$)/u.test(command);
-}
-
-function isDescendantOfPid(
-  pid: number,
-  ancestorPid: number,
-  processInfos: Array<{ pid: number; ppid: number }>,
-): boolean {
-  const parents = new Map(processInfos.map((processInfo) => [processInfo.pid, processInfo.ppid]));
-  const seen = new Set<number>();
-  let current = pid;
-  while (!seen.has(current)) {
-    seen.add(current);
-    const parent = parents.get(current);
-    if (!parent || parent <= 0) {
-      return false;
-    }
-    if (parent === ancestorPid) {
-      return true;
-    }
-    current = parent;
-  }
-  return false;
-}
-
 function createComputerUseRequest(params: {
   pluginConfig?: unknown;
   config?: CodexComputerUseSetupParams["config"];
@@ -1253,8 +1138,6 @@ function createComputerUseRequest(params: {
     });
 }
 
-export const testing = { isDescendantOfPid, parsePsOutput };
-
 function resolveComputerUseConfig(
   params: Pick<CodexComputerUseSetupParams, "pluginConfig" | "overrides" | "forceEnable">,
 ): ResolvedCodexComputerUseConfig {
@@ -1264,3 +1147,4 @@ function resolveComputerUseConfig(
     overrides,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

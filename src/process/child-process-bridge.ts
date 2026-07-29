@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import process from "node:process";
 
 /** Signal forwarding options for a child process bridge. */
-export type ChildProcessBridgeOptions = {
+type ChildProcessBridgeOptions = {
   signals?: NodeJS.Signals[];
   onSignal?: (signal: NodeJS.Signals) => void;
 };

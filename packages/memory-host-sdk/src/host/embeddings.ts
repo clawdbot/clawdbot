@@ -1,4 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { toRetryError } from "@openclaw/retry";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
@@ -14,8 +16,6 @@ import {
   type LlamaModel,
 } from "./node-llama.js";
 // Memory Host SDK module implements embeddings behavior.
-import { toLintErrorObject } from "./retry-utils.js";
-import { normalizeOptionalString } from "./string-utils.js";
 
 type DisposableResource = {
   dispose?: () => Promise<void> | void;
@@ -51,7 +51,7 @@ async function disposeResources(
     }
   }
   if (firstError) {
-    throw toLintErrorObject(firstError, "Non-Error thrown");
+    throw toRetryError(firstError);
   }
 }
 

@@ -75,8 +75,6 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
-let resolveControlUiRepoRoot: typeof import("./control-ui-assets.js").resolveControlUiRepoRoot;
-let resolveControlUiDistIndexPath: typeof import("./control-ui-assets.js").resolveControlUiDistIndexPath;
 let resolveControlUiDistIndexHealth: typeof import("./control-ui-assets.js").resolveControlUiDistIndexHealth;
 let isPackageProvenControlUiRootSync: typeof import("./control-ui-assets.js").isPackageProvenControlUiRootSync;
 let resolveControlUiRootOverrideSync: typeof import("./control-ui-assets.js").resolveControlUiRootOverrideSync;
@@ -87,8 +85,6 @@ describe("control UI assets helpers (fs-mocked)", () => {
   beforeAll(async () => {
     ({
       ensureControlUiAssetsBuilt,
-      resolveControlUiRepoRoot,
-      resolveControlUiDistIndexPath,
       resolveControlUiDistIndexHealth,
       isPackageProvenControlUiRootSync,
       resolveControlUiRootOverrideSync,
@@ -102,72 +98,6 @@ describe("control UI assets helpers (fs-mocked)", () => {
     state.realpaths.clear();
     state.runCommandWithTimeout.mockReset();
     vi.clearAllMocks();
-  });
-
-  it("resolves repo root from src argv1", () => {
-    const root = abs("fixtures/ui-src");
-    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
-
-    const argv1 = path.join(root, "src", "index.ts");
-    expect(resolveControlUiRepoRoot(argv1)).toBe(root);
-  });
-
-  it("resolves repo root by traversing up (dist argv1)", () => {
-    const root = abs("fixtures/ui-dist");
-    setFile(path.join(root, "package.json"), "{}\n");
-    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
-
-    const argv1 = path.join(root, "dist", "index.js");
-    expect(resolveControlUiRepoRoot(argv1)).toBe(root);
-  });
-
-  it("resolves dist control-ui index path for dist argv1", async () => {
-    const argv1 = abs(path.join("fixtures", "pkg", "dist", "index.js"));
-    const distDir = path.dirname(argv1);
-    await expect(resolveControlUiDistIndexPath(argv1)).resolves.toBe(
-      path.join(distDir, "control-ui", "index.html"),
-    );
-  });
-
-  it("resolves dist control-ui index path for symlinked argv1 via realpath", async () => {
-    const pkgRoot = abs("fixtures/bun-global/openclaw");
-    const wrapperArgv1 = abs("fixtures/bin/openclaw");
-    const realEntrypoint = path.join(pkgRoot, "dist", "index.js");
-
-    state.realpaths.set(wrapperArgv1, realEntrypoint);
-
-    await expect(resolveControlUiDistIndexPath(wrapperArgv1)).resolves.toBe(
-      path.join(pkgRoot, "dist", "control-ui", "index.html"),
-    );
-  });
-
-  it("uses resolveOpenClawPackageRoot when available", async () => {
-    const pkgRoot = abs("fixtures/openclaw");
-    (
-      openclawRoot.resolveOpenClawPackageRoot as unknown as ReturnType<typeof vi.fn>
-    ).mockResolvedValueOnce(pkgRoot);
-
-    await expect(resolveControlUiDistIndexPath(abs("fixtures/bin/openclaw"))).resolves.toBe(
-      path.join(pkgRoot, "dist", "control-ui", "index.html"),
-    );
-  });
-
-  it("falls back to package.json name matching when root resolution fails", async () => {
-    const root = abs("fixtures/fallback");
-    setFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    setFile(path.join(root, "dist", "control-ui", "index.html"), "<html></html>\n");
-
-    await expect(resolveControlUiDistIndexPath(path.join(root, "openclaw.mjs"))).resolves.toBe(
-      path.join(root, "dist", "control-ui", "index.html"),
-    );
-  });
-
-  it("returns null when fallback package name does not match", async () => {
-    const root = abs("fixtures/not-openclaw");
-    setFile(path.join(root, "package.json"), JSON.stringify({ name: "malicious-pkg" }));
-    setFile(path.join(root, "dist", "control-ui", "index.html"), "<html></html>\n");
-
-    await expect(resolveControlUiDistIndexPath(path.join(root, "index.mjs"))).resolves.toBeNull();
   });
 
   it("reports health for missing + existing dist assets", async () => {
@@ -190,6 +120,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
     const root = abs("fixtures/build-failure");
     const argv1 = path.join(root, "src", "index.ts");
     const originalArgv1 = process.argv[1];
+    setFile(path.join(root, "package.json"), '{"name":"openclaw"}\n');
     setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
     setFile(path.join(root, "scripts", "ui.js"), "");
     state.runCommandWithTimeout.mockResolvedValueOnce({

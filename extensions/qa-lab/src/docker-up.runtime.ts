@@ -15,6 +15,8 @@ import {
 } from "./docker-runtime.js";
 import { shellQuote } from "./shell-quote.js";
 
+const QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
+
 type QaDockerUpResult = {
   outputDir: string;
   composeFile: string;
@@ -30,7 +32,9 @@ function resolveDefaultQaDockerDir(repoRoot: string) {
 async function isQaLabDockerHealthReachable(url: string, fetchImpl: FetchLike) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    response = await fetchImpl(url);
+    response = await fetchImpl(url, {
+      signal: AbortSignal.timeout(QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS),
+    });
     return response.ok;
   } catch {
     return false;

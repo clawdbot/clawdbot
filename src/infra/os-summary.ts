@@ -13,6 +13,10 @@ type OsSummary = {
 const cachedOsSummaryByKey = new Map<string, OsSummary>();
 const cachedRuntimeOsLabelByKey = new Map<string, string>();
 
+// These synchronous probes run during both gateway startup and first-turn prompt
+// preparation, so keep one hard bound for every macOS system metadata lookup.
+export const DARWIN_SYSTEM_PROBE_TIMEOUT_MS = 5_000;
+
 /**
  * Resolve Darwin product version via sw_vers.
  *
@@ -21,8 +25,12 @@ const cachedRuntimeOsLabelByKey = new Map<string, string>();
  * historical Darwin N → macOS N+9 formula. Prefer sw_vers over os.release() on
  * macOS to avoid stale mappings.
  */
-function resolveDarwinProductVersion(): string {
-  const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
+export function resolveDarwinProductVersion(): string {
+  const res = spawnSync("sw_vers", ["-productVersion"], {
+    encoding: "utf-8",
+    timeout: DARWIN_SYSTEM_PROBE_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  });
   const out = normalizeOptionalString(res.stdout) ?? "";
   return out || os.release();
 }

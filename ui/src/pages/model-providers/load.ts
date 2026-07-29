@@ -1,16 +1,18 @@
-// Fetches the gateway signals behind the Model Providers settings page.
+// Fetches the gateway signals behind the Models settings page.
 // Each source degrades independently: a missing usage hook or an older
 // gateway must not blank the provider list.
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
+import type { ConfigSnapshot, ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { requestSessionUsage } from "../../lib/sessions/index.ts";
+import { loadModels } from "../chat/models.ts";
 
 /** Local session-spend window shown on each card. */
 export const MODEL_PROVIDERS_COST_DAYS = 30;
@@ -18,6 +20,8 @@ export const MODEL_PROVIDERS_COST_DAYS = 30;
 export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
+  catalogModels: ModelCatalogEntry[] | null;
+  config: Record<string, unknown> | null;
   providerUsage: UsageSummary | null;
   costByProvider: SessionModelUsage[] | null;
   updatedAt: number | null;
@@ -27,6 +31,8 @@ export type ModelProvidersData = {
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   models: null,
+  catalogModels: null,
+  config: null,
   providerUsage: null,
   costByProvider: null,
   updatedAt: null,
@@ -51,30 +57,46 @@ function errorMessage(error: unknown): string {
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; agentId?: string; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
-  const [authStatus, models, providerUsage, costByProvider] = await Promise.all([
-    loadModelAuthStatus(client, opts).then(
-      (result) => ({ ok: true as const, result }),
-      (error: unknown) => ({ ok: false as const, error }),
-    ),
-    client
-      .request<{ models?: ModelCatalogEntry[] }>("models.list", {})
-      .then((result) => result?.models ?? null)
-      .catch(() => null),
-    client.request<UsageSummary>("usage.status").catch(() => null),
-    requestSessionUsage(client, {
-      startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
-      endDate: localDate(0),
-      scope: "family",
-      timeZone: "local",
-    })
-      .then((result) => result?.aggregates?.byProvider ?? null)
-      .catch(() => null),
-  ]);
+  const request = <T>(method: string, params?: unknown): Promise<T> =>
+    opts?.signal
+      ? client.request<T>(method, params, { signal: opts.signal })
+      : params === undefined
+        ? client.request<T>(method)
+        : client.request<T>(method, params);
+  const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
+    await Promise.all([
+      loadModelAuthStatus(client, opts).then(
+        (result) => ({ ok: true as const, result }),
+        (error: unknown) => ({ ok: false as const, error }),
+      ),
+      loadModels(client, opts).catch(() => null),
+      request<{ models?: ModelCatalogEntry[] }>("models.list", {
+        view: "all",
+        includeProviderCapabilities: true,
+      })
+        .then((result) => result?.models ?? null)
+        .catch(() => null),
+      request<ConfigSnapshot>("config.get", {})
+        .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
+        .catch(() => null),
+      request<UsageSummary>("usage.status").catch(() => null),
+      requestSessionUsage(client, {
+        startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
+        endDate: localDate(0),
+        scope: "family",
+        timeZone: "local",
+      })
+        .then((result) => result?.aggregates?.byProvider ?? null)
+        .catch(() => null),
+    ]);
   return {
-    authStatus: authStatus.ok ? authStatus.result : null,
+    authStatus:
+      authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models,
+    catalogModels,
+    config,
     providerUsage,
     costByProvider,
     updatedAt: Date.now(),

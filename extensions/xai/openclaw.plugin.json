@@ -34,6 +34,9 @@
     }
   },
   "modelCatalog": {
+    "discovery": {
+      "xai": "refreshable"
+    },
     "suppressions": [
       {
         "provider": "xai",
@@ -191,6 +194,7 @@
     "mediaUnderstandingProviders": ["xai"],
     "speechProviders": ["xai"],
     "realtimeTranscriptionProviders": ["xai"],
+    "realtimeVoiceProviders": ["xai"],
     "imageGenerationProviders": ["xai"],
     "tools": ["code_execution", "x_search"]
   },
@@ -214,10 +218,6 @@
           "rootPath": "plugins.entries.xai.config",
           "overlayPath": "webSearch",
           "required": ["apiKey"]
-        },
-        {
-          "rootPath": "tools.web.search.grok",
-          "required": ["apiKey"]
         }
       ]
     },
@@ -233,16 +233,9 @@
           "rootPath": "plugins.entries.xai.config",
           "overlayPath": "webSearch",
           "required": ["apiKey"]
-        },
-        {
-          "rootPath": "tools.web.search.grok",
-          "required": ["apiKey"]
         }
       ]
     }
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

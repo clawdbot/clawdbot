@@ -2,14 +2,24 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionEntryLifecycleMutation,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import {
   HEARTBEAT_RUN_SCOPE,
   type ReplyOptionsWithHeartbeatRunScope,
 } from "../../infra/heartbeat-run-scope.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+} from "../../plugins/before-agent-reply.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
@@ -28,15 +38,16 @@ import {
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
-  type ReplyOptionsWithOperationRunState,
 } from "./reply-operation-run-state.js";
-import {
-  createReplyOperation,
-  testing as replyRunTesting,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
+import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
+
+type ReplyOptionsWithOperationRunState = {
+  [REPLY_OPERATION_RUN_STATE]?: ReplyOperationRunState;
+};
 
 type AgentRunParams = {
   sessionId?: string;
@@ -60,10 +71,16 @@ type AgentRunParams = {
 };
 
 const state = vi.hoisted(() => ({
+  beforeAgentReplyHasHooksMock: vi.fn(),
+  beforeAgentReplyRunMock: vi.fn(),
   compactEmbeddedAgentSessionMock: vi.fn(),
+  getChannelPluginMock: vi.fn(),
+  materializeMcpAppChannelPresentationMock: vi.fn(),
   queueEmbeddedAgentMessageMock: vi.fn(),
   runEmbeddedAgentMock: vi.fn(),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -98,7 +115,18 @@ function requireStoredSessionEntry(storePath: string, sessionKey = "main"): Sess
   return entry;
 }
 
-let modelFallbackModule: typeof import("../../agents/model-fallback.js");
+async function createSessionStoreFile(entry: SessionEntry, sessionKey = "main"): Promise<string> {
+  const dir = tempDirs.make("openclaw-agent-runner-");
+  const storePath = join(dir, "sessions.json");
+  await replaceSessionEntry({ storePath, sessionKey }, entry);
+  return storePath;
+}
+
+async function readStoredMainSession(storePath: string): Promise<SessionEntry> {
+  return requireStoredSessionEntry(storePath);
+}
+
+let modelFallbackModule: typeof import("../../agents/model-fallback-runner.js");
 let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
 
 let runReplyAgentPromise:
@@ -112,7 +140,7 @@ async function getRunReplyAgent() {
   return await runReplyAgentPromise;
 }
 
-vi.mock("../../agents/model-fallback.js", () => ({
+vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: async ({
     provider,
     model,
@@ -128,16 +156,30 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model,
     attempts: [],
   }),
+}));
+
+vi.mock("../../agents/model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: state.beforeAgentReplyHasHooksMock,
+    runBeforeAgentReply: state.beforeAgentReplyRunMock,
+  }),
+}));
+
 vi.mock("../../agents/embedded-agent.js", () => ({
   compactEmbeddedAgentSession: (params: unknown) => state.compactEmbeddedAgentSessionMock(params),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
+}));
+
+vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/index.js")>()),
+  getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
 }));
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
@@ -169,7 +211,13 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   },
 }));
 
-vi.mock("./queue.js", () => ({
+vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
+  materializeMcpAppChannelPresentation: (params: unknown) =>
+    state.materializeMcpAppChannelPresentationMock(params),
+}));
+
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
@@ -177,7 +225,7 @@ vi.mock("./queue.js", () => ({
 
 beforeAll(async () => {
   // Avoid attributing the initial agent-runner import cost to the first test case.
-  modelFallbackModule = await import("../../agents/model-fallback.js");
+  modelFallbackModule = await import("../../agents/model-fallback-runner.js");
   ({ onAgentEvent } = await import("../../infra/agent-events.js"));
   await getRunReplyAgent();
 });
@@ -196,7 +244,11 @@ beforeEach(() => {
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
   state.queueEmbeddedAgentMessageMock.mockReset();
+  state.beforeAgentReplyHasHooksMock.mockReset().mockReturnValue(false);
+  state.beforeAgentReplyRunMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
+  state.getChannelPluginMock.mockReset();
+  state.materializeMcpAppChannelPresentationMock.mockReset();
   vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
@@ -221,6 +273,7 @@ function createMinimalRun(params?: {
   replyOperation?: ReplyOperation;
   currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
   sessionCtx?: Partial<TemplateContext>;
+  sourceTurnId?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
 }) {
   const typing = createMockTypingController();
@@ -230,6 +283,15 @@ function createMinimalRun(params?: {
     MessageSid: "msg",
     ...params?.sessionCtx,
   } as unknown as TemplateContext;
+  const sourceTurnId =
+    params?.sourceTurnId ??
+    buildChannelSourceTurnId({
+      provider: sessionCtx.Provider,
+      accountId: sessionCtx.AccountId,
+      conversationId: sessionCtx.OriginatingTo,
+      messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    });
+  setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const resolvedQueue = {
     mode: params?.resolvedQueueMode ?? "interrupt",
   } as unknown as QueueSettings;
@@ -239,6 +301,9 @@ function createMinimalRun(params?: {
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     currentInboundEventKind: params?.currentInboundEventKind,
+    originatingChannel: sessionCtx.OriginatingChannel ?? sessionCtx.Provider,
+    originatingTo: sessionCtx.OriginatingTo,
+    originatingChatId: sessionCtx.NativeChannelId ?? sessionCtx.ChatId,
     run: {
       sessionId: "session",
       sessionKey,
@@ -266,6 +331,7 @@ function createMinimalRun(params?: {
 
   return {
     followupRun,
+    sourceTurnId,
     typing,
     opts,
     run: async () => {
@@ -300,7 +366,199 @@ function createMinimalRun(params?: {
   };
 }
 
+async function runHookBackedEmbeddedAgent(params: {
+  agentId?: string;
+  prompt: string;
+  runId: string;
+  sessionId: string;
+  sessionKey?: string;
+  trigger?: string;
+  workspaceDir: string;
+}) {
+  const hookResult = await runBeforeAgentReplyForTurn({
+    runId: params.runId,
+    trigger: params.trigger,
+    event: { cleanedBody: params.prompt },
+    context: {
+      runId: params.runId,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      trigger: params.trigger,
+      workspaceDir: params.workspaceDir,
+    },
+  });
+  return hookResult?.handled
+    ? {
+        payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+        meta: { agentMeta: {} },
+      }
+    : {
+        payloads: [{ text: "model reply" }],
+        meta: { agentMeta: {} },
+      };
+}
+
+function attachSourceTurnRecorder(params: {
+  followupRun: FollowupRun;
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
+  sourceTurnId: string | undefined;
+  storePath: string;
+  text: string;
+}): void {
+  if (!params.sourceTurnId) {
+    throw new Error("test source turn id required");
+  }
+  params.followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+    input: { text: params.text, idempotencyKey: params.sourceTurnId },
+    target: {
+      agentId: "main",
+      config: {},
+      cwd: "/tmp",
+      sessionEntry: params.sessionEntry,
+      sessionId: "session",
+      sessionKey: "main",
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+    },
+  });
+}
+
+function requireBuiltChannelSourceTurnId(
+  params: Parameters<typeof buildChannelSourceTurnId>[0],
+): string {
+  const sourceTurnId = buildChannelSourceTurnId(params);
+  if (!sourceTurnId) {
+    throw new Error("test channel source turn id required");
+  }
+  return sourceTurnId;
+}
+
 describe("runReplyAgent active steering", () => {
+  it("dispatches a declined steer once with its source-turn identity", async () => {
+    const runState: ReplyOperationRunState = {};
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const { run, sourceTurnId } = createMinimalRun({
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        NativeChannelId: "24680",
+        MessageSid: "steer-declined",
+        SenderId: "sender-42",
+      },
+      runOverrides: {
+        agentId: "main",
+        messageProvider: "discord",
+        senderId: "sender-42",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
+      { cleanedBody: "hello" },
+      expect.objectContaining({
+        runId: sourceTurnId,
+        agentId: "main",
+        sessionKey: "main",
+        sessionId: "session",
+        workspaceDir: "/tmp",
+        modelProviderId: "anthropic",
+        modelId: "claude",
+        trigger: "user",
+        channel: "discord",
+        channelId: "24680",
+        chatId: "24680",
+        senderId: "sender-42",
+      }),
+    );
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+      "session",
+      "hello",
+      expect.objectContaining({ steeringMode: "all" }),
+    );
+  });
+
+  it("returns a claimed steer without disturbing the active run", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "claimed steer" },
+    });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const { run } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "steer-claimed",
+      },
+      runOverrides: { agentId: "main", messageProvider: "discord" },
+    });
+
+    await expect(run()).resolves.toEqual([{ text: "claimed steer" }]);
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(active.phase).toBe("running");
+    expect(active.result).toBeNull();
+    active.complete();
+  });
+
+  it("does not dispatch again when a declined steer falls through to a new turn", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(false);
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { run } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "steer-fallback",
+      },
+      runOverrides: { agentId: "main", messageProvider: "discord" },
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("carries the prepared user-turn recorder into the embedded queue", async () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const recorder = createUserTurnTranscriptRecorder({
@@ -379,12 +637,12 @@ describe("runReplyAgent active steering", () => {
         return true;
       },
     );
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       events.push("adoption-finalizer");
       throw finalizerError;
     });
     const { run, typing } = createMinimalRun({
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -394,7 +652,7 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(events).toEqual(["transcript-committed", "adoption-finalizer"]);
-    expect(onTurnAdopted).toHaveBeenCalledTimes(1);
+    expect(onAdopted).toHaveBeenCalledTimes(1);
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -402,6 +660,11 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("queues a follow-up when transcript-backed steering is unsupported", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
       queued: false,
       sessionId: "session",
@@ -409,9 +672,9 @@ describe("runReplyAgent active steering", () => {
       target: "none",
       gatewayHealth: "live",
     });
-    const onTurnAdopted = vi.fn();
+    const onAdopted = vi.fn();
     const { run } = createMinimalRun({
-      opts: { onTurnAdopted },
+      opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -421,8 +684,102 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(onTurnAdopted).not.toHaveBeenCalled();
+    const enqueueArgs = mockCallArgs(vi.mocked(enqueueFollowupRun), "enqueue follow-up");
+    const queued = enqueueArgs[1] as FollowupRun;
+    const runFollowup = enqueueArgs[4];
+    if (typeof runFollowup !== "function") {
+      throw new Error("expected queued follow-up runner");
+    }
+    await runFollowup(queued);
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(onAdopted).not.toHaveBeenCalled();
+  });
+
+  it("admits an ordinary rejected steering turn with durable recovery state", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const onAdopted = vi.fn(async () => {
+      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
+        "admitted",
+      );
+    });
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "rejected-steering-message",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "steering rejected before admission",
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "final" }));
+
+    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("runReplyAgent MCP App channel action", () => {
+  it("materializes the latest view on the final channel payload", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Weather app",
+              action: {
+                type: "web-app",
+                url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    state.materializeMcpAppChannelPresentationMock.mockReturnValue(presentation);
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "The forecast is sunny." }, { text: "NO_REPLY" }],
+      latestMcpAppChannelView: { viewId: "view-latest" },
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+    const { run } = createMinimalRun({
+      sessionCtx: { Provider: "telegram", OriginatingChannel: "telegram" },
+      runOverrides: { messageProvider: "telegram" },
+    });
+
+    await expect(run()).resolves.toEqual(
+      expect.objectContaining({ text: "The forecast is sunny.", presentation }),
+    );
+    expect(state.materializeMcpAppChannelPresentationMock).toHaveBeenCalledWith({
+      sessionKey: "main",
+      view: { viewId: "view-latest" },
+    });
   });
 });
 
@@ -597,6 +954,23 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("defers hooks until an active run's follow-up is admitted", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    const { run } = createMinimalRun({
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("cleans up typing when followup admission is rejected", async () => {
     vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
     const { run, typing } = createMinimalRun({
@@ -706,17 +1080,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
-  async function createSessionStoreFile(entry: SessionEntry) {
-    const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-pending-"));
-    const storePath = join(dir, "sessions.json");
-    await replaceSessionEntry({ storePath, sessionKey: "main" }, entry);
-    return storePath;
-  }
-
-  async function readStoredMainSession(storePath: string): Promise<SessionEntry> {
-    return requireStoredSessionEntry(storePath);
-  }
-
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -741,7 +1104,6 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBeUndefined();
-    expect(stored.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("does not persist sendPolicy-denied final replies for heartbeat replay", async () => {
@@ -768,7 +1130,6 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBeUndefined();
-    expect(stored.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("persists only visible non-reasoning final reply text", async () => {
@@ -793,16 +1154,122 @@ describe("runReplyAgent pending final delivery capture", () => {
     const result = await run();
 
     const stored = await readStoredMainSession(storePath);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("visible final");
-    expect(stored.pendingFinalDeliveryIntentId).toEqual(expect.any(String));
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "visible final",
+      intentId: expect.any(String),
+    });
     const visiblePayload = (Array.isArray(result) ? result : [result]).find(
       (payload) => payload?.text === "visible final",
     );
     expect(getReplyPayloadMetadata(visiblePayload ?? {})).toMatchObject({
-      pendingFinalDeliveryIntentId: stored.pendingFinalDeliveryIntentId,
+      pendingFinalDeliveryIntentId: stored.pendingFinalDelivery?.intentId,
       pendingFinalDeliveryRetryText: "visible final",
     });
+  });
+
+  it("persists canonical SQLite pending final delivery after its intent commits", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "visible canonical final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    const result = await run();
+    const stored = loadSessionEntry({ sessionKey, storePath });
+    expect(stored).toMatchObject({
+      pendingFinalDelivery: {
+        kind: "replayable",
+        intentId: expect.any(String),
+        text: "visible canonical final",
+      },
+      sessionId: "session",
+    });
+    const visiblePayload = Array.isArray(result) ? result[0] : result;
+    expect(getReplyPayloadMetadata(visiblePayload ?? {})).toMatchObject({
+      pendingFinalDeliveryIntentId: stored?.pendingFinalDelivery?.intentId,
+      pendingFinalDeliveryRetryText: "visible canonical final",
+    });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects canonical SQLite pending final delivery when its session is deleted", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      await applySessionEntryLifecycleMutation({
+        removals: [{ sessionKey }],
+        skipMaintenance: true,
+        storePath,
+      });
+      return {
+        payloads: [{ text: "final from deleted session" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not persist canonical SQLite pending final delivery on a reset session", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: "session-after-reset", updatedAt: Date.now() },
+      );
+      return {
+        payloads: [{ text: "final from previous session" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "session-after-reset",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingFinalDelivery).toBeUndefined();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
   it("persists auto-reply delivery context for restart recovery", async () => {
@@ -812,6 +1279,12 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
+    const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      accountId: "work",
+      conversationId: "channel:24680",
+      messageId: "1503645939964055592",
+    });
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const storedDuringRun = await readStoredMainSession(storePath);
       expect(storedDuringRun.restartRecoveryDeliveryContext).toEqual({
@@ -827,7 +1300,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       };
     });
 
-    const { run } = createMinimalRun({
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
@@ -842,31 +1315,809 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionKey: "main",
       storePath,
     });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "durable discord request",
+    });
+    expect(sourceTurnId).toBe(expectedSourceTurnId);
 
     await run();
 
     const stored = await readStoredMainSession(storePath);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("visible final");
-    expect(stored.pendingFinalDeliveryContext).toEqual({
-      channel: "discord",
-      to: "channel:24680",
-      accountId: "work",
-      threadId: "1503645939964055592",
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "visible final",
+      context: {
+        channel: "discord",
+        to: "channel:24680",
+        accountId: "work",
+        threadId: "1503645939964055592",
+      },
     });
+    expect(stored.restartRecoverySourceIngress).toBe("channel");
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
   });
 
-  it("fires onTurnAdopted after restart recovery delivery context persist completes", async () => {
+  it("fails closed and retires an unknown terminal receipt when the live run returns", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
+    const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      conversationId: "channel:24680",
+      messageId: "discord-message-unknown",
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const current = await readStoredMainSession(storePath);
+      await replaceSessionEntry(
+        { storePath, sessionKey: "main" },
+        {
+          ...current,
+          restartRecoveryDeliveryReceiptState: "terminal-pending",
+          restartRecoveryDeliveryToolCallId: "message-call-unknown",
+          updatedAt: Date.now(),
+        },
+      );
+      return {
+        payloads: [{ text: "fallback final" }],
+        meta: {},
+      };
+    });
+
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "discord-message-unknown",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "maybe send a terminal reply",
+    });
+    expect(sourceTurnId).toBe(expectedSourceTurnId);
+
+    await run();
+
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      status: "failed",
+      abortedLastRun: true,
+      restartRecoveryTerminalRunIds: [expectedSourceTurnId],
+    });
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryReceiptState).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryToolCallId).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+  });
+
+  it("rejects channel recovery admission without a source-keyed user turn", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "discord-message-without-recorder",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(run()).rejects.toThrow(
+      "channel restart recovery requires source-keyed user-turn admission",
+    );
+
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(await readStoredMainSession(storePath)).not.toMatchObject({
+      restartRecoveryDeliveryRunId: expect.any(String),
+    });
+  });
+
+  it("does not arm channel recovery without a source turn id", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect((await readStoredMainSession(storePath)).restartRecoveryDeliveryRunId).toBeUndefined();
+      return { payloads: [{ text: "visible final" }], meta: {} };
+    });
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "discord-message-without-source-id",
+      },
+      sourceTurnId: "",
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "visible final" }));
+    expect((await readStoredMainSession(storePath)).restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("drops a redelivered terminal channel source before hooks or model work", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:24680",
+      MessageSid: "redelivered-terminal-message",
+    } as const;
+    const first = createMinimalRun({
+      sessionCtx,
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun: first.followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId: first.sourceTurnId,
+      storePath,
+      text: "execute once",
+    });
+
+    await first.run();
+
+    const completedEntry = await readStoredMainSession(storePath);
+    expect(completedEntry.restartRecoveryTerminalRunIds).toEqual([first.sourceTurnId]);
+    state.runEmbeddedAgentMock.mockClear();
+    const onAdopted = vi.fn();
+    const completedStore = { main: completedEntry };
+    const duplicate = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      sessionCtx,
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry: completedEntry,
+      sessionStore: completedStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun: duplicate.followupRun,
+      sessionEntry: completedEntry,
+      sessionStore: completedStore,
+      sourceTurnId: duplicate.sourceTurnId,
+      storePath,
+      text: "execute once",
+    });
+
+    await expect(duplicate.run()).resolves.toBeUndefined();
+
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect((await readStoredMainSession(storePath)).restartRecoveryTerminalRunIds).toEqual([
+      first.sourceTurnId,
+    ]);
+  });
+
+  it("drops a redelivered active channel source before hooks or queue work", async () => {
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:24680",
+      MessageSid: "redelivered-active-message",
+    } as const;
+    const sourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      conversationId: "channel:24680",
+      messageId: "redelivered-active-message",
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      status: "running",
+      restartRecoveryDeliveryRunId: "active-recovery-run",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+      restartRecoveryDeliveryContext: {
+        channel: "discord",
+        to: "channel:24680",
+      },
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const onAdopted = vi.fn();
+    const duplicate = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      sessionCtx,
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun: duplicate.followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId: duplicate.sourceTurnId,
+      storePath,
+      text: "execute once",
+    });
+
+    await expect(duplicate.run()).resolves.toBeUndefined();
+
+    expect(duplicate.sourceTurnId).toBe(sourceTurnId);
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      status: "running",
+      restartRecoveryDeliveryRunId: "active-recovery-run",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+    });
+  });
+
+  it("tombstones a redelivered source whose recovery claim is already terminal", async () => {
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:24680",
+      MessageSid: "redelivered-terminal-message",
+    } as const;
+    const sourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      conversationId: "channel:24680",
+      messageId: "redelivered-terminal-message",
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      status: "done",
+      restartRecoveryDeliveryRunId: "terminal-recovery-run",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+      restartRecoveryDeliveryContext: {
+        channel: "discord",
+        to: "channel:24680",
+      },
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const onAdopted = vi.fn();
+    const duplicate = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      sessionCtx,
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(duplicate.run()).resolves.toBeUndefined();
+
+    expect(duplicate.sourceTurnId).toBe(sourceTurnId);
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    const stored = await readStoredMainSession(storePath);
+    expect(stored).toMatchObject({
+      status: "done",
+      restartRecoveryTerminalRunIds: [sourceTurnId],
+    });
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+  });
+
+  it("atomically replaces a terminal stale recovery claim for the next run", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryContext: {
+        channel: "webchat",
+        to: "stale-client",
+      },
+      restartRecoveryDeliveryRunId: "stale-run",
+      restartRecoveryDeliverySourceRunId: "stale-control-ui-run",
+      sessionId: "session",
+      status: "done",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      accountId: "work",
+      conversationId: "channel:24680",
+      messageId: "1503645939964055592",
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const storedDuringRun = await readStoredMainSession(storePath);
+      expect(storedDuringRun.restartRecoveryDeliveryContext).toEqual({
+        channel: "discord",
+        to: "channel:24680",
+        accountId: "work",
+        threadId: "1503645939964055592",
+      });
+      expect(storedDuringRun.restartRecoveryDeliveryRunId).not.toBe("stale-run");
+      expect(storedDuringRun.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
+      expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBe(expectedSourceTurnId);
+      expect(storedDuringRun.restartRecoveryTerminalRunIds).toEqual(["stale-control-ui-run"]);
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        AccountId: "work",
+        MessageSid: "1503645939964055592",
+        MessageThreadId: "1503645939964055592",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "next durable discord request",
+    });
+    expect(sourceTurnId).toBe(expectedSourceTurnId);
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual([
+      "stale-control-ui-run",
+      expectedSourceTurnId,
+    ]);
+  });
+
+  it("admits the next channel turn after a failed recovery became terminal", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: true,
+      restartRecoveryTerminalRunIds: ["failed-source-turn"],
+      sessionId: "session",
+      status: "failed",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      accountId: "work",
+      conversationId: "channel:24680",
+      messageId: "1503645939964055593",
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        abortedLastRun: false,
+        restartRecoveryDeliverySourceRunId: expectedSourceTurnId,
+        restartRecoveryTerminalRunIds: ["failed-source-turn"],
+        status: "running",
+      });
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        AccountId: "work",
+        MessageSid: "1503645939964055593",
+        MessageThreadId: "1503645939964055593",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "request after failed recovery",
+    });
+
+    await run();
+
+    expect(sourceTurnId).toBe(expectedSourceTurnId);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: ["failed-source-turn", expectedSourceTurnId],
+    });
+  });
+
+  it("migrates a legacy transcript-only claim before preserving its pending final", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const storedDuringRun = await readStoredMainSession(storePath);
+      expect(storedDuringRun.restartRecoveryBeforeAgentReplyState).toBe("admitted");
+      expect(storedDuringRun.restartRecoveryDeliveryContext).toBeUndefined();
+      expect(storedDuringRun.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+      expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
+      expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBe("control-ui-run");
+      expect(storedDuringRun.restartRecoverySourceIngress).toBe("control-ui");
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      sourceTurnId: "channel-user:v1:different-from-gateway-run",
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(sessionStore.main.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryBeforeAgentReplyState).toBe("admitted");
+    expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.restartRecoverySourceIngress).toBe("control-ui");
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
+  it("advances a transcript-only admission to pending before running a discovered hook", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryBeforeAgentReplyState: "admitted",
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      restartRecoverySourceIngress: "control-ui",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockImplementation(async () => {
+      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
+        "pending",
+      );
+      expect((await readStoredMainSession(storePath)).restartRecoverySourceIngress).toBe(
+        "control-ui",
+      );
+      return undefined;
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const result = await runHookBackedEmbeddedAgent(params);
+      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
+        "continue",
+      );
+      return result;
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      sourceTurnId: "channel-user:v1:different-from-gateway-run",
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not rerun a hook after a durable continue checkpoint", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryBeforeAgentReplyState: "continue",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      restartRecoverySourceIngress: "control-ui",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        MessageSid: "msg",
+        OriginatingChannel: "webchat",
+        Provider: "webchat",
+      },
+      sourceTurnId: "channel-user:v1:different-from-gateway-run",
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
+
+    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not carry a stale hook checkpoint into a fresh claim", async () => {
+    const sessionEntry: SessionEntry = {
+      restartRecoveryBeforeAgentReplyState: "continue",
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockImplementation(async () => {
+      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
+        "pending",
+      );
+      return undefined;
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      sessionCtx: {
+        MessageSid: "fresh-message",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        Provider: "discord",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "fresh request",
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("adopts a transcript-only claim by its short id when the full id differs", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        MessageSid: "msg",
+        MessageSidFull: "provider-full-msg",
+        OriginatingChannel: "webchat",
+        Provider: "webchat",
+      },
+      sourceTurnId: "channel-user:v1:control-ui-run",
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "final" }));
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
+  it("rejects a transcript-only claim already aborted for restart", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: true,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const onAdopted = vi.fn();
+    const { run } = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
+
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      abortedLastRun: true,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      status: "running",
+    });
+  });
+
+  it("clears an adopted transcript-only claim after user cancellation", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect(replyOperation.abortByUser()).toBe(true);
+      const current = await readStoredMainSession(storePath);
+      await replaceSessionEntry(
+        { storePath, sessionKey: "main" },
+        { ...current, abortedLastRun: true, status: "killed", updatedAt: Date.now() },
+      );
+      throw new Error("cancelled");
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        replyOperation,
+        sessionCtx: {
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+        },
+        runOverrides: { messageProvider: "webchat" },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+
+      await run();
+
+      const stored = await readStoredMainSession(storePath);
+      expect(stored.abortedLastRun).toBe(true);
+      expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
+  it("fires onAdopted after restart recovery delivery context persist completes", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      accountId: "work",
+      conversationId: "channel:24680",
+      messageId: "1503645939964055592",
+    });
     const events: string[] = [];
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       const storedAtAdoption = await readStoredMainSession(storePath);
       expect(storedAtAdoption.restartRecoveryDeliveryContext).toEqual({
         channel: "discord",
@@ -875,6 +2126,27 @@ describe("runReplyAgent pending final delivery capture", () => {
         threadId: "1503645939964055592",
       });
       expect(typeof storedAtAdoption.restartRecoveryDeliveryRunId).toBe("string");
+      expect(storedAtAdoption.restartRecoveryDeliverySourceRunId).toBe(expectedSourceTurnId);
+      expect(storedAtAdoption.restartRecoveryRequesterAccountId).toBe("work");
+      expect(storedAtAdoption.restartRecoveryRequesterSenderId).toBe("discord-user");
+      expect(storedAtAdoption.restartRecoverySourceIngress).toBe("channel");
+      expect(storedAtAdoption.restartRecoverySourceReplyDeliveryMode).toBe("message_tool_only");
+      const transcript = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "main",
+        storePath,
+      });
+      expect(transcript).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.objectContaining({
+              role: "user",
+              content: "durable discord request",
+            }),
+          }),
+        ]),
+      );
       events.push("adopted");
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
@@ -885,13 +2157,17 @@ describe("runReplyAgent pending final delivery capture", () => {
       };
     });
 
-    const { run } = createMinimalRun({
-      opts: { onTurnAdopted },
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      opts: {
+        turnAdoptionLifecycle: { onAdopted },
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
         OriginatingTo: "channel:24680",
         AccountId: "work",
+        SenderId: "discord-user",
         MessageSid: "1503645939964055592",
         MessageThreadId: "1503645939964055592",
       },
@@ -901,14 +2177,261 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionKey: "main",
       storePath,
     });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "durable discord request",
+    });
+    expect(sourceTurnId).toBe(expectedSourceTurnId);
 
     await run();
 
-    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(onAdopted).toHaveBeenCalledOnce();
     expect(events).toEqual(["adopted", "agent-run"]);
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoverySourceReplyDeliveryMode,
+    ).toBeUndefined();
+    expect((await readStoredMainSession(storePath)).restartRecoverySourceIngress).toBeUndefined();
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoveryRequesterAccountId,
+    ).toBeUndefined();
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoveryRequesterSenderId,
+    ).toBeUndefined();
   });
 
-  it("fires onTurnAdopted for suppressed-delivery runs before the agent turn", async () => {
+  it("persists the channel adapter's narrowed message-action scope", async () => {
+    state.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: () => ({ sameChannelThreadRequired: true }),
+      },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const onAdopted = vi.fn(async () => {
+      expect(
+        (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
+      ).toBe(true);
+    });
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      opts: {
+        turnAdoptionLifecycle: { onAdopted },
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      sessionCtx: {
+        Provider: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        MessageSid: "1700000000.000001",
+        MessageThreadId: "1699999999.000001",
+      },
+      runOverrides: { messageProvider: "slack" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "durable slack request",
+    });
+
+    await run();
+
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
+    ).toBeUndefined();
+  });
+
+  it("runs a deferred before_agent_reply hook only after durable admission", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
+      provider: "discord",
+      conversationId: "channel:24680",
+      messageId: "discord-message-1",
+    });
+    const events: string[] = [];
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockImplementation(async (_event, context) => {
+      expect(context.sessionId).toBe("session");
+      const storedAtHook = await readStoredMainSession(storePath);
+      expect(storedAtHook.status).toBe("running");
+      expect(storedAtHook.restartRecoveryDeliverySourceRunId).toBe(expectedSourceTurnId);
+      expect(storedAtHook.restartRecoveryBeforeAgentReplyState).toBe("pending");
+      const transcript = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "main",
+        storePath,
+      });
+      expect(transcript.at(-1)).toMatchObject({
+        message: { role: "user", content: "hook-owned request" },
+      });
+      events.push("hook");
+      return { handled: true, reply: { text: "hook reply" } };
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      opts: {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {
+            events.push("adopted");
+          },
+        },
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "discord-message-1",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "hook-owned request",
+    });
+    expect(sourceTurnId).toBe(expectedSourceTurnId);
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "hook reply" }));
+
+    expect(events).toEqual(["adopted", "hook"]);
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      pendingFinalDelivery: { kind: "replayable", text: "hook reply" },
+      restartRecoveryBeforeAgentReplyState: "handled-reply",
+      restartRecoveryForceSafeTools: true,
+      restartRecoverySourceIngress: "channel",
+    });
+  });
+
+  it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "private hook reply" },
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "discord-message-silent-hook",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "private hook request",
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
+
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: [sourceTurnId],
+    });
+  });
+
+  it("checkpoints an unhandled before_agent_reply hook before the model starts", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const result = await runHookBackedEmbeddedAgent(params);
+      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
+        "continue",
+      );
+      return result;
+    });
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "discord-message-2",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "model-owned request",
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      pendingFinalDelivery: { kind: "transport-only" },
+      restartRecoveryBeforeAgentReplyState: "continue",
+      restartRecoverySourceIngress: "channel",
+    });
+  });
+
+  it("fires onAdopted for suppressed-delivery runs before the agent turn", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -916,7 +2439,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
     const events: string[] = [];
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       const storedAtAdoption = await readStoredMainSession(storePath);
       expect(storedAtAdoption.restartRecoveryDeliveryContext).toBeUndefined();
       expect(storedAtAdoption.restartRecoveryDeliveryRunId).toBeUndefined();
@@ -932,7 +2455,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     const { run } = createMinimalRun({
       opts: {
-        onTurnAdopted,
+        turnAdoptionLifecycle: { onAdopted },
         sourceReplyDeliveryMode: "message_tool_only",
       },
       sessionCtx: {
@@ -953,7 +2476,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
     await run();
 
-    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(onAdopted).toHaveBeenCalledOnce();
     expect(events).toEqual(["adopted", "agent-run"]);
   });
 
@@ -980,8 +2503,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     await run();
 
     const stored = await readStoredMainSession(storePath);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("Sent daily summary to channel.");
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "Sent daily summary to channel.",
+    });
   });
 
   it("persists heartbeat reply remainder as pending delivery when remainder exceeds ackMaxChars", async () => {
@@ -1011,11 +2536,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     const result = await run();
 
     const stored = await readStoredMainSession(storePath);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe(longRemainder);
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: longRemainder,
+    });
     const payload = Array.isArray(result) ? result[0] : result;
     expect(getReplyPayloadMetadata(payload ?? {})).toMatchObject({
-      pendingFinalDeliveryIntentId: stored.pendingFinalDeliveryIntentId,
+      pendingFinalDeliveryIntentId: stored.pendingFinalDelivery?.intentId,
       pendingFinalDeliveryRetryText: longRemainder,
     });
   });
@@ -1079,7 +2606,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const stored = requireStoredSessionEntry(storePath);
       expect(stored.pendingFinalDelivery).toBeUndefined();
-      expect(stored.pendingFinalDeliveryText).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1569,11 +3095,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(stored.modelOverrideSource, testCase.name).toBe("user");
       expect(stored.modelProvider, testCase.name).toBe("deepinfra");
       expect(stored.model, testCase.name).toBe("moonshotai/Kimi-K2.5");
-      expect(stored.fallbackNoticeSelectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
-      expect(stored.fallbackNoticeActiveModel, testCase.name).toBe(
+      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
+      expect(stored.fallbackNotice?.activeModel, testCase.name).toBe(
         "deepinfra/moonshotai/Kimi-K2.5",
       );
-      expect(stored.fallbackNoticeReason, testCase.name).toBe("rate limit");
+      expect(stored.fallbackNotice?.reason, testCase.name).toBe("rate limit");
       expect(
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
@@ -1959,17 +3485,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionEntry.providerOverride).toBeUndefined();
       expect(sessionEntry.modelOverride).toBeUndefined();
       expect(sessionEntry.modelOverrideSource).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+      expect(sessionEntry.fallbackNotice).toBeUndefined();
       const persistedSession = requireStoredSessionEntry(storePath);
       expect(persistedSession.modelProvider).toBe("openai");
       expect(persistedSession.model).toBe("gpt-5.5");
       expect(persistedSession.providerOverride).toBeUndefined();
       expect(persistedSession.modelOverride).toBeUndefined();
       expect(persistedSession.modelOverrideSource).toBeUndefined();
-      expect(persistedSession.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(persistedSession.fallbackNoticeActiveModel).toBeUndefined();
+      expect(persistedSession.fallbackNotice).toBeUndefined();
       const payloads = Array.isArray(res) ? res : res ? [res] : [];
       expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
       expect(payloads.some((payload) => payload.text?.includes("Usage:"))).toBe(false);
@@ -2038,9 +3561,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
     expect(sessionEntry.modelOverrideSource).toBeUndefined();
-    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-    expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+    expect(sessionEntry.fallbackNotice).toBeUndefined();
   });
 
   it("keeps fallback transition notices when block streaming has no final text", async () => {
@@ -2986,9 +4507,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const sessionEntry: SessionEntry = {
         sessionId: "session",
         updatedAt: Date.now(),
-        fallbackNoticeSelectedModel: "anthropic/claude",
-        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-        ...(testCase.existingReason ? { fallbackNoticeReason: testCase.existingReason } : {}),
+        fallbackNotice: {
+          kind: "active" as const,
+          selectedModel: "anthropic/claude",
+          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
+          ...(testCase.existingReason ? { reason: testCase.existingReason } : {}),
+        },
         modelProvider: "deepinfra",
         model: "moonshotai/Kimi-K2.5",
       };
@@ -3026,7 +4550,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         const res = await run();
         const firstText = Array.isArray(res) ? res[0]?.text : res?.text;
         expect(firstText).not.toContain("Model Fallback:");
-        expect(sessionEntry.fallbackNoticeReason).toBe(testCase.expectedReason);
+        expect(sessionEntry.fallbackNotice?.reason).toBe(testCase.expectedReason);
       } finally {
         fallbackSpy.mockRestore();
       }
@@ -3037,9 +4561,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-      fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-      fallbackNoticeReason: "selected model unavailable",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "anthropic/claude-opus-4-7",
+        activeModel: "claude-cli/claude-opus-4-7",
+        reason: "selected model unavailable",
+      },
     };
     const sessionStore = { main: sessionEntry };
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-cli-alias-"));
@@ -3065,24 +4592,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
       runOverrides: {
         provider: "anthropic",
         model: "claude-opus-4-7",
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       },
     });
     await run();
 
     const stored = requireStoredSessionEntry(storePath);
-    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-    expect(stored.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(stored.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionEntry.fallbackNotice).toBeUndefined();
+    expect(stored.fallbackNotice).toBeUndefined();
     expect(stored.modelProvider).toBe("claude-cli");
     expect(stored.model).toBe("claude-opus-4-7");
     expect(stored.totalTokens).toBe(36_000);
@@ -3108,7 +4625,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("fresh session or using a model with a larger context window");
     expect(payload.text).toContain("/new");
   });
 
@@ -3131,7 +4648,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("fresh session or using a model with a larger context window");
     expect(payload.text).toContain("/new");
   });
 
@@ -3171,3 +4688,4 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

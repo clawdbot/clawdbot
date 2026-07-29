@@ -5,10 +5,10 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 
-export type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
-export type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
+type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
+type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
 export type WorkspaceDirEntry = WorkspacePathStat & { name: string };
-export type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
+type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
 
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;

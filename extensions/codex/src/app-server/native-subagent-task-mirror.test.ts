@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   codexNativeSubagentRunId,
   CodexNativeSubagentTaskMirror,
-  type TaskLifecycleRuntime,
 } from "./native-subagent-task-mirror.js";
+
+type TaskLifecycleRuntime = ConstructorParameters<typeof CodexNativeSubagentTaskMirror>[1];
 
 function createRuntime() {
   return {

@@ -1,15 +1,15 @@
 // Gateway live agent probe helpers.
 // Builds prompts and verification helpers for live image and cron probe tests.
-import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { promisify } from "node:util";
+import fs from "node:fs";
+import path from "node:path";
 import {
   resolveExpiresAtMsFromDurationSeconds,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { runExec } from "../process/exec.js";
 
-const execFileAsync = promisify(execFile);
 const LIVE_CRON_PROBE_DELAY_SECONDS = 7 * 24 * 60 * 60;
 const OPENCLAW_CLI_GATEWAY_TIMEOUT_MS = 30_000;
 const OPENCLAW_CLI_CHILD_TIMEOUT_MS = OPENCLAW_CLI_GATEWAY_TIMEOUT_MS + 45_000;
@@ -34,6 +34,14 @@ type LiveCronProbeSpec = {
   at: string;
   argsJson: string;
 };
+
+/** Selects the packaged launcher when built, otherwise the canonical source runner. */
+export function resolveOpenClawCliProcessArgs(
+  args: readonly string[],
+  hasBuildOutput: boolean,
+): string[] {
+  return [hasBuildOutput ? "openclaw.mjs" : "scripts/run-node.mjs", ...args];
+}
 
 /** Return true for live agents that expose Claude-style MCP tool names. */
 export function isClaudeLikeLiveAgent(raw: string): boolean {
@@ -85,6 +93,8 @@ export function createLiveCronProbeSpec(
       name,
       schedule: { kind: "at", at },
       payload: { kind: "agentTurn", message },
+      // Live harnesses use synthetic channels that must not become announce targets.
+      delivery: { mode: "none" },
       sessionTarget: params.sessionKey ? `session:${params.sessionKey}` : "current",
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -149,12 +159,20 @@ export async function runOpenClawCliJson<T>(args: string[], env: NodeJS.ProcessE
   const cliArgs = args.includes("--timeout")
     ? args
     : [...args, "--timeout", String(OPENCLAW_CLI_GATEWAY_TIMEOUT_MS)];
-  const { stdout, stderr } = await execFileAsync(process.execPath, ["openclaw.mjs", ...cliArgs], {
-    cwd: process.cwd(),
-    env: childEnv,
-    timeout: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024,
-  });
+  const hasBuildOutput = ["entry.js", "entry.mjs"].some((entry) =>
+    fs.existsSync(path.join(process.cwd(), "dist", entry)),
+  );
+  const { stdout, stderr } = await runExec(
+    process.execPath,
+    resolveOpenClawCliProcessArgs(cliArgs, hasBuildOutput),
+    {
+      baseEnv: childEnv,
+      cwd: process.cwd(),
+      logOutput: false,
+      maxBuffer: 1024 * 1024,
+      timeoutMs: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
+    },
+  );
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error(

@@ -3,7 +3,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 
-export type ChannelInstallSpecs = {
+type ChannelInstallSpecs = {
   installSpec: string;
   recordSpec: string;
   fallbackSpec?: string;

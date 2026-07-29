@@ -1,6 +1,7 @@
 // Delivery preview tests cover dry-run delivery plan output for cron jobs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeCronJob } from "./delivery.test-helpers.js";
+import type { CronJob } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   resolveDeliveryTarget: vi.fn(),
@@ -10,7 +11,12 @@ vi.mock("./isolated-agent/delivery-target.js", () => ({
   resolveDeliveryTarget: mocks.resolveDeliveryTarget,
 }));
 
-const { resolveCronDeliveryPreview } = await import("./delivery-preview.js");
+const { resolveCronDeliveryPreviews } = await import("./delivery-preview.js");
+
+async function previewForJob(job: CronJob) {
+  const previews = await resolveCronDeliveryPreviews({ cfg: {} as never, jobs: [job] });
+  return previews[job.id]!;
+}
 
 describe("resolveCronDeliveryPreview", () => {
   beforeEach(() => {
@@ -31,10 +37,7 @@ describe("resolveCronDeliveryPreview", () => {
       delivery: undefined,
     });
 
-    const preview = await resolveCronDeliveryPreview({
-      cfg: {} as never,
-      job,
-    });
+    const preview = await previewForJob(job);
 
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},
@@ -59,10 +62,7 @@ describe("resolveCronDeliveryPreview", () => {
       sessionTarget: "isolated",
     });
 
-    const preview = await resolveCronDeliveryPreview({
-      cfg: {} as never,
-      job,
-    });
+    const preview = await previewForJob(job);
 
     expect(preview).toEqual({ label: "not requested", detail: "not requested" });
     expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
@@ -81,10 +81,7 @@ describe("resolveCronDeliveryPreview", () => {
       sessionTarget: "isolated",
     });
 
-    const preview = await resolveCronDeliveryPreview({
-      cfg: {} as never,
-      job,
-    });
+    const preview = await previewForJob(job);
 
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},
@@ -119,10 +116,7 @@ describe("resolveCronDeliveryPreview", () => {
       sessionTarget: "isolated",
     });
 
-    const preview = await resolveCronDeliveryPreview({
-      cfg: {} as never,
-      job,
-    });
+    const preview = await previewForJob(job);
 
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},

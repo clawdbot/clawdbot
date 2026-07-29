@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectDockerAttestationErrors,
   imageRefForDigest,
+  inspectRaw,
   parseArgs,
   parsePlatform,
 } from "../../scripts/verify-docker-attestations.mjs";
@@ -54,6 +55,32 @@ function createAttestation(
 }
 
 describe("verify-docker-attestations", () => {
+  it("bounds docker manifest inspection calls", () => {
+    const calls: unknown[] = [];
+    const imageRef = "ghcr.io/openclaw/openclaw:test";
+    const output = inspectRaw(imageRef, {
+      execFileSyncImpl(command: string, args: string[], options: unknown) {
+        calls.push({ args, command, options });
+        return "{}";
+      },
+    });
+
+    expect(output).toBe("{}");
+    expect(calls).toStrictEqual([
+      {
+        args: ["buildx", "imagetools", "inspect", "--raw", imageRef],
+        command: "docker",
+        options: {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 20 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 120_000,
+        },
+      },
+    ]);
+  });
+
   it("parses required platforms and image refs", () => {
     expect(
       parseArgs(["--platform", "linux/amd64", "--platform", "linux/arm64", "ghcr.io/openclaw/app"]),

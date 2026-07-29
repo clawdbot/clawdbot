@@ -8,13 +8,14 @@ import type {
   PluginRegistry,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
+import { getPluginRegistryState } from "./runtime-state.js";
 import { collectLivePluginRegistries } from "./runtime.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
 };
 
-export type HookRunnerGlobalState = {
+type HookRunnerGlobalState = {
   hookRunner: HookRunner | null;
   registry: TrustedPolicyHookRunnerRegistry | null;
 };
@@ -47,11 +48,15 @@ function collectHookRegistrySources(
     seen.add(registry);
     ordered.push(registry);
   };
-  // Precedence: the explicitly initialized registry wins so an SDK caller that
-  // initializes an isolated registry stays authoritative; in the gateway it is
-  // the same object as the active registry, so this just dedupes.
-  add(lastInitialized);
-  for (const registry of collectLivePluginRegistries()) {
+  const liveRegistries = collectLivePluginRegistries();
+  const initializedLiveRegistry = liveRegistries.some((registry) => registry === lastInitialized);
+  // SDK callers can initialize an isolated registry and expect it to stay
+  // authoritative. Runtime activations compose all live registries; owner
+  // selection below aligns same-plugin hooks with their tool registry.
+  if (!initializedLiveRegistry) {
+    add(lastInitialized);
+  }
+  for (const registry of liveRegistries) {
     add(registry);
   }
   return ordered;
@@ -84,6 +89,36 @@ function composeLiveHookRegistry(
     }
     return ids;
   });
+  const liveRegistries = collectLivePluginRegistries();
+  if (lastInitialized && !liveRegistries.includes(lastInitialized as PluginRegistry)) {
+    const isolatedSourceIndex = sources.indexOf(lastInitialized);
+    if (isolatedSourceIndex >= 0) {
+      for (const pluginId of expectDefined(
+        hookPluginIdsBySource[isolatedSourceIndex],
+        "isolated hook plugin ids",
+      )) {
+        claimOwner(pluginId, isolatedSourceIndex);
+      }
+    }
+  }
+  const claimToolOwners = (registry: PluginRegistry | null | undefined) => {
+    if (!registry) {
+      return;
+    }
+    const sourceIndex = sources.indexOf(registry);
+    if (sourceIndex < 0) {
+      return;
+    }
+    for (const tool of registry.tools) {
+      claimOwner(tool.pluginId, sourceIndex);
+    }
+  };
+  const runtimeState = getPluginRegistryState();
+  // Match tool resolution: an isolated initialized registry stays authoritative,
+  // then the pinned Gateway owner wins only for tools it actually registered,
+  // followed by the active registry for remaining tool owners.
+  claimToolOwners(runtimeState?.channel.pinned ? runtimeState.channel.registry : null);
+  claimToolOwners(runtimeState?.activeRegistry);
   // Prefer the highest-precedence source where the plugin loaded AND actually
   // contributes a hook, so a loaded-but-hookless record (failed/disabled scoped
   // reload, or a setup-runtime channel load) cannot shadow a lower-precedence

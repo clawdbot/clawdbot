@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -14,6 +15,9 @@ export type McpLoopbackRequestContext = {
   agentId?: string;
   sessionId?: string;
   runId?: string;
+  /** Server-selected roots for mediated coding tools in this CLI run. */
+  workspaceDir?: string;
+  cwd?: string;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;
@@ -27,6 +31,15 @@ export type McpLoopbackRequestContext = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
+  /**
+   * Per-run allowlist of gateway tool names for this grant. When set, the
+   * loopback surface lists and executes only these tools; CLI-side flags such
+   * as `--allowedTools` are advisory under bypass permission modes, so the
+   * grant is where restricted one-shot runs (e.g. active-memory recall) get
+   * hard enforcement. Unset keeps the full session-scoped surface.
+   */
+  toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
@@ -45,7 +58,7 @@ export type McpLoopbackRequestContext = {
   spawnedBy?: string;
 };
 
-export interface McpAttachGrant {
+interface McpAttachGrant {
   /** Opaque bearer presented as `Authorization: Bearer <token>`. */
   readonly token: string;
   /** The openclaw session this grant is bound to; tool scope is resolved for this key. */
@@ -56,7 +69,7 @@ export interface McpAttachGrant {
   readonly issuedAtMs: number;
 }
 
-export interface McpLoopbackClientGrant {
+interface McpLoopbackClientGrant {
   /** Opaque bearer presented as `Authorization: Bearer <token>`. */
   readonly token: string;
   /** Gateway-selected request context; child-process headers cannot widen it. */
@@ -122,6 +135,7 @@ export function revokeAttachGrant(token: string): boolean {
   return grantsByToken.delete(token);
 }
 
+/** Revokes every attach grant minted for one session. Returns the count removed. */
 export function revokeAttachGrantsForSession(sessionKey: string): number {
   const key = sessionKey.trim();
   let removed = 0;
@@ -134,7 +148,7 @@ export function revokeAttachGrantsForSession(sessionKey: string): number {
   return removed;
 }
 
-export function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
+function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
   let removed = 0;
   for (const [token, grant] of grantsByToken) {
     if (nowMs >= grant.expiresAtMs) {
@@ -143,14 +157,6 @@ export function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
     }
   }
   return removed;
-}
-
-export function attachGrantStoreSize(): number {
-  return grantsByToken.size;
-}
-
-export function resetAttachGrantsForTest(): void {
-  grantsByToken.clear();
 }
 
 export function mintMcpLoopbackClientGrant(params: {
@@ -244,12 +250,4 @@ export function revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken: strin
     }
   }
   return removed;
-}
-
-export function mcpLoopbackClientGrantStoreSize(): number {
-  return clientGrantsByToken.size;
-}
-
-export function resetMcpLoopbackClientGrantsForTest(): void {
-  clientGrantsByToken.clear();
 }

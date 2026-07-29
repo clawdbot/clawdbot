@@ -273,7 +273,7 @@ describe("Codex plugin inventory", () => {
     });
 
     expect(calls.slice(0, 2)).toStrictEqual([
-      { method: "plugin/list", params: { cwds: [] } },
+      { method: "plugin/list", params: {} },
       {
         method: "plugin/list",
         params: { cwds: [], marketplaceKinds: [CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME] },
@@ -308,7 +308,7 @@ describe("Codex plugin inventory", () => {
       },
     });
 
-    expect(calls).toStrictEqual([{ cwds: [] }]);
+    expect(calls).toStrictEqual([{}]);
   });
 
   it("fails closed before plugin/read when a workspace summary lacks remotePluginId", async () => {
@@ -429,7 +429,7 @@ describe("Codex plugin inventory", () => {
     });
 
     expect(calls).toStrictEqual([
-      { method: "plugin/list", params: { cwds: [] } },
+      { method: "plugin/list", params: {} },
       {
         method: "plugin/list",
         params: { cwds: [], marketplaceKinds: [CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME] },

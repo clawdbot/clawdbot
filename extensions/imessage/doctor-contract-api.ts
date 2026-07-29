@@ -4,11 +4,7 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  hasLegacyAccountStreamingAliases,
-  normalizeLegacyChannelAliases,
-  resolveLegacyAliasStreamingMode,
-} from "openclaw/plugin-sdk/runtime-doctor";
+import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Disabled `channels.imessage.catchup` blocks are retired. Enabled blocks stay
@@ -38,16 +34,10 @@ function imessageEntryHasRetiredCatchup(entry: unknown): boolean {
 
 // iMessage's nested streaming schema is delivery-only ({chunkMode, block}); it
 // has no preview mode, so only the delivery flat aliases are legal legacy input.
-function hasLegacyIMessageStreamingAliases(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    value.chunkMode !== undefined ||
-    value.blockStreaming !== undefined ||
-    value.blockStreamingCoalesce !== undefined
-  );
-}
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "imessage",
+  streaming: { defaultMode: "partial", deliveryOnly: true },
+});
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
@@ -57,18 +47,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'Run "openclaw doctor --fix" to remove disabled catchup blocks.',
     match: (value) => imessageEntryHasRetiredCatchup(value),
   },
-  {
-    path: ["channels", "imessage"],
-    message:
-      'channels.imessage.chunkMode, blockStreaming, and blockStreamingCoalesce are legacy; use channels.imessage.streaming.{chunkMode,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
-    match: hasLegacyIMessageStreamingAliases,
-  },
-  {
-    path: ["channels", "imessage", "accounts"],
-    message:
-      'channels.imessage.accounts.<id>.chunkMode, blockStreaming, and blockStreamingCoalesce are legacy; use channels.imessage.accounts.<id>.streaming.{chunkMode,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyIMessageStreamingAliases),
-  },
+  ...streamingAliasMigration.legacyConfigRules,
 ];
 
 export function normalizeCompatibilityConfig({
@@ -111,32 +90,15 @@ export function normalizeCompatibilityConfig({
     }
   }
 
-  // Only run the shared alias migration when the delivery flat aliases exist;
-  // iMessage has no streaming mode, so scalar `streaming` values are plain
-  // validation errors rather than migratable legacy shapes.
-  const hasStreamingAliases =
-    hasLegacyIMessageStreamingAliases(nextImessage) ||
-    hasLegacyAccountStreamingAliases(nextImessage.accounts, hasLegacyIMessageStreamingAliases);
-  if (hasStreamingAliases) {
-    const aliases = normalizeLegacyChannelAliases({
-      entry: nextImessage,
-      pathPrefix: "channels.imessage",
-      changes,
-      resolveStreamingOptions: (entry) => ({
-        resolvedMode: resolveLegacyAliasStreamingMode(entry, "partial"),
-      }),
-    });
-    nextImessage = aliases.entry;
-  }
-
+  const aliases = streamingAliasMigration.normalizeChannelConfig({
+    cfg:
+      nextImessage === imessage
+        ? cfg
+        : ({ ...cfg, channels: { ...channels, imessage: nextImessage } } as OpenClawConfig),
+    changes,
+  });
   if (changes.length === 0) {
     return { config: cfg, changes: [] };
   }
-  return {
-    config: {
-      ...cfg,
-      channels: { ...channels, imessage: nextImessage },
-    } as OpenClawConfig,
-    changes,
-  };
+  return { config: aliases.config, changes };
 }

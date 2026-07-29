@@ -7,6 +7,21 @@ import {
 } from "./canvas-render.ts";
 
 describe("extractCanvasFromText", () => {
+  it("preserves a valid pinned board widget identity", () => {
+    expect(
+      extractCanvasFromText(
+        JSON.stringify({
+          kind: "canvas",
+          view: {
+            id: "cv_status",
+            url: "/__openclaw__/canvas/documents/cv_status/index.html",
+            boardWidgetName: "release-status",
+          },
+        }),
+      ),
+    ).toMatchObject({ viewId: "cv_status", boardWidgetName: "release-status" });
+  });
+
   it("extracts safe MCP App preview metadata from tool details", () => {
     expect(
       extractCanvasFromDetails({
@@ -14,10 +29,29 @@ describe("extractCanvasFromText", () => {
           kind: "canvas",
           view: { id: "cv_app" },
           presentation: { target: "assistant_message", sandbox: "scripts" },
-          mcpApp: { viewId: "cv_app" },
+          mcpApp: {
+            viewId: "cv_app",
+            serverName: "demo",
+            toolName: "show",
+            uiResourceUri: "ui://demo/app",
+            toolCallId: "call-1",
+            originSessionKey: "agent:main:main",
+            resultMetaState: "unavailable",
+          },
         },
       }),
-    ).toMatchObject({ viewId: "cv_app", mcpApp: { viewId: "cv_app" } });
+    ).toMatchObject({
+      viewId: "cv_app",
+      mcpApp: {
+        viewId: "cv_app",
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolCallId: "call-1",
+        originSessionKey: "agent:main:main",
+        resultMetaState: "unavailable",
+      },
+    });
   });
 
   it("keeps MCP App previews opaque while preserving model-visible results", () => {

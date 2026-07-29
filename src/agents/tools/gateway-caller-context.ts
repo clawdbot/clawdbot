@@ -9,11 +9,24 @@ import type { AnyAgentTool } from "./common.js";
 type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
+  /** Host-signed capability for the scheduled run's existing self-management surface. */
+  cronSelfManagementJobId?: string;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+};
+
+type GatewayToolCallerSource = {
+  agentSessionKey?: string;
+  agentChannel?: string;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  agentTo?: string;
+  agentAccountId?: string;
+  currentThreadTs?: string;
+  agentThreadId?: string | number;
 };
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
@@ -33,6 +46,9 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: identity.agentId.trim(),
       sessionKey: identity.sessionKey.trim(),
+      ...(identity.cronSelfManagementJobId?.trim()
+        ? { cronSelfManagementJobId: identity.cronSelfManagementJobId.trim() }
+        : {}),
       ...(identity.turnSourceChannel?.trim()
         ? { turnSourceChannel: identity.turnSourceChannel.trim() }
         : {}),
@@ -65,4 +81,22 @@ export function wrapToolWithGatewayCallerIdentity(
   copyBeforeToolCallHookMarker(tool, wrapped);
   copyToolTerminalPresentation(tool, wrapped);
   return wrapped;
+}
+
+export function createGatewayToolCallerWrapper(
+  agentId: string | undefined,
+  source: GatewayToolCallerSource | undefined,
+): (tool: AnyAgentTool) => AnyAgentTool {
+  const identity =
+    agentId && source?.agentSessionKey?.trim()
+      ? {
+          agentId,
+          sessionKey: source.agentSessionKey.trim(),
+          turnSourceChannel: source.agentChannel,
+          turnSourceTo: source.currentMessagingTarget ?? source.currentChannelId ?? source.agentTo,
+          turnSourceAccountId: source.agentAccountId,
+          turnSourceThreadId: source.currentThreadTs ?? source.agentThreadId,
+        }
+      : undefined;
+  return (tool) => wrapToolWithGatewayCallerIdentity(tool, identity);
 }

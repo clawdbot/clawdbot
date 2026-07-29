@@ -44,6 +44,15 @@ runs:
             fetch "$@"
         }
 
+        echo "Base commit missing; fetching exact SHA before branch history."
+        if ! fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"; then
+          echo "::warning title=ensure-base-commit exact fetch failed::Failed to fetch exact base SHA $BASE_SHA"
+        fi
+        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+          echo "Resolved base commit after exact fetch: $BASE_SHA"
+          exit 0
+        fi
+
         for deepen_by in 25 100 300; do
           echo "Base commit missing; deepening $FETCH_REF by $deepen_by."
           if ! fetch_base_ref --no-tags --deepen="$deepen_by" origin -- "$FETCH_REF"; then
@@ -64,4 +73,5 @@ runs:
           exit 0
         fi
 
-        echo "Base commit still unavailable after fetch attempts: $BASE_SHA"
+        echo "::error title=ensure-base-commit missing base::Base commit still unavailable after fetch attempts: $BASE_SHA"
+        exit 1

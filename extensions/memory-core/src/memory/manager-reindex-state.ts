@@ -15,7 +15,10 @@ export type MemoryIndexMeta = {
   chunkOverlap: number;
   vectorDims?: number;
   ftsTokenizer?: string;
+  provenanceVersion?: number;
 };
+
+export const MEMORY_INDEX_PROVENANCE_VERSION = 1;
 
 export type MemoryIndexIdentityState =
   | {
@@ -124,23 +127,6 @@ export function resolveConfiguredScopeHash(params: {
   );
 }
 
-export function isMemoryIndexIdentityDirty(params: {
-  meta: MemoryIndexMeta | null;
-  provider: { id: string; model: string } | null;
-  providerKey?: string;
-  providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
-  providerKeyKnown?: boolean;
-  configuredSources: MemorySource[];
-  configuredScopeHash: string;
-  chunkTokens: number;
-  chunkOverlap: number;
-  vectorReady: boolean;
-  hasIndexedChunks?: boolean;
-  ftsTokenizer: string;
-}): boolean {
-  return resolveMemoryIndexIdentityState(params).status !== "valid";
-}
-
 export function resolveMemoryIndexIdentityState(params: {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model: string } | null;
@@ -158,6 +144,12 @@ export function resolveMemoryIndexIdentityState(params: {
   const { meta } = params;
   if (!meta) {
     return { status: "missing", reason: "index metadata is missing" };
+  }
+  if (meta.provenanceVersion !== MEMORY_INDEX_PROVENANCE_VERSION) {
+    return {
+      status: "mismatched",
+      reason: "index provenance classifier changed",
+    };
   }
   const expectedModel = params.provider?.model?.trim() || "fts-only";
   const matchingModelIdentities = [

@@ -21,6 +21,7 @@ export async function sendIMessageOutbound(params: {
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
+  conversationReadOrigin?: "delegated" | "direct-operator";
 }) {
   const send =
     resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
@@ -41,6 +42,7 @@ export async function sendIMessageOutbound(params: {
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,
+    conversationReadOrigin: params.conversationReadOrigin,
   });
   const meta = {
     ...(result as typeof result & { meta?: Record<string, unknown> }).meta,

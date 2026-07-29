@@ -1,6 +1,5 @@
 // Tests command gating rules for ownership, channel, and active session state.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import type { MsgContext } from "../templating.js";
@@ -127,8 +126,8 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../config/runtime-overrides.js", () => ({
   getConfigOverrides: getConfigOverridesMock,
   resetConfigOverrides: vi.fn(),
-  setConfigOverride: vi.fn(() => ({ ok: true })),
-  unsetConfigOverride: vi.fn(() => ({ ok: true, removed: true })),
+  setConfigOverride: vi.fn((pathRaw: string) => ({ ok: true, value: pathRaw.split(".") })),
+  unsetConfigOverride: vi.fn(() => ({ ok: true, value: true })),
 }));
 
 vi.mock("../../config/runtime-schema.js", async () => {
@@ -619,18 +618,6 @@ describe("command gating", () => {
       shouldContinue: false,
       reply: { text: "You are not authorized to use this command." },
     });
-  });
-
-  it("ignores inherited command flags", () => {
-    const inheritedCommands = Object.create({
-      bash: true,
-      config: true,
-      debug: true,
-    }) as Record<string, unknown>;
-    const cfg = { commands: inheritedCommands as never } as OpenClawConfig;
-    expect(isCommandFlagEnabled(cfg, "bash")).toBe(false);
-    expect(isCommandFlagEnabled(cfg, "config")).toBe(false);
-    expect(isCommandFlagEnabled(cfg, "debug")).toBe(false);
   });
 
   it("blocks disallowed /config set writes", async () => {

@@ -1,7 +1,10 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 // Msteams plugin module implements reply dispatcher behavior.
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -38,8 +41,6 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
-
-export { pickInformativeStatusText } from "./reply-stream-controller.js";
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
@@ -292,13 +293,9 @@ export function createMSTeamsReplyDispatcher(params: {
     }
   };
 
-  const {
-    dispatcher,
-    replyOptions,
-    markDispatchIdle: baseMarkDispatchIdle,
-  } = core.channel.reply.createReplyDispatcherWithTyping({
+  const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     ...replyPipeline,
-    humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+    humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
       await streamController.onReplyStart();
       // Always start the typing keepalive loop when typing is enabled and
@@ -313,6 +310,8 @@ export function createMSTeamsReplyDispatcher(params: {
       }
     },
     typingCallbacks,
+  };
+  const delivery: ChannelInboundTurnPlan["delivery"] = {
     deliver: async (payload) => {
       const preparedPayload = streamController.preparePayload(payload);
       if (!preparedPayload) {
@@ -341,9 +340,9 @@ export function createMSTeamsReplyDispatcher(params: {
         hint,
       });
     },
-  });
+  };
 
-  const markDispatchIdle = (): Promise<void> => {
+  const settleDelivery = (): Promise<void> => {
     return flushPendingMessages()
       .catch((err: unknown) => {
         const errMsg = formatUnknownError(err);
@@ -365,9 +364,6 @@ export function createMSTeamsReplyDispatcher(params: {
           queueReplyPayload(fallbackPayload);
           await flushPendingMessages();
         }
-      })
-      .finally(() => {
-        baseMarkDispatchIdle();
       });
   };
 
@@ -461,20 +457,9 @@ export function createMSTeamsReplyDispatcher(params: {
           if (payload?.phase !== "update") {
             return;
           }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.explanation === "string"
-                ? { explanation: payload.explanation }
-                : {}),
-              ...(Array.isArray(payload?.steps) &&
-              payload.steps.every((s: unknown) => typeof s === "string")
-                ? { steps: payload.steps }
-                : {}),
-            }),
-          );
+          await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.steps), {
+            explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
+          });
         },
         onApprovalEvent: async (payload: PipelinePayload) => {
           if (payload?.phase !== "requested") {
@@ -544,9 +529,12 @@ export function createMSTeamsReplyDispatcher(params: {
     : {};
 
   return {
-    dispatcher,
+    dispatcherOptions: {
+      ...dispatcherOptions,
+      onSettled: settleDelivery,
+    },
+    delivery,
     replyOptions: {
-      ...replyOptions,
       ...(streamController.hasStream()
         ? {
             onPartialReply: (payload: { text?: string }) =>
@@ -567,6 +555,5 @@ export function createMSTeamsReplyDispatcher(params: {
       disableBlockStreaming: blockStreamingResolved == null ? undefined : !blockStreamingResolved,
       onModelSelected,
     },
-    markDispatchIdle,
   };
 }

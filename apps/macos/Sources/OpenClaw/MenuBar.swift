@@ -17,6 +17,7 @@ struct OpenClawApp: App {
     private let controlChannel = ControlChannel.shared
     private let activityStore = WorkActivityStore.shared
     @State private var statusItem: NSStatusItem?
+    @State private var statusItemMouseRouter = StatusItemMouseRouter()
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
     @State private var tailscaleService = TailscaleService.shared
@@ -78,11 +79,6 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.controlChannel.state) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
-            if self.controlChannel.state == .connected {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
-                }
-            }
         }
         .onChange(of: self.gatewayManager.status) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
@@ -92,7 +88,9 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            if AppLaunchPresentationPolicy.current.allowsAutomaticPresentation {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            }
             BrowserProfileImportModel.shared.handleConnectionModeChange()
         }
 
@@ -101,15 +99,29 @@ struct OpenClawApp: App {
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
                 .environment(self.tailscaleService)
         }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Gateway Window…") {
+                    WebChatManager.shared.newGatewayWindow()
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
+                Button("New Thread") {
+                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
                     self.openWindow(id: SettingsWindowOpener.windowID)
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Back") {
@@ -121,6 +133,13 @@ struct OpenClawApp: App {
                     DashboardManager.shared.navigateForward()
                 }
                 .keyboardShortcut("]", modifiers: .command)
+
+                Divider()
+
+                Button("Command Palette…") {
+                    DashboardManager.shared.dispatchNativeCommand(.commandPalette)
+                }
+                .keyboardShortcut("k", modifiers: .command)
             }
         }
         .onChange(of: self.isMenuPresented) { _, _ in
@@ -176,11 +195,6 @@ struct OpenClawApp: App {
 
     @MainActor
     private func installStatusItemMouseHandler(for item: NSStatusItem) {
-        guard let button = item.button else { return }
-        if button.subviews.contains(where: { $0 is StatusItemMouseHandlerView }) {
-            return
-        }
-
         WebChatManager.shared.onPanelVisibilityChanged = { [self] visible in
             self.isPanelVisible = visible
             self.updateStatusHighlight()
@@ -191,31 +205,23 @@ struct OpenClawApp: App {
         }
         CanvasManager.shared.defaultAnchorProvider = { [self] in self.statusButtonScreenFrame() }
 
-        let handler = StatusItemMouseHandlerView()
-        handler.translatesAutoresizingMaskIntoConstraints = false
-        handler.onLeftClick = { [self] in
-            HoverHUDController.shared.dismiss()
-            self.openDashboardWindow()
-        }
-        handler.onRightClick = { [self] in
-            HoverHUDController.shared.dismiss()
-            WebChatManager.shared.closePanel()
-            self.isMenuPresented = true
-            self.updateStatusHighlight()
-        }
-        handler.onHoverChanged = { [self] inside in
-            HoverHUDController.shared.statusItemHoverChanged(
-                inside: inside,
-                anchorProvider: { [self] in self.statusButtonScreenFrame() })
-        }
-
-        button.addSubview(handler)
-        NSLayoutConstraint.activate([
-            handler.leadingAnchor.constraint(equalTo: button.leadingAnchor),
-            handler.trailingAnchor.constraint(equalTo: button.trailingAnchor),
-            handler.topAnchor.constraint(equalTo: button.topAnchor),
-            handler.bottomAnchor.constraint(equalTo: button.bottomAnchor),
-        ])
+        self.statusItemMouseRouter.install(
+            on: item,
+            onLeftClick: { [self] in
+                HoverHUDController.shared.dismiss()
+                self.openDashboardWindow()
+            },
+            onRightClick: { [self] in
+                HoverHUDController.shared.dismiss()
+                WebChatManager.shared.closePanel()
+                self.isMenuPresented = true
+                self.updateStatusHighlight()
+            },
+            onHoverChanged: { [self] inside in
+                HoverHUDController.shared.statusItemHoverChanged(
+                    inside: inside,
+                    anchorProvider: { [self] in self.statusButtonScreenFrame() })
+            })
     }
 
     @MainActor
@@ -247,29 +253,133 @@ struct OpenClawApp: App {
     }
 }
 
-/// Transparent overlay that intercepts clicks without stealing MenuBarExtra ownership.
-private final class StatusItemMouseHandlerView: NSView {
-    var onLeftClick: (() -> Void)?
-    var onRightClick: (() -> Void)?
-    var onHoverChanged: ((Bool) -> Void)?
-    private var tracking: NSTrackingArea?
+/// Routes status-item clicks before AppKit starts the menu's nested tracking loop.
+/// A label subview is not durable because SwiftUI replaces it when `MenuBarExtra` redraws.
+@MainActor
+final class StatusItemMouseRouter: NSResponder {
+    typealias EventMonitorHandler = (NSEvent) -> NSEvent?
+    typealias EventMonitorInstaller = (NSEvent.EventTypeMask, @escaping EventMonitorHandler) -> Any?
+    typealias EventMonitorRemover = (Any) -> Void
 
-    override func mouseDown(with event: NSEvent) {
-        if let onLeftClick {
-            onLeftClick()
-        } else {
-            super.mouseDown(with: event)
+    private weak var button: NSView?
+    private var eventMonitor: Any?
+    private var trackingArea: NSTrackingArea?
+    private var onLeftClick: (() -> Void)?
+    private var onRightClick: (() -> Void)?
+    private var onHoverChanged: ((Bool) -> Void)?
+    private let eventMonitorInstaller: EventMonitorInstaller
+    private let eventMonitorRemover: EventMonitorRemover
+
+    init(
+        eventMonitorInstaller: @escaping EventMonitorInstaller = { mask, handler in
+            NSEvent.addLocalMonitorForEvents(matching: mask, handler: handler)
+        },
+        eventMonitorRemover: @escaping EventMonitorRemover = { monitor in
+            NSEvent.removeMonitor(monitor)
+        })
+    {
+        self.eventMonitorInstaller = eventMonitorInstaller
+        self.eventMonitorRemover = eventMonitorRemover
+        super.init()
+    }
+
+    required init?(coder: NSCoder) {
+        self.eventMonitorInstaller = { mask, handler in
+            NSEvent.addLocalMonitorForEvents(matching: mask, handler: handler)
+        }
+        self.eventMonitorRemover = { monitor in
+            NSEvent.removeMonitor(monitor)
+        }
+        super.init(coder: coder)
+    }
+
+    func install(
+        on item: NSStatusItem,
+        onLeftClick: @escaping () -> Void,
+        onRightClick: @escaping () -> Void,
+        onHoverChanged: @escaping (Bool) -> Void)
+    {
+        guard let button = item.button else { return }
+        self.install(
+            on: button,
+            onLeftClick: onLeftClick,
+            onRightClick: onRightClick,
+            onHoverChanged: onHoverChanged)
+    }
+
+    func install(
+        on button: NSView,
+        onLeftClick: @escaping () -> Void,
+        onRightClick: @escaping () -> Void,
+        onHoverChanged: @escaping (Bool) -> Void)
+    {
+        self.onLeftClick = onLeftClick
+        self.onRightClick = onRightClick
+        self.onHoverChanged = onHoverChanged
+        self.track(button)
+
+        guard self.eventMonitor == nil else { return }
+        self.eventMonitor = Self.installMonitor(using: self.eventMonitorInstaller) { [weak self] event in
+            guard let self else { return event }
+            return self.route(event)
         }
     }
 
-    override func rightMouseDown(with _: NSEvent) {
-        self.onRightClick?()
-        // Do not call super; menu will be driven by isMenuPresented binding.
+    func route(_ event: NSEvent) -> NSEvent? {
+        Self.route(
+            event,
+            hitsTarget: self.button.map { Self.contains(event, in: $0) } ?? false,
+            onLeftClick: { self.onLeftClick?() },
+            onRightClick: { self.onRightClick?() })
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        TrackingAreaSupport.resetMouseTracking(on: self, tracking: &self.tracking, owner: self)
+    static func installMonitor(
+        using installer: EventMonitorInstaller,
+        handler: @escaping EventMonitorHandler) -> Any?
+    {
+        installer([.leftMouseDown, .rightMouseDown]) { event in
+            handler(event)
+        }
+    }
+
+    static func route(
+        _ event: NSEvent,
+        hitsTarget: Bool,
+        onLeftClick: () -> Void,
+        onRightClick: () -> Void) -> NSEvent?
+    {
+        guard hitsTarget else { return event }
+        switch event.type {
+        case .leftMouseDown:
+            onLeftClick()
+            return nil
+        case .rightMouseDown:
+            onRightClick()
+            return nil
+        default:
+            return event
+        }
+    }
+
+    private func track(_ button: NSView) {
+        guard self.button !== button else { return }
+        if let previousButton = self.button, let trackingArea {
+            previousButton.removeTrackingArea(trackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: button.bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil)
+        button.addTrackingArea(trackingArea)
+        self.button = button
+        self.trackingArea = trackingArea
+    }
+
+    private static func contains(_ event: NSEvent, in button: NSView) -> Bool {
+        guard let window = button.window, event.windowNumber == window.windowNumber else { return false }
+        let point = button.convert(event.locationInWindow, from: nil)
+        return button.bounds.contains(point)
     }
 
     override func mouseEntered(with _: NSEvent) {
@@ -278,6 +388,12 @@ private final class StatusItemMouseHandlerView: NSView {
 
     override func mouseExited(with _: NSEvent) {
         self.onHoverChanged?(false)
+    }
+
+    @MainActor deinit {
+        if let eventMonitor {
+            self.eventMonitorRemover(eventMonitor)
+        }
     }
 }
 
@@ -396,8 +512,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_: Notification) {
-        if self.isDuplicateInstance() {
-            NSWorkspace.shared.open(Self.dashboardURL)
+        #if DEBUG
+        if CommandLine.arguments.contains("--swarm-chat-fixture") {
+            AppActivationPolicy.apply(showDockIcon: true)
+            WebChatManager.shared.showSwarmFixture()
+            return
+        }
+        #endif
+        let environment = ProcessInfo.processInfo.environment
+        let launchPolicy = AppLaunchPresentationPolicy.current
+        let hasReplacementHandoff = ApplicationRelocator.hasReplacementHandoffMetadata(
+            environment: environment)
+        let isReplacementHandoff = ApplicationRelocator.acceptReplacementHandoff(
+            environment: environment)
+        if hasReplacementHandoff, !isReplacementHandoff {
+            NSApp.terminate(nil)
+            return
+        }
+        // Only a child whose signed parent and inherited readiness pipe authenticate
+        // may overlap the old process during replacement handoff.
+        if !isReplacementHandoff, self.isDuplicateInstance() {
+            if launchPolicy.allowsAutomaticPresentation {
+                NSWorkspace.shared.open(Self.dashboardURL)
+            }
             NSApp.terminate(nil)
             return
         }
@@ -421,7 +558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppActivationPolicy.apply(showDockIcon: state?.showDockIcon ?? false)
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
-            if !shouldWaitForConnection {
+            if !shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation {
                 Task { @MainActor in
                     await self.scheduleFirstRunOnboardingIfNeeded(gatewayConnected: false)
                 }
@@ -435,7 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ConnectionModeCoordinator.shared.apply(
                     mode: state.connectionMode,
                     paused: state.isPaused)
-                guard shouldWaitForConnection else { return }
+                guard shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation else { return }
                 await self.scheduleFirstRunOnboardingIfNeeded(
                     gatewayConnected: ControlChannel.shared.state == .connected)
             }
@@ -447,34 +584,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExecApprovalsGatewayPrompter.shared.start()
         MacNodeModeCoordinator.shared.start()
         VoiceWakeGlobalSettingsSync.shared.start()
+        QuickChatController.shared.start()
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+        AppStateStore.shared.applyPeekabooBridgeHostState()
+        if launchPolicy.allowsAutomaticPresentation {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                if !PostUpdateController.shared.startIfNeeded() {
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+                }
+            }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            DashboardManager.shared.preloadIfConfigured()
         }
 
         #if DEBUG
         // Screenshot/demo helper: show the pairing panel with sample requests.
-        if ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1" {
+        if launchPolicy.allowsAutomaticPresentation,
+           ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1"
+        {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 DebugActions.showPairingPanelDemo()
             }
         }
         #endif
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
-        if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
+        if launchPolicy.shouldAutoOpenChat(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
             Task { @MainActor in
                 let sessionKey = await WebChatManager.shared.preferredSessionKey()
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
-        if CommandLine.arguments.contains("--dashboard") {
+        if launchPolicy.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
             Task { @MainActor in
                 if DashboardManager.shared.showConfiguredWindowIfPossible() {
@@ -490,6 +635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        QuickChatController.shared.stop()
         PresenceReporter.shared.stop()
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
@@ -543,14 +689,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func shouldOpenDashboardInsteadOfOnboarding(
         connectionMode: AppState.ConnectionMode,
         onboardingSeen: Bool,
-        crestodianResumePending: Bool,
+        systemAgentResumePending: Bool,
         gatewayConnected: Bool,
         configuredInferenceModel: String?) -> Bool
     {
         let model = configuredInferenceModel?.trimmingCharacters(in: .whitespacesAndNewlines)
         return connectionMode != .unconfigured &&
             !onboardingSeen &&
-            !crestodianResumePending &&
+            !systemAgentResumePending &&
             gatewayConnected &&
             model?.isEmpty == false
     }
@@ -583,7 +729,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) async {
         let connectionMode = AppStateStore.shared.connectionMode
-        let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+        let expectedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
         var configuredInferenceModel: String?
         if connectionMode != .unconfigured,
            !AppStateStore.shared.onboardingSeen,
@@ -594,7 +740,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             // Bind inference discovery to the connected route. A socket without a
-            // default-agent model cannot run Crestodian and must stay in onboarding.
+            // default-agent model cannot run OpenClaw and must stay in onboarding.
             do {
                 configuredInferenceModel = try await GatewayConnection.shared.configuredInferenceModel(
                     ifCurrentRoute: route)
@@ -605,7 +751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let gatewayRouteIsCurrent = await GatewayConnection.shared.isCurrentRoute(route)
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            let currentRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
             guard Self.isCurrentFirstRunInferenceProbe(
                 expectedConnectionMode: connectionMode,
                 currentConnectionMode: AppStateStore.shared.connectionMode,
@@ -618,11 +764,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         let onboardingSeen = AppStateStore.shared.onboardingSeen
-        let crestodianResumePending = OnboardingCrestodianResumeStore.isPending(for: expectedRouteIdentity)
+        let systemAgentResumePending = OnboardingSystemAgentResumeStore.isPending(for: expectedRouteIdentity)
         let shouldOpenDashboard = Self.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: connectionMode,
             onboardingSeen: onboardingSeen,
-            crestodianResumePending: crestodianResumePending,
+            systemAgentResumePending: systemAgentResumePending,
             gatewayConnected: gatewayConnected,
             configuredInferenceModel: configuredInferenceModel)
         if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
@@ -641,7 +787,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func scheduleFirstRunOnboardingRecovery() {
         self.scheduleFirstRunOnboardingPresentation(
             expectedConnectionMode: AppStateStore.shared.connectionMode,
-            expectedRouteIdentity: OnboardingCrestodianResumeStore.selectedRouteIdentity())
+            expectedRouteIdentity: OnboardingSystemAgentResumeStore.selectedRouteIdentity())
     }
 
     private func scheduleFirstRunOnboardingPresentation(
@@ -652,7 +798,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            let currentRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
             guard Self.shouldPresentScheduledFirstRunOnboarding(
                 expectedConnectionMode: expectedConnectionMode,
                 currentConnectionMode: AppStateStore.shared.connectionMode,
@@ -763,6 +909,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         self.updateStatus.isUpdateReady = false
     }
 
+    // periphery:ignore - Sparkle invokes this optional Objective-C delegate callback dynamically.
     func updater(
         _: SPUUpdater,
         userDidMakeChoice choice: SPUUserUpdateChoice,
@@ -792,6 +939,13 @@ func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<Str
 extension SparkleUpdaterController: SPUUpdaterDelegate {
     func allowedChannels(for _: SPUUpdater) -> Set<String> {
         allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+    }
+
+    func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        guard let currentVersion = GatewayEnvironment.appVersionString() else { return }
+        PostAppUpdateReceiptStore.record(
+            fromVersion: currentVersion,
+            toVersion: item.displayVersionString)
     }
 }
 

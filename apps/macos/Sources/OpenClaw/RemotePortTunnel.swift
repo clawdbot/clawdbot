@@ -22,6 +22,7 @@ final class RemotePortTunnel: @unchecked Sendable {
     let process: Process
     let localPort: UInt16?
     private let stderrHandle: FileHandle?
+    private let guardianReceipt: PortGuardian.Record
 
     private final class StderrCapture: @unchecked Sendable {
         private let lock = NSLock()
@@ -49,32 +50,36 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
     }
 
-    private init(process: Process, localPort: UInt16?, stderrHandle: FileHandle?) {
+    private init(
+        process: Process,
+        localPort: UInt16?,
+        stderrHandle: FileHandle?,
+        guardianReceipt: PortGuardian.Record)
+    {
         self.process = process
         self.localPort = localPort
         self.stderrHandle = stderrHandle
+        self.guardianReceipt = guardianReceipt
     }
 
     deinit {
-        self.teardown(waitUntilExit: false)
+        Self.cleanupStderr(self.stderrHandle)
+        let receipt = self.guardianReceipt
+        guard self.process.isRunning else {
+            Task { await PortGuardian.shared.removeRecord(receipt) }
+            return
+        }
+        // deinit cannot wait. Leave the receipt durable until a later sweep proves
+        // the child exited; deleting it after TERM alone can orphan a resistant SSH.
+        Task { await PortGuardian.shared.relinquishRecord(receipt) }
+        self.process.terminate()
     }
 
     func terminate() {
-        self.teardown(waitUntilExit: true)
-    }
-
-    /// deinit cannot block on waitUntilExit; explicit terminate() must, so callers
-    /// can rebind the tunnel's local port immediately after it returns.
-    private func teardown(waitUntilExit: Bool) {
+        Self.terminateAndWait(self.process)
         Self.cleanupStderr(self.stderrHandle)
-        let pid = self.process.processIdentifier
-        if self.process.isRunning {
-            self.process.terminate()
-            if waitUntilExit {
-                self.process.waitUntilExit()
-            }
-        }
-        Task { await PortGuardian.shared.removeRecord(pid: pid) }
+        let receipt = self.guardianReceipt
+        Task { await PortGuardian.shared.removeRecord(receipt) }
     }
 
     static func configuration(remotePort: Int) throws -> Configuration {
@@ -155,23 +160,81 @@ final class RemotePortTunnel: @unchecked Sendable {
             Self.cleanupStderr(stderrHandle)
         }
 
-        try process.run()
+        let spawnPreparation: PortGuardian.SpawnPreparation
+        do {
+            // Legacy reconciliation can inspect many live processes. Complete it
+            // before spawn so a crash during migration cannot orphan this SSH child.
+            spawnPreparation = try await PortGuardian.shared.prepareForTunnelSpawn()
+        } catch {
+            Self.cleanupStderr(stderrHandle)
+            throw NSError(
+                domain: "RemotePortTunnel",
+                code: 5,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Could not prepare SSH tunnel ownership: \(error.localizedDescription)",
+                    NSUnderlyingErrorKey: error,
+                ])
+        }
 
-        try await Self.waitForListener(
+        do {
+            try process.run()
+        } catch {
+            await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
+            Self.cleanupStderr(stderrHandle)
+            throw error
+        }
+
+        let receipt: PortGuardian.Record
+        do {
+            // Persist immediately after spawn. Waiting for listener readiness first leaves
+            // a crash window where a live SSH process has no durable reap receipt.
+            receipt = try await PortGuardian.shared.record(
+                port: Int(localPort),
+                pid: process.processIdentifier,
+                command: process.executableURL?.path ?? "ssh",
+                mode: .remote,
+                preparation: spawnPreparation)
+        } catch {
+            Self.terminateAndWait(process)
+            // Keep the reservation exclusive until this exact child is reaped.
+            // Only then may another operation migrate or open the ledger.
+            await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
+            Self.cleanupStderr(stderrHandle)
+            throw NSError(
+                domain: "RemotePortTunnel",
+                code: 5,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Could not persist SSH tunnel ownership: \(error.localizedDescription)",
+                    NSUnderlyingErrorKey: error,
+                ])
+        }
+
+        do {
+            try await Self.waitForListener(
+                process: process,
+                localPort: localPort,
+                stderrHandle: stderrHandle,
+                stderrCapture: stderrCapture)
+        } catch {
+            Self.terminateAndWait(process)
+            Self.cleanupStderr(stderrHandle)
+            await PortGuardian.shared.removeRecord(receipt)
+            throw error
+        }
+
+        return RemotePortTunnel(
             process: process,
             localPort: localPort,
             stderrHandle: stderrHandle,
-            stderrCapture: stderrCapture)
+            guardianReceipt: receipt)
+    }
 
-        // Record before returning: a crash inside this window would otherwise leave
-        // an untracked (unreapable) orphan.
-        await PortGuardian.shared.record(
-            port: Int(localPort),
-            pid: process.processIdentifier,
-            command: process.executableURL?.path ?? "ssh",
-            mode: .remote)
-
-        return RemotePortTunnel(process: process, localPort: localPort, stderrHandle: stderrHandle)
+    private static func terminateAndWait(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        // waitUntilExit reaps this exact child before its pid can be reused. A
+        // delayed raw kill(pid) could otherwise signal an unrelated process.
+        process.waitUntilExit()
     }
 
     private static func waitForListener(
@@ -193,13 +256,11 @@ final class RemotePortTunnel: @unchecked Sendable {
             do {
                 try await Task.sleep(nanoseconds: 100_000_000)
             } catch {
-                process.terminate()
                 throw error
             }
         } while Date() < deadline
 
-        process.terminate()
-        let stderr = Self.drainStderr(stderrHandle, captured: stderrCapture.snapshot())
+        let stderr = stderrCapture.snapshot()
         let msg = stderr.isEmpty ? "ssh tunnel did not open local port \(localPort)" : "ssh tunnel failed: \(stderr)"
         throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
     }
@@ -433,6 +494,10 @@ final class RemotePortTunnel: @unchecked Sendable {
 
     static func _testDrainStderr(_ handle: FileHandle) -> String {
         self.drainStderr(handle, captured: "")
+    }
+
+    static func _testTerminateAndWait(_ process: Process) {
+        self.terminateAndWait(process)
     }
 
     #endif

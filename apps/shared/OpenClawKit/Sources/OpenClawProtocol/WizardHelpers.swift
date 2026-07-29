@@ -39,16 +39,6 @@ public func parseWizardDeviceCode(
         message: raw?["message"]?.value as? String)
 }
 
-public func decodeWizardStep(_ raw: [String: AnyCodable]?) -> WizardStep? {
-    guard let raw else { return nil }
-    do {
-        let data = try JSONEncoder().encode(raw)
-        return try JSONDecoder().decode(WizardStep.self, from: data)
-    } catch {
-        return nil
-    }
-}
-
 public func parseWizardOptions(_ raw: [[String: AnyCodable]]?) -> [WizardOption] {
     guard let raw else { return [] }
     return raw.map { entry in
@@ -65,6 +55,13 @@ public func wizardStatusString(_ value: AnyCodable?) -> String? {
 
 public func wizardStepType(_ step: WizardStep) -> String {
     (step.type.value as? String) ?? ""
+}
+
+/// `"gateway"` marks a step the Gateway runs itself (download/install progress).
+/// Those steps carry no answer, so clients must poll for the next frame instead
+/// of waiting for input that will never come.
+public func wizardStepExecutor(_ step: WizardStep) -> String {
+    (step.executor?.value as? String) ?? ""
 }
 
 public func anyCodableString(_ value: AnyCodable?) -> String {

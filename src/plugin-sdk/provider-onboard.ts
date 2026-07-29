@@ -656,7 +656,7 @@ export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params
   });
 }
 
-/** Ensure static model allowlists include a provider model ref after onboarding. */
+/** Ensure static per-model config includes a provider model ref after onboarding. */
 export function ensureModelAllowlistEntry(params: {
   cfg: OpenClawConfig;
   modelRef: string;

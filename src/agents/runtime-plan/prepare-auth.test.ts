@@ -8,9 +8,20 @@ import {
   agentRuntimeAuthPlanMatchesTarget,
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
-  prepareAgentRuntimeAuthPlan,
   preparedAgentRuntimeProfileAttemptHasCandidate,
 } from "./prepare-auth.js";
+
+// This suite owns generic auth planning. Provider-hook behavior has dedicated
+// coverage; keep those runtimes out of this focused planner test.
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveProviderSyntheticAuthWithPlugin: () => undefined,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: () => undefined,
+}));
+
+function prepareAgentRuntimeAuthPlan(params: Parameters<typeof prepareAgentRuntimeAuth>[0]) {
+  return prepareAgentRuntimeAuth(params).plan;
+}
 
 function authStore(
   profiles: AuthProfileStore["profiles"],
@@ -1442,6 +1453,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       cfg: config,
       profileId: profileAttempt?.profileId,
       allowAuthProfileFallback: profileAttempt?.allowAuthProfileFallback,
+      lockedProfile: true,
       store,
     });
 
@@ -2047,3 +2059,4 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -37,23 +37,23 @@ struct TalkRuntimeIssue: Equatable {
 
     var displayMessage: String {
         if !self.message.isEmpty { return self.message }
-        return "Realtime voice did not start."
+        return String(localized: "Realtime voice did not start.")
     }
 
     var fallbackStatusText: String {
-        "Listening (iOS Speech fallback)"
+        String(localized: "Listening (iOS Speech fallback)")
     }
 
     var fallbackBannerTitle: String {
-        "Using iOS Speech fallback"
+        String(localized: "Using iOS Speech fallback")
     }
 
     var fallbackBannerOwnerLabel: String {
-        "Fallback active"
+        String(localized: "Fallback active")
     }
 
     var fallbackBannerMessage: String {
-        "Realtime voice did not start. Talk is running with iOS speech recognition and TTS."
+        String(localized: "Realtime voice did not start. Talk is running with iOS speech recognition and TTS.")
     }
 
     var technicalDetails: String {

@@ -1,116 +1,21 @@
 // Whatsapp plugin module implements extract behavior.
 import type { proto } from "baileys";
 import { extractMessageContent, getContentType, normalizeMessageContent } from "baileys";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatLocationText,
+  type ChannelInboundMediaInput,
+  type NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
 import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
+import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import type { WhatsAppStructuredContactContext } from "./types.js";
 
-const MESSAGE_WRAPPER_KEYS = [
-  "botInvokeMessage",
-  "ephemeralMessage",
-  "viewOnceMessage",
-  "viewOnceMessageV2",
-  "viewOnceMessageV2Extension",
-  "documentWithCaptionMessage",
-  "groupMentionedMessage",
-] as const;
-
-const MESSAGE_CONTENT_KEYS = [
-  "conversation",
-  "extendedTextMessage",
-  "imageMessage",
-  "videoMessage",
-  "audioMessage",
-  "documentMessage",
-  "stickerMessage",
-  "locationMessage",
-  "liveLocationMessage",
-  "contactMessage",
-  "contactsArrayMessage",
-  "buttonsResponseMessage",
-  "listResponseMessage",
-  "templateButtonReplyMessage",
-  "interactiveResponseMessage",
-  "buttonsMessage",
-  "listMessage",
-] as const;
-
-function fallbackNormalizeMessageContent(
-  message: proto.IMessage | undefined,
-): proto.IMessage | undefined {
-  let current = message as unknown;
-  while (current && typeof current === "object") {
-    let unwrapped = false;
-    for (const key of MESSAGE_WRAPPER_KEYS) {
-      const candidate = (current as Record<string, unknown>)[key];
-      if (
-        candidate &&
-        typeof candidate === "object" &&
-        "message" in (candidate as Record<string, unknown>) &&
-        (candidate as { message?: unknown }).message
-      ) {
-        current = (candidate as { message: unknown }).message;
-        unwrapped = true;
-        break;
-      }
-    }
-    if (!unwrapped) {
-      break;
-    }
-  }
-  return current as proto.IMessage | undefined;
-}
-
-function normalizeMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  if (typeof normalizeMessageContent === "function") {
-    return normalizeMessageContent(message);
-  }
-  return fallbackNormalizeMessageContent(message);
-}
-
-function fallbackGetContentType(
-  message: proto.IMessage | undefined,
-): keyof proto.IMessage | undefined {
-  const normalized = fallbackNormalizeMessageContent(message);
-  if (!normalized || typeof normalized !== "object") {
-    return undefined;
-  }
-  for (const key of MESSAGE_CONTENT_KEYS) {
-    if ((normalized as Record<string, unknown>)[key] != null) {
-      return key as keyof proto.IMessage;
-    }
-  }
-  return undefined;
-}
-
-function getMessageContentType(
-  message: proto.IMessage | undefined,
-): keyof proto.IMessage | undefined {
-  if (typeof getContentType === "function") {
-    return getContentType(message);
-  }
-  return fallbackGetContentType(message);
-}
-
-function extractMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  if (typeof extractMessageContent === "function") {
-    return extractMessageContent(message);
-  }
-  const normalized = fallbackNormalizeMessageContent(message);
-  const contentType = fallbackGetContentType(normalized);
-  if (!normalized || !contentType || contentType === "conversation") {
-    return normalized;
-  }
-  const candidate = (normalized as Record<string, unknown>)[contentType];
-  return candidate && typeof candidate === "object" ? (candidate as proto.IMessage) : normalized;
-}
-
 function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | undefined {
-  const contentType = getMessageContentType(message);
+  const contentType = getContentType(message);
   const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
   if (
     candidate &&
@@ -119,9 +24,9 @@ function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | u
     (candidate as { message?: unknown }).message &&
     typeof (candidate as { message: unknown }).message === "object"
   ) {
-    const inner = normalizeMessage((candidate as { message: proto.IMessage }).message);
+    const inner = normalizeMessageContent((candidate as { message: proto.IMessage }).message);
     if (inner) {
-      const innerType = getMessageContentType(inner);
+      const innerType = getContentType(inner);
       if (innerType && innerType !== contentType) {
         return inner;
       }
@@ -132,7 +37,7 @@ function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | u
 
 function buildMessageChain(message: proto.IMessage | undefined): proto.IMessage[] {
   const chain: proto.IMessage[] = [];
-  let current = normalizeMessage(message);
+  let current = normalizeMessageContent(message);
   while (current && chain.length < 4) {
     chain.push(current);
     current = getFutureProofInnerMessage(current);
@@ -146,7 +51,7 @@ function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | un
 }
 
 function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextInfo | undefined {
-  const contentType = getMessageContentType(message);
+  const contentType = getContentType(message);
   const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
   const contextInfo =
     candidate && typeof candidate === "object" && "contextInfo" in candidate
@@ -236,7 +141,7 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
   if (!message) {
     return undefined;
   }
-  const extracted = extractMessage(message);
+  const extracted = extractMessageContent(message);
   const candidates = [message, extracted && extracted !== message ? extracted : undefined];
   for (const candidate of candidates) {
     if (!candidate) {
@@ -288,27 +193,28 @@ export function extractExternalAdReplyContext(rawMessage: proto.IMessage | undef
   return title || sourceUrl || body ? { title, sourceUrl, body } : undefined;
 }
 
-export function extractMediaPlaceholder(
+export function extractMediaKind(
   rawMessage: proto.IMessage | undefined,
-): string | undefined {
+): NonNullable<ChannelInboundMediaInput["kind"]> | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) {
     return undefined;
   }
   if (message.imageMessage) {
-    return "<media:image>";
+    return "image";
   }
   if (message.videoMessage) {
-    return message.videoMessage.gifPlayback === true ? "<media:gif>" : "<media:video>";
+    // GIF playback is a video transport detail; no downstream behavior needs a new GIF kind.
+    return "video";
   }
   if (message.audioMessage) {
-    return "<media:audio>";
+    return "audio";
   }
   if (message.documentMessage) {
-    return "<media:document>";
+    return "document";
   }
   if (message.stickerMessage) {
-    return "<media:sticker>";
+    return "sticker";
   }
   return undefined;
 }
@@ -429,19 +335,20 @@ export function describeReplyContext(
     return null;
   }
   const contextInfo = extractContextInfo(message);
-  const quoted = normalizeMessage(contextInfo?.quotedMessage as proto.IMessage | undefined);
+  const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
   if (!quoted) {
     return null;
   }
   const location = extractLocationData(quoted);
   const locationText = location ? formatLocationText(location) : undefined;
   const text = extractText(quoted);
-  let body: string | undefined = [text, locationText].filter(Boolean).join("\n").trim();
-  if (!body) {
-    body = extractMediaPlaceholder(quoted);
-  }
-  if (!body) {
-    const quotedType = quoted ? getMessageContentType(quoted) : undefined;
+  const body = [text, locationText].filter(Boolean).join("\n").trim();
+  const mediaKind = extractMediaKind(quoted);
+  const media = mediaKind
+    ? { kind: mediaKind, contentType: resolveInboundMediaMimetype(quoted) }
+    : undefined;
+  if (!body && !media) {
+    const quotedType = quoted ? getContentType(quoted) : undefined;
     logVerbose(
       `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
     );
@@ -454,7 +361,8 @@ export function describeReplyContext(
   });
   return {
     id: contextInfo?.stanzaId || undefined,
-    body,
+    body: body ?? "",
+    media,
     sender,
   };
 }
@@ -489,7 +397,7 @@ export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): b
   if (extractText(rawMessage)) {
     return true;
   }
-  if (extractMediaPlaceholder(rawMessage)) {
+  if (extractMediaKind(rawMessage)) {
     return true;
   }
   if (extractLocationData(rawMessage)) {

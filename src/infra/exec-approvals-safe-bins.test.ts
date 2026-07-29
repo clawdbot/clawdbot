@@ -15,11 +15,7 @@ import {
   normalizeSafeBins,
   resolveSafeBins,
 } from "./exec-approvals.js";
-import {
-  SAFE_BIN_PROFILE_FIXTURES,
-  SAFE_BIN_PROFILES,
-  resolveSafeBinProfiles,
-} from "./exec-safe-bin-policy.js";
+import { resolveSafeBinProfiles } from "./exec-safe-bin-policy.js";
 import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
@@ -504,23 +500,6 @@ describe("exec approvals safe bins", () => {
         isTrustedSafeBinPathFn: () => false,
       }),
     ).toBe(false);
-  });
-
-  it("keeps safe-bin profile fixtures aligned with compiled profiles", () => {
-    for (const [name, fixture] of Object.entries(SAFE_BIN_PROFILE_FIXTURES)) {
-      const profile = SAFE_BIN_PROFILES[name];
-      if (profile === undefined) {
-        throw new Error(`missing compiled safe-bin profile fixture ${name}`);
-      }
-      const fixtureDeniedFlags = fixture.deniedFlags ?? [];
-      const compiledDeniedFlags = profile.deniedFlags ?? new Set<string>();
-      for (const deniedFlag of fixtureDeniedFlags) {
-        expect(compiledDeniedFlags.has(deniedFlag)).toBe(true);
-      }
-      expect(Array.from(compiledDeniedFlags).toSorted()).toEqual(
-        [...fixtureDeniedFlags].toSorted(),
-      );
-    }
   });
 
   it("does not include sort/grep in default safeBins", () => {

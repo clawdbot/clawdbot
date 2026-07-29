@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { validateSystemInfoResult } from "../../../packages/gateway-protocol/src/index.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -49,6 +50,8 @@ describe("system.info", () => {
     }
     expect(payload.cpuCount).toBeGreaterThanOrEqual(1);
     expect(payload.memoryTotalBytes).toBeGreaterThan(0);
+    expect(payload.processInstanceId).toBe(getGatewayProcessInstanceId());
     expect(payload.uptimeMs).toBeGreaterThanOrEqual(0);
+    expect(payload.defaultAgentUtilityModel).toEqual({ status: "unavailable" });
   });
 });

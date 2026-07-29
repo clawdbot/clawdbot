@@ -5,13 +5,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SAFE_BINS,
-  SAFE_BIN_PROFILE_FIXTURES,
   SAFE_BIN_PROFILES,
-  buildLongFlagPrefixMap,
-  collectKnownLongFlags,
   normalizeSafeBinProfileFixtures,
-  renderDefaultSafeBinsDocText,
-  renderSafeBinDeniedFlagsDocBullets,
   resolveSafeBinProfiles,
   type SafeBinProfileFixtures,
   validateSafeBinArgv,
@@ -23,38 +18,21 @@ const SAFE_BIN_DOC_DENIED_FLAGS_START = '[//]: # "SAFE_BIN_DENIED_FLAGS:START"';
 const SAFE_BIN_DOC_DENIED_FLAGS_END = '[//]: # "SAFE_BIN_DENIED_FLAGS:END"';
 const SAFE_BIN_DOC_PATH = "docs/tools/exec-approvals-advanced.md";
 
-function normalizeGeneratedDocBlock(block: string): string {
-  const lines = block.split("\n");
-  while (lines[0]?.trim() === "") {
-    lines.shift();
-  }
-  while (lines.at(-1)?.trim() === "") {
-    lines.pop();
-  }
-  let commonIndent = Infinity;
-  for (const line of lines) {
-    if (line.trim().length === 0) {
-      continue;
-    }
-    commonIndent = Math.min(commonIndent, line.match(/^ */)?.[0].length ?? 0);
-  }
-  if (commonIndent <= 0) {
-    return lines.join("\n");
-  }
-  const normalizedLines: string[] = [];
-  for (const line of lines) {
-    normalizedLines.push(line.slice(Math.min(line.length, commonIndent)));
-  }
-  return normalizedLines.join("\n");
+function readGeneratedDocBlock(startMarker: string, endMarker: string): string {
+  const docs = fs.readFileSync(path.resolve(process.cwd(), SAFE_BIN_DOC_PATH), "utf8");
+  const start = docs.indexOf(startMarker);
+  const end = docs.indexOf(endMarker);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return docs.slice(start + startMarker.length, end).trim();
 }
 
 function buildDeniedFlagArgvVariants(flag: string): string[][] {
-  const value = "blocked";
   if (flag.startsWith("--")) {
-    return [[`${flag}=${value}`], [flag, value], [flag]];
+    return [[`${flag}=blocked`], [flag, "blocked"], [flag]];
   }
   if (flag.startsWith("-")) {
-    return [[`${flag}${value}`], [flag, value], [flag]];
+    return [[`${flag}blocked`], [flag, "blocked"], [flag]];
   }
   return [[flag]];
 }
@@ -321,34 +299,14 @@ describe("exec safe bin policy long-option metadata", () => {
     expect(validateSafeBinArgv(["--compress-prog=sh"], withoutMetadata)).toBe(false);
     expect(validateSafeBinArgv(["--totally-unknown=1"], withoutMetadata)).toBe(false);
   });
-
-  it("builds prefix maps from collected long flags", () => {
-    const sortProfile = expectDefined(
-      SAFE_BIN_PROFILES.sort,
-      "SAFE_BIN_PROFILES.sort test invariant",
-    );
-    const flags = collectKnownLongFlags(
-      sortProfile.allowedValueFlags ?? new Set(),
-      sortProfile.deniedFlags ?? new Set(),
-    );
-    const prefixMap = buildLongFlagPrefixMap(flags);
-    expect(prefixMap.get("--compress-pr")).toBe("--compress-program");
-    expect(prefixMap.get("--f")).toBe(null);
-  });
 });
 
 describe("exec safe bin policy denied-flag matrix", () => {
-  for (const [binName, fixture] of Object.entries(SAFE_BIN_PROFILE_FIXTURES)) {
-    const profile = expectDefined(
-      SAFE_BIN_PROFILES[binName],
-      "SAFE_BIN_PROFILES[binName] test invariant",
-    );
-    const deniedFlags = fixture.deniedFlags ?? [];
-    for (const deniedFlag of deniedFlags) {
-      const variants = buildDeniedFlagArgvVariants(deniedFlag);
-      for (const variant of variants) {
+  for (const [binName, profile] of Object.entries(SAFE_BIN_PROFILES)) {
+    for (const deniedFlag of profile.deniedFlags ?? []) {
+      for (const variant of buildDeniedFlagArgvVariants(deniedFlag)) {
         it(`${binName} denies ${deniedFlag} (${variant.join(" ")})`, () => {
-          expect(validateSafeBinArgv(variant, profile)).toBe(false);
+          expect(validateSafeBinArgv(variant, profile, { binName })).toBe(false);
         });
       }
     }
@@ -357,28 +315,25 @@ describe("exec safe bin policy denied-flag matrix", () => {
 
 describe("exec safe bin policy docs parity", () => {
   it("keeps default safe-bin docs in sync with policy defaults", () => {
-    const docsPath = path.resolve(process.cwd(), SAFE_BIN_DOC_PATH);
-    const docs = fs.readFileSync(docsPath, "utf8").replaceAll("\r\n", "\n");
-    const start = docs.indexOf(SAFE_BIN_DOC_DEFAULTS_START);
-    const end = docs.indexOf(SAFE_BIN_DOC_DEFAULTS_END);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const actual = docs.slice(start + SAFE_BIN_DOC_DEFAULTS_START.length, end).trim();
-    const expected = renderDefaultSafeBinsDocText(DEFAULT_SAFE_BINS);
+    const actual = readGeneratedDocBlock(SAFE_BIN_DOC_DEFAULTS_START, SAFE_BIN_DOC_DEFAULTS_END);
+    const expected = DEFAULT_SAFE_BINS.map((bin) => `\`${bin}\``).join(", ");
     expect(actual).toBe(expected);
   });
 
-  it("keeps denied-flag docs in sync with policy fixtures", () => {
-    const docsPath = path.resolve(process.cwd(), SAFE_BIN_DOC_PATH);
-    const docs = fs.readFileSync(docsPath, "utf8").replaceAll("\r\n", "\n");
-    const start = docs.indexOf(SAFE_BIN_DOC_DENIED_FLAGS_START);
-    const end = docs.indexOf(SAFE_BIN_DOC_DENIED_FLAGS_END);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const actual = normalizeGeneratedDocBlock(
-      docs.slice(start + SAFE_BIN_DOC_DENIED_FLAGS_START.length, end),
+  it("keeps denied-flag docs in sync with compiled policy profiles", () => {
+    const actual = readGeneratedDocBlock(
+      SAFE_BIN_DOC_DENIED_FLAGS_START,
+      SAFE_BIN_DOC_DENIED_FLAGS_END,
     );
-    const expected = renderSafeBinDeniedFlagsDocBullets();
+    const expected = Object.entries(SAFE_BIN_PROFILES)
+      .flatMap(([bin, profile]) => {
+        const deniedFlags = Array.from(profile.deniedFlags ?? []).toSorted();
+        return deniedFlags.length === 0
+          ? []
+          : [`- \`${bin}\`: ${deniedFlags.map((flag) => `\`${flag}\``).join(", ")}`];
+      })
+      .toSorted()
+      .join("\n");
     expect(actual).toBe(expected);
   });
 });

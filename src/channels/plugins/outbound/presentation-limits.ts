@@ -149,7 +149,9 @@ function buttonFallbackLabel(
     return label;
   }
   const action = resolveMessagePresentationButtonAction(button);
-  return action?.type === "url" || action?.type === "web-app" ? `${label}: ${action.url}` : label;
+  return action?.type === "url" || (action?.type === "web-app" && action.url)
+    ? `${label}: ${action.url}`
+    : label;
 }
 
 function actionCapacity(limits: ActionLimits | undefined): number | undefined {

@@ -545,6 +545,7 @@ export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyCont
         params.modelId,
         params.agentRuntime,
         params.compat,
+        params.api,
       );
     default:
       return null;

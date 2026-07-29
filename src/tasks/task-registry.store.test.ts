@@ -22,10 +22,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  resetTaskFlowRegistryForTests,
-} from "./task-flow-registry.js";
+import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
@@ -34,9 +31,7 @@ import {
   getTaskById,
   listFreshTasksForOwnerKey,
   markTaskTerminalById,
-  maybeDeliverTaskStateChangeUpdate,
   reloadTaskRegistryFromStore,
-  resetTaskRegistryForTests,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -56,6 +51,11 @@ import {
   parseTaskScopeKind,
   parseTaskStatus,
 } from "./task-registry.types.js";
+import {
+  maybeDeliverTaskStateChangeUpdate,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -416,6 +416,51 @@ describe("task-registry store runtime", () => {
 
         const restored = loadTaskRegistryStateFromSqlite();
         expect(restored.deliveryStates.get(created.taskId)?.requesterOrigin).toBeUndefined();
+      },
+    );
+  });
+
+  it("round-trips runtime-owned task detail through sqlite", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-detail-" },
+      async () => {
+        const task: TaskRecord = {
+          ...createStoredTask(),
+          runtime: "cron",
+          sourceId: "cron-detail-job",
+          detail: {
+            kind: "cron-run",
+            status: "ok",
+            usage: { input_tokens: 3, cached: false },
+          },
+        };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([[task.taskId, task]]),
+          deliveryStates: new Map(),
+        });
+
+        expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)?.detail).toEqual(
+          task.detail,
+        );
+      },
+    );
+  });
+
+  it("preserves explicit null task detail through sqlite", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-null-detail-" },
+      async () => {
+        const task: TaskRecord = {
+          ...createStoredTask(),
+          detail: null,
+        };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([[task.taskId, task]]),
+          deliveryStates: new Map(),
+        });
+
+        const restored = loadTaskRegistryStateFromSqlite().tasks.get(task.taskId);
+        expect(restored).toHaveProperty("detail", null);
       },
     );
   });
@@ -1422,3 +1467,4 @@ describe("task-registry store runtime", () => {
     expect(deleteDeliveryState).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

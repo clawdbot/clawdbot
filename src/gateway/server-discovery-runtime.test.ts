@@ -330,7 +330,7 @@ describe("startGatewayDiscovery", () => {
     expect(mocks.writeWideAreaGatewayZone).not.toHaveBeenCalled();
     expect(logs.warn.mock.calls).toEqual([
       [
-        "discovery.wideArea.enabled is true, but no domain was configured; set discovery.wideArea.domain to enable unicast DNS-SD",
+        "wide-area discovery was requested without a domain; set discovery.wideArea.domain to enable unicast DNS-SD",
       ],
     ]);
     expect(result.bonjourStop).toBeNull();

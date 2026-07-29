@@ -3,7 +3,7 @@ import SwiftUI
 extension OnboardingView {
     /// Structured AI setup: detect what's already on this machine, test the
     /// best option live, fall through automatically, offer an API-key form
-    /// when nothing works. Crestodian becomes available only after inference
+    /// when nothing works. OpenClaw becomes available only after inference
     /// has completed a live round-trip.
     func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
@@ -19,8 +19,8 @@ extension OnboardingView {
             ScrollView {
                 OnboardingAISetupView(
                     model: self.aiSetup,
-                    crestodianChat: self.crestodianState.chat,
-                    showCrestodianChat: self.$crestodianState.isPresented,
+                    systemAgentChat: self.systemAgentState.chat,
+                    showSystemAgentChat: self.$systemAgentState.isPresented,
                     retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
                     .padding(.vertical, 4)
                     .padding(.trailing, 12)
@@ -46,14 +46,16 @@ extension OnboardingView {
         // Local mode reaches this page only after the CLI/gateway install page,
         // so the gateway is up before the first RPC.
         guard state.connectionMode != .local || cliInstalled else { return }
-        self.prepareCrestodianHandoff()
+        self.prepareSystemAgentHandoff()
         // A selected/reconnected Gateway may already have a configured default
         // agent. Check that route before setup tries to author inference.
         probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
     }
 
-    func prepareCrestodianHandoff() {
-        crestodianState.chat.onAgentHandoff = { [self] in self.finish() }
+    func prepareSystemAgentHandoff() {
+        systemAgentState.chat.onAgentHandoff = { [self] agentDraft in
+            self.finish(agentDraft: agentDraft)
+        }
         aiSetup.onPendingActivationDeadline = { [self] deadline, routeIdentity in
             let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard currentRouteIdentity == routeIdentity else { return }
@@ -65,14 +67,14 @@ extension OnboardingView {
             aiSetup.onConnected = { [self] in
                 // Activation already persisted the resume marker before its RPC.
                 self.configuredGatewayProbe.cancelPendingActivationRecheck()
-                self.crestodianState.presentAndStart()
+                self.systemAgentState.presentAndStart()
             }
         }
     }
 
     @discardableResult
-    func resumePendingCrestodian(modelRef: String) -> Task<Void, Never> {
-        self.prepareCrestodianHandoff()
+    func resumePendingSystemAgent(modelRef: String) -> Task<Void, Never> {
+        self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         aiSetup.resumeConfiguredInference(modelRef: modelRef)
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
@@ -91,12 +93,12 @@ extension OnboardingView {
             self.configuredGatewayProbe.cancelPendingActivationRecheck()
             // `onConnected` already owns presentation. Await that exact start
             // task without starting a replacement route's chat after suspension.
-            await self.crestodianState.waitForStartIfNeeded()
+            await self.systemAgentState.waitForStartIfNeeded()
         }
     }
 
     func waitForPendingInferenceSetup() {
-        self.prepareCrestodianHandoff()
+        self.prepareSystemAgentHandoff()
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
@@ -115,7 +117,7 @@ extension OnboardingView {
     }
 
     func resumePendingInferenceSetup() {
-        self.prepareCrestodianHandoff()
+        self.prepareSystemAgentHandoff()
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }

@@ -2,32 +2,30 @@
  * Prepares bundled MCP configuration for CLI runner backends.
  */
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import {
-  OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV,
-  OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV,
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV,
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
 } from "../../mcp/openclaw-tools-serve-config.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
+import { isRecord } from "../bundle-mcp-adapter.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
 import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
-import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
-  findClaudeMcpConfigPath,
   findClaudeMcpConfigPaths,
   injectClaudeMcpConfigArgs,
   writeClaudeMcpCaptureConfig,
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
+import { injectBundleMcpBackendArgs, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -37,10 +35,6 @@ type PreparedCliBundleMcpConfig = {
   mcpResumeHash?: string;
   env?: Record<string, string>;
 };
-
-function resolveBundleMcpMode(mode: CliBundleMcpMode | undefined): CliBundleMcpMode {
-  return mode ?? "claude-config-file";
-}
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
   return { mcpServers: extractMcpServerMap(await tryReadJson<unknown>(configPath)) };
@@ -69,10 +63,10 @@ function normalizeOpenClawLoopbackUrl(value: string): string {
   return `${match[1]}:<openclaw-loopback>${match[2]}`;
 }
 
-function canonicalizeCrestodianTurnStateForResume(
+function canonicalizeSystemAgentTurnStateForResume(
   server: BundleMcpConfig["mcpServers"][string],
 ): BundleMcpConfig["mcpServers"][string] {
-  if (!isRecord(server.env) || server.env[OPENCLAW_TOOLS_MCP_TOOLS_ENV] !== "crestodian") {
+  if (!isRecord(server.env) || server.env[OPENCLAW_TOOLS_MCP_TOOLS_ENV] !== "openclaw") {
     return server;
   }
   // The host reissues approval authority through a fresh stdio server each turn.
@@ -81,8 +75,8 @@ function canonicalizeCrestodianTurnStateForResume(
     ...server,
     env: {
       ...server.env,
-      [OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV]: "<crestodian-turn-state>",
-      [OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV]: "<crestodian-turn-state>",
+      [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]: "<openclaw-turn-state>",
+      [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV]: "<openclaw-turn-state>",
     },
   };
 }
@@ -92,7 +86,7 @@ function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMc
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
   const canonicalServers = Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => {
-      const canonicalServer = canonicalizeCrestodianTurnStateForResume(server);
+      const canonicalServer = canonicalizeSystemAgentTurnStateForResume(server);
       if (name !== "openclaw" || typeof canonicalServer.url !== "string") {
         return [name, sortJsonValue(canonicalServer)];
       }
@@ -150,14 +144,9 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 
   if (params.mode === "codex-config-overrides") {
     return {
-      backend: {
-        ...params.backend,
-        args: injectCodexMcpConfigArgs(params.backend.args, params.mergedConfig),
-        resumeArgs: injectCodexMcpConfigArgs(
-          params.backend.resumeArgs ?? params.backend.args ?? [],
-          params.mergedConfig,
-        ),
-      },
+      backend: injectBundleMcpBackendArgs(params.backend, (args) =>
+        injectCodexMcpConfigArgs(args, params.mergedConfig),
+      ),
       mcpConfigHash,
       mcpResumeHash,
       env: params.env,
@@ -175,29 +164,24 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     };
   }
 
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
-  const mcpConfigPath = path.join(tempDir, "mcp.json");
   const runtimeConfig = resolveOpenClawMcpEnvTemplates(
     params.mergedConfig,
     params.env,
   ) as BundleMcpConfig;
-  await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
+  const temporary = await writeTemporaryBundleMcpJson(
+    "openclaw-cli-mcp-",
+    runtimeConfig,
+    "mcp.json",
+    false,
+  );
   return {
-    backend: {
-      ...params.backend,
-      args: injectClaudeMcpConfigArgs(params.backend.args, mcpConfigPath),
-      resumeArgs: injectClaudeMcpConfigArgs(
-        params.backend.resumeArgs ?? params.backend.args ?? [],
-        mcpConfigPath,
-      ),
-    },
+    backend: injectBundleMcpBackendArgs(params.backend, (args) =>
+      injectClaudeMcpConfigArgs(args, temporary.filePath),
+    ),
     mcpConfigHash,
     mcpResumeHash,
     env: params.env,
-    cleanup: async () => {
-      // Claude config files are generated per run and should not survive cleanup.
-      await fs.rm(tempDir, { recursive: true, force: true });
-    },
+    cleanup: temporary.cleanup,
   };
 }
 
@@ -212,8 +196,8 @@ export async function prepareCliBundleMcpConfig(params: {
   additionalConfig?: BundleMcpConfig;
   /**
    * Serve exactly these servers, skipping user/plugin/additional merges.
-   * Ring-zero Crestodian runs use this so the CLI harness sees only the
-   * crestodian MCP server instead of the normal openclaw tool surface.
+   * Ring-zero OpenClaw runs use this so the CLI harness sees only the
+   * openclaw MCP server instead of the normal openclaw tool surface.
    */
   exclusiveConfig?: BundleMcpConfig;
   env?: Record<string, string>;
@@ -223,7 +207,7 @@ export async function prepareCliBundleMcpConfig(params: {
     return { backend: params.backend, env: params.env };
   }
 
-  const mode = resolveBundleMcpMode(params.mode);
+  const mode = params.mode ?? "claude-config-file";
   if (params.exclusiveConfig) {
     return await prepareModeSpecificBundleMcpConfig({
       mode,
@@ -296,16 +280,16 @@ export async function prepareCliBundleMcpCaptureAttempt(params: {
   if (!params.captureKey) {
     return { env: params.env };
   }
-  if (resolveBundleMcpMode(params.mode) === "gemini-system-settings") {
+  if ((params.mode ?? "claude-config-file") === "gemini-system-settings") {
     return await writeGeminiMcpCaptureSettings({
       inheritedEnv: params.env,
       captureKey: params.captureKey,
     });
   }
-  if (resolveBundleMcpMode(params.mode) === "claude-config-file") {
+  if ((params.mode ?? "claude-config-file") === "claude-config-file") {
     const mcpConfigPath =
-      findClaudeMcpConfigPath(params.backend?.args) ??
-      findClaudeMcpConfigPath(params.backend?.resumeArgs);
+      findClaudeMcpConfigPaths(params.backend?.args)[0] ??
+      findClaudeMcpConfigPaths(params.backend?.resumeArgs)[0];
     if (mcpConfigPath) {
       await writeClaudeMcpCaptureConfig({
         mcpConfigPath,

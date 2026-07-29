@@ -81,6 +81,13 @@ enum CommandResolver {
             validatedExecutable: validatedExecutable)
     }
 
+    /// Version-manager trees can make discovery arbitrarily slow. Async callers
+    /// must leave their actor before touching the filesystem or the UI can stall.
+    @concurrent
+    static func preferredPathsAsync() async -> [String] {
+        self.preferredPaths()
+    }
+
     static func preferredPaths(
         home: URL,
         current: [String],
@@ -234,7 +241,14 @@ enum CommandResolver {
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
-        return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
+        if FileManager().isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+        // pnpm does not create a self-referential node_modules/.bin link for
+        // this package. Source builds still need the checkout CLI, not a stale
+        // globally installed binary with a different private command surface.
+        let sourceEntrypoint = root.appendingPathComponent("openclaw.mjs").path
+        return FileManager().isExecutableFile(atPath: sourceEntrypoint) ? sourceEntrypoint : nil
         #else
         return nil
         #endif

@@ -11,7 +11,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 
-export type PostInstallMigrationOptions = {
+type PostInstallMigrationOptions = {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   // Required only on interactive paths; non-interactive callers can omit it
@@ -26,7 +26,7 @@ export type PostInstallMigrationOptions = {
   nonInteractive?: boolean;
 };
 
-export type PostInstallMigrationResult = {
+type PostInstallMigrationResult = {
   config: OpenClawConfig;
 };
 

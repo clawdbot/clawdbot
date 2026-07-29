@@ -1,4 +1,5 @@
 // Control UI view renders dreaming screen content.
+import "../../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -7,8 +8,10 @@ import {
   lobsterPetSeed,
   renderLobsterSvg,
 } from "../../../components/lobster-pet.ts";
+import "../../../components/modal-dialog.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../styles/dreams.css";
 import type { DreamingEntry, WikiImportInsights, WikiMemoryPalace } from "./dreaming.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
@@ -631,8 +634,12 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
     return nothing;
   }
   return html`
-    <div class="dreams-diary__preview-backdrop" @click=${() => closeWikiPreview(props)}>
-      <div class="dreams-diary__preview-panel" @click=${(event: Event) => event.stopPropagation()}>
+    <openclaw-modal-dialog
+      .label=${state.wikiPreviewTitle || t("dreaming.wiki.previewFallbackTitle")}
+      style="--openclaw-modal-width: 1120px"
+      @modal-cancel=${() => closeWikiPreview(props)}
+    >
+      <div class="dreams-diary__preview-panel">
         <div class="dreams-diary__preview-header">
           <div>
             <div class="dreams-diary__preview-title">
@@ -643,7 +650,11 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
               ${state.wikiPreviewUpdatedAt ? ` · ${state.wikiPreviewUpdatedAt}` : ""}
             </div>
           </div>
-          <button class="btn btn--subtle btn--sm" @click=${() => closeWikiPreview(props)}>
+          <button
+            type="button"
+            class="btn btn--subtle btn--sm"
+            @click=${() => closeWikiPreview(props)}
+          >
             ${t("dreaming.wiki.close")}
           </button>
         </div>
@@ -667,7 +678,7 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
                 `}
         </div>
       </div>
-    </div>
+    </openclaw-modal-dialog>
   `;
 }
 
@@ -1547,3 +1558,4 @@ function renderDiarySection(props: DreamingProps) {
     </section>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -105,12 +105,11 @@ type AcpxProcessLease = {
 };
 ```
 
-The wrapper process should receive the lease id and gateway instance id in its
-environment:
+The wrapper process receives the lease id and gateway instance id as portable
+arguments:
 
 ```sh
-OPENCLAW_ACPX_LEASE_ID=...
-OPENCLAW_GATEWAY_INSTANCE_ID=...
+--openclaw-acpx-lease-id ... --openclaw-gateway-instance-id ...
 ```
 
 When the platform allows it, verification should prefer live process metadata
@@ -119,7 +118,7 @@ that cannot be confused by command quoting:
 - root PID still exists
 - live wrapper path is under `wrapperRoot`
 - process group matches the lease when available
-- environment contains the expected lease id when readable
+- arguments contain the expected lease id
 - command hash or executable path matches the lease
 
 If the live process cannot be verified, cleanup fails closed.

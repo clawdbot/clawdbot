@@ -233,7 +233,7 @@ describe("evidence gallery", () => {
     );
     evidence.entries[0] = {
       ...absoluteEntry,
-      coverage: [{ id: `${repoRoot}/coverage`, role: `${repoRoot}/role` }],
+      coverage: [{ id: "qa-lab.absolute-artifact-path", role: `${repoRoot}/role` }],
       execution: {
         ...absoluteExecution,
         artifacts: [
@@ -283,7 +283,7 @@ describe("evidence gallery", () => {
     expect(relativeArtifact?.href).toContain("entryIndex=0&artifactIndex=1");
     expect(model.entries[0]?.sourcePath).toBe("extensions/qa-lab/src/absolute.test.ts");
     expect(model.entries[0]).toMatchObject({
-      coverage: [{ id: "<repo-root>/coverage", role: "<repo-root>/role" }],
+      coverage: [{ id: "qa-lab.absolute-artifact-path", role: "<repo-root>/role" }],
       id: "<repo-root>/qa-lab.absolute-artifact-path",
       kind: "<repo-root>/vitest-test",
       title: "Absolute artifact path at <repo-root>",
@@ -314,17 +314,17 @@ describe("evidence gallery", () => {
       suiteDir,
       "script",
       ...producerRootLeakSegments(repoRoot),
-      "ux-matrix-evidence-dashboard",
+      "ux-matrix-producer",
       "run-1",
     );
     const expectedWebScreenshotNeedle =
       process.platform === "win32"
         ? ".artifacts/qa-e2e/suite/script/nested"
-        : ".artifacts/qa-e2e/suite/script/nested<repo-root>/ux-matrix-evidence-dashboard/run-1/surfaces/web-ui/stages/first-run/screenshot.png";
+        : ".artifacts/qa-e2e/suite/script/nested<repo-root>/ux-matrix-producer/run-1/surfaces/web-ui/stages/first-run/screenshot.png";
     const expectedCliLogNeedle =
       process.platform === "win32"
         ? ".artifacts/qa-e2e/suite/script/nested"
-        : ".artifacts/qa-e2e/suite/script/nested<repo-root>/ux-matrix-evidence-dashboard/run-1/surfaces/cli/stages/error-state/logs.txt";
+        : ".artifacts/qa-e2e/suite/script/nested<repo-root>/ux-matrix-producer/run-1/surfaces/cli/stages/error-state/logs.txt";
     await fs.mkdir(path.join(runDir, "surfaces", "web-ui", "stages", "first-run"), {
       recursive: true,
     });
@@ -365,10 +365,10 @@ describe("evidence gallery", () => {
       cells: [
         null,
         {
-          coverageIds: [`${repoRoot}/ui.control`],
+          coverageIds: [],
           runner: {
             availability: "local",
-            command: `${repoRoot}/openclaw.mjs qa suite --scenario ux-matrix-evidence-dashboard`,
+            command: `node --import tsx ${repoRoot}/scripts/qa/ux-matrix-evidence-producer.ts --artifact-base ${runDir}`,
             lane: "web-ui-playwright",
             workflow: `${repoRoot}/.github/workflows/ux-matrix-qa.yml#ux-matrix-local`,
           },
@@ -377,10 +377,11 @@ describe("evidence gallery", () => {
           surface: "web-ui",
         },
         {
-          coverageIds: ["cli.entrypoint"],
+          coverageIds: [],
           runner: {
             availability: "local",
-            command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
+            command:
+              "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
             lane: "cli-status",
             workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
           },
@@ -399,7 +400,11 @@ describe("evidence gallery", () => {
       },
     });
     await fs.writeFile(path.join(runDir, "scorecard.md"), "# UX Matrix\n\n- pass: 1\n", "utf8");
-    await fs.writeFile(path.join(runDir, "commands.txt"), "node ux matrix\n", "utf8");
+    await fs.writeFile(
+      path.join(runDir, "commands.txt"),
+      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix\n",
+      "utf8",
+    );
     await fs.mkdir(path.join(runDir, "preflight"), { recursive: true });
     await fs.writeFile(path.join(runDir, "preflight", "memory.txt"), "memory ok\n", "utf8");
     await fs.writeFile(
@@ -419,9 +424,9 @@ describe("evidence gallery", () => {
             kind: "ux-matrix-cell",
             id: "ux-matrix.web-ui.first-run",
             title: `UX Matrix: web-ui / first-run at ${repoRoot}`,
-            source: { path: "scripts/ux-matrix/dashboard.ts" },
+            source: { path: "scripts/qa/ux-matrix-evidence-producer.ts" },
           },
-          coverage: [{ id: "ui.control", role: "primary" }],
+          coverage: [],
           execution: {
             runner: "ux-matrix-dashboard",
             environment: {
@@ -458,9 +463,9 @@ describe("evidence gallery", () => {
             kind: "ux-matrix-cell",
             id: "qa-lab.wrapper-cli-error",
             title: "UX Matrix: cli / error-state",
-            source: { path: "scripts/ux-matrix/dashboard.ts" },
+            source: { path: "scripts/qa/ux-matrix-evidence-producer.ts" },
           },
-          coverage: [{ id: "cli.status-snapshots", role: "primary" }],
+          coverage: [],
           execution: {
             runner: "ux-matrix-dashboard",
             environment: {
@@ -530,10 +535,11 @@ describe("evidence gallery", () => {
       {
         artifactKinds: ["screenshot"],
         artifactPaths: [expect.stringContaining(expectedWebScreenshotNeedle)],
-        coverageIds: ["<repo-root>/ui.control"],
+        coverageIds: [],
         runner: {
           availability: "local",
-          command: "<repo-root>/openclaw.mjs qa suite --scenario ux-matrix-evidence-dashboard",
+          command:
+            "node --import tsx <repo-root>/scripts/qa/ux-matrix-evidence-producer.ts --artifact-base <repo-root>/.artifacts/qa-e2e/suite/script/nested<repo-root>/ux-matrix-producer/run-1",
           lane: "web-ui-playwright",
           workflow: "<repo-root>/.github/workflows/ux-matrix-qa.yml#ux-matrix-local",
         },
@@ -546,10 +552,11 @@ describe("evidence gallery", () => {
       {
         artifactKinds: [],
         artifactPaths: [],
-        coverageIds: ["cli.entrypoint"],
+        coverageIds: [],
         runner: {
           availability: "local",
-          command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
+          command:
+            "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
           lane: "cli-status",
           workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
         },
@@ -576,7 +583,9 @@ describe("evidence gallery", () => {
     expect(decodeURIComponent(model.producerContext?.scorecard?.href ?? "")).not.toContain(
       repoRoot,
     );
-    expect(model.producerContext?.commands?.preview).toBe("node ux matrix\n");
+    expect(model.producerContext?.commands?.preview).toBe(
+      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix\n",
+    );
     expect(model.producerContext?.commands?.path).toContain("commands.txt");
     expect(decodeURIComponent(model.producerContext?.commands?.href ?? "")).not.toContain(repoRoot);
     expect(model.producerContext?.manifest?.preview).toContain('"runId": "run-1"');

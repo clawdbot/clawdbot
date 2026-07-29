@@ -453,7 +453,28 @@ internal fun ClawListItem(
   }
 }
 
-/** Equal-width segmented control for small mode/filter sets. */
+/** Keeps segmented options on one row unless a caller explicitly opts into wrapping. */
+internal fun segmentedControlRows(
+  options: List<String>,
+  maxOptionsPerRow: Int? = null,
+): List<List<String>> {
+  if (options.isEmpty()) return emptyList()
+  if (maxOptionsPerRow == null || options.size <= maxOptionsPerRow) return listOf(options)
+  require(maxOptionsPerRow > 0) { "maxOptionsPerRow must be positive" }
+
+  val rowCount = (options.size + maxOptionsPerRow - 1) / maxOptionsPerRow
+  val minimumRowSize = options.size / rowCount
+  val largerRowCount = options.size % rowCount
+  var startIndex = 0
+  return List(rowCount) { rowIndex ->
+    val rowSize = minimumRowSize + if (rowIndex < largerRowCount) 1 else 0
+    options.subList(startIndex, startIndex + rowSize).toList().also {
+      startIndex += rowSize
+    }
+  }
+}
+
+/** Equal-width segmented control with caller-controlled wrapping. */
 @Composable
 internal fun ClawSegmentedControl(
   options: List<String>,
@@ -461,40 +482,48 @@ internal fun ClawSegmentedControl(
   onSelect: (String) -> Unit,
   modifier: Modifier = Modifier,
   enabledOptions: Set<String> = options.toSet(),
+  maxOptionsPerRow: Int? = null,
 ) {
-  Row(
+  Column(
     modifier =
       modifier
         .clip(RoundedCornerShape(ClawTheme.radii.control))
         .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
         .padding(2.dp),
-    horizontalArrangement = Arrangement.spacedBy(2.dp),
+    verticalArrangement = Arrangement.spacedBy(2.dp),
   ) {
-    options.forEach { option ->
-      val active = option == selected
-      val enabled = option in enabledOptions
-      Box(
-        modifier =
-          Modifier
-            .weight(1f)
-            .clip(RoundedCornerShape(ClawTheme.radii.control))
-            .background(if (active) ClawTheme.colors.primary else Color.Transparent)
-            .clickable(enabled = enabled) { onSelect(option) }
-            .padding(horizontal = 9.dp, vertical = 7.dp),
-        contentAlignment = Alignment.Center,
+    segmentedControlRows(options, maxOptionsPerRow).forEach { rowOptions ->
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
       ) {
-        Text(
-          text = option,
-          style = ClawTheme.type.caption,
-          color =
-            when {
-              active -> ClawTheme.colors.primaryText
-              enabled -> ClawTheme.colors.textMuted
-              else -> ClawTheme.colors.textSubtle
-            },
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        rowOptions.forEach { option ->
+          val active = option == selected
+          val enabled = option in enabledOptions
+          Box(
+            modifier =
+              Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(ClawTheme.radii.control))
+                .background(if (active) ClawTheme.colors.primary else Color.Transparent)
+                .clickable(enabled = enabled) { onSelect(option) }
+                .padding(horizontal = 9.dp, vertical = 7.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = option,
+              style = ClawTheme.type.caption,
+              color =
+                when {
+                  active -> ClawTheme.colors.primaryText
+                  enabled -> ClawTheme.colors.textMuted
+                  else -> ClawTheme.colors.textSubtle
+                },
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
       }
     }
   }
@@ -576,14 +605,14 @@ internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
       }
 
       ClawSegmentedControl(
-        options = listOf("Chat", "Voice", "Sessions"),
+        options = listOf("Chat", "Voice", "Threads"),
         selected = selected,
         onSelect = { selected = it },
         modifier = Modifier.fillMaxWidth(),
       )
 
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        ClawSectionHeader(title = "Sessions")
+        ClawSectionHeader(title = "Threads")
         ClawListItem(
           title = "Testing testing 1 2 3",
           subtitle = "14 messages · Android",

@@ -17,9 +17,11 @@ export {
   isUsageCountedSessionTranscriptFileName,
   loadTranscriptEventsSync,
   listSessionEntries,
+  listSessionTranscriptInstances,
   onSessionTranscriptUpdate,
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
+  readTranscriptContentRevisionSync,
   readTranscriptStatsSync,
   resolveSessionFilePath,
   resolveStorePath,
@@ -29,6 +31,7 @@ export {
   stripInboundMetadata,
   stripInternalRuntimeContext,
   type SessionEntry,
+  type SessionTranscriptInstance,
 } from "./openclaw-runtime.js";
 
 /** Extracts the agent id from a canonical `agents/<id>/sessions` directory path. */

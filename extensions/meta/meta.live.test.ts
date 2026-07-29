@@ -1,6 +1,6 @@
 // Meta live tests prove muse-spark-1.1 auth and Responses API completion.
 import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
-import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { buildMetaProvider } from "./provider-catalog.js";
 import { wrapMetaProviderStream } from "./stream.js";

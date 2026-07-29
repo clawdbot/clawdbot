@@ -1,7 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildLatestSubagentRunReadIndex } from "../agents/subagent-registry-read.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -24,7 +24,7 @@ type SubagentApprovalLineage = {
 
 type StoredApprovalLineage = Pick<SessionEntry, "parentSessionKey" | "spawnedBy">;
 
-export type ApprovalSessionAudienceSources = {
+type ApprovalSessionAudienceSources = {
   canonicalizeSessionKey: (
     sessionKey: string,
     relativeToSessionKey?: string,
@@ -46,7 +46,7 @@ function canonicalizeAudienceSessionKey(
 }
 
 /** Resolves the source session and its operator-visible ancestor audience. */
-export function resolveApprovalSessionAudienceFromSources(params: {
+function resolveApprovalSessionAudienceFromSources(params: {
   sourceSessionKey: string;
   sources: ApprovalSessionAudienceSources;
 }): string[] {
@@ -129,7 +129,7 @@ function createRuntimeApprovalSessionAudienceSources(
     getLatestSubagentLineage: (sessionKey) => subagentRuns.getLatestSubagentRun(sessionKey),
     getStoredSessionLineage: (sessionKey) => {
       const target = resolveStorageTarget(sessionKey);
-      return loadSessionEntry({
+      return loadSessionEntryReadOnly({
         agentId: target.agentId,
         clone: false,
         hydrateSkillPromptRefs: false,
@@ -140,7 +140,7 @@ function createRuntimeApprovalSessionAudienceSources(
 }
 
 /** Resolves an approval audience from the live registry and session stores. */
-export function resolveApprovalSessionAudience(
+function resolveApprovalSessionAudience(
   sourceSessionKey: string,
   sourceAgentId?: string | null,
 ): string[] {
@@ -191,7 +191,7 @@ export function resolveApprovalSessionAudienceWithFallback(
   }
 }
 
-export function resolveApprovalFallbackAudienceSessionKey(
+function resolveApprovalFallbackAudienceSessionKey(
   sourceSessionKey: string,
   sourceAgentId?: string | null,
 ): string {

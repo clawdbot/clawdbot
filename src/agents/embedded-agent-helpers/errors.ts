@@ -1,4 +1,5 @@
 import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
+import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 /**
  * Classifies provider/runtime failures and formats assistant-facing error text.
  */
@@ -17,10 +18,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 export {
-  extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -33,6 +31,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
@@ -61,16 +60,13 @@ export {
   formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 
 export {
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
-  isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
@@ -395,6 +391,7 @@ export type ProviderRuntimeFailureKind =
   | "rate_limit"
   | "dns"
   | "timeout"
+  | "tls_certificate"
   | "model_not_found"
   | "schema"
   | "sandbox_blocked"
@@ -751,39 +748,6 @@ export function isTransientHttpError(raw: string): boolean {
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 
-export function classifyFailoverReasonFromHttpStatus(
-  status: number | undefined,
-  message?: string,
-  opts?: { provider?: string },
-): FailoverReason | null {
-  const hasProviderStatusSignal = Boolean(opts?.provider && typeof status === "number");
-  const messageClassification = message
-    ? classifyFailoverClassificationFromMessage(message, opts?.provider, {
-        includeProviderPluginHooks: !hasProviderStatusSignal,
-      })
-    : null;
-  const providerPluginReason = hasProviderStatusSignal
-    ? classifyProviderPluginError({
-        errorMessage: message ?? "",
-        provider: opts?.provider,
-        status,
-      })
-    : null;
-  const effectiveMessageClassification = providerPluginReason
-    ? toReasonClassification(providerPluginReason)
-    : messageClassification;
-  return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(
-      status,
-      message,
-      effectiveMessageClassification,
-      status,
-      opts?.provider,
-      { preserveProviderSignalClassification: providerPluginReason !== null },
-    ),
-  );
-}
-
 function classifyFailoverClassificationFromHttpStatus(
   status: number | undefined,
   message: string | undefined,
@@ -859,7 +823,8 @@ function classifyFailoverClassificationFromHttpStatus(
       messageReason === "session_expired" ||
       messageReason === "billing" ||
       messageReason === "auth_permanent" ||
-      messageReason === "auth"
+      messageReason === "auth" ||
+      messageReason === "format"
     ) {
       return messageClassification;
     }
@@ -907,6 +872,8 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
+// Only cross-provider structured codes classify in core; provider-native
+// mappings belong to provider hooks.
 function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
@@ -933,9 +900,11 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
-function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverReason | null {
+function classifyCoreFailoverReasonFromErrorType(raw: string | undefined): FailoverReason | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   switch (normalized) {
+    case "invalid_request_error":
+      return "format";
     case "server_error":
     case "upstream_error":
       return "server_error";
@@ -949,7 +918,7 @@ function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverR
 function classifyFailoverClassificationFromErrorType(
   raw: string | undefined,
 ): FailoverClassification | null {
-  const reason = classifyFailoverReasonFromErrorType(raw);
+  const reason = classifyCoreFailoverReasonFromErrorType(raw);
   return reason ? toReasonClassification(reason) : null;
 }
 
@@ -1026,6 +995,27 @@ function isExactUnknownNoDetailsError(raw: string): boolean {
   );
 }
 
+function isClaudeCliLoggedOutError(raw: string, provider?: string): boolean {
+  // This upstream phrase is generic prose. Provider identity must come from
+  // the runner metadata so other providers cannot inherit Claude CLI policy.
+  if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
+    return false;
+  }
+  return /\bnot logged in\b\s*·\s*please run \/login\b/i.test(raw);
+}
+
+function isUnsupportedImageInputErrorMessage(raw: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bdoes not support image inputs?\b/.test(normalized) ||
+    /\bunsupported image input\b/.test(normalized) ||
+    (/\bno endpoints found\b/.test(normalized) && /\bsupport image input\b/.test(normalized))
+  );
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -1036,6 +1026,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isImageSizeError(raw)) {
     return null;
+  }
+  if (isUnsupportedImageInputErrorMessage(raw)) {
+    return toReasonClassification("format");
   }
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
@@ -1069,6 +1062,13 @@ function classifyFailoverClassificationFromMessage(
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
   }
+  // Provider-completed `finish_reason: error` / stop-reason `error` is not a
+  // hang. Classify as server_error (failover still runs) so operators do not
+  // chase timeout knobs and user copy is not rewritten to "LLM request timed out."
+  // (#109218; keep #59524 fallback by remaining a failover reason).
+  if (isProviderCompletedErrorFinishReasonMessage(raw)) {
+    return toReasonClassification("server_error");
+  }
   if (
     isStructuredServerErrorMessage(raw) &&
     !isBillingErrorMessage(raw) &&
@@ -1090,6 +1090,9 @@ function classifyFailoverClassificationFromMessage(
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
+  if (isClaudeCliLoggedOutError(raw, provider)) {
+    return toReasonClassification("auth");
+  }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");
@@ -1128,6 +1131,13 @@ function classifyFailoverClassificationFromMessage(
   );
   if (providerSpecific) {
     return toReasonClassification(providerSpecific);
+  }
+  // Some adapters preserve only the raw JSON response body. Reuse the same
+  // structured type mapping as typed SDK errors after all more-specific text
+  // and provider rules have had a chance to classify the failure.
+  const apiErrorReason = classifyCoreFailoverReasonFromErrorType(parseApiErrorInfo(raw)?.type);
+  if (apiErrorReason) {
+    return toReasonClassification(apiErrorReason);
   }
   return null;
 }
@@ -1170,6 +1180,12 @@ function mergeMessageAndDetailClassification(
   if (detailClassification.kind === "context_overflow") {
     return detailClassification;
   }
+  if (
+    classificationReason(detailClassification) === "billing" &&
+    classificationReason(messageClassification) === "rate_limit"
+  ) {
+    return detailClassification;
+  }
   return classificationReason(messageClassification) === "format"
     ? detailClassification
     : messageClassification;
@@ -1177,6 +1193,10 @@ function mergeMessageAndDetailClassification(
 
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
+  const tlsCertificateError = inspectTlsCertificateError(signal);
+  if (tlsCertificateError && inferredStatus === undefined) {
+    return toReasonClassification("tls_certificate");
+  }
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
   if (
@@ -1217,6 +1237,8 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     detailClassification,
   );
   const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
+  // Message/detail semantics stay ahead of generic structured types so an
+  // invalid-request wrapper cannot hide billing, context, or provider policy.
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
     : (messageOrDetailClassification ?? errorTypeClassification);
@@ -1247,8 +1269,9 @@ export function classifyProviderRuntimeFailureKind(
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
+  const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
 
-  if (!message && typeof status !== "number") {
+  if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
     return "empty_response";
   }
   if (normalizedSignal.code === "refresh_contention") {
@@ -1290,6 +1313,12 @@ export function classifyProviderRuntimeFailureKind(
     status,
     message: message || undefined,
   });
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "tls_certificate"
+  ) {
+    return "tls_certificate";
+  }
   if (failoverClassification?.kind === "reason" && failoverClassification.reason === "rate_limit") {
     return "rate_limit";
   }
@@ -1482,6 +1511,13 @@ export function formatAssistantErrorText(
     return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
   }
 
+  if (providerRuntimeFailureKind === "tls_certificate") {
+    return (
+      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
+      "Check the endpoint hostname, proxy, and local certificate trust."
+    );
+  }
+
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
@@ -1524,9 +1560,9 @@ export function formatAssistantErrorText(
     );
   }
 
-  const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
-  if (invalidRequest?.[1]) {
-    return `LLM request rejected: ${invalidRequest[1]}`;
+  const apiError = parseApiErrorInfo(raw);
+  if (apiError?.type?.toLowerCase().includes("invalid_request") && apiError.message?.trim()) {
+    return `LLM request rejected: ${apiError.message.trim()}`;
   }
 
   if (
@@ -1551,6 +1587,12 @@ export function formatAssistantErrorText(
   const transportCopy = formatTransportErrorCopy(raw);
   if (transportCopy) {
     return transportCopy;
+  }
+
+  // Provider finished the stream with finish_reason/stop-reason `error` — not a hang.
+  // Keep the raw reason in the message so operators still see the provider signal (#109218).
+  if (isProviderCompletedErrorFinishReasonMessage(raw)) {
+    return formatRawAssistantErrorForUi(raw);
   }
 
   if (isTimeoutErrorMessage(raw)) {
@@ -1737,7 +1779,7 @@ export function parseImageDimensionError(raw: string): {
   };
 }
 
-export function isImageDimensionErrorMessage(raw: string): boolean {
+function isImageDimensionErrorMessage(raw: string): boolean {
   return Boolean(parseImageDimensionError(raw));
 }
 
@@ -1759,7 +1801,7 @@ export function parseImageSizeError(raw: string): {
   };
 }
 
-export function isImageSizeError(errorMessage?: string): boolean {
+function isImageSizeError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
@@ -1818,3 +1860,4 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   return classifyAssistantFailoverReason(msg) !== null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

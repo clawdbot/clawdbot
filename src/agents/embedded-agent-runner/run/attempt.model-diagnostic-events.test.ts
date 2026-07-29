@@ -17,12 +17,13 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
-import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
@@ -140,6 +141,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticRunActivityForTest();
+    startDiagnosticRunActivityTracking();
     resetGlobalHookRunner();
   });
 
@@ -215,6 +217,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(startedEvent.model).toBe("gpt-5.4");
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
+    expect(startedEvent.observationUnit).toBe("request");
     expect(events[0]?.trace?.parentSpanId).toBe("00f067aa0ba902b7");
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
@@ -281,6 +284,40 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         transport: "http",
       },
     });
+  });
+
+  it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {
+    const modelPrefix = "m".repeat(255);
+    const exactBoundary = "b".repeat(256);
+    const events = await collectProviderTimelineEvents(async () => {
+      const cases: Array<{ callId: string; model: string }> = [
+        { callId: "call-timeline-unicode-boundary", model: `${modelPrefix}😀tail` },
+        { callId: "call-timeline-exact-boundary", model: exactBoundary },
+      ];
+      for (const { callId, model } of cases) {
+        const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+          (() => undefined) as unknown as StreamFn,
+          {
+            runId: "run-timeline-unicode-boundary",
+            provider: "openai",
+            model,
+            trace: createDiagnosticTraceContext(),
+            nextCallId: () => callId,
+          },
+        );
+        await wrapped({} as never, {} as never, {} as never);
+      }
+    });
+
+    expect(events).toHaveLength(2);
+    const splitBoundaryModel = readRecordField(events[0]!, "attributes", "attributes").model;
+    expect(splitBoundaryModel).toBe(modelPrefix);
+    expect(splitBoundaryModel).toHaveLength(255);
+    expect(splitBoundaryModel).not.toContain("�");
+    expect(splitBoundaryModel).not.toMatch(/[\uD800-\uDFFF]/u);
+    const exactBoundaryModel = readRecordField(events[1]!, "attributes", "attributes").model;
+    expect(exactBoundaryModel).toBe(exactBoundary);
+    expect(exactBoundaryModel).toHaveLength(256);
   });
 
   it("emits one failed provider timeline event for a thrown model call", async () => {
@@ -1182,6 +1219,44 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
   });
 
+  it("keeps core model-call diagnostics while suppressing finalization plugin hooks", async () => {
+    const started = vi.fn();
+    const ended = vi.fn();
+    const { registry } = createHookRunnerWithRegistry([
+      { hookName: "model_call_started", handler: started },
+      { hookName: "model_call_ended", handler: ended },
+    ]);
+    initializeGlobalHookRunner(registry);
+    async function* stream() {
+      yield { type: "text", text: "final answer" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-finalization",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-finalization",
+        suppressPluginHooks: true,
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
+    expect(started).not.toHaveBeenCalled();
+    expect(ended).not.toHaveBeenCalled();
+  });
+
   it("emits completed events when stream consumption stops early", async () => {
     async function* stream() {
       yield { type: "text", text: "first" };
@@ -1219,3 +1294,4 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

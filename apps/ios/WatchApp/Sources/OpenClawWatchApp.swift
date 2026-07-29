@@ -1,3 +1,4 @@
+import OpenClawKit
 import SwiftUI
 import UserNotifications
 
@@ -147,7 +148,9 @@ struct OpenClawWatchApp: App {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard self.inboxStore.hasGatewayTaggedAppSnapshot else {
-            self.inboxStore.markAppCommandBlocked(.sendChat, reason: "refreshing iPhone state")
+            self.inboxStore.markAppCommandBlocked(
+                .sendChat,
+                reason: String(localized: "Refreshing iPhone state"))
             self.refreshAppSnapshot()
             return nil
         }
@@ -262,14 +265,14 @@ extension WatchInboxStore {
             transport: "screenshot")
         self.consume(
             appSnapshot: WatchAppSnapshotMessage(
-                gatewayStatusText: "Connected",
+                gatewayStatus: OpenClawWatchAppStatus(code: .gatewayConnected),
                 gatewayConnected: true,
                 agentName: "Molty",
                 agentAvatarURL: nil,
                 agentAvatarText: "M",
                 sessionKey: "watch-screenshot-session",
                 gatewayStableID: "watch-screenshot-gateway",
-                talkStatusText: "Ready",
+                talkStatus: OpenClawWatchAppStatus(code: .talkReady),
                 talkEnabled: true,
                 talkListening: false,
                 talkSpeaking: false,
@@ -286,7 +289,7 @@ extension WatchInboxStore {
                         text: "Gateway is online and ready.",
                         timestampMs: sentAtMs - 30000),
                 ],
-                chatStatusText: "Live gateway conversation",
+                chatStatus: nil,
                 sentAtMs: sentAtMs,
                 snapshotId: "watch-screenshot-now-face"))
     }

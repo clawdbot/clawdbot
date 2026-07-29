@@ -15,7 +15,7 @@ import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 /**
  * Canonical parameter shape used by an outbound message action target.
  */
-export type MessageActionTargetMode = "to" | "channelId" | "none";
+type MessageActionTargetMode = "to" | "channelId" | "none";
 
 /**
  * Target-parameter policy for each supported channel message action.

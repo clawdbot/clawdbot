@@ -24,7 +24,30 @@ vi.mock("../../../plugin-sdk/facade-runtime.js", () => ({
     mocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
-import { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-chatgpt.js";
+import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
+
+type OpenAIProviderLoginCallbacks = Omit<
+  Parameters<typeof openaiCodexOAuthProvider.login>[0],
+  "onAuth"
+> & {
+  onAuth: (
+    info: Parameters<Parameters<typeof openaiCodexOAuthProvider.login>[0]["onAuth"]>[0],
+  ) => Promise<void> | void;
+};
+
+async function loginThroughOpenAIProvider(callbacks: OpenAIProviderLoginCallbacks) {
+  return await openaiCodexOAuthProvider.login(
+    callbacks as Parameters<typeof openaiCodexOAuthProvider.login>[0],
+  );
+}
+
+async function refreshThroughOpenAIProvider(refreshToken: string) {
+  return await openaiCodexOAuthProvider.refreshToken({
+    access: "expired-access-token",
+    refresh: refreshToken,
+    expires: 0,
+  });
+}
 
 function createCredential() {
   return {
@@ -55,7 +78,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
       return credential;
     });
 
-    await expect(loginOpenAICodex({ onAuth, onPrompt })).resolves.toEqual(credential);
+    await expect(loginThroughOpenAIProvider({ onAuth, onPrompt })).resolves.toEqual(credential);
 
     expect(onAuth).toHaveBeenCalledWith({
       url: "https://auth.openai.com/oauth/authorize?state=abc",
@@ -84,7 +107,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
       return createCredential();
     });
 
-    const login = loginOpenAICodex({ onAuth, onPrompt });
+    const login = loginThroughOpenAIProvider({ onAuth, onPrompt });
     await vi.waitFor(() => expect(onAuth).toHaveBeenCalledOnce());
     expect(onPrompt).not.toHaveBeenCalled();
 
@@ -104,7 +127,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     });
 
     await expect(
-      loginOpenAICodex({
+      loginThroughOpenAIProvider({
         onAuth: vi.fn(),
         onPrompt: vi.fn(async () => "fallback-code"),
         onManualCodeInput,
@@ -119,7 +142,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     controller.abort();
 
     await expect(
-      loginOpenAICodex({
+      loginThroughOpenAIProvider({
         onAuth: vi.fn(),
         onPrompt: vi.fn(async () => "manual-code"),
         signal: controller.signal,
@@ -138,7 +161,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     });
 
     await expect(
-      loginOpenAICodex({
+      loginThroughOpenAIProvider({
         onAuth: vi.fn(),
         onPrompt: vi.fn(async () => "manual-code"),
         onManualCodeInput: vi.fn(async () => "manual-code"),
@@ -157,7 +180,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     });
 
     await expect(
-      loginOpenAICodex({
+      loginThroughOpenAIProvider({
         onAuth,
         onPrompt: vi.fn(async () => "manual-code"),
         signal: controller.signal,
@@ -169,7 +192,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
   it("refreshes through the provider runtime hook without returning auth-profile fields", async () => {
     mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(createCredential());
 
-    await expect(refreshOpenAICodexToken("old-refresh-token")).resolves.toEqual({
+    await expect(refreshThroughOpenAIProvider("old-refresh-token")).resolves.toEqual({
       access: "access-token",
       refresh: "refresh-token",
       expires: 1_700_000_000_000,
@@ -199,7 +222,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(null);
     mocks.refreshOpenAICodexToken.mockResolvedValueOnce(credential);
 
-    await expect(refreshOpenAICodexToken("old-refresh-token")).resolves.toEqual(credential);
+    await expect(refreshThroughOpenAIProvider("old-refresh-token")).resolves.toEqual(credential);
 
     expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
       dirName: "openai",
@@ -214,7 +237,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
       throw new Error("plugin runtime is not activated");
     });
 
-    await expect(refreshOpenAICodexToken("old-refresh-token")).rejects.toThrow(
+    await expect(refreshThroughOpenAIProvider("old-refresh-token")).rejects.toThrow(
       "plugin runtime is not activated",
     );
     expect(mocks.refreshOpenAICodexToken).not.toHaveBeenCalled();

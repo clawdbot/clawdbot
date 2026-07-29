@@ -65,6 +65,7 @@ export async function fetchPluralKitMessageInfo(params: {
       signal: timeout.signal,
     });
     if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
       return null;
     }
     if (!res.ok) {
