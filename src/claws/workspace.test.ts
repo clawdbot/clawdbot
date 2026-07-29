@@ -230,6 +230,19 @@ describe("createClawWorkspaceFiles", () => {
     );
   });
 
+  it("writes an adoptable file that disappeared between planning and apply", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+    expect(plan.blockers).toEqual([]);
+    await rm(join(workspace, "AGENTS.md"));
+
+    const records = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
+
+    expect(records).toContainEqual(
+      expect.objectContaining({ path: "AGENTS.md", status: "complete" }),
+    );
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
+  });
+
   it("creates canonical bootstrap and supporting files and records their hashes", async () => {
     const { root, workspace, plan } = await makePlan();
 
@@ -432,6 +445,37 @@ describe("createClawWorkspaceFiles", () => {
 });
 
 describe("workspace files in the consented add lifecycle", () => {
+  it("completes an adoption add without rewriting existing files and commits the agent", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+    expect(plan.blockers).toEqual([]);
+    let config: OpenClawConfig = {};
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      nowMs: 30,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "complete",
+      workspaceCreated: true,
+      workspaceFiles: [
+        expect.objectContaining({ path: "AGENTS.md", status: "complete" }),
+        expect.objectContaining({ path: "reference/policy.md", status: "complete" }),
+      ],
+      installRecord: { status: "complete" },
+    });
+    expect(config.agents?.entries?.["workspace-agent"]).toBeDefined();
+    expect(readInstallStatus("workspace-agent", root)).toBe("complete");
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
+    await expect(readFile(join(workspace, "reference", "policy.md"), "utf8")).resolves.toBe(
+      "Policy\n",
+    );
+  });
+
   it("marks the root install complete after every declared file is created", async () => {
     const { root, plan } = await makePlan({ createWorkspace: false });
     let config: OpenClawConfig = {};
