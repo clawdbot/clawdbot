@@ -1379,7 +1379,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   it("retains the native fallback when message-tool-only delivery also fails", async () => {
     dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
       plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
-      await plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
+      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
         kind: "final",
       });
       return {
