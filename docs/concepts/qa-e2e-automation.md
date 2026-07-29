@@ -210,11 +210,7 @@ declares Matrix eligibility through `execution.channel` or
 `--fail-fast` for a shorter feedback loop or repeat `--scenario <id>` for an
 explicit subset, including portable scenarios with no channel restriction.
 
-Declarative scenario metadata is the only default-membership source. The
-Matrix runner has no named profiles or scenario-id allowlists. The run chooses
-the channel driver. CI may partition the selected catalog after semantic
-resolution, but sharding is not a Matrix selection mode or public CLI surface.
-Their live implementations live under
+Matrix live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
 The adapter provisions a disposable Tuwunel homeserver in Docker (default

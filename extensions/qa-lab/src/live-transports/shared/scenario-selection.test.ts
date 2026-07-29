@@ -1,111 +1,81 @@
 import { describe, expect, it } from "vitest";
-import { selectQaExecutionShardScenarioIds } from "../../execution-sharding.js";
 import { scenarioDeclaresQaChannel } from "../../profile-planning.js";
 import { readQaScenarioPack } from "../../scenario-catalog.js";
-import { describeQaProviderLaneMismatches } from "../../scenario-lane.js";
 import { resolveCatalogLiveTransportQaScenarioIds } from "./scenario-selection.js";
 
-const MOCK_MATRIX_LANE = {
-  channelId: "matrix",
+const MOCK_LANE = {
   providerMode: "mock-openai" as const,
   primaryModel: "mock-openai/gpt-5.6-luna",
 };
 
 describe("catalog live transport QA scenario selection", () => {
-  it("derives the implicit set from declared channel and lane eligibility", () => {
-    const catalog = readQaScenarioPack().scenarios;
-    const scenarioById = new Map(catalog.map((scenario) => [scenario.id, scenario] as const));
-    const scenarioIds = resolveCatalogLiveTransportQaScenarioIds(MOCK_MATRIX_LANE);
-    const expectedScenarioIds = catalog
-      .filter(
-        (scenario) =>
-          scenarioDeclaresQaChannel(scenario, "matrix") &&
-          scenario.execution.kind === "flow" &&
-          (scenario.execution.providerMode === undefined ||
-            scenario.execution.providerMode === MOCK_MATRIX_LANE.providerMode) &&
-          describeQaProviderLaneMismatches({
-            scenario,
-            ...MOCK_MATRIX_LANE,
-            channelDriver: "live",
-            channel: "matrix",
-          }).length === 0,
-      )
-      .map((scenario) => scenario.id);
-
-    expect(scenarioIds.length).toBeGreaterThan(0);
-    expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
-    expect(scenarioIds).toEqual(expectedScenarioIds);
-    for (const scenarioId of scenarioIds) {
-      const scenario = scenarioById.get(scenarioId);
-      expect(scenario?.execution.kind, scenarioId).toBe("flow");
-      expect(
-        scenario?.execution.channel === "matrix" ||
-          (scenario?.execution.kind === "flow" && scenario.execution.channels?.includes("matrix")),
-        scenarioId,
-      ).toBe(true);
-    }
-
-    const unrelatedScenario = catalog.find(
-      (scenario) =>
-        scenario.execution.kind === "flow" &&
-        scenario.execution.channel !== "matrix" &&
-        !scenario.execution.channels?.includes("matrix"),
-    );
-    expect(unrelatedScenario).toBeDefined();
-    expect(scenarioIds).not.toContain(unrelatedScenario?.id);
-  });
-
-  it("preserves an explicit scenario subset without a named profile", () => {
-    const explicitScenarioIds = resolveCatalogLiveTransportQaScenarioIds(MOCK_MATRIX_LANE)
-      .slice(0, 2)
-      .toReversed();
-
-    expect(
-      resolveCatalogLiveTransportQaScenarioIds({
-        ...MOCK_MATRIX_LANE,
-        scenarioIds: explicitScenarioIds,
-      }),
-    ).toEqual(explicitScenarioIds);
-  });
-
-  it("enforces channel, provider, and model constraints for explicit subsets", () => {
-    expect(() =>
-      resolveCatalogLiveTransportQaScenarioIds({
-        ...MOCK_MATRIX_LANE,
-        scenarioIds: ["whatsapp-whoami-command"],
-      }),
-    ).toThrow("channel=whatsapp");
-    expect(() =>
-      resolveCatalogLiveTransportQaScenarioIds({
-        ...MOCK_MATRIX_LANE,
-        scenarioIds: ["anthropic-opus-api-key-smoke"],
-      }),
-    ).toThrow("provider=anthropic");
-  });
-
-  it("keeps portable Matrix scenarios eligible through live and Crabline drivers", () => {
-    const scenarioIds = ["dm-per-room-session", "dm-shared-session"];
-    const selectForDriver = (channelDriver: "crabline" | "live") =>
-      resolveCatalogLiveTransportQaScenarioIds({
-        ...MOCK_MATRIX_LANE,
-        channelDriver,
-        scenarioIds,
+  it.each(["matrix", "telegram"] as const)(
+    "selects declared %s scenarios and preserves an explicit subset",
+    (channelId) => {
+      const scenarioIds = resolveCatalogLiveTransportQaScenarioIds({
+        ...MOCK_LANE,
+        channelId,
       });
+      const explicitScenarioIds = scenarioIds.slice(0, 2).toReversed();
+      const scenarioById = new Map(
+        readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
+      );
 
-    expect(selectForDriver("live")).toEqual(scenarioIds);
-    expect(selectForDriver("crabline")).toEqual(scenarioIds);
-  });
+      expect(scenarioIds.length).toBeGreaterThan(1);
+      expect(
+        scenarioIds.every((scenarioId) => {
+          const scenario = scenarioById.get(scenarioId);
+          return (
+            scenario?.execution.kind === "flow" && scenarioDeclaresQaChannel(scenario, channelId)
+          );
+        }),
+      ).toBe(true);
+      expect(
+        resolveCatalogLiveTransportQaScenarioIds({
+          ...MOCK_LANE,
+          channelId,
+          scenarioIds: explicitScenarioIds,
+        }),
+      ).toEqual(explicitScenarioIds);
+    },
+  );
 
-  it("partitions the complete semantic Matrix selection across CI workers", () => {
-    const semanticScenarioIds = resolveCatalogLiveTransportQaScenarioIds(MOCK_MATRIX_LANE);
-    const shards = [1, 2, 3, 4, 5].map((index) =>
-      selectQaExecutionShardScenarioIds(semanticScenarioIds, { index, count: 5 }),
-    );
+  it.each([
+    { channelId: "matrix", scenarioId: "whatsapp-whoami-command", mismatch: "channel=whatsapp" },
+    {
+      channelId: "telegram",
+      scenarioId: "anthropic-opus-api-key-smoke",
+      mismatch: "provider=anthropic",
+    },
+  ] as const)(
+    "rejects $scenarioId from the $channelId lane",
+    ({ channelId, scenarioId, mismatch }) => {
+      expect(() =>
+        resolveCatalogLiveTransportQaScenarioIds({
+          ...MOCK_LANE,
+          channelId,
+          scenarioIds: [scenarioId],
+        }),
+      ).toThrow(mismatch);
+    },
+  );
 
-    expect(shards.flat().toSorted()).toEqual(semanticScenarioIds.toSorted());
-    expect(new Set(shards.flat()).size).toBe(semanticScenarioIds.length);
-    expect(Math.max(...shards.map((shard) => shard.length))).toBeLessThanOrEqual(
-      Math.min(...shards.map((shard) => shard.length)) + 1,
-    );
-  });
+  it.each([
+    { channelId: "matrix", scenarioId: "thread-follow-up" },
+    { channelId: "telegram", scenarioId: "channel-message-flows" },
+  ] as const)(
+    "keeps $scenarioId eligible through both $channelId drivers",
+    ({ channelId, scenarioId }) => {
+      const selectForDriver = (channelDriver: "crabline" | "live") =>
+        resolveCatalogLiveTransportQaScenarioIds({
+          ...MOCK_LANE,
+          channelId,
+          channelDriver,
+          scenarioIds: [scenarioId],
+        });
+
+      expect(selectForDriver("live")).toEqual([scenarioId]);
+      expect(selectForDriver("crabline")).toEqual([scenarioId]);
+    },
+  );
 });

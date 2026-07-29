@@ -86,8 +86,8 @@ describe("live transport suite runtime", () => {
     process.env.OPENCLAW_QA_EXECUTION_SHARD = "2/2";
 
     await runLiveTransportQaSuiteCommand({
-      channelId: "matrix",
-      defaultProviderMode: "mock-openai",
+      channelId: "slack",
+      defaultProviderMode: "live-frontier",
       options: {},
       selectScenarioIds,
     });
@@ -95,7 +95,7 @@ describe("live transport suite runtime", () => {
     expect(selectScenarioIds).toHaveBeenCalledWith({
       profile: undefined,
       primaryModel: expect.any(String),
-      providerMode: "mock-openai",
+      providerMode: "live-frontier",
       scenarioIds: undefined,
     });
     const suiteArgs = runQaSuiteCommand.mock.calls[0]?.[0];

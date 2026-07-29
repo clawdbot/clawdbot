@@ -11,8 +11,8 @@ describe("QA execution sharding", () => {
       index: 2,
       count: 5,
     });
-    expect(() => resolveQaExecutionShard("1", "Matrix QA execution")).toThrow(
-      "Matrix QA execution shard must use <index>/<count>",
+    expect(() => resolveQaExecutionShard("1", "QA execution")).toThrow(
+      "QA execution shard must use <index>/<count>",
     );
     expect(() => resolveQaExecutionShard("0/5")).toThrow("1 <= index <= count");
     expect(() => resolveQaExecutionShard("6/5")).toThrow("1 <= index <= count");
