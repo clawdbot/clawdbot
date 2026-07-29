@@ -37547,7 +37547,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 265,
+      "line": 502,
       "path": "apps/macos/Sources/OpenClaw/RemotePortTunnel.swift",
       "source": "ssh tunnel exited before listening",
       "surface": "apple",
@@ -37555,7 +37555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 279,
+      "line": 516,
       "path": "apps/macos/Sources/OpenClaw/RemotePortTunnel.swift",
       "source": "ssh tunnel did not open local port \\(localPort)",
       "surface": "apple",
@@ -37563,7 +37563,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 279,
+      "line": 516,
       "path": "apps/macos/Sources/OpenClaw/RemotePortTunnel.swift",
       "source": "ssh tunnel failed: \\(stderr)",
       "surface": "apple",
