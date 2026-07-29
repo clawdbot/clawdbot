@@ -57,11 +57,19 @@ observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option           | Effect                                                                                                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `priority`       | Ordering; higher runs first.                                                                                                                                                                      |
-| `registrationId` | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                  |
-| `timeoutMs`      | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout. |
+| Option             | Effect                                                                                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `priority`         | Ordering; higher runs first.                                                                                                                                                                      |
+| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                  |
+| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout. |
+| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                             |
+
+Trigger eligibility is enforced by the host before it invokes the handler. A
+hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
+inactive for user turns and does not block recovery of an interrupted user
+turn. Omitted, empty, malformed, or partly unknown lists remain unrestricted
+so dispatch and recovery fail closed. Other hook kinds do not accept this
+option.
 
 Operators can set hook budgets without patching plugin code:
 
