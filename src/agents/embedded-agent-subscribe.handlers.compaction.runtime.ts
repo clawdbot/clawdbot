@@ -33,5 +33,3 @@ export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   return nextEntry?.compactionCount;
 }
 
-/** @deprecated Use named export {@link reconcileSessionStoreCompactionCountAfterSuccess} instead. */
-export default reconcileSessionStoreCompactionCountAfterSuccess;
