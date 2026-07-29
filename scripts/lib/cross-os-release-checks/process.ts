@@ -13,6 +13,7 @@ import {
   type Socket,
 } from "node:net";
 import { dirname } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
@@ -235,31 +236,23 @@ function resolveCommandCaptureLimit(options: CommandOptions) {
   return Math.max(1, Math.floor(value));
 }
 
-/**
- * Returns the longest UTF-8 suffix of `buffer` that fits within `maxBytes`,
- * skipping any leading continuation bytes so the tail starts at a character
- * boundary instead of producing replacement characters.
- */
-function safeTailBytes(buffer: Buffer, maxBytes: number): Buffer {
-  if (buffer.byteLength <= maxBytes) {
-    return buffer;
-  }
-  const raw = buffer.subarray(buffer.byteLength - maxBytes);
+function decodeBoundedUtf8Tail(buffer: Buffer, maxBytes: number): string {
+  const tail = buffer.subarray(Math.max(0, buffer.byteLength - maxBytes));
   let start = 0;
-  while (start < raw.length) {
-    const byte = raw.at(start);
+  while (start < tail.byteLength) {
+    const byte = tail[start];
     if (byte === undefined || (byte & 0xc0) !== 0x80) {
       break;
     }
     start += 1;
   }
-  return start > 0 ? raw.subarray(start) : raw;
+  return tail.subarray(start).toString("utf8");
 }
 
 function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string, maxBytes: number) {
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
   if (chunkBuffer.byteLength >= maxBytes) {
-    return safeTailBytes(chunkBuffer, maxBytes).toString("utf8");
+    return decodeBoundedUtf8Tail(chunkBuffer, maxBytes);
   }
 
   const currentBuffer = Buffer.from(current);
@@ -268,25 +261,9 @@ function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string,
     return `${current}${chunkBuffer.toString("utf8")}`;
   }
 
-  // Take the suffix of `current` that can stay within the byte budget.
-  // Skip any leading continuation bytes in the cut so the tail starts
-  // at a character boundary.
   const currentTailBytes = maxBytes - chunkBuffer.byteLength;
-  let currentTail = currentBuffer.subarray(
-    Math.max(0, currentBuffer.byteLength - currentTailBytes),
-  );
-  let skip = 0;
-  while (skip < currentTail.length) {
-    const byte = currentTail.at(skip);
-    if (byte === undefined || (byte & 0xc0) !== 0x80) {
-      break;
-    }
-    skip += 1;
-  }
-  if (skip > 0) {
-    currentTail = currentTail.subarray(skip);
-  }
-  return Buffer.concat([currentTail, chunkBuffer]).toString("utf8");
+  const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
+  return decodeBoundedUtf8Tail(Buffer.concat([currentTail, chunkBuffer]), maxBytes);
 }
 
 export async function runCommand(
@@ -319,6 +296,8 @@ export async function runCommandInvocation(
     });
     const activeChildTree = registerActiveChildProcessTree(child);
     const logStream = createWriteStream(options.logPath, { flags: "a" });
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -424,14 +403,20 @@ export async function runCommandInvocation(
     logStream.write(`${new Date().toISOString()} start command=${commandLabel}\n`);
 
     child.stdout?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stdout = appendBoundedCommandOutput(stdout, chunk, maxCapturedOutputBytes);
-      logStream.write(text);
+      stdout = appendBoundedCommandOutput(
+        stdout,
+        stdoutDecoder.write(chunk),
+        maxCapturedOutputBytes,
+      );
+      logStream.write(chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderr = appendBoundedCommandOutput(stderr, chunk, maxCapturedOutputBytes);
-      logStream.write(text);
+      stderr = appendBoundedCommandOutput(
+        stderr,
+        stderrDecoder.write(chunk),
+        maxCapturedOutputBytes,
+      );
+      logStream.write(chunk);
     });
 
     child.on("error", (error) => {
@@ -452,6 +437,8 @@ export async function runCommandInvocation(
         return;
       }
       activeChildTree.unregister();
+      stdout = appendBoundedCommandOutput(stdout, stdoutDecoder.end(), maxCapturedOutputBytes);
+      stderr = appendBoundedCommandOutput(stderr, stderrDecoder.end(), maxCapturedOutputBytes);
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,
