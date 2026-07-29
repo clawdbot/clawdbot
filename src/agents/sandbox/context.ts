@@ -328,9 +328,14 @@ async function resolveProvisionedSandboxContext(
   return sandboxContext;
 }
 
-export async function resolveSandboxContext(
-  params: ResolveSandboxContextParams,
-): Promise<SandboxContext | null> {
+export async function resolveSandboxContext(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  execOverrides?: ExecPolicyOverrides;
+  requireCurrentConfig?: boolean;
+  sessionKey?: string;
+  workspaceDir?: string;
+}): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
     return null;
