@@ -47,8 +47,8 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Every PR review must explicitly ask whether the PR is the best fix, not merely a plausible fix. Verdicts need a best-fix judgment backed by enough code reading to compare owner boundaries, callers, siblings, tests, docs, current `main`, shipped behavior when relevant, and dependency/Codex contracts when involved.
 - Before a PR verdict, build a small evidence map: changed surface, entry point, owner boundary, at least one caller and callee, sibling surfaces that share the invariant, existing tests, and current `main` behavior. If any cell is missing, say the gap instead of concluding.
 - One-sided fixes need sibling-surface proof, an explanation for why siblings are unaffected, or explicit follow-up work.
-- Verify the premise before fixing: a limitation that looks like an oversight is often the design, and an absence can be load-bearing. Check intent (`git log -p -S <symbol>`) and point to the exact line where the bug manifests before concluding something is unfinished.
-- Taste-based won't-implement/out-of-scope closes are human maintainer decisions. Automated review recognizes design intent and avoids wrongly closing legitimate contributions; it never makes the won't-implement call itself.
+- Verify the premise before fixing: restrictions and missing links are sometimes intentional design, and removed code often had a reason. Check history (`git log -p -S <symbol>`) and name the exact line where the reported bug manifests before treating a gap as unfinished work.
+- Won't-implement and out-of-scope closes are maintainer product judgment. Automated review may recommend with evidence but never executes that close on its own; when design intent is plausible, escalate instead of closing.
 - Doctrine-class findings are first-class: an action path that can end with no visible outcome and no recorded reason; a default-path regression; prompt/tool-description text that contradicts shipped behavior; multi-signal inference where a recorded fact belongs; a new default-off capability with no named enablement path.
 - Before landing any PR: read the latest ClawSweeper comment and its `Rank-up moves:` list. Apply each move, or state in the PR why it is skipped; never merge past them silently. No `@clawsweeper re-review` round-trip is required — the moves are already in the existing comment; re-review only refreshes the rating.
 - Changelog findings: see Docs / Changelog.
@@ -283,7 +283,7 @@ Mechanics only; policy lives above.
 - Prefer invariant assertions (every input accounted for; every action ends in a visible outcome or recorded non-outcome) over enumerating happy paths.
 - Inject faults — network, provider, ordering, restart — instead of asserting only success shapes. Changes to delivery, dispatch, or session paths need at least one boundary-level proof (harness or live), not only unit tests of the changed function.
 - Prefer behavior tests over workflow/docs string greps. Put operator policy reminders in AGENTS/docs.
-- A test asserting on files in lane X belongs in lane X's suite. Cross-lane assertions skip under the changed-file classifier on PRs and only fail later on `main`, where the classifier fails open.
+- A test asserting on files owned by lane X belongs in lane X's suite. A cross-lane assertion may never be selected by PR change classification, so it passes PR CI and first breaks on `main` full runs.
 - QA scenario sources are YAML only: `qa/scenarios/index.yaml` and `qa/scenarios/<theme>/*.yaml`. Do not add fenced `qa-scenario`/`qa-flow` Markdown files under `qa/scenarios/`.
 - Clean timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` safe.
 - Tests asserting resolver/root-containment paths: `fs.realpath` mkdtemp/tmp roots first. macOS `os.tmpdir()` is a `/var` -> `/private/var` symlink; prod resolvers return canonical paths, so raw mkdtemp assertions pass on Linux CI but fail on Mac.
