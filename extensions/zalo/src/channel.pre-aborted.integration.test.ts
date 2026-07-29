@@ -82,13 +82,13 @@ describe("configured Zalo gateway with a pre-aborted lifecycle", () => {
   });
 
   it.each([
-    { mode: "polling", channel: { botToken: "loopback-proof-token" } },
+    { mode: "polling", channel: { botToken: "test-bot-token" } },
     {
       mode: "webhook",
       channel: {
-        botToken: "loopback-proof-token",
+        botToken: "test-bot-token",
         webhookUrl: "https://example.invalid/hooks/zalo",
-        webhookSecret: "loopback-proof-secret",
+        webhookSecret: "test-webhook-secret",
       },
     },
   ] as const)("performs only the account probe in $mode mode", async ({ channel }) => {

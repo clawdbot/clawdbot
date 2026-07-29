@@ -274,7 +274,7 @@ describe("monitorZaloProvider lifecycle", () => {
       abortSignal: preAborted.signal,
       useWebhook: true,
       webhookUrl: "https://example.com/hooks/zalo",
-      webhookSecret: "test-secret-min-8-chars",
+      webhookSecret: "test-webhook-secret",
     });
 
     // setWebhookMock should not be called — we returned before webhook setup.
