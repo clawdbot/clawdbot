@@ -1235,6 +1235,7 @@ jobs:
           candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"
           sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"
           [[ "$(stat -c '%F:%a:%u:%g' "$candidate_artifacts_dir")" == "directory:700:${sut_uid}:${sut_gid}" ]]
+          sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "${candidate_artifacts_dir}/qa-runtime"
           evidence_relative=".trusted-qa-evidence/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           evidence_root="${CANDIDATE_ROOT}/${evidence_relative}"
           boundary_evidence_dir="${evidence_root}/process-boundary"

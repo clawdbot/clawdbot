@@ -92,6 +92,9 @@ extension OpenClawChatViewModel {
         if let idempotencyKey = Self.normalizedIdempotencyKey(message.idempotencyKey) {
             return [role, "idempotency", idempotencyKey].joined(separator: "|")
         }
+        if let transcriptMessageID = Self.normalizedTranscriptMessageID(message.transcriptMessageID) {
+            return [role, "transcript", transcriptMessageID].joined(separator: "|")
+        }
 
         let timestamp: String = {
             guard let value = message.timestamp, value.isFinite else { return "" }
@@ -146,6 +149,11 @@ extension OpenClawChatViewModel {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func normalizedTranscriptMessageID(_ id: String?) -> String? {
+        let trimmed = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func adoptingCanonicalMessage(
         _ incoming: OpenClawChatMessage,
         over existing: OpenClawChatMessage) -> OpenClawChatMessage
@@ -157,6 +165,7 @@ extension OpenClawChatViewModel {
                 in: incoming.content,
                 from: existing.content),
             timestamp: incoming.timestamp ?? existing.timestamp,
+            transcriptMessageID: incoming.transcriptMessageID ?? existing.transcriptMessageID,
             idempotencyKey: incoming.idempotencyKey,
             toolCallId: incoming.toolCallId,
             toolName: incoming.toolName,
@@ -695,6 +704,9 @@ extension OpenClawChatViewModel {
     static func dedupeKey(for message: OpenClawChatMessage) -> String? {
         if let idempotencyKey = normalizedIdempotencyKey(message.idempotencyKey) {
             return "\(message.role)|idempotency|\(idempotencyKey)"
+        }
+        if let transcriptMessageID = normalizedTranscriptMessageID(message.transcriptMessageID) {
+            return "\(message.role)|transcript|\(transcriptMessageID)"
         }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")

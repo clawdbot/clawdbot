@@ -473,6 +473,15 @@ export const mainLanes = [
     weight: 3,
   }),
   serviceLane(
+    "sandbox-browser-sidecar",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:sandbox-browser-sidecar",
+    {
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 4,
+    },
+  ),
+  serviceLane(
     "agents-delete-shared-workspace",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agents-delete-shared-workspace",
     { stateScenario: "empty" },

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { GrammyError } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import {
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
+import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
 import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.js";
 import {
   TelegramIngressPayloadError,
@@ -50,7 +52,85 @@ function updatePayload(updateId: number): TelegramSpooledUpdatePayload {
   };
 }
 
+function telegramSendError(errorCode: number, description: string): GrammyError {
+  return new GrammyError(
+    "Call to 'sendMessage' failed",
+    { ok: false, error_code: errorCode, description },
+    "sendMessage",
+    { chat_id: 111 },
+  );
+}
+
+describe("resolveTelegramIngressNonRetryableFailure", () => {
+  it.each([
+    "Forbidden: bot was blocked by the user",
+    "Forbidden: bot was kicked from the group chat",
+    "Forbidden: user is deactivated",
+  ])("classifies permanent Telegram recipient rejection: %s", (description) => {
+    expect(resolveTelegramIngressNonRetryableFailure(telegramSendError(403, description))).toEqual({
+      reason: "recipient-unreachable",
+      message: expect.stringContaining(description),
+    });
+  });
+
+  it("classifies a permanent recipient error nested inside a dispatch failure", () => {
+    const cause = telegramSendError(403, "Forbidden: bot was blocked by the user");
+
+    expect(
+      resolveTelegramIngressNonRetryableFailure(new Error("pairing reply failed", { cause })),
+    ).toEqual({
+      reason: "recipient-unreachable",
+      message: expect.stringContaining("bot was blocked by the user"),
+    });
+  });
+
+  it("keeps recoverable Telegram permission failures eligible for retry", () => {
+    const error = telegramSendError(403, "Forbidden: not enough rights to send text messages");
+
+    expect(resolveTelegramIngressNonRetryableFailure(error)).toBeNull();
+  });
+
+  it("keeps flood-control failures eligible for retry", () => {
+    const error = telegramSendError(429, "Too Many Requests: retry after 30");
+
+    expect(resolveTelegramIngressNonRetryableFailure(error)).toBeNull();
+  });
+});
+
 describe("createTelegramIngressMonitor", () => {
+  it("dead-letters a real blocked-recipient Telegram API error without retrying it", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const eventId = "3".padStart(16, "0");
+      const payload = updatePayload(3);
+      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+      await queue.enqueue(eventId, payload, { laneKey });
+
+      const error = telegramSendError(403, "Forbidden: bot was blocked by the user");
+      const dispatch = vi.fn(async () => ({ kind: "failed-retryable" as const, error }));
+      const monitor = createTelegramIngressMonitor({ queue, cfg, accountId: "default", dispatch });
+
+      monitor.start();
+      await monitor.waitForIdle();
+
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([
+        expect.objectContaining({
+          id: eventId,
+          reason: "recipient-unreachable",
+          message: expect.stringContaining("bot was blocked by the user"),
+        }),
+      ]);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+
+      await monitor.stop();
+    });
+  });
+
   it("propagates failed-retryable dispatch results as claim release (not tombstone)", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({

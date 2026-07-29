@@ -14,7 +14,7 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
-} from "../extensions/qa-lab/api.ts";
+} from "../extensions/qa-lab/api.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
 
