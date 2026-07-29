@@ -133,6 +133,7 @@ export function repairCanonicalSqliteIndexes(
       }
       db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
       db.exec(createIndexSql(index, index.name, true));
+      assertSqliteIdentifier(probeName);
       db.exec(`DROP INDEX main.${probeName};`);
     }
     if (repairIndexes.size === 0) {
