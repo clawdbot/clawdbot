@@ -5,6 +5,7 @@ import {
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getSynologyRuntime } from "./runtime.js";
 
@@ -96,10 +97,6 @@ function inspectSynologyIngressEvent(event: SynologyWebhookRawEvent): {
     eventId,
     laneKey: channelId ? `channel:${channelId}` : `direct:${userId}`,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function deserializeSynologyIngressEvent(

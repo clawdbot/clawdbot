@@ -6,6 +6,7 @@ import {
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchChatMessage } from "./types.js";
 import { normalizeTwitchChannel } from "./utils/twitch.js";
@@ -38,10 +39,6 @@ class TwitchIngressPermanentError extends Error {
     super(message, options);
     this.name = "TwitchIngressPermanentError";
   }
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function inspectTwitchIngressEvent(event: unknown): { eventId: string; laneKey: string } {
