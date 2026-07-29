@@ -818,7 +818,16 @@ describe("config io write prepare", () => {
     };
     expect(
       resolvePersistCandidateForWrite({
-        runtimeConfig: sourceConfig,
+        runtimeConfig: {
+          agents: {
+            defaults: {
+              model: { primary: "google/gemini-3.1-pro-preview" },
+              models: {
+                "google/gemini-3.1-pro-preview": { alias: "Gemini", params },
+              },
+            },
+          },
+        },
         sourceConfig,
         nextConfig: {
           agents: {
@@ -832,8 +841,148 @@ describe("config io write prepare", () => {
     ).toEqual({
       agents: {
         defaults: {
-          model: { primary: "google/gemini-3.1-pro-preview" },
+          model: { primary: "google/gemini-3-pro-preview" },
           models: { "google/gemini-3.1-pro-preview": { params } },
+        },
+      },
+    });
+  });
+
+  it("canonicalizes only agent model maps touched through normalized runtime identities", () => {
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [retired]: { alias: "Default before", agentRuntime: { id: "codex" } },
+          },
+        },
+        entries: { ops: { models: { [retired]: { alias: "Ops before" } } } },
+      },
+    };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [canonical]: { alias: "Default before", agentRuntime: { id: "codex" } },
+          },
+        },
+        entries: { ops: { models: { [canonical]: { alias: "Ops before" } } } },
+      },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig,
+        sourceConfig,
+        nextConfig: {
+          agents: {
+            defaults: {
+              models: {
+                [canonical]: { alias: "Default after", agentRuntime: { id: "codex" } },
+              },
+            },
+            entries: { ops: { models: { [canonical]: { alias: "Ops after" } } } },
+          },
+        },
+      }),
+    ).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            [canonical]: { alias: "Default after", agentRuntime: { id: "codex" } },
+          },
+        },
+        entries: { ops: { models: { [canonical]: { alias: "Ops after" } } } },
+      },
+    });
+  });
+
+  it("leaves untouched retired model maps for doctor instead of normalizing unrelated writes", () => {
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const sourceConfig = {
+      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig = {
+      agents: { defaults: { models: { [canonical]: { alias: "Gemini" } } } },
+      gateway: { port: 18789 },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig,
+        sourceConfig,
+        nextConfig: { ...runtimeConfig, gateway: { port: 18888 } },
+      }),
+    ).toEqual({
+      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+      gateway: { port: 18888 },
+    });
+  });
+
+  it("canonicalizes an explicitly persisted model-map path even when runtime values are equal", () => {
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const sourceConfig = {
+      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+    };
+    const runtimeConfig = {
+      agents: { defaults: { models: { [canonical]: { alias: "Gemini" } } } },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig,
+        sourceConfig,
+        nextConfig: runtimeConfig,
+        explicitSetPaths: [["agents", "defaults", "models"]],
+      }),
+    ).toEqual(runtimeConfig);
+  });
+
+  it("canonicalizes only the model identity selected by an explicit descendant path", () => {
+    const retiredA = "google/gemini-3-pro-preview";
+    const canonicalA = "google/gemini-3.1-pro-preview";
+    const retiredB = "google/gemma-4-26b";
+    const canonicalB = "google/gemma-4-26b-a4b-it";
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [retiredA]: { alias: "Gemini" },
+            [retiredB]: { alias: "Gemma" },
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [canonicalA]: { alias: "Gemini" },
+            [canonicalB]: { alias: "Gemma" },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig,
+        sourceConfig,
+        nextConfig: runtimeConfig,
+        explicitSetPaths: [["agents", "defaults", "models", canonicalA, "alias"]],
+      }),
+    ).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            [canonicalA]: { alias: "Gemini" },
+            [retiredB]: { alias: "Gemma" },
+          },
         },
       },
     });

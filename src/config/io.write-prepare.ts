@@ -13,7 +13,7 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
-import { normalizeAgentModelRefForConfig } from "./model-input.js";
+import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import type { OpenClawConfig } from "./types.js";
 
 const AGENT_ROSTER_PATHS = [
@@ -308,6 +308,100 @@ function deletePathValue(value: unknown, path: string[]): unknown {
     return next;
   }
   next[head] = deletePathValue(value[head], tail);
+  return next;
+}
+
+function normalizeTouchedAgentModelMapEntries(params: {
+  projectedSource: unknown;
+  patch: unknown;
+  explicitSetPaths?: readonly (readonly string[])[];
+  explicitSetValueSource: unknown;
+}): unknown {
+  const touchedMaps = new Map<string, { path: string[]; canonicalKeys: Set<string> }>();
+  const addKey = (path: string[], modelId: string) => {
+    const serialized = path.join("\0");
+    const target = touchedMaps.get(serialized) ?? { path, canonicalKeys: new Set<string>() };
+    target.canonicalKeys.add(normalizeAgentModelRefForConfig(modelId));
+    touchedMaps.set(serialized, target);
+  };
+
+  const defaultsModelsPatch = getPathValue(params.patch, ["agents", "defaults", "models"]);
+  if (isRecord(defaultsModelsPatch)) {
+    for (const modelId of Object.keys(defaultsModelsPatch)) {
+      addKey(["agents", "defaults", "models"], modelId);
+    }
+  }
+  const entriesPatch = getPathValue(params.patch, ["agents", "entries"]);
+  if (isRecord(entriesPatch)) {
+    for (const [agentId, entryPatch] of Object.entries(entriesPatch)) {
+      if (isRecord(entryPatch) && isRecord(entryPatch.models)) {
+        for (const modelId of Object.keys(entryPatch.models)) {
+          addKey(["agents", "entries", agentId, "models"], modelId);
+        }
+      }
+    }
+  }
+  const explicitModelMaps: string[][] = [["agents", "defaults", "models"]];
+  const explicitEntries = getPathValue(params.explicitSetValueSource, ["agents", "entries"]);
+  if (isRecord(explicitEntries)) {
+    for (const agentId of Object.keys(explicitEntries)) {
+      explicitModelMaps.push(["agents", "entries", agentId, "models"]);
+    }
+  }
+  for (const modelMapPath of explicitModelMaps) {
+    for (const explicitPath of params.explicitSetPaths ?? []) {
+      if (pathStartsWith(explicitPath, modelMapPath) && explicitPath.length > modelMapPath.length) {
+        const modelId = explicitPath[modelMapPath.length];
+        if (modelId) {
+          addKey(modelMapPath, modelId);
+        }
+        continue;
+      }
+      if (
+        !pathStartsWith(explicitPath, modelMapPath) &&
+        !pathStartsWith(modelMapPath, explicitPath)
+      ) {
+        continue;
+      }
+      const explicitModels = getPathValue(params.explicitSetValueSource, modelMapPath);
+      if (!isRecord(explicitModels)) {
+        continue;
+      }
+      for (const modelId of Object.keys(explicitModels)) {
+        addKey(modelMapPath, modelId);
+      }
+    }
+  }
+
+  let next = params.projectedSource;
+  for (const { path, canonicalKeys } of touchedMaps.values()) {
+    const models = getPathValue(next, path);
+    if (!isRecord(models)) {
+      continue;
+    }
+    const touchedEntries: Array<[string, unknown]> = [];
+    const untouchedEntries: Array<[string, unknown]> = [];
+    let hasRetiredTouchedKey = false;
+    for (const [modelId, entry] of Object.entries(models)) {
+      const normalizedModelId = normalizeAgentModelRefForConfig(modelId);
+      if (!canonicalKeys.has(normalizedModelId)) {
+        untouchedEntries.push([modelId, entry]);
+        continue;
+      }
+      touchedEntries.push([modelId, entry]);
+      hasRetiredTouchedKey ||= normalizedModelId !== modelId;
+    }
+    if (hasRetiredTouchedKey) {
+      const normalizedTouchedEntries = normalizeAgentModelMapForConfig(
+        Object.fromEntries(touchedEntries),
+      );
+      next = setPathValue(
+        next,
+        path,
+        Object.fromEntries([...untouchedEntries, ...Object.entries(normalizedTouchedEntries)]),
+      );
+    }
+  }
   return next;
 }
 
@@ -1402,7 +1496,12 @@ export function resolvePersistCandidateForWrite(params: {
   allowIncludeAncestorExplicitSetPaths?: boolean;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
-  const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
+  const projectedSource = normalizeTouchedAgentModelMapEntries({
+    projectedSource: projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig),
+    patch,
+    explicitSetPaths: params.explicitSetPaths,
+    explicitSetValueSource: params.explicitSetValueSource ?? params.nextConfig,
+  });
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
   const persistCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
   const includeOwnsRoster =
