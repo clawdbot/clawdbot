@@ -12350,6 +12350,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
     public let source: AnyCodable
     public let pluginid: String?
     public let channelid: String?
+    public let mcpserver: String?
+    public let mcptoolname: String?
+    public let deniedbysession: Bool?
     public let risk: AnyCodable?
     public let tags: [String]?
 
@@ -12361,6 +12364,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         source: AnyCodable,
         pluginid: String? = nil,
         channelid: String? = nil,
+        mcpserver: String? = nil,
+        mcptoolname: String? = nil,
+        deniedbysession: Bool? = nil,
         risk: AnyCodable? = nil,
         tags: [String]? = nil)
     {
@@ -12371,6 +12377,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         self.source = source
         self.pluginid = pluginid
         self.channelid = channelid
+        self.mcpserver = mcpserver
+        self.mcptoolname = mcptoolname
+        self.deniedbysession = deniedbysession
         self.risk = risk
         self.tags = tags
     }
@@ -12383,6 +12392,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         case source
         case pluginid = "pluginId"
         case channelid = "channelId"
+        case mcpserver = "mcpServer"
+        case mcptoolname = "mcpToolName"
+        case deniedbysession = "deniedBySession"
         case risk
         case tags
     }
