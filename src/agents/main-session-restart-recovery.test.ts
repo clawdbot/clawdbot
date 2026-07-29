@@ -91,7 +91,7 @@ const transcriptMocks = vi.hoisted(() => ({
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
   ensureRuntimePluginsLoaded: vi.fn(),
-  findRestartRecoveryUnsafeReplyHook: vi.fn<() => string | undefined>(),
+  findRestartRecoveryUnsafeReplyHook: vi.fn<(ctx: { trigger?: string }) => string | undefined>(),
 }));
 const discordDeliveryContext = {
   channel: "discord",
@@ -1687,7 +1687,9 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 }, {});
-    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledWith({
+      trigger: "user",
+    });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({
       deliver: true,

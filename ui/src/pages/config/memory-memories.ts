@@ -3,11 +3,9 @@ import { property, state } from "lit/decorators.js";
 import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/memory-memories.css";
-import { renderMemoryAgentScope } from "./memory.ts";
 
 type SearchResult = MemorySearchResponse["results"][number];
 type SearchState =
@@ -59,8 +57,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   @property({ type: Boolean }) connected = false;
   @property({ type: Boolean }) methodAdvertised = true;
   @property() agentId: string | null = null;
-  @property({ attribute: false }) agents: readonly AgentSelectOption[] = [];
-  @property({ attribute: false }) onAgentChange: (agentId: string | null) => void = () => {};
 
   @state() private query = "";
   @state() private searchState: SearchState = { kind: "idle" };
@@ -277,11 +273,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
 
   override render() {
     return html`<div class="settings-page memory-memories">
-      ${renderMemoryAgentScope({
-        agentId: this.agentId,
-        agents: this.agents,
-        onAgentChange: this.onAgentChange,
-      })}
       ${!this.methodAdvertised
         ? html`<p class="memory-memories__unavailable">
             ${t("memoryPage.memories.gatewayUpdateRequired")}

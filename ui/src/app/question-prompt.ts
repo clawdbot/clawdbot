@@ -1,4 +1,5 @@
 // Control UI module owns transient operator question state.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   Question,
   QuestionAnswers,
@@ -54,10 +55,6 @@ type QuestionPromptState = {
 type QuestionAnswerValues = Record<string, string[]>;
 
 const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function readNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {

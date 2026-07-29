@@ -31,6 +31,7 @@ const log = createSubsystemLogger("skills/workshop");
 type ExperienceReviewAgentEndEvent = {
   messages: unknown[];
   success: boolean;
+  error?: string;
 };
 
 type ExperienceReviewAgentContext = {
@@ -73,6 +74,7 @@ export type ExperienceReviewCandidate = {
   config?: OpenClawConfig;
   transcript: string;
   modelIterations: number;
+  turnAborted?: boolean;
 };
 
 type ExperienceReviewRunDeps = {
@@ -276,9 +278,14 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
       const existing = pendingBySession.get(sessionKey);
+      // Errored completions (provider/prompt failures) are transient environment
+      // noise, not learnable evidence, and a same-model review would likely hit
+      // the same failure. User aborts carry no error and stay eligible: deep
+      // interrupted turns are exactly where corrective evidence lives.
+      const errored = typeof params.event.error === "string" && params.event.error.trim() !== "";
       if (
         existing &&
-        !params.event.success &&
+        errored &&
         params.ctx.runId?.trim() &&
         params.ctx.runId === existing.candidate.ctx.runId
       ) {
@@ -292,6 +299,9 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       // eligibility only decides whether that completion can replace the evidence.
       if (existing) {
         arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
+      }
+      if (errored) {
+        return;
       }
       if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off") {
         return;
@@ -314,7 +324,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
             ? reportedModelIterations
             : 0;
-      if (params.event.success && modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
+      if (modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
           const oldest = pendingBySession.entries().next().value as
             | [string, PendingExperienceReview]
@@ -357,6 +367,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           ...(params.config ? { config: params.config } : {}),
           transcript: formatSkillExperienceReviewTranscript(turnMessages),
           modelIterations,
+          turnAborted: !params.event.success,
         };
         const pending = existing ?? { candidate, generation: 0 };
         pending.candidate = candidate;

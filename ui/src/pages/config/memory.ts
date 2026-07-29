@@ -79,6 +79,9 @@ type MemoryViewProps = {
   editor: TemplateResult;
   /** Global dreaming controls, sharing runtimeConfig with the editor above. */
   dreamingSettings: TemplateResult;
+  agentId: string | null;
+  agents: readonly AgentSelectOption[];
+  onAgentChange: (agentId: string | null) => void;
 };
 
 const MEMORY_PANEL_ID = "memory-settings-panel";
@@ -86,30 +89,6 @@ const MEMORY_PANEL_ID = "memory-settings-panel";
 const MEMORY_DOCS_URL = "https://docs.openclaw.ai/concepts/memory";
 
 const MEMORY_ENGINE_OFF = "";
-
-export function renderMemoryAgentScope(props: {
-  agentId: string | null;
-  agents: readonly AgentSelectOption[];
-  onAgentChange: (agentId: string | null) => void;
-}) {
-  return renderSettingsSection(
-    {
-      title: t("memoryPage.dreaming.agentScope.title"),
-      description: t("memoryPage.dreaming.agentScope.description"),
-    },
-    renderSettingsRow({
-      title: t("memoryPage.dreaming.agentScope.rowTitle"),
-      control: html`
-        <openclaw-agent-select
-          .options=${props.agents}
-          .value=${props.agentId ?? ""}
-          .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
-          .onSelect=${(value: string) => props.onAgentChange(value || null)}
-        ></openclaw-agent-select>
-      `,
-    }),
-  );
-}
 
 function engineHintKey(selection: MemoryEngineSelection): string {
   switch (selection.kind) {
@@ -318,22 +297,46 @@ function renderSettingsTab(props: MemoryViewProps) {
 export function renderMemory(props: MemoryViewProps) {
   return html`
     <section class="memory-page">
-      <p class="settings-page__intro">
-        ${t("memoryPage.intro")} ${renderDocsLink(MEMORY_DOCS_URL, t("common.learnMore"))}
-      </p>
-      ${renderHubTabs<MemoryTab>({
-        id: "memory",
-        active: props.activeTab,
-        tabs: [
-          { value: "overview", label: t("memoryPage.tabs.overview") },
-          { value: "memories", label: t("memoryPage.tabs.memories") },
-          { value: "dreams", label: t("memoryPage.tabs.dreams") },
-          { value: "settings", label: t("memoryPage.tabs.settings") },
-        ],
-        ariaLabel: t("memoryPage.tablistLabel"),
-        panelId: MEMORY_PANEL_ID,
-        onSelect: (tab) => props.onTabChange(tab),
-      })}
+      <section class="content-header content-header--page hub-page-header">
+        <div class="hub-page-header__title">
+          <div class="page-title">${t("tabs.memory")}</div>
+          <div class="page-subtitle">
+            ${t("memoryPage.intro")} ${renderDocsLink(MEMORY_DOCS_URL, t("common.learnMore"))}
+          </div>
+        </div>
+        <div class="hub-page-header__tabs">
+          ${renderHubTabs<MemoryTab>({
+            id: "memory",
+            active: props.activeTab,
+            tabs: [
+              { value: "overview", label: t("memoryPage.tabs.overview") },
+              { value: "memories", label: t("memoryPage.tabs.memories") },
+              { value: "dreams", label: t("memoryPage.tabs.dreams") },
+              { value: "settings", label: t("memoryPage.tabs.settings") },
+            ],
+            ariaLabel: t("memoryPage.tablistLabel"),
+            panelId: MEMORY_PANEL_ID,
+            onSelect: (tab) => props.onTabChange(tab),
+          })}
+        </div>
+        <div class="hub-page-header__actions">
+          ${props.activeTab === "settings"
+            ? nothing
+            : html`
+                <div class="agent-scope-control">
+                  <span class="agent-scope-control__label"
+                    >${t("memoryPage.dreaming.agentScope.rowTitle")}</span
+                  >
+                  <openclaw-agent-select
+                    .options=${props.agents}
+                    .value=${props.agentId ?? ""}
+                    .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
+                    .onSelect=${(value: string) => props.onAgentChange(value || null)}
+                  ></openclaw-agent-select>
+                </div>
+              `}
+        </div>
+      </section>
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">
         ${props.activeTab === "overview"
           ? props.overview

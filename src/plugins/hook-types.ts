@@ -279,6 +279,26 @@ const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES)
 export const isConversationHookName = (hookName: PluginHookName): boolean =>
   conversationHookNameSet.has(hookName);
 
+const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
+
+export type PluginHookAgentTrigger = (typeof PLUGIN_HOOK_AGENT_TRIGGERS)[number];
+
+const pluginHookAgentTriggerSet = new Set<PluginHookAgentTrigger>(PLUGIN_HOOK_AGENT_TRIGGERS);
+
+export const isPluginHookAgentTrigger = (trigger: unknown): trigger is PluginHookAgentTrigger =>
+  typeof trigger === "string" && pluginHookAgentTriggerSet.has(trigger as PluginHookAgentTrigger);
+
+export type PluginHookRegistrationOptions<K extends PluginHookName> = {
+  priority?: number;
+  registrationId?: string;
+  timeoutMs?: number;
+} & (K extends "before_agent_reply"
+  ? {
+      /** Host-enforced turn triggers that may invoke this reply hook. */
+      eligibleTriggers?: readonly [PluginHookAgentTrigger, ...PluginHookAgentTrigger[]];
+    }
+  : { eligibleTriggers?: never });
+
 export type PluginHookAgentContext = {
   runId?: string;
   jobId?: string;
@@ -1408,6 +1428,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   handler: PluginHookHandlerMap[K];
   priority?: number;
   timeoutMs?: number;
+  eligibleTriggers?: readonly PluginHookAgentTrigger[];
   source: string;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,6 +7,7 @@ import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
+import type { Locale } from "../../i18n/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import type { WebPushUiState } from "./notifications-section.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
@@ -87,6 +88,8 @@ export type ConfigProps = {
   version: string;
   theme: ThemeName;
   themeMode: ThemeMode;
+  locale: Locale;
+  onLocaleChange: (locale: Locale) => void;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   hasCustomTheme: boolean;

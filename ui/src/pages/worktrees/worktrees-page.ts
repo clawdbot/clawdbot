@@ -4,11 +4,12 @@ import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { shouldHandleNavigationClick } from "../../components/app-sidebar-nav-menus.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
+  renderDocsLink,
   renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsRow,
@@ -24,6 +25,8 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+
+const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
 type WorktreesListResult = { worktrees: WorktreeRecord[] };
 type WorktreesRemoveResult = { removed: boolean; snapshotError?: string };
@@ -505,6 +508,8 @@ class WorktreesPage extends OpenClawLightDomElement {
       ${renderSessionsHubHeader({
         active: "worktrees",
         title: titleForRoute("sessions"),
+        subtitle: html`${subtitleForRoute("worktrees")}
+        ${renderDocsLink(WORKTREES_DOCS_URL, t("common.learnMore"))}`,
         onSelect: (tab) => {
           if (tab !== "worktrees") {
             this.context?.navigate(tab);

@@ -1135,6 +1135,71 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it.each([
+    {
+      name: "structured context_overflow code",
+      fields: {
+        errorCode: "context_overflow",
+        errorMessage: "400 The prompt is too long: 203557, model maximum context length: 196607",
+      },
+    },
+    {
+      name: "provider request_too_large code",
+      fields: {
+        errorCode: "request_too_large",
+        errorMessage: "private upstream body: 203557 tokens sent",
+      },
+    },
+    {
+      name: "provider context-window message",
+      fields: {
+        errorType: "invalid_request_error",
+        errorMessage: "Request size exceeds model context window",
+      },
+    },
+    {
+      name: "embedded context_overflow message",
+      fields: {
+        errorMessage: "Unhandled stop reason: context_overflow",
+      },
+    },
+    {
+      name: "provider maximum-token input message",
+      fields: {
+        errorMessage: "Input exceeds the maximum number of tokens for this model.",
+      },
+    },
+  ])(
+    "projects empty context-overflow assistant errors with recovery guidance: $name",
+    ({ fields }) => {
+      const result = projectRecentChatDisplayMessages([
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          ...fields,
+          timestamp: 1,
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.",
+            },
+          ],
+          stopReason: "error",
+          timestamp: 1,
+        },
+      ]);
+      expect(JSON.stringify(result)).not.toContain("203557");
+      expect(JSON.stringify(result)).not.toContain("196607");
+    },
+  );
+
+  it.each([
     ["output_text", ""],
     ["output_text", "NO_REPLY"],
     ["input_text", ""],
@@ -2402,8 +2467,30 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   it.each([
     {
       name: "passes through string content",
-      attachments: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
-      expected: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+      attachments: [
+        {
+          type: "file",
+          mimeType: "image/png",
+          fileName: "a.png",
+          content: "Zm9v",
+          sizeBytes: 3,
+          durationMs: 10,
+          width: 1,
+          height: 1,
+        },
+      ],
+      expected: [
+        {
+          type: "file",
+          mimeType: "image/png",
+          fileName: "a.png",
+          content: "Zm9v",
+          sizeBytes: 3,
+          durationMs: 10,
+          width: 1,
+          height: 1,
+        },
+      ],
     },
     {
       name: "converts Uint8Array content to base64",

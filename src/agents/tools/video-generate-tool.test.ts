@@ -704,6 +704,7 @@ describe("createVideoGenerateTool", () => {
         path: "/tmp/generated-lobster.mp4",
         mimeType: "video/mp4",
         name: "generated-lobster.mp4",
+        sizeBytes: 11,
         durationMs: 3250,
         width: 1280,
         height: 720,

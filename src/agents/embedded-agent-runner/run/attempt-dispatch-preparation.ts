@@ -36,6 +36,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;
   observeToolOutcome: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"]["onToolOutcome"];
+  isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: Parameters<
     typeof dispatchEmbeddedRunAttempt
   >[0]["control"]["allocateToolOutcomeOrdinal"];
@@ -244,6 +245,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       laneTaskReleaseController,
       noteLaneTaskProgress,
       onToolOutcome: input.observeToolOutcome,
+      isTurnTainted: input.isTurnTainted,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
       onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
       onRunProgress: notifyRunProgress,

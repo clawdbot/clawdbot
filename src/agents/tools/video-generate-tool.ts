@@ -840,6 +840,10 @@ async function executeVideoGenerationJob(params: {
       path: video.path,
       mimeType: video.contentType,
       name: video.id,
+      sizeBytes: video.size,
+      ...(typeof normalizedDurationSeconds === "number"
+        ? { durationMs: normalizedDurationSeconds * 1000 }
+        : {}),
       ...savedVideoMetadata[index],
     })),
     ...urlOnlyVideos.map((video) => ({
@@ -847,6 +851,9 @@ async function executeVideoGenerationJob(params: {
       url: video.url,
       mimeType: video.mimeType,
       name: video.fileName,
+      ...(typeof normalizedDurationSeconds === "number"
+        ? { durationMs: normalizedDurationSeconds * 1000 }
+        : {}),
     })),
   ];
   const lines = [

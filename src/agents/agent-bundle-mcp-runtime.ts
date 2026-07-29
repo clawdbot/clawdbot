@@ -658,6 +658,9 @@ export function createSessionMcpRuntime(params: {
       const tools: McpCatalogTool[] = (retryBaseCatalog?.tools ?? []).filter(
         (tool) => !retryServerNames?.has(tool.serverName),
       );
+      const sessionDeniedTools: McpCatalogTool[] = (
+        retryBaseCatalog?.sessionDeniedTools ?? []
+      ).filter((tool) => !retryServerNames?.has(tool.serverName));
       const diagnostics: McpToolCatalogDiagnostic[] = [];
       // Prefer session-wide precomputed assignments; fall back only for isolated runtimes.
       const safeServerNamesByServer =
@@ -832,9 +835,12 @@ export function createSessionMcpRuntime(params: {
                 const deniedToolNames = new Set(
                   denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
                 );
-                const exposedTools = listedTools.filter((tool) => {
+                const policyEligibleTools = listedTools.filter((tool) =>
+                  shouldExposeMcpTool(selection, tool.name.trim()),
+                );
+                const exposedTools = policyEligibleTools.filter((tool) => {
                   const toolName = tool.name.trim();
-                  return !deniedToolNames.has(toolName) && shouldExposeMcpTool(selection, toolName);
+                  return !deniedToolNames.has(toolName);
                 });
                 const serverEntry: McpServerCatalog = {
                   serverName,
@@ -868,7 +874,7 @@ export function createSessionMcpRuntime(params: {
                     : {}),
                 };
                 const toolEntries: McpCatalogTool[] = [];
-                for (const tool of exposedTools) {
+                for (const tool of policyEligibleTools) {
                   const toolName = tool.name.trim();
                   if (!toolName) {
                     continue;
@@ -894,6 +900,7 @@ export function createSessionMcpRuntime(params: {
                     fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
+                    ...(deniedToolNames.has(toolName) ? { deniedBySession: true } : {}),
                   });
                 }
                 return {
@@ -961,7 +968,13 @@ export function createSessionMcpRuntime(params: {
           if (serverEntry) {
             servers[result.serverName] = serverEntry;
           }
-          tools.push(...toolEntries);
+          for (const tool of toolEntries) {
+            if (tool.deniedBySession) {
+              sessionDeniedTools.push(tool);
+            } else {
+              tools.push(tool);
+            }
+          }
           diagnostics.push(...serverDiags);
         }
 
@@ -971,6 +984,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          ...(sessionDeniedTools.length > 0 ? { sessionDeniedTools } : {}),
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {

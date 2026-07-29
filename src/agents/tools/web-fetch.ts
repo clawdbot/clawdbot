@@ -816,6 +816,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
   } finally {
+    if (!res.bodyUsed) {
+      // Fallbacks and provider failures can abandon the upstream stream. Cancel
+      // without awaiting so a stalled cancellation cannot block guard release.
+      void res.body?.cancel().catch(() => undefined);
+    }
     if (release) {
       await release();
     }
@@ -836,6 +841,7 @@ export function createWebFetchTool(options?: {
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
+    resultContentSource: "network",
     description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,

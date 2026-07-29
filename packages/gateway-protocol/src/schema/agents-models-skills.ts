@@ -1010,6 +1010,9 @@ export const ToolsEffectiveEntrySchema = closedObject({
   ]),
   pluginId: Type.Optional(NonEmptyString),
   channelId: Type.Optional(NonEmptyString),
+  mcpServer: Type.Optional(NonEmptyString),
+  mcpToolName: Type.Optional(NonEmptyString),
+  deniedBySession: Type.Optional(Type.Literal(true)),
   risk: Type.Optional(
     Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
   ),
