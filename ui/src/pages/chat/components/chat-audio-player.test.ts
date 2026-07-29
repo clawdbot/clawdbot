@@ -136,4 +136,53 @@ describe("ChatAudioPlayer", () => {
     second.querySelector("audio")!.dispatchEvent(new Event("play"));
     expect(pauseFirst).not.toHaveBeenCalled();
   });
+
+  it("does not auto-resume a refreshed source after disconnecting before metadata", async () => {
+    const player = await createPlayer("disconnect-resume");
+    const media = player.querySelector("audio")!;
+    let paused = false;
+    Object.defineProperty(media, "paused", { configurable: true, get: () => paused });
+    setMediaNumber(media, "currentTime", 20);
+    setMediaNumber(media, "duration", 80);
+    const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
+    vi.spyOn(media, "pause").mockImplementation(() => {
+      paused = true;
+    });
+
+    player.src = "https://example.com/disconnect-resume-fresh.mp3";
+    await player.updateComplete;
+    media.dispatchEvent(new Event("error"));
+    player.remove();
+    document.body.append(player);
+    media.currentTime = 0;
+    media.dispatchEvent(new Event("loadedmetadata"));
+
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-resume after another player supersedes the pending restore", async () => {
+    const first = await createPlayer("superseded-resume");
+    const firstMedia = first.querySelector("audio")!;
+    let paused = false;
+    Object.defineProperty(firstMedia, "paused", { configurable: true, get: () => paused });
+    setMediaNumber(firstMedia, "currentTime", 20);
+    setMediaNumber(firstMedia, "duration", 80);
+    const playFirst = vi.spyOn(firstMedia, "play").mockResolvedValue(undefined);
+    vi.spyOn(firstMedia, "pause").mockImplementation(() => {
+      paused = true;
+    });
+    firstMedia.dispatchEvent(new Event("play"));
+
+    first.src = "https://example.com/superseded-resume-fresh.mp3";
+    await first.updateComplete;
+    firstMedia.dispatchEvent(new Event("error"));
+
+    const second = await createPlayer("superseding-player");
+    second.querySelector("audio")!.dispatchEvent(new Event("play"));
+    second.remove();
+    firstMedia.currentTime = 0;
+    firstMedia.dispatchEvent(new Event("loadedmetadata"));
+
+    expect(playFirst).not.toHaveBeenCalled();
+  });
 });

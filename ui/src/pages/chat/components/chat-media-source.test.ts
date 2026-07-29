@@ -71,6 +71,7 @@ describe("ChatMediaSourceController", () => {
 
   it("preserves playing state when a failed seek applies the fresh ticket", async () => {
     const media = document.createElement("video");
+    document.body.append(media);
     const state = { currentTime: 10, duration: 90, paused: false };
     const clock = mockMediaState(media, state);
     const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
@@ -87,6 +88,7 @@ describe("ChatMediaSourceController", () => {
 
     expect(clock.currentTime()).toBe(55);
     expect(play).toHaveBeenCalledOnce();
+    media.remove();
   });
 
   it("applies a queued ticket once playback is idle at the end", () => {

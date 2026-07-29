@@ -99,7 +99,13 @@ export class ChatMediaSourceController {
     }
   }
 
-  handleLoadedMetadata(media: HTMLMediaElement): void {
+  cancelPendingResume(): void {
+    if (this.restore && !this.restore.paused) {
+      this.restore = { ...this.restore, paused: true };
+    }
+  }
+
+  handleLoadedMetadata(media: HTMLMediaElement, canResume = () => true): void {
     const restore = this.restore;
     if (!restore) {
       return;
@@ -107,7 +113,7 @@ export class ChatMediaSourceController {
     this.restore = null;
     const duration = Number.isFinite(media.duration) ? media.duration : restore.currentTime;
     media.currentTime = Math.min(restore.currentTime, Math.max(0, duration));
-    if (!restore.paused) {
+    if (!restore.paused && media.isConnected && canResume()) {
       void media.play().catch(() => undefined);
     }
   }

@@ -6,7 +6,11 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import { claimChatAudioPlayback, releaseChatAudioPlayback } from "./chat-audio-coordinator.ts";
+import {
+  canResumeChatAudioPlayback,
+  claimChatAudioPlayback,
+  releaseChatAudioPlayback,
+} from "./chat-audio-coordinator.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
 const SEEK_STEP_SECONDS = 5;
@@ -36,9 +40,11 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   private media: HTMLAudioElement | null = null;
   private readonly sourceController = new ChatMediaSourceController();
+  private readonly cancelPendingResume = () => this.sourceController.cancelPendingResume();
 
   override disconnectedCallback(): void {
     if (this.media) {
+      this.sourceController.cancelPendingResume();
       if (!this.media.paused) {
         this.media.pause();
       }
@@ -66,7 +72,7 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       return;
     }
     if (media.paused) {
-      claimChatAudioPlayback(media);
+      claimChatAudioPlayback(media, this.cancelPendingResume);
       void media.play().catch(() => {
         releaseChatAudioPlayback(media);
         this.playing = false;
@@ -195,7 +201,9 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
             if (!this.media) {
               return;
             }
-            this.sourceController.handleLoadedMetadata(this.media);
+            this.sourceController.handleLoadedMetadata(this.media, () =>
+              canResumeChatAudioPlayback(this.media!),
+            );
             this.duration = Number.isFinite(this.media.duration) ? this.media.duration : 0;
             this.currentTime = this.media.currentTime;
             this.failed = false;
@@ -216,7 +224,7 @@ export class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           @progress=${() => this.updateBuffered()}
           @play=${() => {
             if (this.media) {
-              claimChatAudioPlayback(this.media);
+              claimChatAudioPlayback(this.media, this.cancelPendingResume);
             }
             this.playing = true;
           }}

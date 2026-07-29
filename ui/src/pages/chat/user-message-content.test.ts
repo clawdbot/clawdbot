@@ -28,8 +28,11 @@ describe("buildUserChatMessageContentBlocks", () => {
   });
 
   it.each([
+    ["clip.avi", ""],
     ["clip.mp4", ""],
     ["clip.mkv", ""],
+    ["clip.mpeg", ""],
+    ["clip.mpg", ""],
     ["clip.mkv", "application/octet-stream"],
   ])("falls back to the %s extension when MIME is %s", (fileName, mimeType) => {
     const [block] = buildUserChatMessageContentBlocks("", [
