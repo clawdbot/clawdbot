@@ -15,6 +15,8 @@ type PayloadValidationFailureFactory = (httpStatus: number, code: string, messag
 
 const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/u;
 const E164_RE = /^\+[1-9]\d{6,14}$/u;
+const BUZZ_ROOM_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
 const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
 const TELEGRAM_USER_ID_RE = /^\d+$/u;
@@ -63,6 +65,58 @@ function requireDiscordSnowflakePayloadString(
     );
   }
   return value;
+}
+
+function normalizeBuzzCredentialPayload(
+  payload: Record<string, unknown>,
+  createFailure: PayloadValidationFailureFactory,
+) {
+  const kind = "buzz";
+  const relayUrl = requirePayloadString(payload, "relayUrl", kind, createFailure);
+  let relayProtocol: string;
+  try {
+    relayProtocol = new URL(relayUrl).protocol;
+  } catch {
+    relayProtocol = "";
+  }
+  if (relayProtocol !== "ws:" && relayProtocol !== "wss:") {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "buzz" must include "relayUrl" as a WebSocket URL.',
+    );
+  }
+  const roomId = requirePayloadString(payload, "roomId", kind, createFailure).toLowerCase();
+  if (!BUZZ_ROOM_ID_RE.test(roomId)) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "buzz" must include "roomId" as a channel UUID.',
+    );
+  }
+  const driverPrivateKey = requirePayloadString(payload, "driverPrivateKey", kind, createFailure);
+  const sutPrivateKey = requirePayloadString(payload, "sutPrivateKey", kind, createFailure);
+  if (driverPrivateKey === sutPrivateKey) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "buzz" must use distinct driverPrivateKey and sutPrivateKey values.',
+    );
+  }
+  const optionalString = (key: "driverAuthTag" | "sutAuthTag") => {
+    if (payload[key] === undefined) {
+      return undefined;
+    }
+    return requirePayloadString(payload, key, kind, createFailure);
+  };
+  const driverAuthTag = optionalString("driverAuthTag");
+  const sutAuthTag = optionalString("sutAuthTag");
+
+  return {
+    relayUrl,
+    roomId,
+    driverPrivateKey,
+    sutPrivateKey,
+    ...(driverAuthTag ? { driverAuthTag } : {}),
+    ...(sutAuthTag ? { sutAuthTag } : {}),
+  } satisfies Record<string, unknown>;
 }
 
 function normalizeTelegramCredentialPayload(
@@ -263,6 +317,7 @@ const credentialPayloadNormalizers: Record<
     createFailure: PayloadValidationFailureFactory,
   ) => Record<string, unknown>
 > = {
+  buzz: normalizeBuzzCredentialPayload,
   discord: normalizeDiscordCredentialPayload,
   telegram: normalizeTelegramCredentialPayload,
   "telegram-user": normalizeTelegramUserCredentialPayload,

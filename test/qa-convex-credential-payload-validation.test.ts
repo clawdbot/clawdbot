@@ -3,6 +3,48 @@ import { describe, expect, it } from "vitest";
 import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload_validation.js";
 
 describe("QA Convex credential payload validation", () => {
+  it("normalizes Buzz credential payloads", () => {
+    expect(
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: " wss://relay.qa.example ",
+        roomId: " 123E4567-E89B-42D3-A456-426614174000 ",
+        driverPrivateKey: " driver-key ",
+        sutPrivateKey: " sut-key ",
+        driverAuthTag: ' ["auth","driver","conditions","signature"] ',
+        ignored: true,
+      }),
+    ).toEqual({
+      relayUrl: "wss://relay.qa.example",
+      roomId: "123e4567-e89b-42d3-a456-426614174000",
+      driverPrivateKey: "driver-key",
+      sutPrivateKey: "sut-key",
+      driverAuthTag: '["auth","driver","conditions","signature"]',
+    });
+  });
+
+  it("rejects malformed Buzz credential payloads without echoing values", () => {
+    const privateKey = "same-private-key";
+    const invalidRelay = "https://relay.qa.example/private-path";
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: invalidRelay,
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: privateKey,
+        sutPrivateKey: privateKey,
+      }),
+    ).toThrow(/WebSocket URL/u);
+    try {
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: privateKey,
+        sutPrivateKey: privateKey,
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain(privateKey);
+    }
+  });
+
   it("normalizes Discord credential payloads", () => {
     expect(
       normalizeCredentialPayloadForKind("discord", {
