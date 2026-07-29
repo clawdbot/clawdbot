@@ -1,6 +1,5 @@
 // Telegram plugin module implements bot message behavior.
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -37,6 +36,7 @@ import type { TelegramReplyChainEntry } from "./message-cache.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
+import { formatTelegramFallbackError } from "./telegram-error-presenter.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
@@ -309,10 +309,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
         if (!spooledReplay) {
           try {
-            const errorDetail = formatErrorMessage(err).trim();
-            const fallbackText = errorDetail
-              ? `⚠️ ${errorDetail.length > 400 ? `${errorDetail.slice(0, 400)}…` : errorDetail}\n\nPlease try again, or use /new to start a fresh session.`
-              : "Something went wrong while processing your request. Please try again.";
+            const fallbackText = formatTelegramFallbackError(err);
             await bot.api.sendMessage(
               context.chatId,
               fallbackText,
