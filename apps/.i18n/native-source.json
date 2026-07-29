@@ -12235,7 +12235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 462,
+      "line": 463,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Media unavailable",
       "surface": "android",
@@ -12243,7 +12243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 478,
+      "line": 479,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Audio playback is unavailable",
       "surface": "android",
@@ -12251,7 +12251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 588,
+      "line": 589,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Pause audio",
       "surface": "android",
@@ -12259,7 +12259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 588,
+      "line": 589,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Play audio",
       "surface": "android",
@@ -12267,7 +12267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 675,
+      "line": 676,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Play video",
       "surface": "android",
@@ -12275,7 +12275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 688,
+      "line": 689,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Preparing playback…",
       "surface": "android",
@@ -12283,7 +12283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 689,
+      "line": 690,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Paused for voice playback",
       "surface": "android",
@@ -12291,7 +12291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 822,
+      "line": 823,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Video",
       "surface": "android",
@@ -12299,7 +12299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 822,
+      "line": 823,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMediaPlayer.kt",
       "source": "Voice note",
       "surface": "android",
