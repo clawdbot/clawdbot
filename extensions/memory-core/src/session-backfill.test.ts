@@ -10,13 +10,19 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeBackfillDiaryEntries } from "./dreaming-narrative.js";
+import { writeSessionIngestionState } from "./dreaming-phases.js";
+import {
+  clearMemoryCoreWorkspaceNamespace,
+  SESSION_BACKFILL_REWIND_NAMESPACE,
+} from "./dreaming-state.js";
+import { resetSessionBackfillIngestionState } from "./session-backfill-lifecycle.js";
 import {
   executeSessionBackfill,
   executeSessionBackfillBatch,
   runSessionBackfill,
 } from "./session-backfill.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import { createMemoryCoreTestHarness, dreamingTestState } from "./test-helpers.js";
 
 const harness = createMemoryCoreTestHarness();
 
@@ -552,5 +558,87 @@ describe("runSessionBackfill", () => {
     const afterReapply = await readShortTermRecallEntries({ workspaceDir });
     expect(reapplied.candidateCount).toBe(2);
     expect(hashStagedContent(afterReapply)).toBe(firstContentHash);
+  });
+
+  it("resets agent ingestion state when legacy staged entries have no rewind journal", async () => {
+    const workspaceDir = await createIsolatedWorkspace("legacy-rollback-");
+    await seedCanonicalTranscript("legacy", [
+      {
+        role: "user",
+        content: "The preferred terminal is Ghostty",
+        timestamp: "2026-04-01T10:00:00.000Z",
+        owner: true,
+      },
+    ]);
+    const applyParams = {
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs: Date.parse("2026-04-02T12:00:00.000Z"),
+      timezone: "UTC",
+    } as const;
+
+    await runSessionBackfill(applyParams);
+    const firstContentHash = hashStagedContent(await readShortTermRecallEntries({ workspaceDir }));
+    await clearMemoryCoreWorkspaceNamespace({
+      namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
+      workspaceDir,
+    });
+
+    const rollback = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      rollback: true,
+    });
+    const preview = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      timezone: "UTC",
+    });
+    const reapplied = await runSessionBackfill(applyParams);
+    const afterReapply = await readShortTermRecallEntries({ workspaceDir });
+
+    expect(rollback.rollback).toEqual({
+      removedDiaryEntries: 1,
+      removedStagedEntries: 1,
+    });
+    expect(preview.candidateCount).toBe(1);
+    expect(reapplied.candidateCount).toBe(1);
+    expect(hashStagedContent(afterReapply)).toBe(firstContentHash);
+  });
+
+  it("keeps other agents' archived scopes when resetting an agent named archive", async () => {
+    const workspaceDir = await createIsolatedWorkspace("archive-agent-reset-");
+    const fileState = {
+      mtimeMs: 1,
+      size: 1,
+      contentHash: "hash",
+      lineCount: 1,
+      lastContentLine: 1,
+    };
+    await writeSessionIngestionState(workspaceDir, {
+      version: 3,
+      files: {
+        "archive:sessions/archive/own": fileState,
+        "main:sessions/main/other": fileState,
+      },
+      seenMessages: {
+        "archive:sessions/archive/own": ["own-live"],
+        "archive:archive:/tmp/own.jsonl": ["own-archive"],
+        "archive:main:/tmp/other.jsonl": ["other-archive"],
+        "main:sessions/main/other": ["other-live"],
+      },
+    });
+
+    await resetSessionBackfillIngestionState({ workspaceDir, agentId: "archive" });
+
+    expect(await dreamingTestState.readSessionIngestionState(workspaceDir)).toEqual({
+      version: 3,
+      files: { "main:sessions/main/other": fileState },
+      seenMessages: {
+        "archive:main:/tmp/other.jsonl": ["other-archive"],
+        "main:sessions/main/other": ["other-live"],
+      },
+    });
   });
 });

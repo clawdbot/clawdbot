@@ -98,7 +98,7 @@ function isSessionBackfillRewindCandidate(value: unknown): value is SessionBackf
   );
 }
 
-export async function rewindSessionBackfillIngestionState(workspaceDir: string): Promise<void> {
+export async function rewindSessionBackfillIngestionState(workspaceDir: string): Promise<number> {
   const entries = await readMemoryCoreWorkspaceEntries<SessionBackfillRewindBatch>({
     namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
     workspaceDir,
@@ -113,7 +113,7 @@ export async function rewindSessionBackfillIngestionState(workspaceDir: string):
       namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
       workspaceDir,
     });
-    return;
+    return 0;
   }
 
   const state = await readSessionIngestionState(workspaceDir);
@@ -157,6 +157,41 @@ export async function rewindSessionBackfillIngestionState(workspaceDir: string):
   await clearMemoryCoreWorkspaceNamespace({
     namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
     workspaceDir,
+  });
+  return candidates.length;
+}
+
+function belongsToAgentFileState(key: string, agentId: string): boolean {
+  return key.startsWith(`${agentId}:`);
+}
+
+function belongsToAgentSeenState(key: string, agentId: string): boolean {
+  const archivePrefix = "archive:";
+  if (!key.startsWith(archivePrefix)) {
+    return key.startsWith(`${agentId}:`);
+  }
+  const archiveAgentEnd = key.indexOf(":", archivePrefix.length);
+  if (archiveAgentEnd === -1) {
+    return agentId === "archive";
+  }
+  return key.slice(archivePrefix.length, archiveAgentEnd) === agentId;
+}
+
+export async function resetSessionBackfillIngestionState(params: {
+  workspaceDir: string;
+  agentId: string;
+}): Promise<void> {
+  const state = await readSessionIngestionState(params.workspaceDir);
+  await writeSessionIngestionState(params.workspaceDir, {
+    ...state,
+    files: Object.fromEntries(
+      Object.entries(state.files).filter(([key]) => !belongsToAgentFileState(key, params.agentId)),
+    ),
+    seenMessages: Object.fromEntries(
+      Object.entries(state.seenMessages).filter(
+        ([key]) => !belongsToAgentSeenState(key, params.agentId),
+      ),
+    ),
   });
 }
 
