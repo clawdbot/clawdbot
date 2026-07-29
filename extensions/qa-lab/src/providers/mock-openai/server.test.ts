@@ -1076,6 +1076,30 @@ describe("qa mock openai server", () => {
     expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
   });
 
+  it("does not let a prior Matrix tool result satisfy the current progress prompt", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_stale_progress",
+          output: "STALE_PROGRESS_OK",
+        },
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+        ),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_PROGRESS_OK");
+  });
+
   it("uses the current tool result marker after stale streaming history", async () => {
     const server = await startMockServer();
     const currentPrompt =
