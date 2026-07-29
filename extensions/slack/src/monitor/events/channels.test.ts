@@ -1,13 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-import { registerSlackChannelEvents } from "./channels.js";
-import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
+// Slack tests cover channels plugin behavior.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const enqueueSystemEventMock = vi.fn();
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+let registerSlackChannelEvents: typeof import("./channels.js").registerSlackChannelEvents;
+let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 
-vi.mock("../../../../../src/infra/system-events.js", () => ({
+vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
-
+vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
 type SlackChannelHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;
@@ -27,17 +30,32 @@ function createChannelContext(params?: {
   };
 }
 
+function requireChannelHandler(handler: SlackChannelHandler | null): SlackChannelHandler {
+  if (!handler) {
+    throw new Error("expected Slack channel_created handler");
+  }
+  return handler;
+}
+
 describe("registerSlackChannelEvents", () => {
+  beforeAll(async () => {
+    ({ registerSlackChannelEvents } = await import("./channels.js"));
+    ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    enqueueSystemEventMock.mockClear();
+  });
+
   it("does not track mismatched events", async () => {
     const trackEvent = vi.fn();
     const { getCreatedHandler } = createChannelContext({
       trackEvent,
       shouldDropMismatchedSlackEvent: () => true,
     });
-    const createdHandler = getCreatedHandler();
-    expect(createdHandler).toBeTruthy();
+    const createdHandler = requireChannelHandler(getCreatedHandler());
 
-    await createdHandler!({
+    await createdHandler({
       event: {
         channel: { id: "C1", name: "general" },
       },
@@ -51,10 +69,9 @@ describe("registerSlackChannelEvents", () => {
   it("tracks accepted events", async () => {
     const trackEvent = vi.fn();
     const { getCreatedHandler } = createChannelContext({ trackEvent });
-    const createdHandler = getCreatedHandler();
-    expect(createdHandler).toBeTruthy();
+    const createdHandler = requireChannelHandler(getCreatedHandler());
 
-    await createdHandler!({
+    await createdHandler({
       event: {
         channel: { id: "C1", name: "general" },
       },
@@ -62,6 +79,9 @@ describe("registerSlackChannelEvents", () => {
     });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack channel created: #general.", {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:channel:created:C1",
+    });
   });
 });

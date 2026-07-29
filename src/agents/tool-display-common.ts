@@ -1,8 +1,24 @@
-export type ToolDisplayActionSpec = {
+/**
+ * Shared compact tool-call display helpers.
+ * Redacts and summarizes arguments into short labels/details for chat and UI
+ * tool update streams.
+ */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
+
+type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
 
+/** Display metadata for a tool and optional per-action labels/details. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -10,7 +26,16 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-export type CoerceDisplayValueOptions = {
+/** Normalized display target for code/search bridge tools. */
+type ToolSearchCodeDisplayTarget = {
+  toolName: string;
+  displayToolName?: string;
+  displayArgs?: Record<string, unknown>;
+  detail?: string;
+  bridgeVerb?: "call" | "describe" | "search";
+};
+
+type CoerceDisplayValueOptions = {
   includeFalse?: boolean;
   includeZero?: boolean;
   includeNonFinite?: boolean;
@@ -18,40 +43,37 @@ export type CoerceDisplayValueOptions = {
   maxArrayEntries?: number;
 };
 
-type ArgsRecord = Record<string, unknown>;
-
-function asRecord(args: unknown): ArgsRecord | undefined {
-  return args && typeof args === "object" ? (args as ArgsRecord) : undefined;
-}
-
+/** Normalize a tool name for fallback display. */
 export function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
+/** Convert a tool identifier into a human-readable title. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
   if (!cleaned) {
     return "Tool";
   }
-  return cleaned
-    .split(/\s+/)
-    .map((part) =>
+  const parts: string[] = [];
+  for (const part of cleaned.split(/\s+/)) {
+    parts.push(
       part.length <= 2 && part.toUpperCase() === part
         ? part
         : `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`,
-    )
-    .join(" ");
+    );
+  }
+  return parts.join(" ");
 }
 
-export function normalizeVerb(value?: string): string | undefined {
-  const trimmed = value?.trim();
+function normalizeVerb(value?: string): string | undefined {
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
   return trimmed.replace(/_/g, " ");
 }
 
-export function resolveActionArg(args: unknown): string | undefined {
+function resolveActionArg(args: unknown): string | undefined {
   if (!args || typeof args !== "object") {
     return undefined;
   }
@@ -59,10 +81,11 @@ export function resolveActionArg(args: unknown): string | undefined {
   if (typeof actionRaw !== "string") {
     return undefined;
   }
-  const action = actionRaw.trim();
+  const action = normalizeOptionalString(actionRaw);
   return action || undefined;
 }
 
+/** Resolve display verb/detail from tool args and optional display metadata. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -70,6 +93,7 @@ export function resolveToolVerbAndDetailForArgs(params: {
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
+  toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
@@ -82,13 +106,14 @@ export function resolveToolVerbAndDetailForArgs(params: {
     spec: params.spec,
     fallbackDetailKeys: params.fallbackDetailKeys,
     detailMode: params.detailMode,
+    toolDetailMode: params.toolDetailMode,
     detailCoerce: params.detailCoerce,
     detailMaxEntries: params.detailMaxEntries,
     detailFormatKey: params.detailFormatKey,
   });
 }
 
-export function coerceDisplayValue(
+function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
 ): string | undefined {
@@ -103,12 +128,14 @@ export function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
-    if (!firstLine) {
+    const rawLine = normalizeOptionalString(trimmed.split(/\r?\n/)[0]) ?? "";
+    if (!rawLine) {
       return undefined;
     }
+    const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > maxStringChars) {
-      return `${firstLine.slice(0, Math.max(0, maxStringChars - 3))}…`;
+      const half = Math.floor((maxStringChars - 1) / 2);
+      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxStringChars - 1 - half))}`;
     }
     return firstLine;
   }
@@ -128,19 +155,28 @@ export function coerceDisplayValue(
     return String(value);
   }
   if (Array.isArray(value)) {
-    const values = value
-      .map((item) => coerceDisplayValue(item, opts))
-      .filter((item): item is string => Boolean(item));
-    if (values.length === 0) {
+    const values: string[] = [];
+    let displayValueCount = 0;
+    for (const item of value) {
+      const display = coerceDisplayValue(item, opts);
+      if (!display) {
+        continue;
+      }
+      displayValueCount += 1;
+      if (values.length < maxArrayEntries) {
+        values.push(display);
+      }
+    }
+    if (displayValueCount === 0) {
       return undefined;
     }
-    const preview = values.slice(0, maxArrayEntries).join(", ");
-    return values.length > maxArrayEntries ? `${preview}…` : preview;
+    const preview = values.join(", ");
+    return displayValueCount > maxArrayEntries ? `${preview}…` : preview;
   }
   return undefined;
 }
 
-export function lookupValueByPath(args: unknown, path: string): unknown {
+function lookupValueByPath(args: unknown, path: string): unknown {
   if (!args || typeof args !== "object") {
     return undefined;
   }
@@ -158,19 +194,25 @@ export function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
+/** Format a detail path/key into a short display label. */
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
-  const segments = raw.split(".").filter(Boolean);
-  const last = segments.at(-1) ?? raw;
+  let last = "";
+  for (const segment of raw.split(".")) {
+    if (segment) {
+      last = segment;
+    }
+  }
+  last ||= raw;
   const override = overrides[last];
   if (override) {
     return override;
   }
   const cleaned = last.replace(/_/g, " ").replace(/-/g, " ");
   const spaced = cleaned.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
-  return spaced.trim().toLowerCase() || last.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(spaced) || normalizeLowercaseStringOrEmpty(last);
 }
 
-export function resolvePathArg(args: unknown): string | undefined {
+function resolvePathArg(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -187,7 +229,7 @@ export function resolvePathArg(args: unknown): string | undefined {
   return undefined;
 }
 
-export function resolveReadDetail(args: unknown): string | undefined {
+function resolveReadDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -224,14 +266,13 @@ export function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-export function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
+function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
   }
 
-  const path =
-    resolvePathArg(record) ?? (typeof record.url === "string" ? record.url.trim() : undefined);
+  const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
     return undefined;
   }
@@ -257,840 +298,367 @@ export function resolveWriteDetail(toolKey: string, args: unknown): string | und
   return `${destinationPrefix} ${path}`;
 }
 
-export function resolveWebSearchDetail(args: unknown): string | undefined {
+function resolveWebSearchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
   }
 
-  const query = typeof record.query === "string" ? record.query.trim() : undefined;
+  const queries = collectWebSearchQueries(record);
   const count =
     typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
       ? Math.floor(record.count)
-      : undefined;
+      : typeof record.max_results === "number" &&
+          Number.isFinite(record.max_results) &&
+          record.max_results > 0
+        ? Math.floor(record.max_results)
+        : typeof record.num_results === "number" &&
+            Number.isFinite(record.num_results) &&
+            record.num_results > 0
+          ? Math.floor(record.num_results)
+          : typeof record.limit === "number" && Number.isFinite(record.limit) && record.limit > 0
+            ? Math.floor(record.limit)
+            : typeof record.top_k === "number" && Number.isFinite(record.top_k) && record.top_k > 0
+              ? Math.floor(record.top_k)
+              : undefined;
 
-  if (!query) {
+  if (queries.length === 0) {
     return undefined;
   }
 
-  return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
+  const displayedQueries = queries.slice(0, 3).map((query) => `"${query}"`);
+  const queryText =
+    queries.length > displayedQueries.length
+      ? `${displayedQueries.join(", ")}…`
+      : displayedQueries.join(", ");
+
+  return count !== undefined ? `for ${queryText} (top ${count})` : `for ${queryText}`;
 }
 
-export function resolveWebFetchDetail(args: unknown): string | undefined {
+function collectWebSearchQueries(record: Record<string, unknown>): string[] {
+  const queries: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: unknown) => {
+    const normalized = normalizeOptionalString(value);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    queries.push(normalized);
+  };
+
+  add(record.query);
+  add(record.q);
+  add(record.search);
+  add(record.input);
+  // Parallel's `web_search` provider uses the native Parallel Search shape
+  // (`objective` + `search_queries`). Surface those so CLI progress and
+  // Codex activity metadata render the query context instead of a bare
+  // `search`.
+  add(record.objective);
+
+  for (const key of ["search_query", "image_query", "queries", "search_queries"]) {
+    const value = record[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        add(entry);
+        continue;
+      }
+      const entryRecord = asRecord(entry);
+      if (!entryRecord) {
+        continue;
+      }
+      add(entryRecord.query);
+      add(entryRecord.q);
+      add(entryRecord.search);
+    }
+  }
+
+  return queries;
+}
+
+function parseToolSearchCall(code: string): { target: string; args?: string } | undefined {
+  // This is a bounded summary parser for display only; execution still uses the
+  // real tool-search bridge and schema validation.
+  const prefixMatch = code.match(/openclaw\.tools\.call\s*\(\s*/s);
+  if (!prefixMatch || prefixMatch.index === undefined) {
+    return undefined;
+  }
+  const rest = code.slice(prefixMatch.index + prefixMatch[0].length);
+  const targetMatch = rest.match(/^("[^"]{1,240}"|'[^']{1,240}'|[^,)\s]{1,240})/s);
+  if (!targetMatch?.[1]) {
+    return undefined;
+  }
+  const afterTarget = rest.slice(targetMatch[0].length);
+  const commaIndex = afterTarget.indexOf(",");
+  if (commaIndex < 0) {
+    return { target: targetMatch[1] };
+  }
+  const args = afterTarget.slice(commaIndex + 1);
+  return { target: targetMatch[1], args };
+}
+
+function normalizeToolSearchDisplayToolName(toolName: string | undefined): string | undefined {
+  const value = normalizeOptionalString(toolName);
+  if (!value) {
+    return undefined;
+  }
+  const catalogIdMatch = value.match(/^(?:openclaw|mcp|client):[^:]+:(.+)$/s);
+  return normalizeOptionalString(catalogIdMatch?.[1]) ?? value;
+}
+
+function collectToolSearchDescribeBindings(code: string): Map<string, string> {
+  const bindings = new Map<string, string>();
+  const bindingPattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?openclaw\.tools\.describe\s*\(\s*("[^"]{1,240}"|'[^']{1,240}')\s*(?:,|\))/gs;
+  for (const match of code.matchAll(bindingPattern)) {
+    const variableName = match[1];
+    const target = summarizeToolSearchTarget(match[2]);
+    if (variableName && target) {
+      bindings.set(variableName, target);
+    }
+  }
+  return bindings;
+}
+
+function resolveToolSearchCallTarget(
+  code: string,
+  rawTarget: string | undefined,
+): string | undefined {
+  const target = normalizeOptionalString(rawTarget);
+  if (!target) {
+    return undefined;
+  }
+  const idReference = target.match(/^([A-Za-z_$][\w$]*)\.id\b/s);
+  if (idReference?.[1]) {
+    const describedTarget = collectToolSearchDescribeBindings(code).get(idReference[1]);
+    if (describedTarget) {
+      return describedTarget;
+    }
+  }
+  return summarizeToolSearchTarget(target);
+}
+
+function summarizeToolSearchTarget(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  const literalMatch = value.match(/^[\s]*["']([^"']{1,160})["'][\s]*$/s);
+  if (literalMatch?.[1]) {
+    return normalizeOptionalString(literalMatch[1]);
+  }
+  const idPropertyMatch = value.match(/\.id\b/);
+  if (idPropertyMatch) {
+    return normalizeOptionalString(value.replace(/\.id\b.*/s, ""));
+  }
+  const namePropertyMatch = value.match(/name\s*:\s*["']([^"']{1,120})["']/s);
+  if (namePropertyMatch?.[1]) {
+    return normalizeOptionalString(namePropertyMatch[1]);
+  }
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= 80 ? compact : undefined;
+}
+
+function parseToolSearchCallArgs(raw: string | undefined): Record<string, unknown> | undefined {
+  const source = extractObjectLiteralSource(raw);
+  if (!source) {
+    return undefined;
+  }
+  const args: Record<string, unknown> = {};
+  const propertyPattern =
+    /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?)/gi;
+  for (const match of source.matchAll(propertyPattern)) {
+    const key = match[1];
+    const value = match[2];
+    if (!key || value === undefined) {
+      continue;
+    }
+    args[key] = parseSimpleToolSearchArgValue(value);
+  }
+  return Object.keys(args).length > 0 ? args : undefined;
+}
+
+function extractObjectLiteralSource(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  const start = value.indexOf("{");
+  if (start < 0) {
+    return undefined;
+  }
+  let depth = 0;
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (let i = start; i < value.length; i += 1) {
+    const char = value[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return value.slice(start, i + 1);
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseSimpleToolSearchArgValue(raw: string): unknown {
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  if (raw === "null") {
+    return null;
+  }
+  const numeric = parseStrictFiniteNumber(raw);
+  if (numeric !== undefined) {
+    return numeric;
+  }
+  const quote = raw[0];
+  const inner = raw.slice(1, -1);
+  if (quote === '"') {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return inner;
+    }
+  }
+  return inner.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+}
+
+function summarizeToolSearchCallInput(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw)
+    ?.replace(/[);\s]+$/g, "")
+    .trim();
+  if (!value) {
+    return undefined;
+  }
+  const queryMatch = value.match(/query\s*:\s*["']([^"']{1,80})["']/s);
+  if (queryMatch?.[1]) {
+    return "query " + queryMatch[1].trim();
+  }
+  const actionMatch = value.match(/action\s*:\s*["']([^"']{1,80})["']/s);
+  if (actionMatch?.[1]) {
+    return normalizeOptionalString(actionMatch[1]);
+  }
+  const commandMatch = value.match(/command\s*:\s*["']([^"'\n]{1,120})["']/s);
+  if (commandMatch?.[1]) {
+    return normalizeOptionalString(commandMatch[1]);
+  }
+  const sessionMatch = value.match(/sessionId\s*:\s*["']([^"']{1,80})["']/s);
+  if (sessionMatch?.[1]) {
+    return "session " + sessionMatch[1].trim();
+  }
+  const idMatch = value.match(/id\s*:\s*["']([^"']{1,80})["']/s);
+  if (idMatch?.[1]) {
+    return idMatch[1].trim();
+  }
+  return undefined;
+}
+
+/** Infer the bridged tool target displayed for tool_search_code snippets. */
+export function resolveToolSearchCodeDisplayTarget(
+  args: unknown,
+): ToolSearchCodeDisplayTarget | undefined {
+  const record = asRecord(args);
+  if (!record || typeof record.code !== "string") {
+    return undefined;
+  }
+  const code = record.code;
+  const call = parseToolSearchCall(code);
+  if (call) {
+    const toolName = resolveToolSearchCallTarget(code, call.target);
+    if (!toolName) {
+      return { toolName: "tool_search_code", detail: "call selected tool", bridgeVerb: "call" };
+    }
+    return {
+      toolName,
+      displayToolName: normalizeToolSearchDisplayToolName(toolName),
+      displayArgs: parseToolSearchCallArgs(call.args),
+      detail: summarizeToolSearchCallInput(call.args),
+      bridgeVerb: "call",
+    };
+  }
+  const describeMatch = code.match(/openclaw\.tools\.describe\s*\(\s*([^)]+?)\s*(?:,|\))/s);
+  if (describeMatch) {
+    const toolName = summarizeToolSearchTarget(describeMatch[1]);
+    return toolName
+      ? { toolName, detail: "describe via tool search", bridgeVerb: "describe" }
+      : { toolName: "tool_search_code", detail: "describe selected tool", bridgeVerb: "describe" };
+  }
+  const searchMatch = code.match(/openclaw\.tools\.search\s*\(\s*([^)]+?)\s*(?:,|\))/s);
+  if (searchMatch) {
+    const query = summarizeToolSearchTarget(searchMatch[1]);
+    return {
+      toolName: "tool_search_code",
+      detail: query ? "search " + query : "search tools",
+      bridgeVerb: "search",
+    };
+  }
+  return { toolName: "tool_search_code", detail: "run bridge code" };
+}
+
+function resolveToolSearchCodeDetail(args: unknown): string | undefined {
+  return resolveToolSearchCodeDisplayTarget(args)?.detail;
+}
+
+function resolveWebFetchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
   }
 
-  const url = typeof record.url === "string" ? record.url.trim() : undefined;
+  const url = normalizeOptionalString(record.url);
   if (!url) {
     return undefined;
   }
 
-  const mode = typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
+  const mode = normalizeOptionalString(record.extractMode);
   const maxChars =
     typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
       ? Math.floor(record.maxChars)
       : undefined;
 
-  const suffix = [
-    mode ? `mode ${mode}` : undefined,
-    maxChars !== undefined ? `max ${maxChars} chars` : undefined,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(", ");
+  let suffix = "";
+  if (mode) {
+    suffix = `mode ${mode}`;
+  }
+  if (maxChars !== undefined) {
+    suffix = suffix ? `${suffix}, max ${maxChars} chars` : `max ${maxChars} chars`;
+  }
 
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
-function stripOuterQuotes(value: string | undefined): string | undefined {
-  if (!value) {
-    return value;
-  }
-  const trimmed = value.trim();
-  if (
-    trimmed.length >= 2 &&
-    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-      (trimmed.startsWith("'") && trimmed.endsWith("'")))
-  ) {
-    return trimmed.slice(1, -1).trim();
-  }
-  return trimmed;
-}
-
-function splitShellWords(input: string | undefined, maxWords = 48): string[] {
-  if (!input) {
-    return [];
-  }
-
-  const words: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-
-  for (let i = 0; i < input.length; i += 1) {
-    const char = input[i];
-
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (!current) {
-        continue;
-      }
-      words.push(current);
-      if (words.length >= maxWords) {
-        return words;
-      }
-      current = "";
-      continue;
-    }
-
-    current += char;
-  }
-
-  if (current) {
-    words.push(current);
-  }
-  return words;
-}
-
-function binaryName(token: string | undefined): string | undefined {
-  if (!token) {
-    return undefined;
-  }
-  const cleaned = stripOuterQuotes(token) ?? token;
-  const segment = cleaned.split(/[/]/).at(-1) ?? cleaned;
-  return segment.trim().toLowerCase();
-}
-
-function optionValue(words: string[], names: string[]): string | undefined {
-  const lookup = new Set(names);
-
-  for (let i = 0; i < words.length; i += 1) {
-    const token = words[i];
-    if (!token) {
-      continue;
-    }
-
-    if (lookup.has(token)) {
-      const value = words[i + 1];
-      if (value && !value.startsWith("-")) {
-        return value;
-      }
-      continue;
-    }
-
-    for (const name of names) {
-      if (name.startsWith("--") && token.startsWith(`${name}=`)) {
-        return token.slice(name.length + 1);
-      }
-    }
-  }
-
-  return undefined;
-}
-
-function positionalArgs(words: string[], from = 1, optionsWithValue: string[] = []): string[] {
-  const args: string[] = [];
-  const takesValue = new Set(optionsWithValue);
-
-  for (let i = from; i < words.length; i += 1) {
-    const token = words[i];
-    if (!token) {
-      continue;
-    }
-
-    if (token === "--") {
-      for (let j = i + 1; j < words.length; j += 1) {
-        const candidate = words[j];
-        if (candidate) {
-          args.push(candidate);
-        }
-      }
-      break;
-    }
-
-    if (token.startsWith("--")) {
-      if (token.includes("=")) {
-        continue;
-      }
-      if (takesValue.has(token)) {
-        i += 1;
-      }
-      continue;
-    }
-
-    if (token.startsWith("-")) {
-      if (takesValue.has(token)) {
-        i += 1;
-      }
-      continue;
-    }
-
-    args.push(token);
-  }
-
-  return args;
-}
-
-function firstPositional(
-  words: string[],
-  from = 1,
-  optionsWithValue: string[] = [],
-): string | undefined {
-  return positionalArgs(words, from, optionsWithValue)[0];
-}
-
-function trimLeadingEnv(words: string[]): string[] {
-  if (words.length === 0) {
-    return words;
-  }
-
-  let index = 0;
-  if (binaryName(words[0]) === "env") {
-    index = 1;
-    while (index < words.length) {
-      const token = words[index];
-      if (!token) {
-        break;
-      }
-      if (token.startsWith("-")) {
-        index += 1;
-        continue;
-      }
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
-        index += 1;
-        continue;
-      }
-      break;
-    }
-    return words.slice(index);
-  }
-
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])) {
-    index += 1;
-  }
-  return words.slice(index);
-}
-
-function unwrapShellWrapper(command: string): string {
-  const words = splitShellWords(command, 10);
-  if (words.length < 3) {
-    return command;
-  }
-
-  const bin = binaryName(words[0]);
-  if (!(bin === "bash" || bin === "sh" || bin === "zsh" || bin === "fish")) {
-    return command;
-  }
-
-  const flagIndex = words.findIndex(
-    (token, index) => index > 0 && (token === "-c" || token === "-lc" || token === "-ic"),
-  );
-  if (flagIndex === -1) {
-    return command;
-  }
-
-  const inner = words
-    .slice(flagIndex + 1)
-    .join(" ")
-    .trim();
-  return inner ? (stripOuterQuotes(inner) ?? command) : command;
-}
-
-function scanTopLevelChars(
-  command: string,
-  visit: (char: string, index: number) => boolean | void,
-): void {
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-
-  for (let i = 0; i < command.length; i += 1) {
-    const char = command[i];
-
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-
-    if (visit(char, i) === false) {
-      return;
-    }
-  }
-}
-
-function splitTopLevelStages(command: string): string[] {
-  const parts: string[] = [];
-  let start = 0;
-
-  scanTopLevelChars(command, (char, index) => {
-    if (char === ";") {
-      parts.push(command.slice(start, index));
-      start = index + 1;
-      return true;
-    }
-    if ((char === "&" || char === "|") && command[index + 1] === char) {
-      parts.push(command.slice(start, index));
-      start = index + 2;
-      return true;
-    }
-    return true;
-  });
-
-  parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
-}
-
-function splitTopLevelPipes(command: string): string[] {
-  const parts: string[] = [];
-  let start = 0;
-
-  scanTopLevelChars(command, (char, index) => {
-    if (char === "|" && command[index - 1] !== "|" && command[index + 1] !== "|") {
-      parts.push(command.slice(start, index));
-      start = index + 1;
-    }
-    return true;
-  });
-
-  parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
-}
-
-function parseChdirTarget(head: string): string | undefined {
-  const words = splitShellWords(head, 3);
-  const bin = binaryName(words[0]);
-  if (bin === "cd" || bin === "pushd") {
-    return words[1] || undefined;
-  }
-  return undefined;
-}
-
-function isChdirCommand(head: string): boolean {
-  const bin = binaryName(splitShellWords(head, 2)[0]);
-  return bin === "cd" || bin === "pushd" || bin === "popd";
-}
-
-function isPopdCommand(head: string): boolean {
-  return binaryName(splitShellWords(head, 2)[0]) === "popd";
-}
-
-type PreambleResult = {
-  command: string;
-  chdirPath?: string;
-};
-
-function stripShellPreamble(command: string): PreambleResult {
-  let rest = command.trim();
-  let chdirPath: string | undefined;
-
-  for (let i = 0; i < 4; i += 1) {
-    // Find the first top-level separator (&&, ||, ;, \n) respecting quotes/escaping.
-    let first: { index: number; length: number; isOr?: boolean } | undefined;
-    scanTopLevelChars(rest, (char, idx) => {
-      if (char === "&" && rest[idx + 1] === "&") {
-        first = { index: idx, length: 2 };
-        return false;
-      }
-      if (char === "|" && rest[idx + 1] === "|") {
-        first = { index: idx, length: 2, isOr: true };
-        return false;
-      }
-      if (char === ";" || char === "\n") {
-        first = { index: idx, length: 1 };
-        return false;
-      }
-    });
-    const head = (first ? rest.slice(0, first.index) : rest).trim();
-    // cd/pushd/popd is preamble when followed by && / ; / \n, or when we already
-    // stripped at least one preamble segment (handles chained cd's like `cd /tmp && cd /app`).
-    // NOT for || — `cd /app || npm install` means npm runs when cd *fails*, so (in /app) is wrong.
-    const isChdir = (first ? !first.isOr : i > 0) && isChdirCommand(head);
-    const isPreamble =
-      head.startsWith("set ") || head.startsWith("export ") || head.startsWith("unset ") || isChdir;
-
-    if (!isPreamble) {
-      break;
-    }
-
-    if (isChdir) {
-      // popd returns to the previous directory, so inferred cwd from earlier
-      // preamble steps is no longer reliable.
-      if (isPopdCommand(head)) {
-        chdirPath = undefined;
-      } else {
-        chdirPath = parseChdirTarget(head) ?? chdirPath;
-      }
-    }
-
-    rest = first ? rest.slice(first.index + first.length).trimStart() : "";
-    if (!rest) {
-      break;
-    }
-  }
-
-  return { command: rest.trim(), chdirPath };
-}
-
-function summarizeKnownExec(words: string[]): string {
-  if (words.length === 0) {
-    return "run command";
-  }
-
-  const bin = binaryName(words[0]) ?? "command";
-
-  if (bin === "git") {
-    const globalWithValue = new Set([
-      "-C",
-      "-c",
-      "--git-dir",
-      "--work-tree",
-      "--namespace",
-      "--config-env",
-    ]);
-
-    const gitCwd = optionValue(words, ["-C"]);
-
-    let sub: string | undefined;
-    for (let i = 1; i < words.length; i += 1) {
-      const token = words[i];
-      if (!token) {
-        continue;
-      }
-      if (token === "--") {
-        sub = firstPositional(words, i + 1);
-        break;
-      }
-      if (token.startsWith("--")) {
-        if (token.includes("=")) {
-          continue;
-        }
-        if (globalWithValue.has(token)) {
-          i += 1;
-        }
-        continue;
-      }
-      if (token.startsWith("-")) {
-        if (globalWithValue.has(token)) {
-          i += 1;
-        }
-        continue;
-      }
-      sub = token;
-      break;
-    }
-
-    const map: Record<string, string> = {
-      status: "check git status",
-      diff: "check git diff",
-      log: "view git history",
-      show: "show git object",
-      branch: "list git branches",
-      checkout: "switch git branch",
-      switch: "switch git branch",
-      commit: "create git commit",
-      pull: "pull git changes",
-      push: "push git changes",
-      fetch: "fetch git changes",
-      merge: "merge git changes",
-      rebase: "rebase git branch",
-      add: "stage git changes",
-      restore: "restore git files",
-      reset: "reset git state",
-      stash: "stash git changes",
-    };
-
-    if (sub && map[sub]) {
-      return map[sub];
-    }
-    if (!sub || sub.startsWith("/") || sub.startsWith("~") || sub.includes("/")) {
-      return gitCwd ? `run git command in ${gitCwd}` : "run git command";
-    }
-    return `run git ${sub}`;
-  }
-
-  if (bin === "grep" || bin === "rg" || bin === "ripgrep") {
-    const positional = positionalArgs(words, 1, [
-      "-e",
-      "--regexp",
-      "-f",
-      "--file",
-      "-m",
-      "--max-count",
-      "-A",
-      "--after-context",
-      "-B",
-      "--before-context",
-      "-C",
-      "--context",
-    ]);
-    const pattern = optionValue(words, ["-e", "--regexp"]) ?? positional[0];
-    const target = positional.length > 1 ? positional.at(-1) : undefined;
-    if (pattern) {
-      return target ? `search "${pattern}" in ${target}` : `search "${pattern}"`;
-    }
-    return "search text";
-  }
-
-  if (bin === "find") {
-    const path = words[1] && !words[1].startsWith("-") ? words[1] : ".";
-    const name = optionValue(words, ["-name", "-iname"]);
-    return name ? `find files named "${name}" in ${path}` : `find files in ${path}`;
-  }
-
-  if (bin === "ls") {
-    const target = firstPositional(words, 1);
-    return target ? `list files in ${target}` : "list files";
-  }
-
-  if (bin === "head" || bin === "tail") {
-    const lines =
-      optionValue(words, ["-n", "--lines"]) ??
-      words
-        .slice(1)
-        .find((token) => /^-\d+$/.test(token))
-        ?.slice(1);
-    const positional = positionalArgs(words, 1, ["-n", "--lines"]);
-    let target = positional.at(-1);
-    if (target && /^\d+$/.test(target) && positional.length === 1) {
-      target = undefined;
-    }
-    const side = bin === "head" ? "first" : "last";
-    const unit = lines === "1" ? "line" : "lines";
-    if (lines && target) {
-      return `show ${side} ${lines} ${unit} of ${target}`;
-    }
-    if (lines) {
-      return `show ${side} ${lines} ${unit}`;
-    }
-    if (target) {
-      return `show ${target}`;
-    }
-    return `show ${bin} output`;
-  }
-
-  if (bin === "cat") {
-    const target = firstPositional(words, 1);
-    return target ? `show ${target}` : "show output";
-  }
-
-  if (bin === "sed") {
-    const expression = optionValue(words, ["-e", "--expression"]);
-    const positional = positionalArgs(words, 1, ["-e", "--expression", "-f", "--file"]);
-    const script = expression ?? positional[0];
-    const target = expression ? positional[0] : positional[1];
-
-    if (script) {
-      const compact = (stripOuterQuotes(script) ?? script).replace(/\s+/g, "");
-      const range = compact.match(/^([0-9]+),([0-9]+)p$/);
-      if (range) {
-        return target
-          ? `print lines ${range[1]}-${range[2]} from ${target}`
-          : `print lines ${range[1]}-${range[2]}`;
-      }
-      const single = compact.match(/^([0-9]+)p$/);
-      if (single) {
-        return target ? `print line ${single[1]} from ${target}` : `print line ${single[1]}`;
-      }
-    }
-
-    return target ? `run sed on ${target}` : "run sed transform";
-  }
-
-  if (bin === "printf" || bin === "echo") {
-    return "print text";
-  }
-
-  if (bin === "cp" || bin === "mv") {
-    const positional = positionalArgs(words, 1, ["-t", "--target-directory", "-S", "--suffix"]);
-    const src = positional[0];
-    const dst = positional[1];
-    const action = bin === "cp" ? "copy" : "move";
-    if (src && dst) {
-      return `${action} ${src} to ${dst}`;
-    }
-    if (src) {
-      return `${action} ${src}`;
-    }
-    return `${action} files`;
-  }
-
-  if (bin === "rm") {
-    const target = firstPositional(words, 1);
-    return target ? `remove ${target}` : "remove files";
-  }
-
-  if (bin === "mkdir") {
-    const target = firstPositional(words, 1);
-    return target ? `create folder ${target}` : "create folder";
-  }
-
-  if (bin === "touch") {
-    const target = firstPositional(words, 1);
-    return target ? `create file ${target}` : "create file";
-  }
-
-  if (bin === "curl" || bin === "wget") {
-    const url = words.find((token) => /^https?:\/\//i.test(token));
-    return url ? `fetch ${url}` : "fetch url";
-  }
-
-  if (bin === "npm" || bin === "pnpm" || bin === "yarn" || bin === "bun") {
-    const positional = positionalArgs(words, 1, ["--prefix", "-C", "--cwd", "--config"]);
-    const sub = positional[0] ?? "command";
-    const map: Record<string, string> = {
-      install: "install dependencies",
-      test: "run tests",
-      build: "run build",
-      start: "start app",
-      lint: "run lint",
-      run: positional[1] ? `run ${positional[1]}` : "run script",
-    };
-    return map[sub] ?? `run ${bin} ${sub}`;
-  }
-
-  if (bin === "node" || bin === "python" || bin === "python3" || bin === "ruby" || bin === "php") {
-    const heredoc = words.slice(1).find((token) => token.startsWith("<<"));
-    if (heredoc) {
-      return `run ${bin} inline script (heredoc)`;
-    }
-
-    const inline =
-      bin === "node"
-        ? optionValue(words, ["-e", "--eval"])
-        : bin === "python" || bin === "python3"
-          ? optionValue(words, ["-c"])
-          : undefined;
-    if (inline !== undefined) {
-      return `run ${bin} inline script`;
-    }
-
-    const nodeOptsWithValue = ["-e", "--eval", "-m"];
-    const otherOptsWithValue = ["-c", "-e", "--eval", "-m"];
-    const script = firstPositional(
-      words,
-      1,
-      bin === "node" ? nodeOptsWithValue : otherOptsWithValue,
-    );
-    if (!script) {
-      return `run ${bin}`;
-    }
-
-    if (bin === "node") {
-      const mode =
-        words.includes("--check") || words.includes("-c")
-          ? "check js syntax for"
-          : "run node script";
-      return `${mode} ${script}`;
-    }
-
-    return `run ${bin} ${script}`;
-  }
-
-  if (bin === "openclaw") {
-    const sub = firstPositional(words, 1);
-    return sub ? `run openclaw ${sub}` : "run openclaw";
-  }
-
-  const arg = firstPositional(words, 1);
-  if (!arg || arg.length > 48) {
-    return `run ${bin}`;
-  }
-  return /^[A-Za-z0-9._/-]+$/.test(arg) ? `run ${bin} ${arg}` : `run ${bin}`;
-}
-
-function summarizePipeline(stage: string): string {
-  const pipeline = splitTopLevelPipes(stage);
-  if (pipeline.length > 1) {
-    const first = summarizeKnownExec(trimLeadingEnv(splitShellWords(pipeline[0])));
-    const last = summarizeKnownExec(trimLeadingEnv(splitShellWords(pipeline[pipeline.length - 1])));
-    const extra = pipeline.length > 2 ? ` (+${pipeline.length - 2} steps)` : "";
-    return `${first} -> ${last}${extra}`;
-  }
-  return summarizeKnownExec(trimLeadingEnv(splitShellWords(stage)));
-}
-
-type ExecSummary = {
-  text: string;
-  chdirPath?: string;
-  allGeneric?: boolean;
-};
-
-function summarizeExecCommand(command: string): ExecSummary | undefined {
-  const { command: cleaned, chdirPath } = stripShellPreamble(command);
-  if (!cleaned) {
-    // All segments were preamble (e.g. `cd /tmp && cd /app`) — preserve chdirPath for context.
-    return chdirPath ? { text: "", chdirPath } : undefined;
-  }
-
-  const stages = splitTopLevelStages(cleaned);
-  if (stages.length === 0) {
-    return undefined;
-  }
-
-  const summaries = stages.map((stage) => summarizePipeline(stage));
-  const text = summaries.length === 1 ? summaries[0] : summaries.join(" → ");
-  const allGeneric = summaries.every((s) => isGenericSummary(s));
-
-  return { text, chdirPath, allGeneric };
-}
-
-/** Known summarizer prefixes that indicate a recognized command with useful context. */
-const KNOWN_SUMMARY_PREFIXES = [
-  "check git",
-  "view git",
-  "show git",
-  "list git",
-  "switch git",
-  "create git",
-  "pull git",
-  "push git",
-  "fetch git",
-  "merge git",
-  "rebase git",
-  "stage git",
-  "restore git",
-  "reset git",
-  "stash git",
-  "search ",
-  "find files",
-  "list files",
-  "show first",
-  "show last",
-  "print line",
-  "print text",
-  "copy ",
-  "move ",
-  "remove ",
-  "create folder",
-  "create file",
-  "fetch http",
-  "install dependencies",
-  "run tests",
-  "run build",
-  "start app",
-  "run lint",
-  "run openclaw",
-  "run node script",
-  "run node ",
-  "run python",
-  "run ruby",
-  "run php",
-  "run sed",
-  "run git ",
-  "run npm ",
-  "run pnpm ",
-  "run yarn ",
-  "run bun ",
-  "check js syntax",
-];
-
-/** True when the summary is generic and the raw command would be more informative. */
-function isGenericSummary(summary: string): boolean {
-  if (summary === "run command") {
-    return true;
-  }
-  // "run <binary>" or "run <binary> <arg>" without useful context
-  if (summary.startsWith("run ")) {
-    return !KNOWN_SUMMARY_PREFIXES.some((prefix) => summary.startsWith(prefix));
-  }
-  return false;
-}
-
-/** Compact the raw command for display: collapse whitespace, trim long strings. */
-function compactRawCommand(raw: string, maxLength = 120): string {
-  const oneLine = raw
-    .replace(/\s*\n\s*/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-  if (oneLine.length <= maxLength) {
-    return oneLine;
-  }
-  return `${oneLine.slice(0, Math.max(0, maxLength - 1))}…`;
-}
-
-export function resolveExecDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
-  const raw = typeof record.command === "string" ? record.command.trim() : undefined;
-  if (!raw) {
-    return undefined;
-  }
-
-  const unwrapped = unwrapShellWrapper(raw);
-  const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
-  const summary = result?.text || "run command";
-
-  const cwdRaw =
-    typeof record.workdir === "string"
-      ? record.workdir
-      : typeof record.cwd === "string"
-        ? record.cwd
-        : undefined;
-  // Explicit workdir takes priority; fall back to cd path extracted from the command.
-  const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
-
-  const compact = compactRawCommand(unwrapped);
-
-  // When ALL stages are generic (e.g. "run jj"), use the compact raw command instead.
-  // For mixed stages like "run cargo build → run tests", keep the summary since some parts are useful.
-  if (result?.allGeneric !== false && isGenericSummary(summary)) {
-    return cwd ? `${compact} (in ${cwd})` : compact;
-  }
-
-  const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
-
-  // Keep the raw command inline so chat surfaces do not break "Exec:" onto a
-  // separate paragraph/code block.
-  if (compact && compact !== displaySummary && compact !== summary) {
-    return `${displaySummary} · \`${compact}\``;
-  }
-
-  return displaySummary;
-}
-
-export function resolveActionSpec(
+function resolveActionSpec(
   spec: ToolDisplaySpec | undefined,
   action: string | undefined,
 ): ToolDisplayActionSpec | undefined {
@@ -1100,7 +668,7 @@ export function resolveActionSpec(
   return spec.actions?.[action] ?? undefined;
 }
 
-export function resolveDetailFromKeys(
+function resolveDetailFromKeys(
   args: unknown,
   keys: string[],
   opts: {
@@ -1134,7 +702,7 @@ export function resolveDetailFromKeys(
     return undefined;
   }
   if (entries.length === 1) {
-    return entries[0].value;
+    return entries.at(0)?.value;
   }
 
   const seen = new Set<string>();
@@ -1151,13 +719,18 @@ export function resolveDetailFromKeys(
     return undefined;
   }
 
-  return unique
-    .slice(0, opts.maxEntries ?? 8)
-    .map((entry) => `${entry.label} ${entry.value}`)
-    .join(" · ");
+  const maxEntries = opts.maxEntries ?? 8;
+  const parts: string[] = [];
+  for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
+    const entry = unique[index];
+    if (entry) {
+      parts.push(`${entry.label} ${entry.value}`);
+    }
+  }
+  return parts.join(" · ");
 }
 
-export function resolveToolVerbAndDetail(params: {
+function resolveToolVerbAndDetail(params: {
   toolKey: string;
   args?: unknown;
   meta?: string;
@@ -1165,6 +738,7 @@ export function resolveToolVerbAndDetail(params: {
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
+  toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
@@ -1179,8 +753,8 @@ export function resolveToolVerbAndDetail(params: {
   const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (params.toolKey === "exec") {
-    detail = resolveExecDetail(params.args);
+  if (params.toolKey === "exec" || params.toolKey === "bash") {
+    detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
   }
   if (!detail && params.toolKey === "read") {
     detail = resolveReadDetail(params.args);
@@ -1196,6 +770,9 @@ export function resolveToolVerbAndDetail(params: {
   }
   if (!detail && params.toolKey === "web_fetch") {
     detail = resolveWebFetchDetail(params.args);
+  }
+  if (!detail && params.toolKey === "tool_search_code") {
+    detail = resolveToolSearchCodeDetail(params.args);
   }
 
   const detailKeys =
@@ -1214,6 +791,7 @@ export function resolveToolVerbAndDetail(params: {
   return { verb, detail };
 }
 
+/** Normalize final detail text before attaching it to a tool display line. */
 export function formatToolDetailText(
   detail: string | undefined,
   opts: { prefixWithWith?: boolean } = {},
@@ -1222,14 +800,20 @@ export function formatToolDetailText(
     return undefined;
   }
   const normalized = detail.includes(" · ")
-    ? detail
-        .split(" · ")
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0)
-        .join(", ")
+    ? (() => {
+        const parts: string[] = [];
+        for (const part of detail.split(" · ")) {
+          const trimmed = part.trim();
+          if (trimmed) {
+            parts.push(trimmed);
+          }
+        }
+        return parts.join(", ");
+      })()
     : detail;
   if (!normalized) {
     return undefined;
   }
   return opts.prefixWithWith ? `with ${normalized}` : normalized;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

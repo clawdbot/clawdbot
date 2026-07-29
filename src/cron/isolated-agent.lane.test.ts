@@ -1,64 +1,59 @@
-import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
-import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
+// Isolated agent lane tests cover lane selection for scheduled agent runs.
+import { describe, expect, it } from "vitest";
+import { resolveCronAgentLane } from "../agents/lanes.js";
 import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStoreEntries,
-} from "./isolated-agent.test-harness.js";
+  makeIsolatedAgentJobFixture,
+  makeIsolatedAgentParamsFixture,
+} from "./isolated-agent/job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
+import {
+  loadRunCronIsolatedAgentTurn,
+  mockRunCronFallbackPassthrough,
+  resolveCronAgentLaneMock,
+  runEmbeddedAgentMock,
+} from "./isolated-agent/run.test-harness.js";
+
+const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function lastEmbeddedLane(): string | undefined {
-  const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  return (calls.at(-1)?.[0] as { lane?: string } | undefined)?.lane;
+  const params = runEmbeddedAgentMock.mock.calls.at(-1)?.[0];
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("Expected embedded OpenClaw agent params to be an object");
+  }
+  return (params as { lane?: string }).lane;
 }
 
-async function runLaneCase(home: string, lane?: string) {
-  const storePath = await writeSessionStoreEntries(home, {
-    "agent:main:main": {
-      sessionId: "main-session",
-      updatedAt: Date.now(),
-      lastProvider: "webchat",
-      lastTo: "",
-    },
-  });
-  mockAgentPayloads([{ text: "ok" }]);
+async function runLaneCase(lane?: string) {
+  resolveCronAgentLaneMock.mockImplementation(resolveCronAgentLane);
+  mockRunCronFallbackPassthrough();
 
-  await runCronIsolatedAgentTurn({
-    cfg: makeCfg(home, storePath),
-    deps: createCliDeps(),
-    job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
-    message: "do it",
-    sessionKey: "cron:job-1",
-    ...(lane === undefined ? {} : { lane }),
-  });
+  await runCronIsolatedAgentTurn(
+    makeIsolatedAgentParamsFixture({
+      job: makeIsolatedAgentJobFixture({
+        delivery: { mode: "none" },
+        payload: { kind: "agentTurn", message: "do it" },
+      }),
+      message: "do it",
+      sessionKey: "cron:job-1",
+      ...(lane === undefined ? {} : { lane }),
+    }),
+  );
 
   return lastEmbeddedLane();
 }
 
 describe("runCronIsolatedAgentTurn lane selection", () => {
-  beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockClear();
+  setupRunCronIsolatedAgentTurnSuite();
+
+  it("moves the cron lane to cron-nested for embedded runs", async () => {
+    expect(await runLaneCase("cron")).toBe("cron-nested");
   });
 
-  it("moves the cron lane to nested for embedded runs", async () => {
-    await withTempCronHome(async (home) => {
-      expect(await runLaneCase(home, "cron")).toBe("nested");
-    });
-  });
-
-  it("defaults missing lanes to nested for embedded runs", async () => {
-    await withTempCronHome(async (home) => {
-      expect(await runLaneCase(home)).toBe("nested");
-    });
+  it("defaults missing lanes to cron-nested for embedded runs", async () => {
+    expect(await runLaneCase()).toBe("cron-nested");
   });
 
   it("preserves non-cron lanes for embedded runs", async () => {
-    await withTempCronHome(async (home) => {
-      expect(await runLaneCase(home, "subagent")).toBe("subagent");
-    });
+    expect(await runLaneCase("subagent")).toBe("subagent");
   });
 });

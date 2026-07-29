@@ -1,6 +1,22 @@
 {
   "id": "slack",
+  "name": "Slack",
+  "description": "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
+  "skills": ["./skills"],
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["slack"],
+  "channelConfigs": {
+    "slack": {
+      "label": "Slack",
+      "description": "Slack channel, DM, command, and app event integration.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,11 +1,11 @@
-import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "openclaw/plugin-sdk/provider-models";
+// Opencode setup module handles plugin onboarding behavior.
 import {
   applyAgentDefaultModelPrimary,
   withAgentModelAliases,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export { OPENCODE_ZEN_DEFAULT_MODEL_REF };
+export const OPENCODE_ZEN_DEFAULT_MODEL_REF = "opencode/claude-opus-4-6";
 
 export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   return {

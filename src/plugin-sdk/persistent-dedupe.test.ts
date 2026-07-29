@@ -1,138 +1,155 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { createPersistentDedupe } from "./persistent-dedupe.js";
+import { describe, expect, it, vi } from "vitest";
+import { createChannelReplayGuard } from "./persistent-dedupe.js";
 
-const tmpRoots: string[] = [];
+type ReplayEvent = {
+  accountId: string;
+  keys: readonly (string | null | undefined)[];
+};
 
-async function makeTmpRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dedupe-"));
-  tmpRoots.push(root);
-  return root;
+function createGuard() {
+  return createChannelReplayGuard<ReplayEvent>({
+    dedupe: { ttlMs: 10_000, memoryMaxSize: 100 },
+    buildReplayKey: (event) => event.keys,
+    namespace: (event) => event.accountId,
+  });
 }
 
-afterEach(async () => {
-  await Promise.all(
-    tmpRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
+async function expectClaimed(claim: Awaited<ReturnType<ReturnType<typeof createGuard>["claim"]>>) {
+  expect(claim.kind).toBe("claimed");
+  if (claim.kind !== "claimed") {
+    throw new Error(`expected claimed result, received ${claim.kind}`);
+  }
+  return claim.handle;
+}
 
-describe("createPersistentDedupe", () => {
-  it("deduplicates keys and persists across instances", async () => {
-    const root = await makeTmpRoot();
-    const resolveFilePath = (namespace: string) => path.join(root, `${namespace}.json`);
+describe("createChannelReplayGuard", () => {
+  it("normalizes multi-key claims and mirrors commit state to in-flight waiters", async () => {
+    const guard = createGuard();
+    const event = { accountId: "work", keys: [" message-1 ", "message-1", "message-2"] };
 
-    const first = createPersistentDedupe({
-      ttlMs: 24 * 60 * 60 * 1000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath,
-    });
-    expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(true);
-    expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(false);
-
-    const second = createPersistentDedupe({
-      ttlMs: 24 * 60 * 60 * 1000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath,
-    });
-    expect(await second.checkAndRecord("m1", { namespace: "a" })).toBe(false);
-    expect(await second.checkAndRecord("m1", { namespace: "b" })).toBe(true);
+    const handle = await expectClaimed(await guard.claim(event));
+    expect(handle.keys).toEqual(["message-1", "message-2"]);
+    const inflight = await guard.claim(event);
+    expect(inflight.kind).toBe("inflight");
+    await expect(handle.commit()).resolves.toBe(true);
+    if (inflight.kind === "inflight") {
+      await expect(inflight.pending).resolves.toBe(true);
+    }
+    await expect(guard.claim(event)).resolves.toEqual({ kind: "duplicate" });
   });
 
-  it("guards concurrent calls for the same key", async () => {
-    const root = await makeTmpRoot();
-    const dedupe = createPersistentDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
-    });
+  it("fails open for invalid keys without recording them", async () => {
+    const guard = createGuard();
+    const event = { accountId: "work", keys: [" ", null, undefined] };
+    const process = vi.fn(async () => "handled");
 
-    const [first, second] = await Promise.all([
-      dedupe.checkAndRecord("race-key", { namespace: "feishu" }),
-      dedupe.checkAndRecord("race-key", { namespace: "feishu" }),
-    ]);
-    expect(first).toBe(true);
-    expect(second).toBe(false);
+    await expect(guard.claim(event)).resolves.toEqual({ kind: "invalid" });
+    await expect(guard.shouldProcess(event)).resolves.toBe(true);
+    await expect(guard.processGuarded(event, process)).resolves.toEqual({
+      kind: "processed",
+      value: "handled",
+    });
+    expect("commit" in guard).toBe(false);
+    expect("release" in guard).toBe(false);
+    expect(process).toHaveBeenCalledOnce();
   });
 
-  it("falls back to memory-only behavior on disk errors", async () => {
-    const dedupe = createPersistentDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: () => path.join("/dev/null", "dedupe.json"),
-    });
+  it("releases failed claims and rejects their in-flight waiters", async () => {
+    const guard = createGuard();
+    const event = { accountId: "work", keys: ["message-3"] };
 
-    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(true);
-    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(false);
+    const handle = await expectClaimed(await guard.claim(event));
+    const inflight = await guard.claim(event);
+    const failure = new Error("retry me");
+    handle.release({ error: failure });
+    if (inflight.kind === "inflight") {
+      await expect(inflight.pending).rejects.toThrow("retry me");
+    }
+    await expect(guard.claim(event)).resolves.toMatchObject({ kind: "claimed" });
   });
 
-  it("warmup loads persisted entries into memory", async () => {
-    const root = await makeTmpRoot();
-    const resolveFilePath = (namespace: string) => path.join(root, `${namespace}.json`);
+  it("does not let a mixed claim commit another claim's in-flight key", async () => {
+    const guard = createGuard();
+    const sharedOwner = await expectClaimed(
+      await guard.claim({ accountId: "work", keys: ["shared", "first-only"] }),
+    );
+    const mixedOwner = await expectClaimed(
+      await guard.claim({ accountId: "work", keys: ["shared", "second-only"] }),
+    );
+    expect(mixedOwner.keys).toEqual(["second-only"]);
+    const sharedWaiter = await guard.claim({ accountId: "work", keys: ["shared"] });
 
-    const writer = createPersistentDedupe({
-      ttlMs: 24 * 60 * 60 * 1000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath,
-    });
-    expect(await writer.checkAndRecord("msg-1", { namespace: "acct" })).toBe(true);
-    expect(await writer.checkAndRecord("msg-2", { namespace: "acct" })).toBe(true);
+    await expect(mixedOwner.commit()).resolves.toBe(true);
+    sharedOwner.release({ error: new Error("first handler failed") });
 
-    const reader = createPersistentDedupe({
-      ttlMs: 24 * 60 * 60 * 1000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath,
+    if (sharedWaiter.kind === "inflight") {
+      await expect(sharedWaiter.pending).rejects.toThrow("first handler failed");
+    }
+    await expect(guard.claim({ accountId: "work", keys: ["shared"] })).resolves.toMatchObject({
+      kind: "claimed",
     });
-    const loaded = await reader.warmup("acct");
-    expect(loaded).toBe(2);
-    expect(await reader.checkAndRecord("msg-1", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("msg-2", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("msg-3", { namespace: "acct" })).toBe(true);
+    await expect(guard.claim({ accountId: "work", keys: ["second-only"] })).resolves.toEqual({
+      kind: "duplicate",
+    });
   });
 
-  it("warmup returns 0 when no disk file exists", async () => {
-    const root = await makeTmpRoot();
-    const dedupe = createPersistentDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: (ns) => path.join(root, `${ns}.json`),
+  it("does not let the first claim commit keys owned by a mixed second claim", async () => {
+    const guard = createGuard();
+    const firstOwner = await expectClaimed(
+      await guard.claim({ accountId: "work", keys: ["shared", "first-only"] }),
+    );
+    const secondOwner = await expectClaimed(
+      await guard.claim({ accountId: "work", keys: ["shared", "second-only"] }),
+    );
+    const sharedWaiter = await guard.claim({ accountId: "work", keys: ["shared"] });
+    const secondWaiter = await guard.claim({ accountId: "work", keys: ["second-only"] });
+
+    secondOwner.release({ error: new Error("second handler failed") });
+    await expect(firstOwner.commit()).resolves.toBe(true);
+
+    if (sharedWaiter.kind === "inflight") {
+      await expect(sharedWaiter.pending).resolves.toBe(true);
+    }
+    if (secondWaiter.kind === "inflight") {
+      await expect(secondWaiter.pending).rejects.toThrow("second handler failed");
+    }
+    await expect(
+      guard.claim({ accountId: "work", keys: ["shared", "first-only"] }),
+    ).resolves.toEqual({ kind: "duplicate" });
+    await expect(guard.claim({ accountId: "work", keys: ["second-only"] })).resolves.toMatchObject({
+      kind: "claimed",
     });
-    const loaded = await dedupe.warmup("nonexistent");
-    expect(loaded).toBe(0);
   });
 
-  it("warmup skips expired entries", async () => {
-    const root = await makeTmpRoot();
-    const resolveFilePath = (namespace: string) => path.join(root, `${namespace}.json`);
-    const ttlMs = 1000;
+  it.each([
+    { errorMode: "release" as const, nextKind: "claimed" },
+    { errorMode: "commit" as const, nextKind: "duplicate" },
+  ])("uses $errorMode error settlement in processGuarded", async ({ errorMode, nextKind }) => {
+    const guard = createGuard();
+    const event = { accountId: "work", keys: [`message-${errorMode}`] };
 
-    const writer = createPersistentDedupe({
-      ttlMs,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath,
-    });
-    const oldNow = Date.now() - 2000;
-    expect(await writer.checkAndRecord("old-msg", { namespace: "acct", now: oldNow })).toBe(true);
-    expect(await writer.checkAndRecord("new-msg", { namespace: "acct" })).toBe(true);
+    await expect(
+      guard.processGuarded(
+        event,
+        async () => {
+          throw new Error("handler failed");
+        },
+        { onError: errorMode },
+      ),
+    ).rejects.toThrow("handler failed");
+    await expect(guard.claim(event)).resolves.toMatchObject({ kind: nextKind });
+  });
 
-    const reader = createPersistentDedupe({
-      ttlMs,
-      memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath,
-    });
-    const loaded = await reader.warmup("acct");
-    expect(loaded).toBe(1);
-    expect(await reader.checkAndRecord("old-msg", { namespace: "acct" })).toBe(true);
-    expect(await reader.checkAndRecord("new-msg", { namespace: "acct" })).toBe(false);
+  it("scopes keys by namespace and supports recency cleanup", async () => {
+    const guard = createGuard();
+    const work = { accountId: "work", keys: ["message-4"] };
+    const home = { accountId: "home", keys: ["message-4"] };
+
+    await expect(guard.shouldProcess(work)).resolves.toBe(true);
+    await expect(guard.shouldProcess(work)).resolves.toBe(false);
+    await expect(guard.shouldProcess(home)).resolves.toBe(true);
+    await expect(guard.hasRecent(work)).resolves.toBe(true);
+    await expect(guard.forget(work)).resolves.toBe(true);
+    await expect(guard.hasRecent(work)).resolves.toBe(false);
   });
 });

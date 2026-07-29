@@ -1,8 +1,11 @@
-import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+// Tool execution component renders tool call status and output in the TUI.
+import { Box, Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
 
+// Rendering model for live tool calls in the chat log.
 type ToolResultContent = {
   type?: string;
   text?: string;
@@ -17,7 +20,57 @@ type ToolResult = {
 };
 
 const PREVIEW_LINES = 12;
+const MAX_PREVIEW_CHARS = PREVIEW_LINES * 256;
 
+// Bound the actual wrapped Markdown, not just source newlines: a single long
+// tool-output line can otherwise produce thousands of rows and stall the TUI.
+class ToolOutputComponent extends Markdown {
+  private sourceText = "";
+  private renderedSource: string | undefined;
+  private expanded = false;
+
+  override setText(text: string): void {
+    if (this.sourceText === text) {
+      return;
+    }
+    this.sourceText = text;
+    this.renderedSource = undefined;
+    super.invalidate();
+  }
+
+  setExpanded(expanded: boolean): void {
+    if (this.expanded === expanded) {
+      return;
+    }
+    this.expanded = expanded;
+    this.renderedSource = undefined;
+    super.invalidate();
+  }
+
+  override render(width: number): string[] {
+    const safeWidth = Math.max(0, Math.floor(width));
+    const previewBudget = Math.min(MAX_PREVIEW_CHARS, PREVIEW_LINES * Math.max(1, safeWidth));
+    const text = this.expanded
+      ? this.sourceText
+      : truncateUtf16Safe(this.sourceText, previewBudget);
+
+    if (this.renderedSource !== text) {
+      super.setText(text);
+      this.renderedSource = text;
+    }
+
+    const lines = super.render(safeWidth);
+    if (
+      this.expanded ||
+      (text.length === this.sourceText.length && lines.length <= PREVIEW_LINES)
+    ) {
+      return lines;
+    }
+    return [...lines.slice(0, PREVIEW_LINES - 1), truncateToWidth("…", safeWidth, "")];
+  }
+}
+
+// Prefer curated display summaries, then fall back to sanitized JSON args.
 function formatArgs(toolName: string, args: unknown): string {
   const display = resolveToolDisplay({ name: toolName, args });
   const detail = formatToolDetail(display);
@@ -34,6 +87,7 @@ function formatArgs(toolName: string, args: unknown): string {
   }
 }
 
+// Extracts visible text and compact media placeholders from tool result payloads.
 function extractText(result?: ToolResult): string {
   if (!result?.content) {
     return "";
@@ -52,11 +106,12 @@ function extractText(result?: ToolResult): string {
   return lines.join("\n").trim();
 }
 
+/** Displays a running or completed tool call with optional expandable output. */
 export class ToolExecutionComponent extends Container {
   private box: Box;
   private header: Text;
   private argsLine: Text;
-  private output: Markdown;
+  private output: ToolOutputComponent;
   private toolName: string;
   private args: unknown;
   private result?: ToolResult;
@@ -71,7 +126,7 @@ export class ToolExecutionComponent extends Container {
     this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
     this.header = new Text("", 0, 0);
     this.argsLine = new Text("", 0, 0);
-    this.output = new Markdown("", 0, 0, markdownTheme, {
+    this.output = new ToolOutputComponent("", 0, 0, markdownTheme, {
       color: (line) => theme.toolOutput(line),
     });
     this.addChild(new Spacer(1));
@@ -82,16 +137,19 @@ export class ToolExecutionComponent extends Container {
     this.refresh();
   }
 
+  /** Re-renders tool arguments when streaming tool call input changes. */
   setArgs(args: unknown) {
     this.args = args;
     this.refresh();
   }
 
+  /** Toggles preview/full output rendering for long tool results. */
   setExpanded(expanded: boolean) {
     this.expanded = expanded;
     this.refresh();
   }
 
+  /** Marks the tool call complete and renders final output. */
   setResult(result: ToolResult | undefined, opts?: { isError?: boolean }) {
     this.result = result;
     this.isPartial = false;
@@ -99,6 +157,7 @@ export class ToolExecutionComponent extends Container {
     this.refresh();
   }
 
+  /** Renders partial output while the tool call is still running. */
   setPartialResult(result: ToolResult | undefined) {
     this.result = result;
     this.isPartial = true;
@@ -125,13 +184,7 @@ export class ToolExecutionComponent extends Container {
 
     const raw = extractText(this.result);
     const text = raw || (this.isPartial ? "…" : "");
-    if (!this.expanded && text) {
-      const lines = text.split("\n");
-      const preview =
-        lines.length > PREVIEW_LINES ? `${lines.slice(0, PREVIEW_LINES).join("\n")}\n…` : text;
-      this.output.setText(preview);
-    } else {
-      this.output.setText(text);
-    }
+    this.output.setExpanded(this.expanded);
+    this.output.setText(text);
   }
 }

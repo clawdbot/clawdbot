@@ -1,3 +1,4 @@
+// Message secret scope tests cover CLI secret scoping for message commands.
 import { describe, expect, it } from "vitest";
 import { resolveMessageSecretScope } from "./message-secret-scope.js";
 
@@ -5,11 +6,11 @@ describe("resolveMessageSecretScope", () => {
   it("prefers explicit channel/account inputs", () => {
     expect(
       resolveMessageSecretScope({
-        channel: "Discord",
+        channel: "Signal",
         accountId: "Ops",
       }),
     ).toEqual({
-      channel: "discord",
+      channel: "signal",
       accountId: "ops",
     });
   });
@@ -17,29 +18,29 @@ describe("resolveMessageSecretScope", () => {
   it("infers channel from a prefixed target", () => {
     expect(
       resolveMessageSecretScope({
-        target: "telegram:12345",
+        target: "signal:12345",
       }),
     ).toEqual({
-      channel: "telegram",
+      channel: "signal",
     });
   });
 
   it("infers a shared channel from target arrays", () => {
     expect(
       resolveMessageSecretScope({
-        targets: ["discord:one", "discord:two"],
+        targets: ["signal:one", "signal:two"],
       }),
     ).toEqual({
-      channel: "discord",
+      channel: "signal",
     });
   });
 
   it("does not infer a channel when target arrays mix channels", () => {
     expect(
       resolveMessageSecretScope({
-        targets: ["discord:one", "slack:two"],
+        targets: ["signal:one", "imessage:two"],
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("uses fallback channel/account when direct inputs are missing", () => {

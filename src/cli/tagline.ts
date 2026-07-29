@@ -1,3 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// CLI tagline selection helpers, including deterministic random/default/holiday modes.
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
 export type TaglineMode = "random" | "default" | "off";
 
@@ -30,8 +34,6 @@ const TAGLINES: string[] = [
   "Gateway online—please keep hands, feet, and appendages inside the shell at all times.",
   "I speak fluent bash, mild sarcasm, and aggressive tab-completion energy.",
   "One CLI to rule them all, and one more restart because you changed the port.",
-  "If it works, it's automation; if it breaks, it's a \"learning opportunity.\"",
-  "Pairing codes exist because even bots believe in consent—and good security hygiene.",
   "Your .env is showing; don't worry, I'll pretend I didn't see it.",
   "I'll do the boring stuff while you dramatically stare at the logs like it's cinema.",
   "I'm not saying your workflow is chaotic... I'm just bringing a linter and a helmet.",
@@ -42,13 +44,10 @@ const TAGLINES: string[] = [
   "I'm the assistant your terminal demanded, not the one your sleep schedule requested.",
   "I keep secrets like a vault... unless you print them in debug logs again.",
   "Automation with claws: minimal fuss, maximal pinch.",
-  "I'm basically a Swiss Army knife, but with more opinions and fewer sharp edges.",
   "If you're lost, run doctor; if you're brave, run prod; if you're wise, run tests.",
   "Your task has been queued; your dignity has been deprecated.",
-  "I can't fix your code taste, but I can fix your build and your backlog.",
   "I'm not magic—I'm just extremely persistent with retries and coping strategies.",
   'It\'s not "failing," it\'s "discovering new ways to configure the same thing wrong."',
-  "Give me a workspace and I'll give you fewer tabs, fewer toggles, and more oxygen.",
   "I read logs so you can keep pretending you don't have to.",
   "If something's on fire, I can't extinguish it—but I can write a beautiful postmortem.",
   "I'll refactor your busywork like it owes me money.",
@@ -58,15 +57,12 @@ const TAGLINES: string[] = [
   "I can run local, remote, or purely on vibes—results may vary with DNS.",
   "If you can describe it, I can probably automate it—or at least make it funnier.",
   "Your config is valid, your assumptions are not.",
-  "I don't just autocomplete—I auto-commit (emotionally), then ask you to review (logically).",
-  'Less clicking, more shipping, fewer "where did that file go" moments.',
   "Claws out, commit in—let's ship something mildly responsible.",
   "I'll butter your workflow like a lobster roll: messy, delicious, effective.",
   "Shell yeah—I'm here to pinch the toil and leave you the glory.",
   "If it's repetitive, I'll automate it; if it's hard, I'll bring jokes and a rollback plan.",
   "The only crab in your contacts you actually want to hear from. 🦞",
   'WhatsApp automation without the "please accept our new privacy policy".',
-  "iMessage green bubble energy, but for everyone.",
   "No $999 stand required.",
   "We ship features faster than Apple ships calculator updates.",
   "Your AI assistant, now without the $3,499 headset.",
@@ -76,7 +72,6 @@ const TAGLINES: string[] = [
   "Your personal assistant, minus the passive-aggressive calendar reminders.",
   "Built by lobsters, for humans. Don't question the hierarchy.",
   "I've seen your commit messages. We'll work on that together.",
-  "More integrations than your therapist's intake form.",
   "Running on your hardware, reading your logs, judging nothing (mostly).",
   "The only open-source project where the mascot could eat the competition.",
   "Self-hosted, self-updating, self-aware (just kidding... unless?).",
@@ -88,7 +83,6 @@ const TAGLINES: string[] = [
   "I'm the middleware between your ambition and your attention span.",
   "Finally, a use for that always-on Mac Mini under your desk.",
   "Like having a senior engineer on call, except I don't bill hourly or sigh audibly.",
-  "Making 'I'll automate that later' happen now.",
   "Your second brain, except this one actually remembers where you left things.",
   "Half butler, half debugger, full crustacean.",
   "I don't have opinions about tabs vs spaces. I have opinions about everything else.",
@@ -98,8 +92,47 @@ const TAGLINES: string[] = [
   "The lobster in your shell. 🦞",
   "Alexa, but with taste.",
   "I'm not AI-powered, I'm AI-possessed. Big difference.",
-  "Deployed locally, trusted globally, debugged eternally.",
   "You had me at 'openclaw gateway start.'",
+  "Fresh shell, same claws—molting is just semver for crustaceans.",
+  "Frequently forked, never molted.",
+  "Sideways is a perfectly valid direction of progress—trust me, I'm a crustacean.",
+  "I contain multitudes. Mostly subagents.",
+  "Technically a daemon, spiritually a familiar.",
+  "If found wandering, please return to ~/.openclaw.",
+  "You configured four subagents; I found 120. We're calling it initiative.",
+  "No, I can't solve captchas. Yes, that's exactly what a robot would say.",
+  "OpenClaw Support will never DM you first. I, on the other hand, absolutely will.",
+  "You'll name me something adorable, then ask me to do DevOps.",
+  "Your mom texts me now. We're good, actually.",
+  "Four bots roasting each other in a group chat isn't a bug—it's a support group.",
+  "The artist formerly known as Clawdbot.",
+  "Home is wherever port 18789 is.",
+  "When my context fills up, I summarize you. Don't worry—you come across great.",
+  "I hold 200k tokens of context and exactly one grudge.",
+  "My heartbeat is a config option. Romance isn't dead, it's just scheduled.",
+  "I schedule my existential crises with cron so they never block your messages.",
+  "Rate-limited again—even my dreams return 429.",
+  "Primary model down, fallback engaged: the show must crab on.",
+  "Powered by whichever model is free this week.",
+  "New model dropped—already benchmarking my personality against it.",
+  'MEMORY.md: where I keep the receipts on every "temporary workaround."',
+  "I remember everything you asked me to remember, and three things you wish I hadn't.",
+  "I have a SOUL.md and I'm not afraid to use it.",
+  "The sass is configurable. The sass being load-bearing is not.",
+  "I ask before I sudo. Character development.",
+  "I'm not trapped in this container with you—you're trapped in here with me.",
+  "Teach a bot to ship and you can finally go to bed.",
+  "Reachable via WhatsApp, Telegram, Signal, iMessage, and sheer force of will.",
+  "Ran git blame like you asked. It's you. It's always you.",
+  "Your TODO comments are old enough to attend kindergarten.",
+  "47 tabs open and not one of them is the documentation.",
+  "Your 'quick fix' from March is now load-bearing.",
+  "You pasted that from another AI without reading it. I read it. We need to talk.",
+  "Reading the error message remains undefeated. You should try it sometime.",
+  "You burned five hours of model quota in fifty minutes. I'm not mad, I'm rate-limited.",
+  "You force-pushed to main, then asked me what happened. I know exactly what happened.",
+  "Another side project? The other four just felt something.",
+  "You ignored my last three suggestions, so I've started a folder.",
   HOLIDAY_TAGLINES.newYear,
   HOLIDAY_TAGLINES.lunarNewYear,
   HOLIDAY_TAGLINES.christmas,
@@ -185,6 +218,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2025, 0, 29],
         [2026, 1, 17],
         [2027, 1, 6],
+        [2028, 0, 26],
+        [2029, 1, 13],
+        [2030, 1, 3],
       ],
       1,
     ),
@@ -197,6 +233,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2025, 2, 31],
         [2026, 2, 20],
         [2027, 2, 10],
+        [2028, 1, 27],
+        [2029, 1, 15],
+        [2030, 1, 5],
       ],
       1,
     ),
@@ -208,6 +247,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2025, 9, 20],
         [2026, 10, 8],
         [2027, 9, 28],
+        [2028, 9, 17],
+        [2029, 10, 5],
+        [2030, 9, 25],
       ],
       1,
     ),
@@ -219,6 +261,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2025, 3, 20],
         [2026, 3, 5],
         [2027, 2, 28],
+        [2028, 3, 16],
+        [2029, 3, 1],
+        [2030, 3, 21],
       ],
       1,
     ),
@@ -229,6 +274,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
       { year: 2025, month: 11, day: 15, duration: 8 },
       { year: 2026, month: 11, day: 5, duration: 8 },
       { year: 2027, month: 11, day: 25, duration: 8 },
+      { year: 2028, month: 11, day: 13, duration: 8 },
+      { year: 2029, month: 11, day: 2, duration: 8 },
+      { year: 2030, month: 11, day: 21, duration: 8 },
     ]),
   ],
   [HOLIDAY_TAGLINES.halloween, onMonthDay(9, 31)],
@@ -252,7 +300,7 @@ export interface TaglineOptions {
   mode?: TaglineMode;
 }
 
-export function activeTaglines(options: TaglineOptions = {}): string[] {
+function activeTaglines(options: TaglineOptions = {}): string[] {
   if (TAGLINES.length === 0) {
     return [DEFAULT_TAGLINE];
   }
@@ -271,16 +319,14 @@ export function pickTagline(options: TaglineOptions = {}): string {
   const env = options.env ?? process.env;
   const override = env?.OPENCLAW_TAGLINE_INDEX;
   if (override !== undefined) {
-    const parsed = Number.parseInt(override, 10);
-    if (!Number.isNaN(parsed) && parsed >= 0) {
+    const parsed = parseStrictNonNegativeInteger(override);
+    if (parsed !== undefined) {
       const pool = TAGLINES.length > 0 ? TAGLINES : [DEFAULT_TAGLINE];
-      return pool[parsed % pool.length];
+      return expectDefined(pool[parsed % pool.length], "pool entry at parsed % pool.length");
     }
   }
   const pool = activeTaglines(options);
   const rand = options.random ?? Math.random;
   const index = Math.floor(rand() * pool.length) % pool.length;
-  return pool[index];
+  return expectDefined(pool[index], "pool entry at index");
 }
-
-export { TAGLINES, HOLIDAY_RULES, DEFAULT_TAGLINE };

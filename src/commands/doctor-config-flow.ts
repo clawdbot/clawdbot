@@ -1,1057 +1,498 @@
-import { normalizeChatChannelId } from "../channels/registry.js";
+/** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
+import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { listRouteBindings } from "../config/bindings.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH, migrateLegacyConfig } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
-import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
+import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { CONFIG_PATH } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { callGateway } from "../gateway/call.js";
+import type { RuntimeEnv } from "../runtime.js";
 import {
-  listInterpreterLikeSafeBins,
-  resolveMergedSafeBinProfileFixtures,
-} from "../infra/exec-safe-bin-runtime-policy.js";
-import {
-  getTrustedSafeBinDirs,
-  isTrustedSafeBinPath,
-  normalizeTrustedSafeBinDirs,
-} from "../infra/exec-safe-bin-trust.js";
-import {
-  autoPrepareLegacyMatrixCrypto,
-  detectLegacyMatrixCrypto,
-} from "../infra/matrix-legacy-crypto.js";
-import {
-  autoMigrateLegacyMatrixState,
-  detectLegacyMatrixState,
-} from "../infra/matrix-legacy-state.js";
-import {
-  hasActionableMatrixMigration,
-  hasPendingMatrixMigration,
-  maybeCreateMatrixMigrationSnapshot,
-} from "../infra/matrix-migration-snapshot.js";
-import {
-  detectPluginInstallPathIssue,
-  formatPluginInstallPathIssue,
-} from "../infra/plugin-install-path-warnings.js";
-import {
-  formatChannelAccountsDefaultPath,
-  formatSetExplicitDefaultInstruction,
-  formatSetExplicitDefaultToConfiguredInstruction,
-} from "../routing/default-account-warnings.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "../routing/session-key.js";
-import { note } from "../terminal/note.js";
-import {
-  formatConfigPath,
+  noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
-  resolveConfigPathTarget,
-  stripUnknownConfigKeys,
+  noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
+import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
+import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
+import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
-  maybeRepairDiscordNumericIds,
-  scanDiscordNumericIdEntries,
-} from "./doctor/providers/discord.js";
+  applyLegacyCompatibilityStep,
+  applyUnknownConfigKeyStep,
+} from "./doctor/shared/config-flow-steps.js";
 import {
-  collectTelegramGroupPolicyWarnings,
-  maybeRepairTelegramAllowFromUsernames,
-  scanTelegramAllowFromUsernameEntries,
-} from "./doctor/providers/telegram.js";
-import { maybeRepairAllowlistPolicyAllowFrom } from "./doctor/shared/allowlist-policy-repair.js";
-import { collectEmptyAllowlistPolicyWarningsForAccount } from "./doctor/shared/empty-allowlist-policy.js";
-import { scanMutableAllowlistEntries } from "./doctor/shared/mutable-allowlist.js";
-import { asObjectRecord } from "./doctor/shared/object.js";
-import { maybeRepairOpenPolicyAllowFrom } from "./doctor/shared/open-policy-allowfrom.js";
+  applyDoctorConfigMutation,
+  type DoctorConfigMutationResult,
+  type DoctorConfigMutationState,
+} from "./doctor/shared/config-mutation-state.js";
+import { materializeDefaultAgentRoles } from "./doctor/shared/default-agent-role-materialization.js";
+import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
-function normalizeBindingChannelKey(raw?: string | null): string {
-  const normalized = normalizeChatChannelId(raw);
-  if (normalized) {
-    return normalized;
-  }
-  return (raw ?? "").trim().toLowerCase();
+function hasLegacyInternalHookHandlers(raw: unknown): boolean {
+  const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
+    ?.handlers;
+  return Array.isArray(handlers) && handlers.length > 0;
 }
 
-type ChannelMissingDefaultAccountContext = {
-  channelKey: string;
-  channel: Record<string, unknown>;
-  normalizedAccountIds: string[];
-};
-
-function collectChannelsMissingDefaultAccount(
+function collectInvalidHookTransformsDirWarnings(
   cfg: OpenClawConfig,
-): ChannelMissingDefaultAccountContext[] {
-  const channels = asObjectRecord(cfg.channels);
-  if (!channels) {
-    return [];
-  }
-
-  const contexts: ChannelMissingDefaultAccountContext[] = [];
-  for (const [channelKey, rawChannel] of Object.entries(channels)) {
-    const channel = asObjectRecord(rawChannel);
-    if (!channel) {
-      continue;
-    }
-    const accounts = asObjectRecord(channel.accounts);
-    if (!accounts) {
-      continue;
-    }
-
-    const normalizedAccountIds = Array.from(
-      new Set(
-        Object.keys(accounts)
-          .map((accountId) => normalizeAccountId(accountId))
-          .filter(Boolean),
-      ),
-    ).toSorted((a, b) => a.localeCompare(b));
-    if (normalizedAccountIds.length === 0 || normalizedAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
-      continue;
-    }
-    contexts.push({ channelKey, channel, normalizedAccountIds });
-  }
-  return contexts;
-}
-
-export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
-  const bindings = listRouteBindings(cfg);
-  const warnings: string[] = [];
-
-  for (const { channelKey, normalizedAccountIds } of collectChannelsMissingDefaultAccount(cfg)) {
-    const accountIdSet = new Set(normalizedAccountIds);
-    const channelPattern = normalizeBindingChannelKey(channelKey);
-
-    let hasWildcardBinding = false;
-    const coveredAccountIds = new Set<string>();
-    for (const binding of bindings) {
-      const bindingRecord = asObjectRecord(binding);
-      if (!bindingRecord) {
-        continue;
-      }
-      const match = asObjectRecord(bindingRecord.match);
-      if (!match) {
-        continue;
-      }
-
-      const matchChannel =
-        typeof match.channel === "string" ? normalizeBindingChannelKey(match.channel) : "";
-      if (!matchChannel || matchChannel !== channelPattern) {
-        continue;
-      }
-
-      const rawAccountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-      if (!rawAccountId) {
-        continue;
-      }
-      if (rawAccountId === "*") {
-        hasWildcardBinding = true;
-        continue;
-      }
-      const normalizedBindingAccountId = normalizeAccountId(rawAccountId);
-      if (accountIdSet.has(normalizedBindingAccountId)) {
-        coveredAccountIds.add(normalizedBindingAccountId);
-      }
-    }
-
-    if (hasWildcardBinding) {
-      continue;
-    }
-
-    const uncoveredAccountIds = normalizedAccountIds.filter(
-      (accountId) => !coveredAccountIds.has(accountId),
-    );
-    if (uncoveredAccountIds.length === 0) {
-      continue;
-    }
-    if (coveredAccountIds.size > 0) {
-      warnings.push(
-        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
-      );
-      continue;
-    }
-
-    warnings.push(
-      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
-    );
-  }
-
-  return warnings;
-}
-
-export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
-  const warnings: string[] = [];
-  for (const { channelKey, channel, normalizedAccountIds } of collectChannelsMissingDefaultAccount(
-    cfg,
-  )) {
-    if (normalizedAccountIds.length < 2) {
-      continue;
-    }
-
-    const preferredDefault = normalizeOptionalAccountId(
-      typeof channel.defaultAccount === "string" ? channel.defaultAccount : undefined,
-    );
-    if (preferredDefault) {
-      if (normalizedAccountIds.includes(preferredDefault)) {
-        continue;
-      }
-      warnings.push(
-        `- channels.${channelKey}: defaultAccount is set to "${preferredDefault}" but does not match configured accounts (${normalizedAccountIds.join(", ")}). ${formatSetExplicitDefaultToConfiguredInstruction({ channelKey })} to avoid fallback routing.`,
-      );
-      continue;
-    }
-
-    warnings.push(
-      `- channels.${channelKey}: multiple accounts are configured but no explicit default is set. ${formatSetExplicitDefaultInstruction(channelKey)} to avoid fallback routing.`,
-    );
-  }
-
-  return warnings;
-}
-
-function formatMatrixLegacyStatePreview(
-  detection: Exclude<ReturnType<typeof detectLegacyMatrixState>, null | { warning: string }>,
-): string {
-  return [
-    "- Matrix plugin upgraded in place.",
-    `- Legacy sync store: ${detection.legacyStoragePath} -> ${detection.targetStoragePath}`,
-    `- Legacy crypto store: ${detection.legacyCryptoPath} -> ${detection.targetCryptoPath}`,
-    ...(detection.selectionNote ? [`- ${detection.selectionNote}`] : []),
-    '- Run "openclaw doctor --fix" to migrate this Matrix state now.',
-  ].join("\n");
-}
-
-function formatMatrixLegacyCryptoPreview(
-  detection: ReturnType<typeof detectLegacyMatrixCrypto>,
+  configPath: string,
 ): string[] {
-  const notes: string[] = [];
-  for (const warning of detection.warnings) {
-    notes.push(`- ${warning}`);
-  }
-  for (const plan of detection.plans) {
-    notes.push(
-      [
-        `- Matrix encrypted-state migration is pending for account "${plan.accountId}".`,
-        `- Legacy crypto store: ${plan.legacyCryptoPath}`,
-        `- New recovery key file: ${plan.recoveryKeyPath}`,
-        `- Migration state file: ${plan.statePath}`,
-        '- Run "openclaw doctor --fix" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.',
-      ].join("\n"),
-    );
-  }
-  return notes;
-}
-
-async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Promise<string[]> {
-  const issue = await detectPluginInstallPathIssue({
-    pluginId: "matrix",
-    install: cfg.plugins?.installs?.matrix,
-  });
-  if (!issue) {
+  const transformsDir = cfg.hooks?.transformsDir?.trim();
+  if (!transformsDir) {
     return [];
   }
-  return formatPluginInstallPathIssue({
-    issue,
-    pluginLabel: "Matrix",
-    defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-    repoInstallCommand: "openclaw plugins install ./extensions/matrix",
-    formatCommand: formatCliCommand,
-  }).map((entry) => `- ${entry}`);
-}
-
-/**
- * Scan all channel configs for dmPolicy="allowlist" without any allowFrom entries.
- * This configuration blocks all DMs because no sender can match the empty
- * allowlist. Common after upgrades that remove external allowlist
- * file support.
- */
-function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object") {
+  const configDir = path.dirname(configPath);
+  const transformsRoot = path.join(configDir, "hooks", "transforms");
+  const resolved = path.isAbsolute(transformsDir)
+    ? path.resolve(transformsDir)
+    : path.resolve(transformsRoot, transformsDir);
+  const relative = path.relative(transformsRoot, resolved);
+  const escapesRoot =
+    relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  if (!escapesRoot) {
     return [];
   }
+  return [
+    `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
+  ];
+}
 
-  const warnings: string[] = [];
-
-  const checkAccount = (
-    account: Record<string, unknown>,
-    prefix: string,
-    parent?: Record<string, unknown>,
-    channelName?: string,
-  ) => {
-    const accountDm = asObjectRecord(account.dm);
-    const parentDm = asObjectRecord(parent?.dm);
-    const dmPolicy =
-      (account.dmPolicy as string | undefined) ??
-      (accountDm?.policy as string | undefined) ??
-      (parent?.dmPolicy as string | undefined) ??
-      (parentDm?.policy as string | undefined) ??
-      undefined;
-    const effectiveAllowFrom =
-      (account.allowFrom as Array<string | number> | undefined) ??
-      (parent?.allowFrom as Array<string | number> | undefined) ??
-      (accountDm?.allowFrom as Array<string | number> | undefined) ??
-      (parentDm?.allowFrom as Array<string | number> | undefined) ??
-      undefined;
-
-    warnings.push(
-      ...collectEmptyAllowlistPolicyWarningsForAccount({
-        account,
-        channelName,
-        doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
-        parent,
-        prefix,
-      }),
-    );
-    if (
-      channelName === "telegram" &&
-      ((account.groupPolicy as string | undefined) ??
-        (parent?.groupPolicy as string | undefined) ??
-        undefined) === "allowlist"
-    ) {
-      warnings.push(
-        ...collectTelegramGroupPolicyWarnings({
-          account,
-          dmPolicy,
-          effectiveAllowFrom,
-          parent,
-          prefix,
-        }),
+function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
+  const entries = cfg.hooks?.internal?.entries;
+  if (!entries) {
+    return [];
+  }
+  const unsupportedKeysByEntry = Object.entries(entries)
+    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map(([hookKey, entry]) => {
+      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
+        Object.hasOwn(entry, key),
       );
-    }
-  };
+      return { hookKey, unsupportedKeys };
+    })
+    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
 
-  for (const [channelName, channelConfig] of Object.entries(
-    channels as Record<string, Record<string, unknown>>,
-  )) {
-    if (!channelConfig || typeof channelConfig !== "object") {
-      continue;
-    }
-    checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
-
-    const accounts = channelConfig.accounts;
-    if (accounts && typeof accounts === "object") {
-      for (const [accountId, account] of Object.entries(
-        accounts as Record<string, Record<string, unknown>>,
-      )) {
-        if (!account || typeof account !== "object") {
-          continue;
-        }
-        checkAccount(
-          account,
-          `channels.${channelName}.accounts.${accountId}`,
-          channelConfig,
-          channelName,
-        );
-      }
-    }
-  }
-
-  return warnings;
-}
-
-type ExecSafeBinCoverageHit = {
-  scopePath: string;
-  bin: string;
-  isInterpreter: boolean;
-};
-
-type ExecSafeBinScopeRef = {
-  scopePath: string;
-  safeBins: string[];
-  exec: Record<string, unknown>;
-  mergedProfiles: Record<string, unknown>;
-  trustedSafeBinDirs: ReadonlySet<string>;
-};
-
-type ExecSafeBinTrustedDirHintHit = {
-  scopePath: string;
-  bin: string;
-  resolvedPath: string;
-};
-
-function normalizeConfiguredSafeBins(entries: unknown): string[] {
-  if (!Array.isArray(entries)) {
+  if (unsupportedKeysByEntry.length === 0) {
     return [];
   }
-  return Array.from(
-    new Set(
-      entries
-        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
-        .filter((entry) => entry.length > 0),
-    ),
-  ).toSorted();
-}
 
-function normalizeConfiguredTrustedSafeBinDirs(entries: unknown): string[] {
-  if (!Array.isArray(entries)) {
-    return [];
-  }
-  return normalizeTrustedSafeBinDirs(
-    entries.filter((entry): entry is string => typeof entry === "string"),
+  return unsupportedKeysByEntry.map(
+    ({ hookKey, unsupportedKeys }) =>
+      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
   );
 }
 
-function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
-  const scopes: ExecSafeBinScopeRef[] = [];
-  const globalExec = asObjectRecord(cfg.tools?.exec);
-  const globalTrustedDirs = normalizeConfiguredTrustedSafeBinDirs(globalExec?.safeBinTrustedDirs);
-  if (globalExec) {
-    const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
-    if (safeBins.length > 0) {
-      scopes.push({
-        scopePath: "tools.exec",
-        safeBins,
-        exec: globalExec,
-        mergedProfiles:
-          resolveMergedSafeBinProfileFixtures({
-            global: globalExec,
-          }) ?? {},
-        trustedSafeBinDirs: getTrustedSafeBinDirs({
-          extraDirs: globalTrustedDirs,
-        }),
-      });
-    }
+function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
+  const channels =
+    cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
+      ? cfg.channels
+      : null;
+  if (!channels) {
+    return [];
   }
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
-    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
-      continue;
-    }
-    const agentExec = asObjectRecord(agent.tools?.exec);
-    if (!agentExec) {
-      continue;
-    }
-    const safeBins = normalizeConfiguredSafeBins(agentExec.safeBins);
-    if (safeBins.length === 0) {
-      continue;
-    }
-    scopes.push({
-      scopePath: `agents.list.${agent.id}.tools.exec`,
-      safeBins,
-      exec: agentExec,
-      mergedProfiles:
-        resolveMergedSafeBinProfileFixtures({
-          global: globalExec,
-          local: agentExec,
-        }) ?? {},
-      trustedSafeBinDirs: getTrustedSafeBinDirs({
-        extraDirs: [
-          ...globalTrustedDirs,
-          ...normalizeConfiguredTrustedSafeBinDirs(agentExec.safeBinTrustedDirs),
-        ],
-      }),
+  return Object.keys(channels).filter((channelId) => channelId !== "defaults");
+}
+
+// Past-tense "Removed X" lines must not appear under a "Doctor changes" panel
+// when the run did not write to disk; retitle to signal the preview state.
+function emitDoctorChangesPanel(
+  changeLines: ReadonlyArray<string>,
+  shouldRepair: boolean,
+  options: { sanitize?: boolean } = {},
+): void {
+  if (changeLines.length === 0) {
+    return;
+  }
+  const body = changeLines.join("\n");
+  const message = options.sanitize ? sanitizeDoctorNote(body) : body;
+  const title = shouldRepair ? "Doctor changes" : "Doctor changes preview";
+  note(message, title);
+}
+
+async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
+  try {
+    await callGateway({
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
     });
+  } catch {
+    // Best-effort only: doctor --fix must still succeed when no gateway is running
+    // or the live gateway cannot reload unrelated secret-backed channels.
   }
-  return scopes;
-}
-
-function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
-  const hits: ExecSafeBinCoverageHit[] = [];
-  for (const scope of collectExecSafeBinScopes(cfg)) {
-    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
-    for (const bin of scope.safeBins) {
-      if (scope.mergedProfiles[bin]) {
-        continue;
-      }
-      hits.push({
-        scopePath: scope.scopePath,
-        bin,
-        isInterpreter: interpreterBins.has(bin),
-      });
-    }
-  }
-  return hits;
-}
-
-function scanExecSafeBinTrustedDirHints(cfg: OpenClawConfig): ExecSafeBinTrustedDirHintHit[] {
-  const hits: ExecSafeBinTrustedDirHintHit[] = [];
-  for (const scope of collectExecSafeBinScopes(cfg)) {
-    for (const bin of scope.safeBins) {
-      const resolution = resolveCommandResolutionFromArgv([bin]);
-      if (!resolution?.resolvedPath) {
-        continue;
-      }
-      if (
-        isTrustedSafeBinPath({
-          resolvedPath: resolution.resolvedPath,
-          trustedDirs: scope.trustedSafeBinDirs,
-        })
-      ) {
-        continue;
-      }
-      hits.push({
-        scopePath: scope.scopePath,
-        bin,
-        resolvedPath: resolution.resolvedPath,
-      });
-    }
-  }
-  return hits;
-}
-
-function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
-  config: OpenClawConfig;
-  changes: string[];
-  warnings: string[];
-} {
-  const next = structuredClone(cfg);
-  const changes: string[] = [];
-  const warnings: string[] = [];
-
-  for (const scope of collectExecSafeBinScopes(next)) {
-    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
-    const missingBins = scope.safeBins.filter((bin) => !scope.mergedProfiles[bin]);
-    if (missingBins.length === 0) {
-      continue;
-    }
-    const profileHolder =
-      asObjectRecord(scope.exec.safeBinProfiles) ?? (scope.exec.safeBinProfiles = {});
-    for (const bin of missingBins) {
-      if (interpreterBins.has(bin)) {
-        warnings.push(
-          `- ${scope.scopePath}.safeBins includes interpreter/runtime '${bin}' without profile; remove it from safeBins or use explicit allowlist entries.`,
-        );
-        continue;
-      }
-      if (profileHolder[bin] !== undefined) {
-        continue;
-      }
-      profileHolder[bin] = {};
-      changes.push(
-        `- ${scope.scopePath}.safeBinProfiles.${bin}: added scaffold profile {} (review and tighten flags/positionals).`,
-      );
-    }
-  }
-
-  if (changes.length === 0 && warnings.length === 0) {
-    return { config: cfg, changes: [], warnings: [] };
-  }
-  return { config: next, changes, warnings };
-}
-
-type LegacyToolsBySenderKeyHit = {
-  toolsBySenderPath: Array<string | number>;
-  pathLabel: string;
-  key: string;
-  targetKey: string;
-};
-
-function collectLegacyToolsBySenderKeyHits(
-  value: unknown,
-  pathParts: Array<string | number>,
-  hits: LegacyToolsBySenderKeyHit[],
-) {
-  if (Array.isArray(value)) {
-    for (const [index, entry] of value.entries()) {
-      collectLegacyToolsBySenderKeyHits(entry, [...pathParts, index], hits);
-    }
-    return;
-  }
-  const record = asObjectRecord(value);
-  if (!record) {
-    return;
-  }
-
-  const toolsBySender = asObjectRecord(record.toolsBySender);
-  if (toolsBySender) {
-    const path = [...pathParts, "toolsBySender"];
-    const pathLabel = formatConfigPath(path);
-    for (const rawKey of Object.keys(toolsBySender)) {
-      const trimmed = rawKey.trim();
-      if (!trimmed || trimmed === "*" || parseToolsBySenderTypedKey(trimmed)) {
-        continue;
-      }
-      hits.push({
-        toolsBySenderPath: path,
-        pathLabel,
-        key: rawKey,
-        targetKey: `id:${trimmed}`,
-      });
-    }
-  }
-
-  for (const [key, nested] of Object.entries(record)) {
-    if (key === "toolsBySender") {
-      continue;
-    }
-    collectLegacyToolsBySenderKeyHits(nested, [...pathParts, key], hits);
+  try {
+    await callGateway({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  } catch {
+    // Best-effort only: doctor --fix must still succeed when no gateway is running.
   }
 }
 
-function scanLegacyToolsBySenderKeys(cfg: OpenClawConfig): LegacyToolsBySenderKeyHit[] {
-  const hits: LegacyToolsBySenderKeyHit[] = [];
-  collectLegacyToolsBySenderKeyHits(cfg, [], hits);
-  return hits;
-}
-
-function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
-  config: OpenClawConfig;
-  changes: string[];
-} {
-  const next = structuredClone(cfg);
-  const hits = scanLegacyToolsBySenderKeys(next);
-  if (hits.length === 0) {
-    return { config: cfg, changes: [] };
-  }
-
-  const summary = new Map<string, { migrated: number; dropped: number; examples: string[] }>();
-  let changed = false;
-
-  for (const hit of hits) {
-    const toolsBySender = asObjectRecord(resolveConfigPathTarget(next, hit.toolsBySenderPath));
-    if (!toolsBySender || !(hit.key in toolsBySender)) {
-      continue;
-    }
-    const row = summary.get(hit.pathLabel) ?? { migrated: 0, dropped: 0, examples: [] };
-
-    if (toolsBySender[hit.targetKey] === undefined) {
-      toolsBySender[hit.targetKey] = toolsBySender[hit.key];
-      row.migrated++;
-      if (row.examples.length < 3) {
-        row.examples.push(`${hit.key} -> ${hit.targetKey}`);
-      }
-    } else {
-      row.dropped++;
-      if (row.examples.length < 3) {
-        row.examples.push(`${hit.key} (kept existing ${hit.targetKey})`);
-      }
-    }
-    delete toolsBySender[hit.key];
-    summary.set(hit.pathLabel, row);
-    changed = true;
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-
-  const changes: string[] = [];
-  for (const [pathLabel, row] of summary) {
-    if (row.migrated > 0) {
-      const suffix = row.examples.length > 0 ? ` (${row.examples.join(", ")})` : "";
-      changes.push(
-        `- ${pathLabel}: migrated ${row.migrated} legacy key${row.migrated === 1 ? "" : "s"} to typed id: entries${suffix}.`,
-      );
-    }
-    if (row.dropped > 0) {
-      changes.push(
-        `- ${pathLabel}: removed ${row.dropped} legacy key${row.dropped === 1 ? "" : "s"} where typed id: entries already existed.`,
-      );
-    }
-  }
-
-  return { config: next, changes };
-}
-
+/**
+ * Loads config, runs doctor migrations/repairs, and returns the config write plan.
+ *
+ * This is the config-side orchestration boundary for doctor; it keeps preview notes, repair
+ * mutations, gateway auth refreshes, and final write confirmation in one ordered flow.
+ */
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
+  runtime?: RuntimeEnv;
+  prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await runDoctorConfigPreflight();
-  let snapshot = preflight.snapshot;
+  const preflight = await runDoctorConfigPreflight({
+    repairPrefixedConfig: shouldRepair,
+    recoverCorruptTargetStore: shouldRepair,
+    doctorOnlyStateMigrations: shouldRepair,
+  });
+  const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
-  let cfg: OpenClawConfig = baseCfg;
-  let candidate = structuredClone(baseCfg);
-  let pendingChanges = false;
-  let shouldWriteConfig = false;
-  const fixHints: string[] = [];
-
-  if (snapshot.legacyIssues.length > 0) {
-    note(
-      formatConfigIssueLines(snapshot.legacyIssues, "-").join("\n"),
-      "Compatibility config keys detected",
+  let state: DoctorConfigMutationState = {
+    cfg: baseCfg,
+    candidate: structuredClone(baseCfg),
+    pendingChanges: false,
+    fixHints: [],
+  };
+  let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
+  const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const applyConfigMutation = (
+    mutation: DoctorConfigMutationResult & { warnings?: string[] },
+    options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
+  ): void => {
+    emitDoctorChangesPanel(
+      mutation.changes,
+      shouldRepair,
+      options.sanitize ? { sanitize: true } : {},
     );
-    const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
-    if (changes.length > 0) {
-      note(changes.join("\n"), "Doctor changes");
+    if (options.emitWarnings && mutation.warnings?.length) {
+      emitDoctorNotes({ note, warningNotes: mutation.warnings });
     }
-    if (migrated) {
-      candidate = migrated;
-      pendingChanges = pendingChanges || changes.length > 0;
-    }
-    if (shouldRepair) {
-      // Compatibility migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
-      if (migrated) {
-        cfg = migrated;
-      }
-    } else {
-      fixHints.push(
-        `Run "${formatCliCommand("openclaw doctor --fix")}" to apply compatibility migrations.`,
-      );
-    }
-  }
+    state = applyDoctorConfigMutation({
+      state,
+      mutation,
+      shouldRepair,
+      fixHint: options.fixHint,
+    });
+  };
+  const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
+  const sourceLastTouchedVersion =
+    typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
-  const normalized = normalizeCompatibilityConfigValues(candidate);
-  if (normalized.changes.length > 0) {
-    note(normalized.changes.join("\n"), "Doctor changes");
-    candidate = normalized.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = normalized.config;
-    } else {
-      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
-    }
+  const legacyStep = applyLegacyCompatibilityStep({
+    snapshot,
+    state,
+    shouldRepair,
+    doctorFixCommand,
+  });
+  state = legacyStep.state;
+  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
+  const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
+    (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
+  );
+  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
+  if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
+    // Runtime roster normalization is read-only; doctor --fix owns persistence.
+    const migrated = migratePersistedImplicitMainRoster(state.candidate).config as OpenClawConfig;
+    const migratedRoster = readAgentRosterProperty(migrated);
+    const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
+    const { list: _legacyList, ...candidateAgents } = state.candidate.agents ?? {};
+    const rosterRepair = {
+      config: {
+        ...state.candidate,
+        agents: {
+          ...candidateAgents,
+          entries: migratedEntries as NonNullable<OpenClawConfig["agents"]>["entries"],
+        },
+      },
+      changes: ["Persisted agents.entries with exactly one explicit default agent."],
+    };
+    applyConfigMutation(rosterRepair, {
+      fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
+    });
   }
-
-  const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
-  if (autoEnable.changes.length > 0) {
-    note(autoEnable.changes.join("\n"), "Doctor changes");
-    candidate = autoEnable.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = autoEnable.config;
-    } else {
-      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
-    }
+  applyConfigMutation(materializeDefaultAgentRoles(state.candidate), {
+    fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
+  });
+  const { collectBlockedLegacyOpenAICodexProviderPlan } =
+    await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
+  const blockedCodexProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(state.candidate);
+  const blockedCodexModelIdentities = new Set(blockedCodexProviderPlan.blockedModelIdentities);
+  if (preflight.cronCodexRuntimePolicyTargets?.length) {
+    const { repairCronCodexRuntimePolicies } =
+      await import("./doctor/cron/runtime-policy-migration.js");
+    const cronRuntimeRepair = repairCronCodexRuntimePolicies({
+      cfg: state.candidate,
+      targets: preflight.cronCodexRuntimePolicyTargets,
+      blockedModelIdentities: blockedCodexModelIdentities,
+    });
+    applyConfigMutation(cronRuntimeRepair, {
+      fixHint: `Run "${doctorFixCommand}" to preserve migrated cron runtime policy.`,
+      emitWarnings: true,
+    });
+    const blockedTargets = new Set(
+      cronRuntimeRepair.blockedTargets.map(cronCodexRuntimePolicyTargetKey),
+    );
+    shouldRepairCronCodexModelRefsAfterConfigWrite = preflight.cronCodexRuntimePolicyTargets.some(
+      (target) => !blockedTargets.has(cronCodexRuntimePolicyTargetKey(target)),
+    );
   }
-
-  const matrixLegacyState = detectLegacyMatrixState({
-    cfg: candidate,
-    env: process.env,
-  });
-  const matrixLegacyCrypto = detectLegacyMatrixCrypto({
-    cfg: candidate,
-    env: process.env,
-  });
-  const pendingMatrixMigration = hasPendingMatrixMigration({
-    cfg: candidate,
-    env: process.env,
-  });
-  const actionableMatrixMigration = hasActionableMatrixMigration({
-    cfg: candidate,
-    env: process.env,
-  });
-  if (shouldRepair) {
-    let matrixSnapshotReady = true;
-    if (actionableMatrixMigration) {
-      try {
-        const snapshot = await maybeCreateMatrixMigrationSnapshot({
-          trigger: "doctor-fix",
-          env: process.env,
-        });
-        note(
-          `Matrix migration snapshot ${snapshot.created ? "created" : "reused"} before applying Matrix upgrades.\n- ${snapshot.archivePath}`,
-          "Doctor changes",
-        );
-      } catch (err) {
-        matrixSnapshotReady = false;
-        note(
-          `- Failed creating a Matrix migration snapshot before repair: ${String(err)}`,
-          "Doctor warnings",
-        );
-        note(
-          '- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".',
-          "Doctor warnings",
-        );
-      }
-    } else if (pendingMatrixMigration) {
-      note(
-        "- Matrix migration warnings are present, but no on-disk Matrix mutation is actionable yet. No pre-migration snapshot was needed.",
-        "Doctor warnings",
-      );
+  const pluginLegacyIssues = await (async () => {
+    if (snapshot.parsed === snapshot.sourceConfig) {
+      return [];
     }
-    if (matrixSnapshotReady) {
-      const matrixStateRepair = await autoMigrateLegacyMatrixState({
-        cfg: candidate,
-        env: process.env,
-      });
-      if (matrixStateRepair.changes.length > 0) {
-        note(
-          [
-            "Matrix plugin upgraded in place.",
-            ...matrixStateRepair.changes.map((entry) => `- ${entry}`),
-            "- No user action required.",
-          ].join("\n"),
-          "Doctor changes",
-        );
+    const { findDoctorLegacyConfigIssues } =
+      await import("./doctor/shared/legacy-config-issues.js");
+    return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
+  })();
+  const seenLegacyIssues = new Set(
+    snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
+  );
+  const pluginIssueLines = pluginLegacyIssues
+    .filter((issue) => {
+      const key = `${issue.path}:${issue.message}`;
+      if (seenLegacyIssues.has(key)) {
+        return false;
       }
-      if (matrixStateRepair.warnings.length > 0) {
-        note(matrixStateRepair.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
-      }
-      const matrixCryptoRepair = await autoPrepareLegacyMatrixCrypto({
-        cfg: candidate,
-        env: process.env,
-      });
-      if (matrixCryptoRepair.changes.length > 0) {
-        note(
-          [
-            "Matrix encrypted-state migration prepared.",
-            ...matrixCryptoRepair.changes.map((entry) => `- ${entry}`),
-          ].join("\n"),
-          "Doctor changes",
-        );
-      }
-      if (matrixCryptoRepair.warnings.length > 0) {
-        note(
-          matrixCryptoRepair.warnings.map((entry) => `- ${entry}`).join("\n"),
-          "Doctor warnings",
-        );
-      }
-    }
-  } else if (matrixLegacyState) {
-    if ("warning" in matrixLegacyState) {
-      note(`- ${matrixLegacyState.warning}`, "Doctor warnings");
-    } else {
-      note(formatMatrixLegacyStatePreview(matrixLegacyState), "Doctor warnings");
-    }
-  }
+      seenLegacyIssues.add(key);
+      return true;
+    })
+    .map((issue) => `- ${issue.path}: ${issue.message}`);
+  const legacyIssueLines = [...legacyStep.issueLines, ...pluginIssueLines];
   if (
+    pluginIssueLines.length > 0 &&
     !shouldRepair &&
-    (matrixLegacyCrypto.warnings.length > 0 || matrixLegacyCrypto.plans.length > 0)
+    !state.fixHints.includes(`Run "${doctorFixCommand}" to migrate legacy config keys.`)
   ) {
-    for (const preview of formatMatrixLegacyCryptoPreview(matrixLegacyCrypto)) {
-      note(preview, "Doctor warnings");
-    }
+    state.fixHints.push(`Run "${doctorFixCommand}" to migrate legacy config keys.`);
   }
-
-  const matrixInstallWarnings = await collectMatrixInstallPathWarnings(candidate);
-  if (matrixInstallWarnings.length > 0) {
-    note(matrixInstallWarnings.join("\n"), "Doctor warnings");
+  if (legacyIssueLines.length > 0) {
+    note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
-
-  const missingDefaultAccountBindingWarnings =
-    collectMissingDefaultAccountBindingWarnings(candidate);
-  if (missingDefaultAccountBindingWarnings.length > 0) {
-    note(missingDefaultAccountBindingWarnings.join("\n"), "Doctor warnings");
-  }
-  const missingExplicitDefaultWarnings = collectMissingExplicitDefaultAccountWarnings(candidate);
-  if (missingExplicitDefaultWarnings.length > 0) {
-    note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
-  }
-
-  if (shouldRepair) {
-    const repair = await maybeRepairTelegramAllowFromUsernames(candidate);
-    if (repair.changes.length > 0) {
-      note(repair.changes.join("\n"), "Doctor changes");
-      candidate = repair.config;
-      pendingChanges = true;
-      cfg = repair.config;
-    }
-
-    const discordRepair = maybeRepairDiscordNumericIds(candidate);
-    if (discordRepair.changes.length > 0) {
-      note(discordRepair.changes.join("\n"), "Doctor changes");
-      candidate = discordRepair.config;
-      pendingChanges = true;
-      cfg = discordRepair.config;
-    }
-
-    const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
-    if (allowFromRepair.changes.length > 0) {
-      note(allowFromRepair.changes.join("\n"), "Doctor changes");
-      candidate = allowFromRepair.config;
-      pendingChanges = true;
-      cfg = allowFromRepair.config;
-    }
-
-    const allowlistRepair = await maybeRepairAllowlistPolicyAllowFrom(candidate);
-    if (allowlistRepair.changes.length > 0) {
-      note(allowlistRepair.changes.join("\n"), "Doctor changes");
-      candidate = allowlistRepair.config;
-      pendingChanges = true;
-      cfg = allowlistRepair.config;
-    }
-
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
-    if (emptyAllowlistWarnings.length > 0) {
-      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
-    }
-
-    const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
-    if (toolsBySenderRepair.changes.length > 0) {
-      note(toolsBySenderRepair.changes.join("\n"), "Doctor changes");
-      candidate = toolsBySenderRepair.config;
-      pendingChanges = true;
-      cfg = toolsBySenderRepair.config;
-    }
-
-    const safeBinProfileRepair = maybeRepairExecSafeBinProfiles(candidate);
-    if (safeBinProfileRepair.changes.length > 0) {
-      note(safeBinProfileRepair.changes.join("\n"), "Doctor changes");
-      candidate = safeBinProfileRepair.config;
-      pendingChanges = true;
-      cfg = safeBinProfileRepair.config;
-    }
-    if (safeBinProfileRepair.warnings.length > 0) {
-      note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
-    }
-  } else {
-    const hits = scanTelegramAllowFromUsernameEntries(candidate);
-    if (hits.length > 0) {
-      note(
-        [
-          `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${hits[0]?.entry ?? "@"}); Telegram authorization requires numeric sender IDs.`,
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
-        ].join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const discordHits = scanDiscordNumericIdEntries(candidate);
-    if (discordHits.length > 0) {
-      note(
-        [
-          `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${discordHits[0]?.path}=${discordHits[0]?.entry}).`,
-          `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
-        ].join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const allowFromScan = maybeRepairOpenPolicyAllowFrom(candidate);
-    if (allowFromScan.changes.length > 0) {
-      note(
-        [
-          ...allowFromScan.changes,
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to add missing allowFrom wildcards.`,
-        ].join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
-    if (emptyAllowlistWarnings.length > 0) {
-      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
-    }
-
-    const toolsBySenderHits = scanLegacyToolsBySenderKeys(candidate);
-    if (toolsBySenderHits.length > 0) {
-      const sample = toolsBySenderHits[0];
-      const sampleLabel = sample ? `${sample.pathLabel}.${sample.key}` : "toolsBySender";
-      note(
-        [
-          `- Found ${toolsBySenderHits.length} legacy untyped toolsBySender key${toolsBySenderHits.length === 1 ? "" : "s"} (for example ${sampleLabel}).`,
-          "- Untyped sender keys are deprecated; use explicit prefixes (id:, e164:, username:, name:).",
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to migrate legacy keys to typed id: entries.`,
-        ].join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const safeBinCoverage = scanExecSafeBinCoverage(candidate);
-    if (safeBinCoverage.length > 0) {
-      const interpreterHits = safeBinCoverage.filter((hit) => hit.isInterpreter);
-      const customHits = safeBinCoverage.filter((hit) => !hit.isInterpreter);
-      const lines: string[] = [];
-      if (interpreterHits.length > 0) {
-        for (const hit of interpreterHits.slice(0, 5)) {
-          lines.push(
-            `- ${hit.scopePath}.safeBins includes interpreter/runtime '${hit.bin}' without profile.`,
-          );
-        }
-        if (interpreterHits.length > 5) {
-          lines.push(
-            `- ${interpreterHits.length - 5} more interpreter/runtime safeBins entries are missing profiles.`,
-          );
-        }
-      }
-      if (customHits.length > 0) {
-        for (const hit of customHits.slice(0, 5)) {
-          lines.push(
-            `- ${hit.scopePath}.safeBins entry '${hit.bin}' is missing safeBinProfiles.${hit.bin}.`,
-          );
-        }
-        if (customHits.length > 5) {
-          lines.push(
-            `- ${customHits.length - 5} more custom safeBins entries are missing profiles.`,
-          );
-        }
-      }
-      lines.push(
-        `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
-      );
-      note(lines.join("\n"), "Doctor warnings");
-    }
-
-    const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(candidate);
-    if (safeBinTrustedDirHints.length > 0) {
-      const lines = safeBinTrustedDirHints
-        .slice(0, 5)
-        .map(
-          (hit) =>
-            `- ${hit.scopePath}.safeBins entry '${hit.bin}' resolves to '${hit.resolvedPath}' outside trusted safe-bin dirs.`,
-        );
-      if (safeBinTrustedDirHints.length > 5) {
-        lines.push(
-          `- ${safeBinTrustedDirHints.length - 5} more safeBins entries resolve outside trusted safe-bin dirs.`,
-        );
-      }
-      lines.push(
-        "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
-      );
-      note(lines.join("\n"), "Doctor warnings");
-    }
-  }
-
-  const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
-  if (mutableAllowlistHits.length > 0) {
-    const channels = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.channel))).toSorted();
-    const exampleLines = mutableAllowlistHits
-      .slice(0, 8)
-      .map((hit) => `- ${hit.path}: ${hit.entry}`)
-      .join("\n");
-    const remaining =
-      mutableAllowlistHits.length > 8
-        ? `- +${mutableAllowlistHits.length - 8} more mutable allowlist entries.`
-        : null;
-    const flagPaths = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.dangerousFlagPath)));
-    const flagHint =
-      flagPaths.length === 1
-        ? flagPaths[0]
-        : `${flagPaths[0]} (and ${flagPaths.length - 1} other scope flags)`;
+  emitDoctorChangesPanel(legacyStep.changeLines, shouldRepair);
+  if (hasLegacyInternalHookHandlers(snapshot.parsed)) {
     note(
       [
-        `- Found ${mutableAllowlistHits.length} mutable allowlist ${mutableAllowlistHits.length === 1 ? "entry" : "entries"} across ${channels.join(", ")} while name matching is disabled by default.`,
-        exampleLines,
-        ...(remaining ? [remaining] : []),
-        `- Option A (break-glass): enable ${flagHint}=true to keep name/email/nick matching.`,
-        "- Option B (recommended): resolve names/emails/nicks to stable sender IDs and rewrite the allowlist entries.",
+        "- hooks.internal.handlers: legacy inline hook modules are no longer part of the public config surface.",
+        "- Migrate each entry to a managed or workspace hook directory with HOOK.md + handler.js, then enable it through hooks.internal.entries.<hookKey> as needed.",
+        "- openclaw doctor --fix does not rewrite this shape automatically.",
       ].join("\n"),
-      "Doctor warnings",
+      "Legacy config keys detected",
+    );
+  }
+  const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(
+    state.cfg,
+    snapshot.path,
+  );
+  if (hookTransformsDirWarnings.length > 0) {
+    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
+  }
+  const unsupportedInternalHookEntryWarnings = collectUnsupportedInternalHookEntryWarnings(
+    state.cfg,
+  );
+  if (unsupportedInternalHookEntryWarnings.length > 0) {
+    note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
+  }
+
+  const normalized = normalizeCompatibilityConfigValues(state.candidate, {
+    blockedModelIdentities: blockedCodexModelIdentities,
+  });
+  applyConfigMutation(normalized, {
+    fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
+  });
+
+  const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
+  const retiredPhoneControlCleanup = await prepareRetiredPhoneControlCleanup({
+    cfg: state.candidate,
+    env: process.env,
+  });
+  applyConfigMutation(
+    {
+      config: retiredPhoneControlCleanup.config,
+      changes: retiredPhoneControlCleanup.configChanges,
+      warnings: retiredPhoneControlCleanup.warnings,
+    },
+    {
+      fixHint: `Run "${doctorFixCommand}" to retire Phone Control lease configuration.`,
+      emitWarnings: true,
+    },
+  );
+  if (retiredPhoneControlCleanup.cleanupPending && !shouldRepair) {
+    note(
+      `Retired Phone Control lease state remains. Run "${doctorFixCommand}" to archive it.`,
+      "Legacy state detected",
     );
   }
 
-  const unknown = stripUnknownConfigKeys(candidate);
-  if (unknown.removed.length > 0) {
-    const lines = unknown.removed.map((path) => `- ${path}`).join("\n");
-    candidate = unknown.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = unknown.config;
-      note(lines, "Doctor changes");
-    } else {
-      note(lines, "Unknown config keys");
-      fixHints.push('Run "openclaw doctor --fix" to remove these keys.');
-    }
+  const pluginActivationSourceConfig = state.candidate;
+  const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
+  applyConfigMutation(applyPluginAutoEnable({ config: state.candidate, env: process.env }), {
+    fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
+  });
+
+  const { repairStaleAgentModelRefs } =
+    await import("./doctor/shared/stale-agent-model-ref-repair.js");
+  const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
+  applyConfigMutation(staleAgentModelRepair, {
+    fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
+    sanitize: true,
+    emitWarnings: true,
+  });
+
+  const { collectPluginToolAllowlistWarnings } =
+    await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
+  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
+    cfg: state.candidate,
+    env: process.env,
+  });
+  if (pluginToolAllowlistWarnings.length > 0) {
+    note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
-  if (!shouldRepair && pendingChanges) {
-    const shouldApply = await params.confirm({
-      message: "Apply recommended config repairs now?",
-      initialValue: true,
+  const hasConfiguredChannels = collectConfiguredChannelIds(state.candidate).length > 0;
+  let collectMutableAllowlistWarnings:
+    | typeof import("./doctor/shared/channel-doctor.js").collectChannelDoctorMutableAllowlistWarnings
+    | undefined;
+  if (hasConfiguredChannels) {
+    const channelDoctor = await import("./doctor/shared/channel-doctor.js");
+    collectMutableAllowlistWarnings = channelDoctor.collectChannelDoctorMutableAllowlistWarnings;
+    const channelDoctorSequence = await channelDoctor.runChannelDoctorConfigSequences({
+      cfg: state.candidate,
+      env: process.env,
+      shouldRepair,
     });
-    if (shouldApply) {
-      cfg = candidate;
-      shouldWriteConfig = true;
-    } else if (fixHints.length > 0) {
-      note(fixHints.join("\n"), "Doctor");
+    emitDoctorNotes({
+      note,
+      changeNotes: channelDoctorSequence.changeNotes,
+      warningNotes: channelDoctorSequence.warningNotes,
+    });
+
+    for (const staleCleanup of await channelDoctor.collectChannelDoctorStaleConfigMutations(
+      state.candidate,
+      { env: process.env },
+    )) {
+      applyConfigMutation(staleCleanup, {
+        fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
+        sanitize: true,
+      });
     }
   }
 
-  if (shouldRepair && pendingChanges) {
-    shouldWriteConfig = true;
+  const { repairHooksTokenReuseGatewayAuth } =
+    await import("./doctor/shared/hooks-token-reuse-repair.js");
+  applyConfigMutation(await repairHooksTokenReuseGatewayAuth(state.candidate, process.env), {
+    fixHint: `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
+  });
+
+  if (shouldRepair) {
+    const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
+    const repairSequence = await runDoctorRepairSequence({
+      state,
+      doctorFixCommand,
+      env: process.env,
+      blockedCodexProviderPlan,
+    });
+    state = repairSequence.state;
+    if (repairSequence.authProfilesRepaired) {
+      await refreshGatewayAuthStateAfterAuthProfileRepair();
+    }
+    emitDoctorNotes({
+      note,
+      changeNotes: repairSequence.changeNotes,
+      warningNotes: repairSequence.warningNotes,
+    });
+  } else {
+    const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
+    const previewNotes = await collectDoctorPreviewNotes({
+      cfg: state.candidate,
+      activationSourceConfig: pluginActivationSourceConfig,
+      doctorFixCommand,
+      env: process.env,
+      allowExec: params.options.allowExec === true,
+      blockedCodexProviderPlan,
+    });
+    emitDoctorNotes({
+      note,
+      infoNotes: previewNotes.infoNotes,
+      warningNotes: previewNotes.warningNotes,
+    });
   }
+
+  const mutableAllowlistWarnings = collectMutableAllowlistWarnings
+    ? await collectMutableAllowlistWarnings({
+        cfg: state.candidate,
+        env: process.env,
+      })
+    : [];
+  if (mutableAllowlistWarnings.length > 0) {
+    note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
+  }
+
+  const unknownStep = applyUnknownConfigKeyStep({
+    state,
+    shouldRepair,
+    doctorFixCommand,
+  });
+  state = unknownStep.state;
+  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
+    const lines = [
+      ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
+      ...unknownStep.repairs.map((change) => `- ${change}`),
+    ].join("\n");
+    note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+  }
+  if (unknownStep.warnings.length > 0) {
+    note(unknownStep.warnings.join("\n"), "Doctor warnings");
+  }
+
+  const finalized = await finalizeDoctorConfigFlow({
+    cfg: state.cfg,
+    candidate: state.candidate,
+    pendingChanges: state.pendingChanges,
+    shouldRepair,
+    fixHints: state.fixHints,
+    confirm: params.confirm,
+    note,
+  });
+  const cfg = finalized.cfg;
+  const singleTopLevelIncludeWrite =
+    finalized.shouldWriteConfig &&
+    isSingleTopLevelIncludeMigration({
+      parsed: snapshot.parsed,
+      sourceConfig: snapshot.sourceConfig,
+      candidate: cfg,
+    });
 
   noteOpencodeProviderOverrides(cfg);
+  noteImplicitFallbackClobberWarnings(cfg);
+  noteSandboxOriginProxyWarning(cfg);
 
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
-    shouldWriteConfig,
+    shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
+    ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
+    ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
+    ...(shouldRepairCronCodexModelRefsAfterConfigWrite
+      ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }
+      : {}),
+    ...(shouldRepair &&
+    retiredPhoneControlCleanup.cleanupPending &&
+    retiredPhoneControlCleanup.cleanupSafe
+      ? { retiredPhoneControlStateCleanupPending: true }
+      : {}),
+    ...(blockedCodexProviderPlan.blockedModelIdentities.length > 0
+      ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }
+      : {}),
   };
 }

@@ -5,17 +5,45 @@ set -euo pipefail
 # Outputs to dist/OpenClaw.app
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
+source "$ROOT_DIR/scripts/lib/build-metadata.sh"
+DEFAULT_APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+APP_ROOT="${OPENCLAW_PACKAGE_APP_ROOT:-$DEFAULT_APP_ROOT}"
+case "$APP_ROOT" in
+  "$ROOT_DIR/dist/"*) ;;
+  *)
+    echo "ERROR: OPENCLAW_PACKAGE_APP_ROOT must stay under $ROOT_DIR/dist" >&2
+    exit 1
+    ;;
+esac
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
+MLX_TTS_HELPER_PRODUCT="openclaw-mlx-tts"
+MLX_TTS_HELPER_ROOT="$ROOT_DIR/apps/macos-mlx-tts"
+MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
-BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+BUILD_TS="$(openclaw_resolve_build_timestamp)"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  OPENCLAW_REQUIRE_BUILD_METADATA=1
+fi
+BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
+    --root "$ROOT_DIR" \
+    --expected-commit "$BUILD_GIT_COMMIT"
+fi
+export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"
+if openclaw_is_full_git_commit "$BUILD_GIT_COMMIT"; then
+  export GIT_COMMIT="$BUILD_GIT_COMMIT"
+else
+  unset GIT_COMMIT
+fi
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
-BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 if [[ -n "${BUILD_ARCHS:-}" ]]; then
   BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
 elif [[ "$BUILD_CONFIG" == "release" ]]; then
@@ -38,7 +66,7 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
 fi
 
 sparkle_canonical_build_from_version() {
-  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+  (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
 }
 
 build_path_for_arch() {
@@ -49,8 +77,186 @@ bin_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$PRODUCT"
 }
 
+helper_build_path_for_arch() {
+  echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
+}
+
+helper_bin_for_arch() {
+  echo "$(helper_build_path_for_arch "$1")/$BUILD_CONFIG/$MLX_TTS_HELPER_PRODUCT"
+}
+
 sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+}
+
+run_with_locked_swift_packages() {
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  local resolved_snapshot
+  local command_status=0
+
+  if [[ ! -f "$resolved_file" ]]; then
+    echo "ERROR: Swift package lockfile not found at $resolved_file" >&2
+    return 1
+  fi
+  resolved_snapshot="$(mktemp)"
+  cp "$resolved_file" "$resolved_snapshot"
+  "$@" || command_status=$?
+  if ! cmp -s "$resolved_snapshot" "$resolved_file"; then
+    cp "$resolved_snapshot" "$resolved_file"
+    rm "$resolved_snapshot"
+    echo "ERROR: Swift package resolution changed Package.resolved; update it in a separate reviewed change" >&2
+    return 1
+  fi
+  rm "$resolved_snapshot"
+  return "$command_status"
+}
+
+PATCHED_SWIFTPM_RESOURCE_SOURCES=()
+
+restore_swiftpm_resource_sources() {
+  local source_file
+  local backup_file
+  for source_file in "${PATCHED_SWIFTPM_RESOURCE_SOURCES[@]:-}"; do
+    [[ -n "$source_file" ]] || continue
+    backup_file="$source_file.openclaw-original"
+    if [[ -f "$backup_file" ]]; then
+      mv "$backup_file" "$source_file"
+    fi
+  done
+  PATCHED_SWIFTPM_RESOURCE_SOURCES=()
+}
+
+patch_swiftpm_resource_lookups() {
+  local build_path="$1"
+  local checkout_root="$build_path/checkouts"
+  local source_file
+  local source_files=(
+    "$checkout_root/KeyboardShortcuts/Sources/KeyboardShortcuts/Utilities.swift"
+    "$checkout_root/SwiftMath/Sources/SwiftMath/MathBundle/MathFont.swift"
+    "$checkout_root/SwiftMath/Sources/SwiftMath/MathRender/MTFont.swift"
+  )
+
+  for source_file in "${source_files[@]}"; do
+    if [[ ! -f "$source_file" ]]; then
+      echo "ERROR: SwiftPM resource source not found at $source_file" >&2
+      return 1
+    fi
+    if [[ -e "$source_file.openclaw-original" ]]; then
+      echo "ERROR: Stale SwiftPM resource source backup at $source_file.openclaw-original" >&2
+      return 1
+    fi
+    cp -p "$source_file" "$source_file.openclaw-original"
+    chmod u+w "$source_file"
+    PATCHED_SWIFTPM_RESOURCE_SOURCES+=("$source_file")
+  done
+
+  /usr/bin/python3 - "${source_files[@]}" <<'PY'
+from pathlib import Path
+import sys
+
+
+def replace_exact(path: Path, old: str, new: str, expected: int = 1) -> str:
+    text = path.read_text()
+    if text.count(old) != expected:
+        raise SystemExit(f"Expected {expected} occurrence(s) in {path}: {old!r}")
+    return text.replace(old, new)
+
+
+keyboard_shortcuts, swift_math_font, swift_math_legacy_font = map(Path, sys.argv[1:])
+
+keyboard_text = replace_exact(
+    keyboard_shortcuts,
+    "NSLocalizedString(self, bundle: .module, comment: self)",
+    "NSLocalizedString(self, bundle: .keyboardShortcutsPackagedResources, comment: self)",
+)
+keyboard_marker = "\n\nextension Data {"
+keyboard_injection = """
+
+private extension Bundle {
+\t// Command-line SwiftPM builds resolve Bundle.module beside the executable, which is
+\t// outside a valid signed .app layout. Prefer the bundle copied into Contents/Resources.
+\tstatic let keyboardShortcutsPackagedResources: Bundle = {
+\t\t#if os(macOS)
+\t\tif let url = Bundle.main.url(
+\t\t\tforResource: \"KeyboardShortcuts_KeyboardShortcuts\",
+\t\t\twithExtension: \"bundle\"),
+\t\t   let bundle = Bundle(url: url)
+\t\t{
+\t\t\treturn bundle
+\t\t}
+\t\t#endif
+\t\treturn .module
+\t}()
+}
+"""
+if keyboard_text.count(keyboard_marker) != 1:
+    raise SystemExit(f"Expected one KeyboardShortcuts insertion marker in {keyboard_shortcuts}")
+keyboard_shortcuts.write_text(keyboard_text.replace(keyboard_marker, keyboard_injection + keyboard_marker))
+
+swift_math_text = replace_exact(
+    swift_math_font,
+    "Bundle.module.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    "Bundle.swiftMathPackagedResources.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    expected=2,
+)
+swift_math_marker = "\n#endif\n\n/// Now available for everyone to use"
+swift_math_injection = """
+
+extension Bundle {
+    // Keep SwiftMath's generated resource sidecar inside the signed app Resources directory.
+    static let swiftMathPackagedResources: Bundle = {
+        #if os(macOS)
+        if let url = Bundle.main.url(
+            forResource: \"SwiftMath_SwiftMath\",
+            withExtension: \"bundle\"),
+           let bundle = Bundle(url: url)
+        {
+            return bundle
+        }
+        #endif
+        return .module
+    }()
+}
+"""
+if swift_math_text.count(swift_math_marker) != 1:
+    raise SystemExit(f"Expected one SwiftMath insertion marker in {swift_math_font}")
+swift_math_font.write_text(
+    swift_math_text.replace(swift_math_marker, "\n#endif" + swift_math_injection + "\n/// Now available for everyone to use")
+)
+
+legacy_text = replace_exact(
+    swift_math_legacy_font,
+    "Bundle.module.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    "Bundle.swiftMathPackagedResources.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+)
+swift_math_legacy_font.write_text(legacy_text)
+PY
+}
+
+trap restore_swiftpm_resource_sources EXIT
+
+PNPM_CMD=()
+
+resolve_pnpm_cmd() {
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    PNPM_CMD=(corepack pnpm)
+    return 0
+  fi
+
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+    return 0
+  fi
+
+  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
+  exit 1
+}
+
+run_pnpm() {
+  if [[ "${#PNPM_CMD[@]}" -eq 0 ]]; then
+    resolve_pnpm_cmd
+  fi
+  (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
 }
 
 merge_framework_machos() {
@@ -114,8 +320,14 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
-echo "📦 Ensuring deps (pnpm install)"
-(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+require_swift_toolchain
+
+if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+  echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
+  run_pnpm install --frozen-lockfile --config.node-linker=hoisted
+else
+  echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
+fi
 
 if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
@@ -137,7 +349,7 @@ fi
 
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
   echo "📦 Building JS (pnpm build)"
-  (cd "$ROOT_DIR" && pnpm build)
+  run_pnpm build
 else
   echo "📦 Skipping JS build (SKIP_TSC=1)"
 fi
@@ -154,7 +366,14 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  echo "📦 Resolving Swift packages [$arch]"
+  run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
+  patch_swiftpm_resource_lookups "$BUILD_PATH"
+  echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
+  run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  restore_swiftpm_resource_sources
+  echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
+  swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
@@ -172,20 +391,26 @@ if [ ! -f "$INFO_PLIST_SRC" ]; then
   exit 1
 fi
 cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_BUILD}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :OpenClawBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :OpenClawGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :SUFeedURL ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" \
-  || /usr/libexec/PlistBuddy -c "Add :SUFeedURL string ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${SPARKLE_PUBLIC_ED_KEY}" "$APP_ROOT/Contents/Info.plist" \
-  || /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string ${SPARKLE_PUBLIC_ED_KEY}" "$APP_ROOT/Contents/Info.plist" || true
-if /usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks ${AUTO_CHECKS}" "$APP_ROOT/Contents/Info.plist"; then
-  true
-else
-  /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool ${AUTO_CHECKS}" "$APP_ROOT/Contents/Info.plist" || true
+PORT_GUARDIAN_STORAGE_VERSION="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawPortGuardianStorageVersion)"
+if [[ ! "$PORT_GUARDIAN_STORAGE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: OpenClawPortGuardianStorageVersion must be a positive integer." >&2
+  exit 1
 fi
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$BUNDLE_ID"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
+  if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
+    echo "ERROR: Release app embedded Git commit '$EMBEDDED_GIT_COMMIT', expected '$BUILD_GIT_COMMIT'." >&2
+    exit 1
+  fi
+fi
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL "$SPARKLE_FEED_URL"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUPublicEDKey "$SPARKLE_PUBLIC_ED_KEY"
+plist_set_or_add_bool "$APP_ROOT/Contents/Info.plist" SUEnableAutomaticChecks "$AUTO_CHECKS"
 
 echo "🚚 Copying binary"
 cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/OpenClaw"
@@ -199,6 +424,18 @@ fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+
+echo "🚚 Copying MLX TTS helper"
+cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+  HELPER_BIN_INPUTS=()
+  for arch in "${BUILD_ARCHS[@]}"; do
+    HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
+  done
+  /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+fi
+chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
@@ -222,6 +459,9 @@ SWIFT_COMPAT_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
 if [ -f "$SWIFT_COMPAT_LIB" ]; then
   cp "$SWIFT_COMPAT_LIB" "$APP_ROOT/Contents/Frameworks/"
   chmod +x "$APP_ROOT/Contents/Frameworks/libswiftCompatibilitySpan.dylib"
+elif [[ "$BUILD_CONFIG" == "release" ]]; then
+  echo "ERROR: Swift compatibility library not found at $SWIFT_COMPAT_LIB" >&2
+  exit 1
 else
   echo "WARN: Swift compatibility library not found at $SWIFT_COMPAT_LIB (continuing)" >&2
 fi
@@ -233,53 +473,120 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
-echo "📦 Copying model catalog"
-MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@mariozechner/pi-ai/dist/models.generated.js"
-MODEL_CATALOG_DEST="$APP_ROOT/Contents/Resources/models.generated.js"
-if [ -f "$MODEL_CATALOG_SRC" ]; then
-  cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
+echo "📦 Copying provider icon resources"
+PROVIDER_ICONS_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/ProviderIcons"
+if [ ! -d "$PROVIDER_ICONS_SRC" ]; then
+  echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC" >&2
+  exit 1
+fi
+rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
+cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
+
+echo "📦 Copying CLI installer"
+INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+if [ ! -f "$INSTALL_CLI_SRC" ]; then
+  echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
+  exit 1
+fi
+cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
+chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
+
+echo "🌐 Copying app localizations"
+node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
+  --output "$APP_ROOT/Contents/Resources"
+
+echo "📦 Copying Control UI assets"
+CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
+CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
+if [ -d "$CONTROL_UI_SRC" ] && [ -f "$CONTROL_UI_SRC/index.html" ]; then
+  rm -rf "$CONTROL_UI_DEST"
+  cp -R "$CONTROL_UI_SRC" "$CONTROL_UI_DEST"
 else
-  echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
+  echo "ERROR: Control UI assets missing at $CONTROL_UI_SRC. Run pnpm ui:build first." >&2
+  exit 1
 fi
 
-echo "📦 Copying OpenClawKit resources"
-OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"
-if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-  cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-else
-  echo "WARN: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE (continuing)" >&2
-fi
-
-echo "📦 Copying Textual resources"
-TEXTUAL_BUNDLE_DIR="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
-TEXTUAL_BUNDLE=""
-for candidate in \
-  "$TEXTUAL_BUNDLE_DIR/textual_Textual.bundle" \
-  "$TEXTUAL_BUNDLE_DIR/Textual_Textual.bundle"
-do
-  if [ -d "$candidate" ]; then
-    TEXTUAL_BUNDLE="$candidate"
-    break
-  fi
+echo "📦 Copying SwiftPM resource bundles"
+SWIFTPM_BUILD_PRODUCTS="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
+# Generated Bundle.module accessors resolve from Bundle.main.bundleURL. In a packaged app,
+# that is the .app root, not Contents/Resources; placing a bundle there traps on first access.
+for resource_bundle_src in "$SWIFTPM_BUILD_PRODUCTS"/*.bundle; do
+  [[ -d "$resource_bundle_src" ]] || continue
+  resource_bundle="${resource_bundle_src##*/}"
+  rm -rf "$APP_ROOT/Contents/Resources/$resource_bundle"
+  cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"
 done
-if [ -z "$TEXTUAL_BUNDLE" ]; then
-  TEXTUAL_BUNDLE="$(find "$BUILD_ROOT" -type d \( -name "textual_Textual.bundle" -o -name "Textual_Textual.bundle" \) -print -quit)"
-fi
-if [ -n "$TEXTUAL_BUNDLE" ] && [ -d "$TEXTUAL_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/$(basename "$TEXTUAL_BUNDLE")"
-  cp -R "$TEXTUAL_BUNDLE" "$APP_ROOT/Contents/Resources/"
-else
-  if [[ "${ALLOW_MISSING_TEXTUAL_BUNDLE:-0}" == "1" ]]; then
-    echo "WARN: Textual resource bundle not found (continuing due to ALLOW_MISSING_TEXTUAL_BUNDLE=1)" >&2
-  else
-    echo "ERROR: Textual resource bundle not found. Set ALLOW_MISSING_TEXTUAL_BUNDLE=1 to bypass." >&2
+REQUIRED_SWIFTPM_RESOURCE_BUNDLES=(
+  "GRDB_GRDB.bundle"
+  "KeyboardShortcuts_KeyboardShortcuts.bundle"
+  "OpenClaw_OpenClaw.bundle"
+  "OpenClawKit_OpenClawKit.bundle"
+  "SwiftMath_SwiftMath.bundle"
+)
+for resource_bundle in "${REQUIRED_SWIFTPM_RESOURCE_BUNDLES[@]}"; do
+  if [[ ! -d "$APP_ROOT/Contents/Resources/$resource_bundle" ]]; then
+    echo "ERROR: Required SwiftPM resource bundle not found at $SWIFTPM_BUILD_PRODUCTS/$resource_bundle" >&2
     exit 1
   fi
-fi
+done
 
-echo "⏹  Stopping any running OpenClaw"
-killall -q OpenClaw 2>/dev/null || true
+running_packaged_app_pids() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+  local app_binary="$APP_ROOT/Contents/MacOS/OpenClaw"
+  local pid
+  pgrep -x "$PRODUCT" 2>/dev/null | while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if command -v lsof >/dev/null 2>&1 &&
+      lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed 's/^n//' | grep -Fx "$app_binary" >/dev/null; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    local command_line
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+stop_packaged_app_if_running() {
+  local pids=()
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] && pids+=("$pid")
+  done < <(running_packaged_app_pids)
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "⏹  Stopping packaged OpenClaw bundle (${pids[*]})"
+  kill "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.25
+  done
+  kill -KILL "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.1
+  done
+  echo "ERROR: Packaged OpenClaw bundle did not exit: ${pids[*]}" >&2
+  return 1
+}
+
+stop_packaged_app_if_running
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"

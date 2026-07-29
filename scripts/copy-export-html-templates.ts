@@ -5,63 +5,51 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { ensureDirectory, logVerboseCopy, resolveBuildCopyContext } from "./lib/copy-assets.ts";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(__dirname, "..");
-const verbose = process.env.OPENCLAW_BUILD_VERBOSE === "1";
+const context = resolveBuildCopyContext(import.meta.url);
 
-const srcDir = path.join(projectRoot, "src", "auto-reply", "reply", "export-html");
-const distDir = path.join(projectRoot, "dist", "export-html");
+const exportHtmlSrcDir = path.join(
+  context.projectRoot,
+  "src",
+  "auto-reply",
+  "reply",
+  "export-html",
+);
+const exportHtmlDistDir = path.join(context.projectRoot, "dist", "export-html");
 
 function copyExportHtmlTemplates() {
-  if (!fs.existsSync(srcDir)) {
-    console.warn("[copy-export-html-templates] Source directory not found:", srcDir);
+  if (!fs.existsSync(exportHtmlSrcDir)) {
+    console.warn(`${context.prefix} Source directory not found:`, exportHtmlSrcDir);
     return;
   }
 
-  // Create dist directory
-  if (!fs.existsSync(distDir)) {
-    fs.mkdirSync(distDir, { recursive: true });
-  }
-
-  // Copy main template files
-  const templateFiles = ["template.html", "template.css", "template.js"];
+  fs.rmSync(exportHtmlDistDir, { recursive: true, force: true });
+  ensureDirectory(exportHtmlDistDir);
   let copiedCount = 0;
-  for (const file of templateFiles) {
-    const srcFile = path.join(srcDir, file);
-    const distFile = path.join(distDir, file);
-    if (fs.existsSync(srcFile)) {
+
+  const copyDir = (srcDir: string, distDir: string, relativePrefix = "") => {
+    ensureDirectory(distDir);
+    for (const file of fs.readdirSync(srcDir)) {
+      const srcFile = path.join(srcDir, file);
+      const distFile = path.join(distDir, file);
+      const relativeName = path.join(relativePrefix, file);
+      if (file.endsWith(".test.ts")) {
+        continue;
+      }
+      if (fs.statSync(srcFile).isDirectory()) {
+        copyDir(srcFile, distFile, relativeName);
+        continue;
+      }
       fs.copyFileSync(srcFile, distFile);
       copiedCount += 1;
-      if (verbose) {
-        console.log(`[copy-export-html-templates] Copied ${file}`);
-      }
+      logVerboseCopy(context, `Copied ${relativeName}`);
     }
-  }
+  };
 
-  // Copy vendor files
-  const srcVendor = path.join(srcDir, "vendor");
-  const distVendor = path.join(distDir, "vendor");
-  if (fs.existsSync(srcVendor)) {
-    if (!fs.existsSync(distVendor)) {
-      fs.mkdirSync(distVendor, { recursive: true });
-    }
-    const vendorFiles = fs.readdirSync(srcVendor);
-    for (const file of vendorFiles) {
-      const srcFile = path.join(srcVendor, file);
-      const distFile = path.join(distVendor, file);
-      if (fs.statSync(srcFile).isFile()) {
-        fs.copyFileSync(srcFile, distFile);
-        copiedCount += 1;
-        if (verbose) {
-          console.log(`[copy-export-html-templates] Copied vendor/${file}`);
-        }
-      }
-    }
-  }
+  copyDir(exportHtmlSrcDir, exportHtmlDistDir);
 
-  console.log(`[copy-export-html-templates] Copied ${copiedCount} export-html assets.`);
+  console.log(`${context.prefix} Copied ${copiedCount} export-html assets.`);
 }
 
 copyExportHtmlTemplates();

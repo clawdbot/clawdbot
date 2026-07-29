@@ -1,10 +1,11 @@
+// Config CLI integration tests cover end-to-end config command reads and writes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { runConfigSet } from "./config-cli.js";
 
 function createTestRuntime() {
@@ -31,18 +32,22 @@ function createExecDryRunBatch(params: { markerPath: string }) {
     },
   });
   const script = [
+    `#!${process.execPath}`,
     'const fs = require("node:fs");',
     `fs.writeFileSync(${JSON.stringify(params.markerPath)}, "dryrun\\n", "utf8");`,
     `process.stdout.write(${JSON.stringify(response)});`,
-  ].join("");
+  ].join("\n");
+  const scriptPath = path.join(path.dirname(params.markerPath), "exec-provider.cjs");
+  fs.writeFileSync(scriptPath, script, { mode: 0o700 });
   return [
     {
       path: "secrets.providers.runner",
       provider: {
         source: "exec",
-        command: process.execPath,
-        args: ["-e", script],
-        allowInsecurePath: true,
+        command: scriptPath,
+        trustedDirs: [path.dirname(scriptPath)],
+        timeoutMs: 60_000,
+        noOutputTimeoutMs: 60_000,
       },
     },
     {
@@ -56,7 +61,125 @@ function createExecDryRunBatch(params: { markerPath: string }) {
   ];
 }
 
+async function withExecDryRunConfigHarness(
+  prefix: string,
+  run: (params: {
+    batchPath: string;
+    configPath: string;
+    markerPath: string;
+    runtime: ReturnType<typeof createTestRuntime>;
+  }) => Promise<void>,
+) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const configPath = path.join(tempDir, "openclaw.json");
+  const batchPath = path.join(tempDir, "batch.json");
+  const markerPath = path.join(tempDir, "marker.txt");
+  const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+  try {
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          gateway: { port: 18789 },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      batchPath,
+      `${JSON.stringify(createExecDryRunBatch({ markerPath }), null, 2)}\n`,
+      "utf8",
+    );
+
+    setTestEnvValue("OPENCLAW_TEST_FAST", "1");
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    clearConfigCache();
+    clearRuntimeConfigSnapshot();
+
+    await run({
+      batchPath,
+      configPath,
+      markerPath,
+      runtime: createTestRuntime(),
+    });
+  } finally {
+    envSnapshot.restore();
+    clearConfigCache();
+    clearRuntimeConfigSnapshot();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 describe("config cli integration", () => {
+  beforeAll(async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-warmup-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+    try {
+      fs.writeFileSync(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
+      setTestEnvValue("OPENCLAW_TEST_FAST", "1");
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      await runConfigSet({
+        path: "gateway.port",
+        value: "18790",
+        cliOptions: {},
+        runtime: createTestRuntime().runtime,
+      });
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts plugin hook conversation-access policy via config set", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-plugin-hooks-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+    try {
+      fs.writeFileSync(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { port: 18789 },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      setTestEnvValue("OPENCLAW_TEST_FAST", "1");
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+
+      const runtime = createTestRuntime();
+      await runConfigSet({
+        path: "plugins.entries.openclaw-mem0.hooks.allowConversationAccess",
+        value: "true",
+        cliOptions: {},
+        runtime: runtime.runtime,
+      });
+
+      expect(runtime.errors).toStrictEqual([]);
+      const afterWrite = JSON5.parse(fs.readFileSync(configPath, "utf8"));
+      expect(afterWrite.plugins?.entries?.["openclaw-mem0"]?.hooks).toEqual({
+        allowConversationAccess: true,
+      });
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("supports batch-file dry-run and then writes real config changes", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-"));
     const configPath = path.join(tempDir, "openclaw.json");
@@ -101,9 +224,9 @@ describe("config cli integration", () => {
         "utf8",
       );
 
-      process.env.OPENCLAW_TEST_FAST = "1";
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      process.env.DISCORD_BOT_TOKEN = "test-token";
+      setTestEnvValue("OPENCLAW_TEST_FAST", "1");
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("DISCORD_BOT_TOKEN", "test-token");
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 
@@ -118,7 +241,7 @@ describe("config cli integration", () => {
       });
       const afterDryRun = fs.readFileSync(configPath, "utf8");
       expect(afterDryRun).toBe(before);
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       expect(runtime.logs.some((line) => line.includes("Dry run successful: 2 update(s)"))).toBe(
         true,
       );
@@ -172,9 +295,9 @@ describe("config cli integration", () => {
         "utf8",
       );
 
-      process.env.OPENCLAW_TEST_FAST = "1";
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      delete process.env.MISSING_TEST_SECRET;
+      setTestEnvValue("OPENCLAW_TEST_FAST", "1");
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      deleteTestEnvValue("MISSING_TEST_SECRET");
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 
@@ -195,10 +318,12 @@ describe("config cli integration", () => {
       ).rejects.toThrow("__exit__:1");
       const after = fs.readFileSync(configPath, "utf8");
       expect(after).toBe(before);
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       const raw = runtime.logs.at(-1);
-      expect(raw).toBeTruthy();
-      const payload = JSON.parse(raw ?? "{}") as {
+      if (raw === undefined) {
+        throw new Error("expected config check JSON log");
+      }
+      const payload = JSON.parse(raw) as {
         ok?: boolean;
         checks?: { schema?: boolean; resolvability?: boolean };
         errors?: Array<{ kind?: string; ref?: string }>;
@@ -206,63 +331,8 @@ describe("config cli integration", () => {
       expect(payload.ok).toBe(false);
       expect(payload.checks?.resolvability).toBe(true);
       expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
-      expect(payload.errors?.some((entry) => entry.ref?.includes("MISSING_TEST_SECRET"))).toBe(
-        true,
-      );
-    } finally {
-      envSnapshot.restore();
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("skips exec provider execution during dry-run by default", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-exec-skip-"));
-    const configPath = path.join(tempDir, "openclaw.json");
-    const batchPath = path.join(tempDir, "batch.json");
-    const markerPath = path.join(tempDir, "marker.txt");
-    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
-    try {
-      fs.writeFileSync(
-        configPath,
-        `${JSON.stringify(
-          {
-            gateway: { port: 18789 },
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      fs.writeFileSync(
-        batchPath,
-        `${JSON.stringify(createExecDryRunBatch({ markerPath }), null, 2)}\n`,
-        "utf8",
-      );
-
-      process.env.OPENCLAW_TEST_FAST = "1";
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-
-      const runtime = createTestRuntime();
-      const before = fs.readFileSync(configPath, "utf8");
-      await runConfigSet({
-        cliOptions: {
-          batchFile: batchPath,
-          dryRun: true,
-        },
-        runtime: runtime.runtime,
-      });
-      const after = fs.readFileSync(configPath, "utf8");
-
-      expect(after).toBe(before);
-      expect(fs.existsSync(markerPath)).toBe(false);
       expect(
-        runtime.logs.some((line) =>
-          line.includes("Dry run note: skipped 1 exec SecretRef resolvability check(s)."),
-        ),
+        payload.errors?.some((entry) => (entry.ref ?? "").includes("MISSING_TEST_SECRET")),
       ).toBe(true);
     } finally {
       envSnapshot.restore();
@@ -272,59 +342,48 @@ describe("config cli integration", () => {
     }
   });
 
-  it("executes exec providers during dry-run when --allow-exec is set", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-exec-allow-"));
-    const configPath = path.join(tempDir, "openclaw.json");
-    const batchPath = path.join(tempDir, "batch.json");
-    const markerPath = path.join(tempDir, "marker.txt");
-    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
-    try {
-      fs.writeFileSync(
-        configPath,
-        `${JSON.stringify(
-          {
-            gateway: { port: 18789 },
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      fs.writeFileSync(
-        batchPath,
-        `${JSON.stringify(createExecDryRunBatch({ markerPath }), null, 2)}\n`,
-        "utf8",
-      );
-
-      process.env.OPENCLAW_TEST_FAST = "1";
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-
-      const runtime = createTestRuntime();
-      const before = fs.readFileSync(configPath, "utf8");
+  it("skips exec provider execution during dry-run by default", async () => {
+    await withExecDryRunConfigHarness("openclaw-config-cli-int-exec-skip-", async (params) => {
+      const before = fs.readFileSync(params.configPath, "utf8");
       await runConfigSet({
         cliOptions: {
-          batchFile: batchPath,
+          batchFile: params.batchPath,
+          dryRun: true,
+        },
+        runtime: params.runtime.runtime,
+      });
+      const after = fs.readFileSync(params.configPath, "utf8");
+
+      expect(after).toBe(before);
+      expect(fs.existsSync(params.markerPath)).toBe(false);
+      expect(
+        params.runtime.logs.some((line) =>
+          line.includes("Dry run note: skipped 1 exec SecretRef resolvability check(s)."),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("executes exec providers during dry-run when --allow-exec is set", async () => {
+    await withExecDryRunConfigHarness("openclaw-config-cli-int-exec-allow-", async (params) => {
+      const before = fs.readFileSync(params.configPath, "utf8");
+      await runConfigSet({
+        cliOptions: {
+          batchFile: params.batchPath,
           dryRun: true,
           allowExec: true,
         },
-        runtime: runtime.runtime,
+        runtime: params.runtime.runtime,
       });
-      const after = fs.readFileSync(configPath, "utf8");
+      const after = fs.readFileSync(params.configPath, "utf8");
 
       expect(after).toBe(before);
-      expect(fs.existsSync(markerPath)).toBe(true);
+      expect(fs.existsSync(params.markerPath)).toBe(true);
       expect(
-        runtime.logs.some((line) =>
+        params.runtime.logs.some((line) =>
           line.includes("Dry run note: skipped 1 exec SecretRef resolvability check(s)."),
         ),
       ).toBe(false);
-    } finally {
-      envSnapshot.restore();
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    });
   });
 });

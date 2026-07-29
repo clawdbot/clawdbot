@@ -45,6 +45,23 @@ private func mountScreen(_ screen: ScreenController) throws -> (ScreenWebViewCoo
         #expect(screen.urlString.isEmpty)
     }
 
+    @Test @MainActor func canvasPresentationTracksExplicitPresentAndHide() {
+        let screen = ScreenController()
+
+        #expect(screen.isCanvasPresented == false)
+
+        screen.showDefaultCanvas()
+        #expect(screen.isCanvasPresented == false)
+
+        screen.presentDefaultCanvas()
+        #expect(screen.isCanvasPresented == true)
+        #expect(screen.urlString.isEmpty)
+
+        screen.hideCanvas()
+        #expect(screen.isCanvasPresented == false)
+        #expect(screen.urlString.isEmpty)
+    }
+
     @Test @MainActor func evalExecutesJavaScript() async throws {
         let screen = ScreenController()
         let (coordinator, _) = try mountScreen(screen)
@@ -66,17 +83,37 @@ private func mountScreen(_ screen: ScreenController) throws -> (ScreenWebViewCoo
         }
     }
 
-    @Test @MainActor func localNetworkCanvasURLsAreAllowed() {
+    @Test("remote A2UI URL is not trusted for native actions")
+    @MainActor func remoteA2UIURLIsNotTrustedForNativeActions() throws {
         let screen = ScreenController()
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://localhost:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://openclaw.local:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://peters-mac-studio-1:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "https://peters-mac-studio-1.ts.net:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://192.168.0.10:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://10.0.0.10:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://100.123.224.76:18789/")!) == true) // Tailscale CGNAT
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "https://example.com/")!) == false)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://8.8.8.8/")!) == false)
+        let trusted = "https://node.ts.net:18789/__openclaw__/a2ui/?platform=ios"
+        screen.navigate(to: trusted, trustA2UIActions: true)
+
+        #expect(screen.isShowingLocalA2UI() == false)
+
+        let urls = try [
+            trusted,
+            "https://node.ts.net:18789/__openclaw__/a2ui/?platform=ios#step2",
+            "http://192.168.0.10:18789/__openclaw__/a2ui/?platform=ios",
+            "https://node.ts.net:18789/__openclaw__/a2ui/?platform=android",
+            "https://node.ts.net:18789/__openclaw__/canvas/",
+            "https://evil.ts.net:18789/__openclaw__/a2ui/?platform=ios",
+        ].map { try #require(URL(string: $0)) }
+
+        for url in urls {
+            #expect(screen.isTrustedCanvasUIURL(url) == false)
+        }
+    }
+
+    @Test("local A2UI URL is trusted for native actions")
+    @MainActor func localA2UIURLIsTrustedForNativeActions() throws {
+        let screen = ScreenController()
+        screen.showLocalA2UI()
+
+        let url = try #require(URL(string: screen.urlString))
+        #expect(url.isFileURL)
+        #expect(screen.isShowingLocalA2UI() == true)
+        #expect(screen.isTrustedCanvasUIURL(url) == true)
     }
 
     @Test func parseA2UIActionBodyAcceptsJSONString() throws {

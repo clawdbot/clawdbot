@@ -1,22 +1,23 @@
+/** Tests plugin logger formatting and diagnostic forwarding behavior. */
 import { describe, expect, it, vi } from "vitest";
 import { createPluginLoaderLogger } from "./logger.js";
 
 describe("plugins/logger", () => {
-  it("forwards logger methods", () => {
-    const info = vi.fn();
-    const warn = vi.fn();
-    const error = vi.fn();
-    const debug = vi.fn();
-    const logger = createPluginLoaderLogger({ info, warn, error, debug });
+  it.each([
+    ["info", "i"],
+    ["warn", "w"],
+    ["error", "e"],
+    ["debug", "d"],
+  ] as const)("forwards %s", (method, value) => {
+    const methods = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+    const logger = createPluginLoaderLogger(methods);
 
-    logger.info("i");
-    logger.warn("w");
-    logger.error("e");
-    logger.debug?.("d");
-
-    expect(info).toHaveBeenCalledWith("i");
-    expect(warn).toHaveBeenCalledWith("w");
-    expect(error).toHaveBeenCalledWith("e");
-    expect(debug).toHaveBeenCalledWith("d");
+    logger[method]?.(value);
+    expect(methods[method]).toHaveBeenCalledWith(value);
   });
 });

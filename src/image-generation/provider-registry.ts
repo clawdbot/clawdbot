@@ -1,69 +1,47 @@
-import { normalizeProviderId } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+/** Registry for image-generation providers contributed by plugin capabilities. */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as capabilityProviderRuntime from "../plugins/capability-provider-runtime.js";
+import {
+  buildCapabilityProviderMaps,
+  normalizeCapabilityProviderId,
+} from "../plugins/provider-registry-shared.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
+// Image-generation providers come from plugin capability registration. The
+// registry keeps aliases separate from canonical ids for user config lookups.
 const BUILTIN_IMAGE_GENERATION_PROVIDERS: readonly ImageGenerationProviderPlugin[] = [];
-
-function normalizeImageGenerationProviderId(id: string | undefined): string | undefined {
-  const normalized = normalizeProviderId(id ?? "");
-  return normalized || undefined;
-}
-
 function resolvePluginImageGenerationProviders(
   cfg?: OpenClawConfig,
 ): ImageGenerationProviderPlugin[] {
-  const active = getActivePluginRegistry();
-  const registry =
-    (active?.imageGenerationProviders?.length ?? 0) > 0 || !cfg
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  return registry?.imageGenerationProviders?.map((entry) => entry.provider) ?? [];
+  return capabilityProviderRuntime.resolvePluginCapabilityProviders({
+    key: "imageGenerationProviders",
+    cfg,
+  });
 }
 
 function buildProviderMaps(cfg?: OpenClawConfig): {
   canonical: Map<string, ImageGenerationProviderPlugin>;
   aliases: Map<string, ImageGenerationProviderPlugin>;
 } {
-  const canonical = new Map<string, ImageGenerationProviderPlugin>();
-  const aliases = new Map<string, ImageGenerationProviderPlugin>();
-  const register = (provider: ImageGenerationProviderPlugin) => {
-    const id = normalizeImageGenerationProviderId(provider.id);
-    if (!id) {
-      return;
-    }
-    canonical.set(id, provider);
-    aliases.set(id, provider);
-    for (const alias of provider.aliases ?? []) {
-      const normalizedAlias = normalizeImageGenerationProviderId(alias);
-      if (normalizedAlias) {
-        aliases.set(normalizedAlias, provider);
-      }
-    }
-  };
-
-  for (const provider of BUILTIN_IMAGE_GENERATION_PROVIDERS) {
-    register(provider);
-  }
-  for (const provider of resolvePluginImageGenerationProviders(cfg)) {
-    register(provider);
-  }
-
-  return { canonical, aliases };
+  return buildCapabilityProviderMaps(
+    [...BUILTIN_IMAGE_GENERATION_PROVIDERS, ...resolvePluginImageGenerationProviders(cfg)],
+    normalizeCapabilityProviderId,
+  );
 }
 
+/** Lists canonical image-generation providers visible for config. */
 export function listImageGenerationProviders(
   cfg?: OpenClawConfig,
 ): ImageGenerationProviderPlugin[] {
   return [...buildProviderMaps(cfg).canonical.values()];
 }
 
+/** Resolves an image-generation provider by canonical id or alias. */
 export function getImageGenerationProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
 ): ImageGenerationProviderPlugin | undefined {
-  const normalized = normalizeImageGenerationProviderId(providerId);
+  const normalized = normalizeCapabilityProviderId(providerId);
   if (!normalized) {
     return undefined;
   }

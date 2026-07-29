@@ -1,59 +1,41 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Google provider module implements model/runtime integration.
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
-import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
+import { GOOGLE_GEMINI_CLI_PROVIDER_ID } from "./gemini-cli-auth-home.js";
+import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
+import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
+import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 
-const PROVIDER_ID = "google-gemini-cli";
+const PROVIDER_ID = GOOGLE_GEMINI_CLI_PROVIDER_ID;
 const PROVIDER_LABEL = "Gemini CLI OAuth";
-const DEFAULT_MODEL = "google-gemini-cli/gemini-3.1-pro-preview";
+const DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const ENV_VARS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
   "GEMINI_CLI_OAUTH_CLIENT_ID",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
-];
+] as const;
 
-function parseGoogleUsageToken(apiKey: string): string {
-  try {
-    const parsed = JSON.parse(apiKey) as { token?: unknown };
-    if (typeof parsed?.token === "string") {
-      return parsed.token;
-    }
-  } catch {
-    // ignore
-  }
-  return apiKey;
-}
-
-function formatGoogleOauthApiKey(cred: {
-  type?: string;
-  access?: string;
-  projectId?: string;
-}): string {
-  if (cred.type !== "oauth" || typeof cred.access !== "string" || !cred.access.trim()) {
-    return "";
-  }
-  return JSON.stringify({
-    token: cred.access,
-    projectId: cred.projectId,
-  });
-}
+const loadOauthRuntimeModule = createLazyRuntimeModule(() => import("./oauth.runtime.js"));
 
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
 }
 
-export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
-  api.registerProvider({
+export function buildGoogleGeminiCliProvider(): ProviderPlugin {
+  return {
     id: PROVIDER_ID,
     label: PROVIDER_LABEL,
     docsPath: "/providers/models",
     aliases: ["gemini-cli"],
-    envVars: ENV_VARS,
+    envVars: [...ENV_VARS],
     auth: [
       {
         id: "oauth",
@@ -81,14 +63,15 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
 
           const spin = ctx.prompter.progress("Starting Gemini CLI OAuth…");
           try {
-            const { loginGeminiCliOAuth } = await import("./oauth.runtime.js");
+            const { loginGeminiCliOAuth } = await loadOauthRuntimeModule();
             const result = await loginGeminiCliOAuth({
               isRemote: ctx.isRemote,
               openUrl: ctx.openUrl,
               log: (msg) => ctx.runtime.log(msg),
-              note: ctx.prompter.note,
-              prompt: async (message) => String(await ctx.prompter.text({ message })),
+              note: (message, title) => ctx.prompter.note(message, title),
+              prompt: async (message) => ctx.prompter.text({ message }),
               progress: spin,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
             });
 
             spin.stop("Gemini CLI OAuth complete");
@@ -99,8 +82,23 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
               refresh: result.refresh,
               expires: result.expires,
               email: result.email,
-              credentialExtra: { projectId: result.projectId },
-              notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
+              configPatch: {
+                agents: {
+                  defaults: {
+                    models: {
+                      [DEFAULT_MODEL]: { agentRuntime: { id: PROVIDER_ID } },
+                    },
+                  },
+                },
+              },
+              ...(result.projectId ? { credentialExtra: { projectId: result.projectId } } : {}),
+              ...(result.projectId
+                ? {
+                    notes: [
+                      "If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
+                    ],
+                  }
+                : {}),
             });
           } catch (err) {
             spin.stop("Gemini CLI OAuth failed");
@@ -117,14 +115,22 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
       setup: {
         choiceId: "google-gemini-cli",
         choiceLabel: "Gemini CLI OAuth",
-        choiceHint: "Google OAuth with project-aware token payload",
+        choiceHint: "Sign in with your Google account (opens a browser)",
         methodId: "oauth",
       },
     },
     resolveDynamicModel: (ctx) =>
-      resolveGoogle31ForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: PROVIDER_ID,
+        ctx,
+      }),
+    ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
+    refreshOAuth: async (cred) => {
+      const { refreshGeminiCliOAuthToken } = await loadOauthRuntimeModule();
+      return await refreshGeminiCliOAuthToken(cred);
+    },
     resolveUsageAuth: async (ctx) => {
       const auth = await ctx.resolveOAuthToken();
       if (!auth) {
@@ -136,5 +142,9 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
       };
     },
     fetchUsageSnapshot: async (ctx) => await fetchGeminiCliUsage(ctx),
-  });
+  };
+}
+
+export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
+  api.registerProvider(buildGoogleGeminiCliProvider());
 }

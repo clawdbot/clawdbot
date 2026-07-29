@@ -1,82 +1,13 @@
+/**
+ * Internal channel plugin type barrel.
+ *
+ * Re-exports curated core-facing channel plugin types without helper-only implementation details.
+ */
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
-export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
-export { CHANNEL_MESSAGE_CAPABILITIES } from "./message-capabilities.js";
-
+/** Stable message action name union derived from the registered action list. */
 export type ChannelMessageActionName = ChannelMessageActionNameFromList;
-export type { ChannelMessageCapability } from "./message-capabilities.js";
 
-export type {
-  ChannelAuthAdapter,
-  ChannelCommandAdapter,
-  ChannelCapabilitiesDiagnostics,
-  ChannelCapabilitiesDisplayLine,
-  ChannelCapabilitiesDisplayTone,
-  ChannelConfigAdapter,
-  ChannelDirectoryAdapter,
-  ChannelExecApprovalAdapter,
-  ChannelExecApprovalForwardTarget,
-  ChannelExecApprovalInitiatingSurfaceState,
-  ChannelResolveKind,
-  ChannelResolveResult,
-  ChannelResolverAdapter,
-  ChannelElevatedAdapter,
-  ChannelGatewayAdapter,
-  ChannelGatewayContext,
-  ChannelGroupAdapter,
-  ChannelHeartbeatAdapter,
-  ChannelLifecycleAdapter,
-  ChannelLoginWithQrStartResult,
-  ChannelLoginWithQrWaitResult,
-  ChannelLogoutContext,
-  ChannelLogoutResult,
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-  ChannelAllowlistAdapter,
-  ChannelConfiguredBindingConversationRef,
-  ChannelConfiguredBindingMatch,
-  ChannelConfiguredBindingProvider,
-  ChannelPairingAdapter,
-  ChannelSecurityAdapter,
-  ChannelSetupAdapter,
-  ChannelStatusAdapter,
-} from "./types.adapters.js";
-export type {
-  ChannelAccountSnapshot,
-  ChannelAccountState,
-  ChannelAgentPromptAdapter,
-  ChannelAgentTool,
-  ChannelAgentToolFactory,
-  ChannelCapabilities,
-  ChannelDirectoryEntry,
-  ChannelDirectoryEntryKind,
-  ChannelGroupContext,
-  ChannelHeartbeatDeps,
-  ChannelId,
-  ChannelLogSink,
-  ChannelMentionAdapter,
-  ChannelMessageActionAdapter,
-  ChannelMessageActionDiscoveryContext,
-  ChannelMessageActionContext,
-  ChannelMessagingAdapter,
-  ChannelMessageToolDiscovery,
-  ChannelMeta,
-  ChannelMessageToolSchemaContribution,
-  ChannelOutboundTargetMode,
-  ChannelPollContext,
-  ChannelPollResult,
-  ChannelSecurityContext,
-  ChannelSecurityDmPolicy,
-  ChannelSetupInput,
-  ChannelStatusIssue,
-  ChannelStreamingAdapter,
-  ChannelStructuredComponents,
-  ChannelThreadingAdapter,
-  ChannelThreadingContext,
-  ChannelThreadingToolContext,
-  ChannelToolSend,
-  BaseProbeResult,
-  BaseTokenResolution,
-} from "./types.core.js";
+export type { ChannelMessageActionContext } from "./types.core.js";
 
 export type { ChannelPlugin } from "./types.plugin.js";

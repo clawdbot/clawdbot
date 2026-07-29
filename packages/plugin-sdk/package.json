@@ -1,0 +1,248 @@
+{
+  "name": "@openclaw/plugin-sdk",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./account-id": {
+      "types": "./dist/src/plugin-sdk/account-id.d.ts",
+      "default": "./src/account-id.ts"
+    },
+    "./acp-runtime": {
+      "types": "./dist/src/plugin-sdk/acp-runtime.d.ts",
+      "default": "./src/acp-runtime.ts"
+    },
+    "./acp-runtime-backend": {
+      "types": "./dist/src/plugin-sdk/acp-runtime-backend.d.ts",
+      "default": "./src/acp-runtime-backend.ts"
+    },
+    "./async-lock-runtime": {
+      "types": "./dist/src/plugin-sdk/async-lock-runtime.d.ts",
+      "default": "./src/async-lock-runtime.ts"
+    },
+    "./browser-config": {
+      "types": "./dist/src/plugin-sdk/browser-config.d.ts",
+      "default": "./src/browser-config.ts"
+    },
+    "./channel-activity-runtime": {
+      "types": "./dist/src/plugin-sdk/channel-activity-runtime.d.ts",
+      "default": "./src/channel-activity-runtime.ts"
+    },
+    "./concurrency-runtime": {
+      "types": "./dist/src/plugin-sdk/concurrency-runtime.d.ts",
+      "default": "./src/concurrency-runtime.ts"
+    },
+    "./dedupe-runtime": {
+      "types": "./dist/src/plugin-sdk/dedupe-runtime.d.ts",
+      "default": "./src/dedupe-runtime.ts"
+    },
+    "./delivery-queue-runtime": {
+      "types": "./dist/src/plugin-sdk/delivery-queue-runtime.d.ts",
+      "default": "./src/delivery-queue-runtime.ts"
+    },
+    "./file-access-runtime": {
+      "types": "./dist/src/plugin-sdk/file-access-runtime.d.ts",
+      "default": "./src/file-access-runtime.ts"
+    },
+    "./heartbeat-runtime": {
+      "types": "./dist/src/plugin-sdk/heartbeat-runtime.d.ts",
+      "default": "./src/heartbeat-runtime.ts"
+    },
+    "./number-runtime": {
+      "types": "./dist/src/plugin-sdk/number-runtime.d.ts",
+      "default": "./src/number-runtime.ts"
+    },
+    "./outbound-media": {
+      "types": "./dist/src/plugin-sdk/outbound-media.d.ts",
+      "default": "./src/outbound-media.ts"
+    },
+    "./secure-random-runtime": {
+      "types": "./dist/src/plugin-sdk/secure-random-runtime.d.ts",
+      "default": "./src/secure-random-runtime.ts"
+    },
+    "./system-event-runtime": {
+      "types": "./dist/src/plugin-sdk/system-event-runtime.d.ts",
+      "default": "./src/system-event-runtime.ts"
+    },
+    "./time-runtime": {
+      "types": "./dist/src/plugin-sdk/time-runtime.d.ts",
+      "default": "./src/time-runtime.ts"
+    },
+    "./transport-ready-runtime": {
+      "types": "./dist/src/plugin-sdk/transport-ready-runtime.d.ts",
+      "default": "./src/transport-ready-runtime.ts"
+    },
+    "./exec-approvals-runtime": {
+      "types": "./dist/src/plugin-sdk/exec-approvals-runtime.d.ts",
+      "default": "./src/exec-approvals-runtime.ts"
+    },
+    "./core": {
+      "types": "./dist/src/plugin-sdk/core.d.ts",
+      "default": "./src/core.ts"
+    },
+    "./config-runtime": {
+      "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
+      "default": "./src/config-runtime.ts"
+    },
+    "./plugin-config-runtime": {
+      "types": "./dist/src/plugin-sdk/plugin-config-runtime.d.ts",
+      "default": "./src/plugin-config-runtime.ts"
+    },
+    "./config-mutation": {
+      "types": "./dist/src/plugin-sdk/config-mutation.d.ts",
+      "default": "./src/config-mutation.ts"
+    },
+    "./cron-store-runtime": {
+      "types": "./dist/src/plugin-sdk/cron-store-runtime.d.ts",
+      "default": "./src/cron-store-runtime.ts"
+    },
+    "./channel-secret-runtime": {
+      "types": "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
+      "default": "./src/channel-secret-runtime.ts"
+    },
+    "./channel-streaming": {
+      "types": "./dist/src/plugin-sdk/channel-streaming.d.ts",
+      "default": "./src/channel-streaming.ts"
+    },
+    "./cli-runtime": {
+      "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
+      "default": "./src/cli-runtime.ts"
+    },
+    "./gateway-method-runtime": {
+      "types": "./dist/src/plugin-sdk/gateway-method-runtime.d.ts",
+      "default": "./src/gateway-method-runtime.ts"
+    },
+    "./error-runtime": {
+      "types": "./dist/src/plugin-sdk/error-runtime.d.ts",
+      "default": "./src/error-runtime.ts"
+    },
+    "./plugin-entry": {
+      "types": "./dist/src/plugin-sdk/plugin-entry.d.ts",
+      "default": "./src/plugin-entry.ts"
+    },
+    "./plugin-runtime": {
+      "types": "./dist/src/plugin-sdk/plugin-runtime.d.ts",
+      "default": "./src/plugin-runtime.ts"
+    },
+    "./provider-auth": {
+      "types": "./dist/src/plugin-sdk/provider-auth.d.ts",
+      "default": "./src/provider-auth.ts"
+    },
+    "./provider-auth-runtime": {
+      "types": "./dist/src/plugin-sdk/provider-auth-runtime.d.ts",
+      "default": "./src/provider-auth-runtime.ts"
+    },
+    "./provider-auth-login-flow-runtime": {
+      "types": "./dist/src/plugin-sdk/provider-auth-login-flow-runtime.d.ts",
+      "default": "./src/provider-auth-login-flow-runtime.ts"
+    },
+    "./provider-env-vars": {
+      "types": "./dist/src/plugin-sdk/provider-env-vars.d.ts",
+      "default": "./src/provider-env-vars.ts"
+    },
+    "./provider-entry": {
+      "types": "./dist/src/plugin-sdk/provider-entry.d.ts",
+      "default": "./src/provider-entry.ts"
+    },
+    "./provider-usage": {
+      "types": "./dist/src/plugin-sdk/provider-usage.d.ts",
+      "default": "./src/provider-usage.ts"
+    },
+    "./provider-http": {
+      "types": "./dist/src/plugin-sdk/provider-http.d.ts",
+      "default": "./src/provider-http.ts"
+    },
+    "./provider-model-types": {
+      "types": "./dist/src/plugin-sdk/provider-model-types.d.ts",
+      "default": "./src/provider-model-types.ts"
+    },
+    "./provider-model-shared": {
+      "types": "./dist/src/plugin-sdk/provider-model-shared.d.ts",
+      "default": "./src/provider-model-shared.ts"
+    },
+    "./model-session-runtime": {
+      "types": "./dist/src/plugin-sdk/model-session-runtime.d.ts",
+      "default": "./src/model-session-runtime.ts"
+    },
+    "./talk-config-runtime": {
+      "types": "./dist/src/plugin-sdk/talk-config-runtime.d.ts",
+      "default": "./src/talk-config-runtime.ts"
+    },
+    "./provider-onboard": {
+      "types": "./dist/src/plugin-sdk/provider-onboard.d.ts",
+      "default": "./src/provider-onboard.ts"
+    },
+    "./provider-stream-shared": {
+      "types": "./dist/src/plugin-sdk/provider-stream-shared.d.ts",
+      "default": "./src/provider-stream-shared.ts"
+    },
+    "./provider-tools": {
+      "types": "./dist/src/plugin-sdk/provider-tools.d.ts",
+      "default": "./src/provider-tools.ts"
+    },
+    "./provider-web-search": {
+      "types": "./dist/src/plugin-sdk/provider-web-search.d.ts",
+      "default": "./src/provider-web-search.ts"
+    },
+    "./provider-web-search-contract": {
+      "types": "./dist/src/plugin-sdk/provider-web-search-contract.d.ts",
+      "default": "./src/provider-web-search-contract.ts"
+    },
+    "./provider-web-search-config-contract": {
+      "types": "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
+      "default": "./src/provider-web-search-config-contract.ts"
+    },
+    "./runtime-doctor": {
+      "types": "./dist/src/plugin-sdk/runtime-doctor.d.ts",
+      "default": "./src/runtime-doctor.ts"
+    },
+    "./runtime-env": {
+      "types": "./dist/src/plugin-sdk/runtime-env.d.ts",
+      "default": "./src/runtime-env.ts"
+    },
+    "./infra-runtime": {
+      "types": "./dist/src/plugin-sdk/infra-runtime.d.ts",
+      "default": "./src/infra-runtime.ts"
+    },
+    "./security-runtime": {
+      "types": "./dist/src/plugin-sdk/security-runtime.d.ts",
+      "default": "./src/security-runtime.ts"
+    },
+    "./secret-ref-runtime": {
+      "types": "./dist/src/plugin-sdk/secret-ref-runtime.d.ts",
+      "default": "./src/secret-ref-runtime.ts"
+    },
+    "./ssrf-runtime": {
+      "types": "./dist/src/plugin-sdk/ssrf-runtime.d.ts",
+      "default": "./src/ssrf-runtime.ts"
+    },
+    "./secret-input": {
+      "types": "./dist/src/plugin-sdk/secret-input.d.ts",
+      "default": "./src/secret-input.ts"
+    },
+    "./tts-runtime": {
+      "types": "./dist/src/plugin-sdk/tts-runtime.d.ts",
+      "default": "./src/tts-runtime.ts"
+    },
+    "./text-runtime": {
+      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
+      "default": "./src/text-runtime.ts"
+    },
+    "./video-generation": {
+      "types": "./dist/src/plugin-sdk/video-generation.d.ts",
+      "default": "./src/video-generation.ts"
+    },
+    "./config-contracts": {
+      "types": "./dist/src/plugin-sdk/config-contracts.d.ts",
+      "default": "./src/config-contracts.ts"
+    },
+    "./text-utility-runtime": {
+      "types": "./dist/src/plugin-sdk/text-utility-runtime.d.ts",
+      "default": "./src/text-utility-runtime.ts"
+    },
+    "./zod": {
+      "types": "./dist/src/plugin-sdk/zod.d.ts",
+      "default": "./src/zod.ts"
+    }
+  }
+}

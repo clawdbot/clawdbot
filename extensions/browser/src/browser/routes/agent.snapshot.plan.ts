@@ -1,0 +1,118 @@
+/**
+ * Snapshot planning for browser route handlers.
+ *
+ * Resolves requested snapshot mode, format, limits, refs, labels, and driver
+ * choice before the route talks to Playwright or Chrome MCP.
+ */
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ResolvedBrowserProfile } from "../config.js";
+import {
+  DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH,
+  DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS,
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+} from "../constants.js";
+import {
+  resolveDefaultSnapshotFormat,
+  shouldUsePlaywrightForAriaSnapshot,
+  shouldUsePlaywrightForScreenshot,
+} from "../profile-capabilities.js";
+import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
+import { toBoolean, toStringOrEmpty } from "./utils.js";
+
+type BrowserSnapshotPlan = {
+  format: "ai" | "aria";
+  mode?: "efficient";
+  labels?: boolean;
+  urls?: boolean;
+  limit?: number;
+  resolvedMaxChars?: number;
+  interactive?: boolean;
+  compact?: boolean;
+  depth?: number;
+  refsMode?: "aria" | "role";
+  selectorValue?: string;
+  frameSelectorValue?: string;
+  timeoutMs?: number;
+  wantsRoleSnapshot: boolean;
+};
+
+/** Resolve a normalized snapshot plan from query parameters and profile caps. */
+export function resolveSnapshotPlan(params: {
+  profile: ResolvedBrowserProfile;
+  query: Record<string, unknown>;
+  hasPlaywright: boolean;
+}): BrowserSnapshotPlan {
+  const mode = params.query.mode === "efficient" ? "efficient" : undefined;
+  const labels = toBoolean(params.query.labels) ?? undefined;
+  const urls = toBoolean(params.query.urls) ?? undefined;
+  const explicitFormat =
+    params.query.format === "aria" ? "aria" : params.query.format === "ai" ? "ai" : undefined;
+  const format = resolveDefaultSnapshotFormat({
+    profile: params.profile,
+    hasPlaywright: params.hasPlaywright,
+    explicitFormat,
+    mode,
+  });
+  const limit = parseStrictPositiveInteger(params.query.limit);
+  const hasMaxChars = Object.hasOwn(params.query, "maxChars");
+  const maxCharsRaw = parseStrictNonNegativeInteger(params.query.maxChars);
+  const maxChars = maxCharsRaw !== undefined && maxCharsRaw > 0 ? maxCharsRaw : undefined;
+  const resolvedMaxChars =
+    format === "ai"
+      ? hasMaxChars
+        ? maxCharsRaw === undefined
+          ? mode === "efficient"
+            ? DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS
+            : DEFAULT_AI_SNAPSHOT_MAX_CHARS
+          : maxChars
+        : mode === "efficient"
+          ? DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS
+          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
+      : undefined;
+  const interactiveRaw = toBoolean(params.query.interactive);
+  const compactRaw = toBoolean(params.query.compact);
+  const depthRaw = parseStrictNonNegativeInteger(params.query.depth);
+  const refsModeRaw = toStringOrEmpty(params.query.refs).trim();
+  const refsMode: "aria" | "role" | undefined =
+    refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
+  const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
+  const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
+  const depth =
+    depthRaw ?? (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
+  const selectorValue = normalizeOptionalString(toStringOrEmpty(params.query.selector));
+  const frameSelectorValue = normalizeOptionalString(toStringOrEmpty(params.query.frame));
+  const timeoutMsRaw = parseStrictPositiveInteger(params.query.timeoutMs);
+  const timeoutMs =
+    timeoutMsRaw !== undefined ? normalizeBrowserTimerDelayMs(timeoutMsRaw) : undefined;
+
+  return {
+    format,
+    mode,
+    labels,
+    urls,
+    limit,
+    resolvedMaxChars,
+    interactive,
+    compact,
+    depth,
+    refsMode,
+    selectorValue,
+    frameSelectorValue,
+    timeoutMs,
+    wantsRoleSnapshot:
+      labels === true ||
+      urls === true ||
+      mode === "efficient" ||
+      interactive === true ||
+      compact === true ||
+      depth !== undefined ||
+      Boolean(selectorValue) ||
+      Boolean(frameSelectorValue),
+  };
+}
+
+export { shouldUsePlaywrightForAriaSnapshot, shouldUsePlaywrightForScreenshot };

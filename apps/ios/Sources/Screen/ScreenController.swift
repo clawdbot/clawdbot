@@ -1,5 +1,5 @@
-import OpenClawKit
 import Observation
+import OpenClawKit
 import UIKit
 import WebKit
 
@@ -10,6 +10,7 @@ final class ScreenController {
 
     var urlString: String = ""
     var errorText: String?
+    var isCanvasPresented: Bool = false
 
     /// Callback invoked when an openclaw:// deep link is tapped in the canvas
     var onDeepLink: ((URL) -> Void)?
@@ -26,7 +27,7 @@ final class ScreenController {
         self.reload()
     }
 
-    func navigate(to urlString: String) {
+    func navigate(to urlString: String, trustA2UIActions _: Bool = false) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             self.urlString = ""
@@ -73,6 +74,39 @@ final class ScreenController {
     func showDefaultCanvas() {
         self.urlString = ""
         self.reload()
+    }
+
+    func presentDefaultCanvas() {
+        self.isCanvasPresented = true
+        self.showDefaultCanvas()
+    }
+
+    func present(urlString: String) {
+        self.isCanvasPresented = true
+        self.navigate(to: urlString)
+    }
+
+    func hideCanvas() {
+        self.isCanvasPresented = false
+        self.showDefaultCanvas()
+    }
+
+    func showLocalA2UI() {
+        self.isCanvasPresented = true
+        guard let url = Self.localA2UIURL else {
+            self.showDefaultCanvas()
+            return
+        }
+        self.urlString = url.absoluteString
+        self.reload()
+    }
+
+    func isShowingLocalA2UI() -> Bool {
+        guard let url = URL(string: self.urlString),
+              url.isFileURL,
+              let expected = Self.localA2UIURL
+        else { return false }
+        return url.standardizedFileURL == expected.standardizedFileURL
     }
 
     func setDebugStatusEnabled(_ enabled: Bool) {
@@ -147,16 +181,6 @@ final class ScreenController {
         return try await WebViewJavaScriptSupport.evaluateToString(webView: webView, javaScript: javaScript)
     }
 
-    func snapshotPNGBase64(maxWidth: CGFloat? = nil) async throws -> String {
-        let image = try await self.snapshotImage(maxWidth: maxWidth)
-        guard let data = image.pngData() else {
-            throw NSError(domain: "Screen", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "snapshot encode failed",
-            ])
-        }
-        return data.base64EncodedString()
-    }
-
     func snapshotBase64(
         maxWidth: CGFloat? = nil,
         format: OpenClawCanvasSnapshotFormat,
@@ -190,7 +214,7 @@ final class ScreenController {
                 NSLocalizedDescriptionKey: "web view unavailable",
             ])
         }
-        let image: UIImage = try await withCheckedThrowingContinuation { cont in
+        return try await withCheckedThrowingContinuation { cont in
             webView.takeSnapshot(with: config) { image, error in
                 if let error {
                     cont.resume(throwing: error)
@@ -205,7 +229,6 @@ final class ScreenController {
                 cont.resume(returning: image)
             }
         }
-        return image
     }
 
     func attachWebView(_ webView: WKWebView) {
@@ -236,29 +259,27 @@ final class ScreenController {
         ext: "html",
         subdirectory: "CanvasScaffold")
 
+    private static let localA2UIURL: URL? = ScreenController.bundledResourceURL(
+        name: "index",
+        ext: "html",
+        subdirectory: "CanvasA2UI")
+
     func isTrustedCanvasUIURL(_ url: URL) -> Bool {
-        guard url.isFileURL else { return false }
-        let std = url.standardizedFileURL
-        if let expected = Self.canvasScaffoldURL,
-           std == expected.standardizedFileURL
-        {
-            return true
+        if url.isFileURL {
+            let std = url.standardizedFileURL
+            if let expected = Self.canvasScaffoldURL,
+               std == expected.standardizedFileURL
+            {
+                return true
+            }
+            if let expected = Self.localA2UIURL,
+               std == expected.standardizedFileURL
+            {
+                return true
+            }
+            return false
         }
         return false
-    }
-
-    private func applyScrollBehavior() {
-        guard let webView = self.activeWebView else { return }
-        let trimmed = self.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        let allowScroll = !trimmed.isEmpty
-        let scrollView = webView.scrollView
-        // Default canvas needs raw touch events; external pages should scroll.
-        scrollView.isScrollEnabled = allowScroll
-        scrollView.bounces = allowScroll
-    }
-
-    func isLocalNetworkCanvasURL(_ url: URL) -> Bool {
-        LocalNetworkURLSupport.isLocalNetworkHTTPURL(url)
     }
 
     nonisolated static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
@@ -277,6 +298,16 @@ final class ScreenController {
             return mapped.isEmpty ? nil : mapped
         }
         return nil
+    }
+
+    private func applyScrollBehavior() {
+        guard let webView = self.activeWebView else { return }
+        let trimmed = self.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let allowScroll = !trimmed.isEmpty
+        let scrollView = webView.scrollView
+        // Default canvas needs raw touch events; external pages should scroll.
+        scrollView.isScrollEnabled = allowScroll
+        scrollView.bounces = allowScroll
     }
 }
 

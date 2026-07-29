@@ -1,4 +1,7 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+// Tracks last inbound/outbound activity for channel accounts.
+import type { ChannelId } from "../channels/plugins/channel-id.types.js";
+
+/** Direction of the last observed activity for a channel/account pair. */
 export type ChannelDirection = "inbound" | "outbound";
 
 type ActivityEntry = {
@@ -9,6 +12,7 @@ type ActivityEntry = {
 const activity = new Map<string, ActivityEntry>();
 
 function keyFor(channel: ChannelId, accountId: string) {
+  // Account ids are normalized before keying so omitted/blank ids share the default account slot.
   return `${channel}:${accountId || "default"}`;
 }
 
@@ -23,6 +27,7 @@ function ensureEntry(channel: ChannelId, accountId: string): ActivityEntry {
   return created;
 }
 
+/** Records the latest inbound or outbound activity timestamp for a channel/account. */
 export function recordChannelActivity(params: {
   channel: ChannelId;
   accountId?: string | null;
@@ -40,6 +45,7 @@ export function recordChannelActivity(params: {
   }
 }
 
+/** Returns the latest known inbound/outbound activity timestamps for a channel/account. */
 export function getChannelActivity(params: {
   channel: ChannelId;
   accountId?: string | null;
@@ -53,6 +59,7 @@ export function getChannelActivity(params: {
   );
 }
 
+/** Clears all tracked channel activity; test-only helper. */
 export function resetChannelActivityForTest() {
   activity.clear();
 }

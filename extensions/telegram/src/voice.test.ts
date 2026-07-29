@@ -1,5 +1,33 @@
+// Telegram tests cover voice plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
+
+const TELEGRAM_CAPTION_LIMIT = 1024;
+
+describe("splitTelegramCaption", () => {
+  it("returns empty parts for blank captions", () => {
+    expect(splitTelegramCaption("   ")).toEqual({
+      caption: undefined,
+      followUpText: undefined,
+    });
+  });
+
+  it("keeps short captions inline", () => {
+    expect(splitTelegramCaption(" hello ")).toEqual({
+      caption: "hello",
+      followUpText: undefined,
+    });
+  });
+
+  it("moves oversized captions into follow-up text", () => {
+    const text = "x".repeat(TELEGRAM_CAPTION_LIMIT + 1);
+    expect(splitTelegramCaption(text)).toEqual({
+      caption: undefined,
+      followUpText: text,
+    });
+  });
+});
 
 describe("resolveTelegramVoiceSend", () => {
   it("skips voice when wantsVoice is false", () => {

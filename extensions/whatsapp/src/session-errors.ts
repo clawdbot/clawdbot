@@ -1,3 +1,6 @@
+// Whatsapp plugin module implements session errors behavior.
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+
 function safeStringify(value: unknown, limit = 800): string {
   try {
     const seen = new WeakSet();
@@ -26,7 +29,7 @@ function safeStringify(value: unknown, limit = 800): string {
     if (!raw) {
       return String(value);
     }
-    return raw.length > limit ? `${raw.slice(0, limit)}…` : raw;
+    return raw.length > limit ? `${truncateUtf16Safe(raw, limit)}…` : raw;
   } catch {
     return String(value);
   }
@@ -99,8 +102,10 @@ export function formatError(err: unknown): string {
     typeof (err as { error?: { message?: unknown } })?.error?.message === "string"
       ? ((err as { error?: { message?: unknown } }).error?.message as string)
       : undefined,
-  ].filter((value): value is string => Boolean(value && value.trim().length > 0));
-  const message = messageCandidates[0];
+  ];
+  const message = messageCandidates.find((value): value is string =>
+    Boolean(value && value.trim().length > 0),
+  );
 
   const pieces: string[] = [];
   if (typeof status === "number") {

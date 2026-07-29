@@ -1,15 +1,21 @@
+/**
+ * Analyzes injected workspace bootstrap files and builds warnings when context
+ * was truncated before an agent sees it.
+ */
 import path from "node:path";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import { USER_BOOTSTRAP_MAX_CHARS } from "./embedded-agent-helpers/bootstrap.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
-export const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
-export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
-export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
+const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
+const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
+const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
 
-export type BootstrapTruncationCause = "per-file-limit" | "total-limit";
-export type BootstrapPromptWarningMode = "off" | "once" | "always";
+type BootstrapTruncationCause = "per-file-limit" | "total-limit";
+type BootstrapPromptWarningMode = "off" | "once" | "always";
 
-export type BootstrapInjectionStat = {
+type BootstrapInjectionStat = {
   name: string;
   path: string;
   missing: boolean;
@@ -18,12 +24,13 @@ export type BootstrapInjectionStat = {
   truncated: boolean;
 };
 
-export type BootstrapAnalyzedFile = BootstrapInjectionStat & {
+type BootstrapAnalyzedFile = BootstrapInjectionStat & {
+  effectiveFileLimit: number;
   nearLimit: boolean;
   causes: BootstrapTruncationCause[];
 };
 
-export type BootstrapBudgetAnalysis = {
+type BootstrapBudgetAnalysis = {
   files: BootstrapAnalyzedFile[];
   truncatedFiles: BootstrapAnalyzedFile[];
   nearLimitFiles: BootstrapAnalyzedFile[];
@@ -39,14 +46,14 @@ export type BootstrapBudgetAnalysis = {
   };
 };
 
-export type BootstrapPromptWarning = {
+type BootstrapPromptWarning = {
   signature?: string;
   warningShown: boolean;
   lines: string[];
   warningSignaturesSeen: string[];
 };
 
-export type BootstrapTruncationReportMeta = {
+type BootstrapTruncationReportMeta = {
   warningMode: BootstrapPromptWarningMode;
   warningShown: boolean;
   promptWarningSignature?: string;
@@ -67,6 +74,20 @@ function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
 }
 
+function isAgentsBootstrapName(name: string | undefined): boolean {
+  return name?.toLowerCase() === "agents.md";
+}
+
+function isUserBootstrapName(name: string | undefined): boolean {
+  return name?.toLowerCase() === "user.md";
+}
+
+function effectiveBootstrapFileLimit(name: string, bootstrapMaxChars: number): number {
+  return name.toLowerCase() === "user.md"
+    ? Math.min(bootstrapMaxChars, USER_BOOTSTRAP_MAX_CHARS)
+    : bootstrapMaxChars;
+}
+
 function normalizeSeenSignatures(signatures?: string[]): string[] {
   if (!Array.isArray(signatures) || signatures.length === 0) {
     return [];
@@ -74,7 +95,7 @@ function normalizeSeenSignatures(signatures?: string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const signature of signatures) {
-    const value = typeof signature === "string" ? signature.trim() : "";
+    const value = normalizeOptionalString(signature) ?? "";
     if (!value || seen.has(value)) {
       continue;
     }
@@ -98,6 +119,7 @@ function appendSeenSignature(signatures: string[], signature: string): string[] 
   return next.slice(-DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX);
 }
 
+/** Restores prompt-warning dedupe state from a previous bootstrap report. */
 export function resolveBootstrapWarningSignaturesSeen(report?: {
   bootstrapTruncation?: {
     warningMode?: BootstrapPromptWarningMode;
@@ -116,11 +138,12 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   }
   const single =
     typeof truncation?.promptWarningSignature === "string"
-      ? truncation.promptWarningSignature.trim()
+      ? (normalizeOptionalString(truncation.promptWarningSignature) ?? "")
       : "";
   return single ? [single] : [];
 }
 
+/** Compares raw bootstrap files with the injected context files the agent received. */
 export function buildBootstrapInjectionStats(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
@@ -128,7 +151,7 @@ export function buildBootstrapInjectionStats(params: {
   const injectedByPath = new Map<string, string>();
   const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
-    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    const pathValue = normalizeOptionalString(file.path) ?? "";
     if (!pathValue) {
       continue;
     }
@@ -142,17 +165,24 @@ export function buildBootstrapInjectionStats(params: {
     }
   }
   return params.bootstrapFiles.map((file) => {
-    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    const pathValue = normalizeOptionalString(file.path) ?? "";
+    const normalizedPath = pathValue.replace(/\\/g, "/");
+    // Bootstrap hooks are extension-facing and may provide path/content only.
+    // Derive the display name before budget classification so those entries
+    // keep working and cannot crash the turn when filename-specific caps run.
+    const name =
+      normalizeOptionalString(file.name) ??
+      (normalizedPath ? path.posix.basename(normalizedPath) : "bootstrap");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
       (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
+      injectedByPath.get(name) ??
+      injectedByBaseName.get(name);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
-      name: file.name,
-      path: pathValue || file.name,
+      name,
+      path: pathValue || name,
       missing: file.missing,
       rawChars,
       injectedChars,
@@ -161,6 +191,7 @@ export function buildBootstrapInjectionStats(params: {
   });
 }
 
+/** Classifies bootstrap truncation and near-limit pressure for prompt/report output. */
 export function analyzeBootstrapBudget(params: {
   files: BootstrapInjectionStat[];
   bootstrapMaxChars: number;
@@ -180,24 +211,26 @@ export function analyzeBootstrapBudget(params: {
   const rawChars = nonMissing.reduce((sum, file) => sum + file.rawChars, 0);
   const injectedChars = nonMissing.reduce((sum, file) => sum + file.injectedChars, 0);
   const totalNearLimit = injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio);
-  const totalOverLimit = injectedChars >= bootstrapTotalMaxChars;
-
+  let remainingTotalChars = bootstrapTotalMaxChars;
   const files = params.files.map((file) => {
+    const effectiveFileLimit = effectiveBootstrapFileLimit(file.name, bootstrapMaxChars);
+    const availableTotalChars = remainingTotalChars;
+    remainingTotalChars = Math.max(0, remainingTotalChars - file.injectedChars);
     if (file.missing) {
-      return { ...file, nearLimit: false, causes: [] };
+      return { ...file, effectiveFileLimit, nearLimit: false, causes: [] };
     }
-    const perFileOverLimit = file.rawChars > bootstrapMaxChars;
-    const nearLimit = file.rawChars >= Math.ceil(bootstrapMaxChars * nearLimitRatio);
+    const perFileOverLimit = file.rawChars > effectiveFileLimit;
+    const nearLimit = file.rawChars >= Math.ceil(effectiveFileLimit * nearLimitRatio);
     const causes: BootstrapTruncationCause[] = [];
     if (file.truncated) {
       if (perFileOverLimit) {
         causes.push("per-file-limit");
       }
-      if (totalOverLimit) {
+      if (availableTotalChars < effectiveFileLimit && file.rawChars > availableTotalChars) {
         causes.push("total-limit");
       }
     }
-    return { ...file, nearLimit, causes };
+    return { ...file, effectiveFileLimit, nearLimit, causes };
   });
 
   const truncatedFiles = files.filter((file) => file.truncated);
@@ -220,9 +253,8 @@ export function analyzeBootstrapBudget(params: {
   };
 }
 
-export function buildBootstrapTruncationSignature(
-  analysis: BootstrapBudgetAnalysis,
-): string | undefined {
+/** Builds a stable signature for once-per-truncation warning suppression. */
+function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): string | undefined {
   if (!analysis.hasTruncation) {
     return undefined;
   }
@@ -253,7 +285,8 @@ export function buildBootstrapTruncationSignature(
   });
 }
 
-export function formatBootstrapTruncationWarningLines(params: {
+/** Formats human-readable warning lines for the most important truncated files. */
+function formatBootstrapTruncationWarningLines(params: {
   analysis: BootstrapBudgetAnalysis;
   maxFiles?: number;
 }): string[] {
@@ -292,12 +325,35 @@ export function formatBootstrapTruncationWarningLines(params: {
       `+${params.analysis.truncatedFiles.length - topFiles.length} more truncated file(s).`,
     );
   }
-  lines.push(
-    "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
+  if (params.analysis.truncatedFiles.some((file) => isAgentsBootstrapName(file.name))) {
+    lines.push("AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.");
+  }
+  const fixedUserCapApplied = params.analysis.truncatedFiles.some(
+    (file) =>
+      isUserBootstrapName(file.name) &&
+      file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS &&
+      file.causes.includes("per-file-limit"),
   );
+  if (fixedUserCapApplied) {
+    lines.push(
+      `USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS}-character bootstrap cap; keep it compact.`,
+    );
+  }
+  const configurableLimitApplied = params.analysis.truncatedFiles.some(
+    (file) =>
+      !isUserBootstrapName(file.name) ||
+      file.effectiveFileLimit < USER_BOOTSTRAP_MAX_CHARS ||
+      file.causes.includes("total-limit"),
+  );
+  if (configurableLimitApplied) {
+    lines.push(
+      "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
+    );
+  }
   return lines;
 }
 
+/** Decides whether to show a prompt warning and returns the updated dedupe state. */
 export function buildBootstrapPromptWarning(params: {
   analysis: BootstrapBudgetAnalysis;
   mode: BootstrapPromptWarningMode;
@@ -330,6 +386,7 @@ export function buildBootstrapPromptWarning(params: {
   };
 }
 
+/** Appends a detailed truncation warning block to the agent prompt when needed. */
 export function appendBootstrapPromptWarning(
   prompt: string,
   warningLines?: string[],
@@ -353,9 +410,20 @@ export function appendBootstrapPromptWarning(
   return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
 
-// Backward-compatible alias while older callers still import the prepend name.
-export const prependBootstrapPromptWarning = appendBootstrapPromptWarning;
+/** Builds the compact truncation notice mirrored into run metadata. */
+export function buildBootstrapPromptWarningNotice(warningLines?: string[]): string | undefined {
+  const hasWarning = (warningLines ?? []).some((line) => line.trim().length > 0);
+  if (!hasWarning) {
+    return undefined;
+  }
+  return [
+    "[Bootstrap truncation warning]",
+    "Some workspace bootstrap files were truncated before Project Context injection.",
+    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
+  ].join("\n");
+}
 
+/** Serializes truncation warning state for run reports and future dedupe. */
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;
   warningMode: BootstrapPromptWarningMode;

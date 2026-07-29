@@ -1,62 +1,20 @@
 #!/usr/bin/env node
 
+/**
+ * Stdio MCP proxy used by ACPX wrappers. It injects OpenClaw-provided MCP
+ * servers into session creation/load/fork requests before forwarding to target.
+ */
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
+import { splitCommandLine } from "./mcp-command-line.mjs";
 
-function splitCommandLine(value) {
-  const parts = [];
-  let current = "";
-  let quote = null;
-  let escaping = false;
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current.length > 0) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
+function formatErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message || error.name || "Error";
   }
-
-  if (escaping) {
-    current += "\\";
-  }
-  if (quote) {
-    throw new Error("Invalid agent command: unterminated quote");
-  }
-  if (current.length > 0) {
-    parts.push(current);
-  }
-  if (parts.length === 0) {
-    throw new Error("Invalid agent command: empty command");
-  }
-  return {
-    command: parts[0],
-    args: parts.slice(1),
-  };
+  return String(error);
 }
 
 function decodePayload(argv) {
@@ -116,36 +74,86 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
-const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
-const target = splitCommandLine(targetCommand);
-const child = spawn(target.command, target.args, {
-  stdio: ["pipe", "pipe", "inherit"],
-  env: process.env,
-});
-
-if (!child.stdin || !child.stdout) {
-  throw new Error("Failed to create MCP proxy stdio pipes");
+/** Build spawn options for the proxied MCP target process. */
+export function createTargetSpawnOptions(platform = process.platform) {
+  const options = {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: process.env,
+  };
+  if (platform === "win32") {
+    options.windowsHide = true;
+  }
+  return options;
 }
 
-const input = createInterface({ input: process.stdin });
-input.on("line", (line) => {
-  child.stdin.write(`${rewriteLine(line, mcpServers)}\n`);
-});
-input.on("close", () => {
-  child.stdin.end();
-});
-
-child.stdout.pipe(process.stdout);
-
-child.on("error", (error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
-
-child.on("close", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
+function isMainModule() {
+  const mainPath = process.argv[1];
+  if (!mainPath) {
+    return false;
   }
-  process.exit(code ?? 0);
-});
+  return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
+}
+
+function main() {
+  const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
+  const target = splitCommandLine(targetCommand);
+  const child = spawn(target.command, target.args, createTargetSpawnOptions());
+
+  if (!child.stdin || !child.stdout) {
+    throw new Error("Failed to create MCP proxy stdio pipes");
+  }
+
+  const input = createInterface({ input: process.stdin });
+  let exiting = false;
+
+  const exitWithError = (error) => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
+    input.close();
+    child.kill();
+    process.stderr.write(`${formatErrorMessage(error)}\n`);
+    process.exit(1);
+  };
+
+  child.stdin.on("error", exitWithError);
+  process.stdout.on("error", exitWithError);
+
+  input.on("line", (line) => {
+    if (exiting) {
+      return;
+    }
+    child.stdin.write(`${rewriteLine(line, mcpServers)}\n`, (error) => {
+      if (error) {
+        exitWithError(error);
+      }
+    });
+  });
+  input.on("close", () => {
+    if (exiting || child.stdin.destroyed || child.stdin.writableEnded) {
+      return;
+    }
+    child.stdin.end();
+  });
+
+  child.stdout.pipe(process.stdout);
+
+  child.on("error", exitWithError);
+
+  child.on("close", (code, signal) => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+}
+
+if (isMainModule()) {
+  main();
+}

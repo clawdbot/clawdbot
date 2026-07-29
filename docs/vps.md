@@ -4,11 +4,9 @@ read_when:
   - You want to run the Gateway on a Linux server or cloud VPS
   - You need a quick map of hosting guides
   - You want generic Linux server tuning for OpenClaw
-title: "Linux Server"
+title: "Linux server"
 sidebarTitle: "Linux Server"
 ---
-
-# Linux Server
 
 Run the OpenClaw Gateway on any Linux server or cloud VPS. This page helps you
 pick a provider, explains how cloud deployments work, and covers generic Linux
@@ -17,15 +15,16 @@ tuning that applies everywhere.
 ## Pick a provider
 
 <CardGroup cols={2}>
-  <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
-  <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
-  <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
-  <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
-  <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
-  <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
-  <Card title="GCP" href="/install/gcp">Compute Engine</Card>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
+  <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
+  <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
+  <Card title="GCP" href="/install/gcp">Compute Engine</Card>
+  <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
+  <Card title="Hostinger" href="/install/hostinger">VPS with one-click setup</Card>
+  <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
+  <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
+  <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
   <Card title="Raspberry Pi" href="/install/raspberry-pi">ARM self-hosted</Card>
 </CardGroup>
 
@@ -40,13 +39,31 @@ A community video walkthrough is available at
 - You connect from your laptop or phone via the **Control UI** or **Tailscale/SSH**.
 - Treat the VPS as the source of truth and **back up** the state + workspace regularly.
 - Secure default: keep the Gateway on loopback and access it via SSH tunnel or Tailscale Serve.
-  If you bind to `lan` or `tailnet`, require `gateway.auth.token` or `gateway.auth.password`.
+  If you bind to `lan` or `tailnet`, the Gateway requires a shared secret
+  (`gateway.auth.token` or `gateway.auth.password`) unless auth is delegated to a
+  trusted proxy.
 
 Related pages: [Gateway remote access](/gateway/remote), [Platforms hub](/platforms).
 
+## Harden admin access first
+
+Before you install OpenClaw on a public VPS, decide how you want to administer
+the box itself.
+
+- For Tailnet-only admin access: install Tailscale first, join the VPS to your
+  tailnet, verify a second SSH session over the Tailscale IP or MagicDNS name,
+  then restrict public SSH.
+- Without Tailscale: apply the equivalent hardening for your SSH path before
+  exposing more services.
+- This is separate from Gateway access. You can still keep OpenClaw bound to
+  loopback and use an SSH tunnel or Tailscale Serve for the dashboard.
+
+Tailscale-specific Gateway options live in [Tailscale](/gateway/tailscale).
+
 ## Shared company agent on a VPS
 
-Running a single agent for a team is a valid setup when every user is in the same trust boundary and the agent is business-only.
+Running a single agent for a team is a valid setup when every user is in the
+same trust boundary and the agent is business-only.
 
 - Keep it on a dedicated runtime (VPS/VM/container + dedicated OS user/accounts).
 - Do not sign that runtime into personal Apple/Google accounts or personal browser/password-manager profiles.
@@ -75,28 +92,24 @@ EOF
 source ~/.bashrc
 ```
 
-- `NODE_COMPILE_CACHE` improves repeated command startup times.
-- `OPENCLAW_NO_RESPAWN=1` avoids extra startup overhead from a self-respawn path.
-- First command run warms the cache; subsequent runs are faster.
+- `NODE_COMPILE_CACHE` improves repeated command startup times; the first run warms the cache.
+- `OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, which avoids extra process handoffs and keeps PID tracking simple on small hosts.
 - For Raspberry Pi specifics, see [Raspberry Pi](/install/raspberry-pi).
 
 ### systemd tuning checklist (optional)
 
 For VM hosts using `systemd`, consider:
 
-- Add service env for a stable startup path:
-  - `OPENCLAW_NO_RESPAWN=1`
-  - `NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache`
-- Keep restart behavior explicit:
-  - `Restart=always`
-  - `RestartSec=2`
-  - `TimeoutStartSec=90`
-- Prefer SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
+- Service env for a stable startup path: `OPENCLAW_NO_RESPAWN=1` and
+  `NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache`
+- Explicit restart behavior: `Restart=always`, `RestartSec=2`, `TimeoutStartSec=90`
+- SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
 
-Example:
+The standard `openclaw onboard --install-daemon` path installs a systemd user
+unit; edit it with:
 
 ```bash
-sudo systemctl edit openclaw
+systemctl --user edit openclaw-gateway.service
 ```
 
 ```ini
@@ -108,5 +121,18 @@ RestartSec=2
 TimeoutStartSec=90
 ```
 
+If you deliberately installed a system unit instead, edit it via
+`sudo systemctl edit openclaw-gateway.service`.
+
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
+
+For Linux OOM behavior, child process victim selection, and `exit 137`
+diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-pressure-and-oom-kills).
+
+## Related
+
+- [Install overview](/install)
+- [DigitalOcean](/install/digitalocean)
+- [Fly.io](/install/fly)
+- [Hetzner](/install/hetzner)

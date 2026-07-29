@@ -1,5 +1,10 @@
+// Operator scope compatibility tests cover legacy operator scope normalization.
 import { describe, expect, it } from "vitest";
-import { resolveMissingRequestedScope, roleScopesAllow } from "./operator-scope-compat.js";
+import {
+  resolveMissingRequestedScope,
+  resolveScopeOutsideRequestedRoles,
+  roleScopesAllow,
+} from "./operator-scope-compat.js";
 
 describe("roleScopesAllow", () => {
   it("allows empty requested scope lists regardless of granted scopes", () => {
@@ -53,6 +58,25 @@ describe("roleScopesAllow", () => {
     ).toBe(true);
   });
 
+  it("treats operator.talk as satisfied by talk/write/admin scopes", () => {
+    for (const allowedScope of ["operator.talk", "operator.write", "operator.admin"]) {
+      expect(
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.talk"],
+          allowedScopes: [allowedScope],
+        }),
+      ).toBe(true);
+    }
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.talk"],
+        allowedScopes: ["operator.read"],
+      }),
+    ).toBe(false);
+  });
+
   it("treats operator.approvals/operator.pairing as satisfied by operator.admin", () => {
     expect(
       roleScopesAllow({
@@ -80,26 +104,33 @@ describe("roleScopesAllow", () => {
     ).toBe(false);
   });
 
-  it("uses strict matching for non-operator roles", () => {
+  it("uses strict matching with role-prefix partitioning for non-operator roles", () => {
     expect(
       roleScopesAllow({
         role: "node",
-        requestedScopes: ["system.run"],
-        allowedScopes: ["operator.admin", "system.run"],
+        requestedScopes: ["node.exec"],
+        allowedScopes: ["operator.admin", "node.exec"],
       }),
     ).toBe(true);
     expect(
       roleScopesAllow({
         role: "node",
-        requestedScopes: ["system.run"],
+        requestedScopes: ["node.exec"],
         allowedScopes: ["operator.admin"],
       }),
     ).toBe(false);
     expect(
       roleScopesAllow({
+        role: "node",
+        requestedScopes: ["operator.read"],
+        allowedScopes: ["operator.read", "node.exec"],
+      }),
+    ).toBe(false);
+    expect(
+      roleScopesAllow({
         role: " node ",
-        requestedScopes: [" system.run ", "system.run", "  "],
-        allowedScopes: ["system.run", "operator.admin"],
+        requestedScopes: [" node.exec ", "node.exec", "  "],
+        allowedScopes: ["node.exec", "operator.admin"],
       }),
     ).toBe(true);
   });
@@ -145,9 +176,27 @@ describe("roleScopesAllow", () => {
     expect(
       resolveMissingRequestedScope({
         role: "node",
-        requestedScopes: ["system.run"],
-        allowedScopes: ["system.run", "operator.admin"],
+        requestedScopes: ["node.exec"],
+        allowedScopes: ["node.exec", "operator.admin"],
       }),
     ).toBeNull();
+  });
+
+  it("returns null when every requested scope belongs to one requested role", () => {
+    expect(
+      resolveScopeOutsideRequestedRoles({
+        requestedRoles: ["node", "operator"],
+        requestedScopes: ["node.exec", "operator.read"],
+      }),
+    ).toBeNull();
+  });
+
+  it("returns the first scope outside the requested role set", () => {
+    expect(
+      resolveScopeOutsideRequestedRoles({
+        requestedRoles: ["node", "operator"],
+        requestedScopes: ["node.exec", "vault.admin", "operator.read"],
+      }),
+    ).toBe("vault.admin");
   });
 });

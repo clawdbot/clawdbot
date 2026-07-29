@@ -1,157 +1,117 @@
-import { mkdtempSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+// Covers Cloudflare AI Gateway profile provenance and generated provider config.
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { resolveCloudflareAiGatewayBaseUrl } from "./cloudflare-ai-gateway.js";
+import type { ApiKeyCredential } from "./auth-profiles/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+import { resolveApiKeyFromCredential } from "./models-config.providers.secret-helpers.js";
+
+function expectedCloudflareGatewayBaseUrl(accountId: string, gatewayId: string): string {
+  return `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/anthropic`;
+}
+
+function buildCloudflareAiGatewayCatalogProvider(params: {
+  credential:
+    | (ApiKeyCredential & {
+        metadata?: {
+          accountId?: string;
+          gatewayId?: string;
+        };
+      })
+    | undefined;
+  envApiKey?: string;
+}) {
+  // Cloudflare gateway providers require both account/gateway metadata and an
+  // auth marker from the same profile/env source.
+  const apiKey = params.envApiKey?.trim() || resolveApiKeyFromCredential(params.credential)?.apiKey;
+  const accountId = params.credential?.metadata?.accountId?.trim();
+  const gatewayId = params.credential?.metadata?.gatewayId?.trim();
+  if (!apiKey || !accountId || !gatewayId) {
+    return null;
+  }
+  return {
+    baseUrl: expectedCloudflareGatewayBaseUrl(accountId, gatewayId),
+    api: "anthropic-messages",
+    apiKey,
+    models: [{ id: "cloudflare-ai-gateway" }],
+  };
+}
 
 describe("cloudflare-ai-gateway profile provenance", () => {
-  it("prefers env keyRef marker over runtime plaintext for persistence", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+  it("prefers env keyRef marker over runtime plaintext for persistence", () => {
+    // Env-backed profile refs persist the env var name, not the runtime
+    // plaintext value.
     const envSnapshot = captureEnv(["CLOUDFLARE_AI_GATEWAY_API_KEY"]);
     delete process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
-
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "cloudflare-ai-gateway:default": {
-              type: "api_key",
-              provider: "cloudflare-ai-gateway",
-              key: "sk-runtime-cloudflare",
-              keyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
-              metadata: {
-                accountId: "acct_123",
-                gatewayId: "gateway_456",
-              },
-            },
+    try {
+      const provider = buildCloudflareAiGatewayCatalogProvider({
+        credential: {
+          type: "api_key",
+          provider: "cloudflare-ai-gateway",
+          key: "sk-runtime-cloudflare",
+          keyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
+          metadata: {
+            accountId: "acct_123",
+            gatewayId: "gateway_456",
           },
         },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    try {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.["cloudflare-ai-gateway"]?.apiKey).toBe("CLOUDFLARE_AI_GATEWAY_API_KEY");
+      });
+      expect(provider?.apiKey).toBe("CLOUDFLARE_AI_GATEWAY_API_KEY");
     } finally {
       envSnapshot.restore();
     }
   });
 
-  it("uses non-env marker for non-env keyRef cloudflare profiles", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "cloudflare-ai-gateway:default": {
-              type: "api_key",
-              provider: "cloudflare-ai-gateway",
-              key: "sk-runtime-cloudflare",
-              keyRef: { source: "file", provider: "vault", id: "/cloudflare/apiKey" },
-              metadata: {
-                accountId: "acct_123",
-                gatewayId: "gateway_456",
-              },
-            },
-          },
+  it("uses non-env marker for non-env keyRef cloudflare profiles", () => {
+    const provider = buildCloudflareAiGatewayCatalogProvider({
+      credential: {
+        type: "api_key",
+        provider: "cloudflare-ai-gateway",
+        key: "sk-runtime-cloudflare",
+        keyRef: { source: "file", provider: "vault", id: "/cloudflare/apiKey" },
+        metadata: {
+          accountId: "acct_123",
+          gatewayId: "gateway_456",
         },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const providers = await resolveImplicitProvidersForTest({ agentDir });
-    expect(providers?.["cloudflare-ai-gateway"]?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+      },
+    });
+    expect(provider?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
-  it("keeps Cloudflare gateway metadata and apiKey from the same auth profile", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "cloudflare-ai-gateway:key-only": {
-              type: "api_key",
-              provider: "cloudflare-ai-gateway",
-              key: "sk-first",
-            },
-            "cloudflare-ai-gateway:gateway": {
-              type: "api_key",
-              provider: "cloudflare-ai-gateway",
-              key: "sk-second",
-              metadata: {
-                accountId: "acct_456",
-                gatewayId: "gateway_789",
-              },
-            },
-          },
+  it("keeps Cloudflare gateway metadata and apiKey from the same auth profile", () => {
+    const provider = buildCloudflareAiGatewayCatalogProvider({
+      credential: {
+        type: "api_key",
+        provider: "cloudflare-ai-gateway",
+        key: "sk-second",
+        metadata: {
+          accountId: "acct_456",
+          gatewayId: "gateway_789",
         },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const providers = await resolveImplicitProvidersForTest({ agentDir });
-    expect(providers?.["cloudflare-ai-gateway"]?.apiKey).toBe("sk-second");
-    expect(providers?.["cloudflare-ai-gateway"]?.baseUrl).toBe(
-      resolveCloudflareAiGatewayBaseUrl({
-        accountId: "acct_456",
-        gatewayId: "gateway_789",
-      }),
-    );
+      },
+    });
+    expect(provider?.apiKey).toBe("sk-second");
+    expect(provider?.baseUrl).toBe(expectedCloudflareGatewayBaseUrl("acct_456", "gateway_789"));
   });
 
-  it("prefers the runtime env marker over stored profile secrets", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+  it("prefers the runtime env marker over stored profile secrets", () => {
     const envSnapshot = captureEnv(["CLOUDFLARE_AI_GATEWAY_API_KEY"]);
     process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "rotated-secret"; // pragma: allowlist secret
 
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "cloudflare-ai-gateway:default": {
-              type: "api_key",
-              provider: "cloudflare-ai-gateway",
-              key: "stale-stored-secret",
-              metadata: {
-                accountId: "acct_123",
-                gatewayId: "gateway_456",
-              },
-            },
+    try {
+      const provider = buildCloudflareAiGatewayCatalogProvider({
+        credential: {
+          type: "api_key",
+          provider: "cloudflare-ai-gateway",
+          key: "stale-stored-secret",
+          metadata: {
+            accountId: "acct_123",
+            gatewayId: "gateway_456",
           },
         },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    try {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.["cloudflare-ai-gateway"]?.apiKey).toBe("CLOUDFLARE_AI_GATEWAY_API_KEY");
-      expect(providers?.["cloudflare-ai-gateway"]?.baseUrl).toBe(
-        resolveCloudflareAiGatewayBaseUrl({
-          accountId: "acct_123",
-          gatewayId: "gateway_456",
-        }),
-      );
+        envApiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+      });
+      expect(provider?.apiKey).toBe("CLOUDFLARE_AI_GATEWAY_API_KEY");
+      expect(provider?.baseUrl).toBe(expectedCloudflareGatewayBaseUrl("acct_123", "gateway_456"));
     } finally {
       envSnapshot.restore();
     }

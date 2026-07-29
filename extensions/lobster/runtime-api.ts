@@ -1,3 +1,4 @@
+// Lobster API module exposes the plugin public contract.
 export { definePluginEntry } from "openclaw/plugin-sdk/core";
 export type {
   AnyAgentTool,

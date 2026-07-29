@@ -1,13 +1,17 @@
+// Push method tests cover APNs direct/relay registrations, alert delivery,
+// stale registration cleanup, config resolution, and error mapping.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../protocol/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { pushHandlers } from "./push.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../../infra/push-apns.js", () => ({
@@ -21,7 +25,6 @@ vi.mock("../../infra/push-apns.js", () => ({
 }));
 
 import {
-  type ApnsPushResult,
   type ApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -31,6 +34,8 @@ import {
   sendApnsAlert,
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
+
+type ApnsPushResult = Awaited<ReturnType<typeof sendApnsAlert>>;
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 
@@ -96,10 +101,13 @@ function createInvokeParams(params: Record<string, unknown>) {
   return {
     respond,
     invoke: async () =>
-      await pushHandlers["push.test"]({
+      await expectDefined(
+        pushHandlers["push.test"],
+        'pushHandlers["push.test"] test invariant',
+      )({
         params,
         respond: respond as never,
-        context: {} as never,
+        context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "push.test" },
         isWebchatConnect: () => false,
@@ -111,16 +119,30 @@ function expectInvalidRequestResponse(
   respond: ReturnType<typeof vi.fn>,
   expectedMessagePart: string,
 ) {
-  const call = respond.mock.calls[0] as RespondCall | undefined;
+  const call = firstRespondCall(respond);
   expect(call?.[0]).toBe(false);
   expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
   expect(call?.[2]?.message).toContain(expectedMessagePart);
 }
 
+function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | undefined {
+  return respond.mock.calls[0] as RespondCall | undefined;
+}
+
+function expectSuccessfulPushTestResponse(respond: ReturnType<typeof vi.fn>): ApnsPushResult {
+  expect(sendApnsAlert).toHaveBeenCalledTimes(1);
+  const call = firstRespondCall(respond);
+  expect(call?.[0]).toBe(true);
+  const result = call?.[1] as ApnsPushResult | undefined;
+  expect(result?.ok).toBe(true);
+  expect(result?.status).toBe(200);
+  return result as ApnsPushResult;
+}
+
 describe("push.test handler", () => {
   beforeEach(() => {
-    mocks.loadConfig.mockClear();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockClear();
+    mocks.getRuntimeConfig.mockReturnValue({});
     vi.mocked(loadApnsRegistration).mockClear();
     vi.mocked(normalizeApnsEnvironment).mockClear();
     vi.mocked(resolveApnsAuthConfigFromEnv).mockClear();
@@ -156,14 +178,11 @@ describe("push.test handler", () => {
     });
     await invoke();
 
-    expect(sendApnsAlert).toHaveBeenCalledTimes(1);
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(true);
-    expect(call?.[1]).toMatchObject({ ok: true, status: 200 });
+    expectSuccessfulPushTestResponse(respond);
   });
 
   it("sends push test through relay registrations", async () => {
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       gateway: {
         push: {
           apns: {
@@ -203,20 +222,22 @@ describe("push.test handler", () => {
 
     expect(resolveApnsAuthConfigFromEnv).not.toHaveBeenCalled();
     expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(1);
-    expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
-      push: {
-        apns: {
-          relay: {
-            baseUrl: "https://relay.example.com",
-            timeoutMs: 1000,
+    expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(
+      process.env,
+      {
+        push: {
+          apns: {
+            relay: {
+              baseUrl: "https://relay.example.com",
+              timeoutMs: 1000,
+            },
           },
         },
       },
-    });
-    expect(sendApnsAlert).toHaveBeenCalledTimes(1);
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(true);
-    expect(call?.[1]).toMatchObject({ ok: true, status: 200, transport: "relay" });
+      { registrationRelayOrigin: undefined },
+    );
+    const result = expectSuccessfulPushTestResponse(respond);
+    expect(result?.transport).toBe("relay");
   });
 
   it("clears stale registrations after invalid token push-test failures", async () => {

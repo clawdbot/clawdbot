@@ -1,4 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
+// Feishu helper module supports doc schema behavior.
+import { Type, type Static } from "typebox";
 
 const tableCreationProperties = {
   doc_token: Type.String({ description: "Document token" }),

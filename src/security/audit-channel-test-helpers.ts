@@ -1,0 +1,55 @@
+// Provides channel plugin fixtures for security audit tests.
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/config.js";
+
+/** Build a minimal channel plugin stub for security audit unit tests. */
+export function stubAuditChannelPlugin(params: {
+  id: string;
+  label: string;
+  commands: ChannelPlugin["commands"];
+  collectAuditFindings: NonNullable<ChannelPlugin["security"]>["collectAuditFindings"];
+  resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
+  inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
+  isConfigured?: (account: unknown, cfg: OpenClawConfig) => boolean;
+}): ChannelPlugin {
+  return {
+    id: params.id,
+    meta: {
+      id: params.id,
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: "/docs/testing",
+      blurb: "test stub",
+    },
+    capabilities: {
+      chatTypes: ["direct", "group"],
+    },
+    commands: params.commands,
+    security: {
+      collectAuditFindings: params.collectAuditFindings,
+    },
+    config: {
+      listAccountIds: () => ["default"],
+      inspectAccount:
+        params.inspectAccount ??
+        ((cfg, accountId) => {
+          const resolvedAccountId =
+            typeof accountId === "string" && accountId ? accountId : "default";
+          // Default inspection mirrors the resolved test account so channel
+          // audit tests can override only the behavior they care about.
+          const account = params.resolveAccount(cfg, resolvedAccountId) as
+            | { config?: Record<string, unknown> }
+            | undefined;
+          return {
+            accountId: resolvedAccountId,
+            enabled: true,
+            configured: true,
+            config: account?.config ?? {},
+          };
+        }),
+      resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
+      isEnabled: () => true,
+      isConfigured: (account, cfg) => params.isConfigured?.(account, cfg) ?? true,
+    },
+  };
+}

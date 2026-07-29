@@ -1,56 +1,79 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
+// Runtime bridge for web-search providers supplied by plugins.
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { createPluginLoaderLogger } from "./logger.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
+import { resolveBundledWebSearchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.js";
+import {
+  mapRegistryProviders,
+  resolveManifestDeclaredWebProviderCandidatePluginIds,
+} from "./web-provider-resolution-shared.js";
+import {
+  resolvePluginWebProviders,
+  resolveRuntimeWebProviders,
+} from "./web-provider-runtime-shared.js";
 import {
   resolveBundledWebSearchResolutionConfig,
   sortWebSearchProviders,
 } from "./web-search-providers.shared.js";
 
-const log = createSubsystemLogger("plugins");
+function resolveWebSearchCandidatePluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+  origin?: PluginManifestRecord["origin"];
+}): string[] | undefined {
+  return resolveManifestDeclaredWebProviderCandidatePluginIds({
+    contract: "webSearchProviders",
+    configKey: "webSearch",
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
+    origin: params.origin,
+  });
+}
+
+function mapRegistryWebSearchProviders(params: {
+  registry: ReturnType<typeof loadOpenClawPlugins>;
+  onlyPluginIds?: readonly string[];
+}): PluginWebSearchProviderEntry[] {
+  return mapRegistryProviders({
+    entries: params.registry.webSearchProviders,
+    onlyPluginIds: params.onlyPluginIds,
+    sortProviders: sortWebSearchProviders,
+  });
+}
 
 export function resolvePluginWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
+  onlyPluginIds?: readonly string[];
   activate?: boolean;
   cache?: boolean;
+  mode?: "runtime" | "setup";
+  origin?: PluginManifestRecord["origin"];
 }): PluginWebSearchProviderEntry[] {
-  const { config } = resolveBundledWebSearchResolutionConfig(params);
-  const registry = loadOpenClawPlugins({
-    config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    cache: params.cache ?? false,
-    activate: params.activate ?? false,
-    logger: createPluginLoaderLogger(log),
+  return resolvePluginWebProviders(params, {
+    resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
+    resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
+    mapRegistryProviders: mapRegistryWebSearchProviders,
+    resolveBundledPublicArtifactProviders: resolveBundledWebSearchProvidersFromPublicArtifacts,
   });
-
-  return sortWebSearchProviders(
-    registry.webSearchProviders.map((entry) => ({
-      ...entry.provider,
-      pluginId: entry.pluginId,
-    })),
-  );
 }
 
 export function resolveRuntimeWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
+  onlyPluginIds?: readonly string[];
+  origin?: PluginManifestRecord["origin"];
 }): PluginWebSearchProviderEntry[] {
-  const runtimeProviders = getActivePluginRegistry()?.webSearchProviders ?? [];
-  if (runtimeProviders.length > 0) {
-    return sortWebSearchProviders(
-      runtimeProviders.map((entry) => ({
-        ...entry.provider,
-        pluginId: entry.pluginId,
-      })),
-    );
-  }
-  return resolvePluginWebSearchProviders(params);
+  return resolveRuntimeWebProviders(params, {
+    resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
+    resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
+    mapRegistryProviders: mapRegistryWebSearchProviders,
+  });
 }

@@ -1,4 +1,12 @@
+// Fetch auth helpers provide scoped bearer-token retries for plugin HTTP requests.
+import {
+  normalizeHeadersInitForFetch,
+  normalizeRequestInitHeadersForFetch,
+} from "../infra/fetch-headers.js";
+
+/** Token source used by scoped bearer-auth fetch retries. */
 export type ScopeTokenProvider = {
+  /** Return a bearer token for the requested OAuth/API scope. */
   getAccessToken: (scope: string) => Promise<string>;
 };
 
@@ -8,13 +16,21 @@ function isAuthFailureStatus(status: number): boolean {
 
 /** Retry a fetch with bearer tokens from the provided scopes when the unauthenticated attempt fails. */
 export async function fetchWithBearerAuthScopeFallback(params: {
+  /** Absolute URL to request. */
   url: string;
+  /** Token scopes to try in order after the initial unauthenticated request fails. */
   scopes: readonly string[];
+  /** Optional token source; when omitted, only the unauthenticated request is attempted. */
   tokenProvider?: ScopeTokenProvider;
+  /** Fetch implementation override for tests or plugin runtimes. Defaults to global `fetch`. */
   fetchFn?: typeof fetch;
+  /** Request options reused across unauthenticated and authenticated attempts. */
   requestInit?: RequestInit;
+  /** Reject non-HTTPS URLs before any request is sent. */
   requireHttps?: boolean;
+  /** Optional policy gate for whether this URL is allowed to receive bearer auth. */
   shouldAttachAuth?: (url: string) => boolean;
+  /** Override which responses should trigger scoped-token retries. Defaults to 401/403. */
   shouldRetry?: (response: Response) => boolean;
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
@@ -28,9 +44,10 @@ export async function fetchWithBearerAuthScopeFallback(params: {
     throw new Error(`URL must use HTTPS: ${params.url}`);
   }
 
+  const requestInit = normalizeRequestInitHeadersForFetch(params.requestInit);
   const fetchOnce = (headers?: Headers): Promise<Response> =>
     fetchFn(params.url, {
-      ...params.requestInit,
+      ...requestInit,
       ...(headers ? { headers } : {}),
     });
 
@@ -54,7 +71,7 @@ export async function fetchWithBearerAuthScopeFallback(params: {
   for (const scope of params.scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
-      const authHeaders = new Headers(params.requestInit?.headers);
+      const authHeaders = new Headers(normalizeHeadersInitForFetch(requestInit?.headers));
       authHeaders.set("Authorization", `Bearer ${token}`);
       const authAttempt = await fetchOnce(authHeaders);
       if (authAttempt.ok) {

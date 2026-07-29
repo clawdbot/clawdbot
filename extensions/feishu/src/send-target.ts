@@ -1,15 +1,22 @@
+// Feishu plugin module implements send target behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
+
+type FeishuSendTarget = {
+  client: ReturnType<typeof createFeishuClient>;
+  receiveId: string;
+  receiveIdType: ReturnType<typeof resolveReceiveIdType>;
+};
 
 export function resolveFeishuSendTarget(params: {
   cfg: ClawdbotConfig;
   to: string;
   accountId?: string;
-}) {
+}): FeishuSendTarget {
   const target = params.to.trim();
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }

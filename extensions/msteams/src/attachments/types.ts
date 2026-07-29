@@ -1,4 +1,6 @@
+// Msteams type declarations define plugin contracts.
 export type MSTeamsAttachmentLike = {
+  id?: string | null;
   contentType?: string | null;
   contentUrl?: string | null;
   name?: string | null;
@@ -11,9 +13,11 @@ export type MSTeamsAccessTokenProvider = {
 };
 
 export type MSTeamsInboundMedia = {
-  path: string;
+  path?: string;
   contentType?: string;
-  placeholder: string;
+  kind: Extract<import("openclaw/plugin-sdk/media-runtime").MediaKind, "image" | "document">;
+  /** Transport resource identity used only to align fallback downloads. */
+  sourceId?: string;
 };
 
 export type MSTeamsHtmlAttachmentSummary = {

@@ -1,12 +1,6 @@
-import path from "node:path";
+// Covers the archive-path facade used by runtime path classification.
 import { describe, expect, it } from "vitest";
-import {
-  isWindowsDrivePath,
-  normalizeArchiveEntryPath,
-  resolveArchiveOutputPath,
-  stripArchivePath,
-  validateArchiveEntryPath,
-} from "./archive-path.js";
+import { isWindowsDrivePath } from "./archive-path.js";
 
 describe("archive path helpers", () => {
   it.each([
@@ -16,102 +10,5 @@ describe("archive path helpers", () => {
     { value: "/tmp/file.txt", expected: false },
   ])("detects Windows drive paths for %j", ({ value, expected }) => {
     expect(isWindowsDrivePath(value)).toBe(expected);
-  });
-
-  it.each([
-    { raw: "dir\\file.txt", expected: "dir/file.txt" },
-    { raw: "dir/file.txt", expected: "dir/file.txt" },
-  ])("normalizes archive separators for %j", ({ raw, expected }) => {
-    expect(normalizeArchiveEntryPath(raw)).toBe(expected);
-  });
-
-  it.each(["", ".", "./"])("accepts empty-like entry paths: %j", (entryPath) => {
-    expect(() => validateArchiveEntryPath(entryPath)).not.toThrow();
-  });
-
-  it.each([
-    {
-      name: "uses custom escape labels in traversal errors",
-      entryPath: "../escape.txt",
-      message: "archive entry escapes targetDir: ../escape.txt",
-    },
-    {
-      name: "rejects Windows drive paths",
-      entryPath: "C:\\temp\\file.txt",
-      message: "archive entry uses a drive path: C:\\temp\\file.txt",
-    },
-    {
-      name: "rejects absolute paths after normalization",
-      entryPath: "/tmp/file.txt",
-      message: "archive entry is absolute: /tmp/file.txt",
-    },
-    {
-      name: "rejects double-slash absolute paths after normalization",
-      entryPath: "\\\\server\\share.txt",
-      message: "archive entry is absolute: \\\\server\\share.txt",
-    },
-  ])("$name", ({ entryPath, message }) => {
-    expect(() =>
-      validateArchiveEntryPath(entryPath, {
-        escapeLabel: "targetDir",
-      }),
-    ).toThrow(message);
-  });
-
-  it.each([
-    { entryPath: "a/../escape.txt", stripComponents: 1, expected: "../escape.txt" },
-    { entryPath: "a//b/file.txt", stripComponents: 1, expected: "b/file.txt" },
-    { entryPath: "./", stripComponents: 0, expected: null },
-    { entryPath: "a", stripComponents: 3, expected: null },
-    { entryPath: "dir\\sub\\file.txt", stripComponents: 1, expected: "sub/file.txt" },
-  ])("strips archive paths for %j", ({ entryPath, stripComponents, expected }) => {
-    expect(stripArchivePath(entryPath, stripComponents)).toBe(expected);
-  });
-
-  it("preserves strip-induced traversal for follow-up validation", () => {
-    const stripped = stripArchivePath("a/../escape.txt", 1);
-    expect(stripped).toBe("../escape.txt");
-    expect(() =>
-      validateArchiveEntryPath(stripped ?? "", {
-        escapeLabel: "targetDir",
-      }),
-    ).toThrow("archive entry escapes targetDir: ../escape.txt");
-  });
-
-  it.each([
-    {
-      name: "keeps resolved output paths inside the root",
-      relPath: "sub/file.txt",
-      originalPath: "sub/file.txt",
-      expected: path.resolve(path.join(path.sep, "tmp", "archive-root"), "sub/file.txt"),
-    },
-    {
-      name: "rejects output paths that escape the root",
-      relPath: "../escape.txt",
-      originalPath: "../escape.txt",
-      escapeLabel: "targetDir",
-      message: "archive entry escapes targetDir: ../escape.txt",
-    },
-  ])("$name", ({ relPath, originalPath, escapeLabel, expected, message }) => {
-    const rootDir = path.join(path.sep, "tmp", "archive-root");
-    if (message) {
-      expect(() =>
-        resolveArchiveOutputPath({
-          rootDir,
-          relPath,
-          originalPath,
-          escapeLabel,
-        }),
-      ).toThrow(message);
-      return;
-    }
-
-    expect(
-      resolveArchiveOutputPath({
-        rootDir,
-        relPath,
-        originalPath,
-      }),
-    ).toBe(expected);
   });
 });

@@ -1,72 +1,44 @@
+/**
+ * Configured binding compiler.
+ *
+ * Compiles config rules into channel/provider-specific binding registry entries.
+ */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { listConfiguredBindings } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
 import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
 import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
-import { resolveConfiguredBindingConsumer } from "./configured-binding-consumers.js";
-import { getChannelPlugin } from "./index.js";
+import {
+  resolveConfiguredBindingConsumer,
+  type ConfiguredBindingConsumer,
+} from "./configured-binding-consumers.js";
+import { getLoadedChannelPlugin } from "./index.js";
 import type {
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 
-// Configured bindings are channel-owned rules compiled from config, separate
-// from runtime plugin-owned conversation bindings.
-
-type ChannelPluginLike = NonNullable<ReturnType<typeof getChannelPlugin>>;
-
 export type CompiledConfiguredBindingRegistry = {
   rulesByChannel: Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>;
 };
 
-type CachedCompiledConfiguredBindingRegistry = {
-  registryVersion: number;
-  registry: CompiledConfiguredBindingRegistry;
-};
-
-const compiledRegistryCache = new WeakMap<
-  OpenClawConfig,
-  CachedCompiledConfiguredBindingRegistry
->();
-
-function findChannelPlugin(params: {
-  registry:
-    | {
-        channels?: Array<{ plugin?: ChannelPluginLike | null } | null> | null;
-      }
-    | null
-    | undefined;
-  channel: string;
-}): ChannelPluginLike | undefined {
-  return (
-    params.registry?.channels?.find((entry) => entry?.plugin?.id === params.channel)?.plugin ??
-    undefined
-  );
-}
-
 function resolveLoadedChannelPlugin(channel: string) {
-  const normalized = channel.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(channel);
   if (!normalized) {
     return undefined;
   }
-
-  const current = getChannelPlugin(normalized as ConfiguredBindingChannel);
-  if (current) {
-    return current;
-  }
-
-  return findChannelPlugin({
-    registry: getActivePluginRegistry(),
-    channel: normalized,
-  });
+  return getLoadedChannelPlugin(normalized as ConfiguredBindingChannel);
 }
 
 function resolveConfiguredBindingAdapter(channel: string): {
   channel: ConfiguredBindingChannel;
   provider: ChannelConfiguredBindingProvider;
 } | null {
-  const normalized = channel.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(channel);
   if (!normalized) {
     return null;
   }
@@ -89,8 +61,7 @@ function resolveConfiguredBindingAdapter(channel: string): {
 function resolveBindingConversationId(binding: {
   match?: { peer?: { id?: string } };
 }): string | null {
-  const id = binding.match?.peer?.id?.trim();
-  return id ? id : null;
+  return normalizeOptionalString(binding.match?.peer?.id) ?? null;
 }
 
 function compileConfiguredBindingTarget(params: {
@@ -111,13 +82,10 @@ function compileConfiguredBindingRule(params: {
   target: ChannelConfiguredBindingConversationRef;
   bindingConversationId: string;
   provider: ChannelConfiguredBindingProvider;
+  consumer: ConfiguredBindingConsumer;
 }): CompiledConfiguredBinding | null {
   const agentId = pickFirstExistingAgentId(params.cfg, params.binding.agentId ?? "main");
-  const consumer = resolveConfiguredBindingConsumer(params.binding);
-  if (!consumer) {
-    return null;
-  }
-  const targetFactory = consumer.buildTargetFactory({
+  const targetFactory = params.consumer.buildTargetFactory({
     cfg: params.cfg,
     binding: params.binding,
     channel: params.channel,
@@ -130,7 +98,7 @@ function compileConfiguredBindingRule(params: {
   }
   return {
     channel: params.channel,
-    accountPattern: params.binding.match.accountId?.trim() || undefined,
+    accountPattern: normalizeOptionalString(params.binding.match.accountId),
     binding: params.binding,
     bindingConversationId: params.bindingConversationId,
     target: params.target,
@@ -158,6 +126,12 @@ function compileConfiguredBindingRegistry(params: {
   const rulesByChannel = new Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>();
 
   for (const binding of listConfiguredBindings(params.cfg)) {
+    // Ordinary routing bindings share the config array but have no stateful target consumer.
+    // Reject them before consulting the loaded channel registry on request-time route lookups.
+    const consumer = resolveConfiguredBindingConsumer(binding);
+    if (!consumer) {
+      continue;
+    }
     const bindingConversationId = resolveBindingConversationId(binding);
     if (!bindingConversationId) {
       continue;
@@ -184,6 +158,7 @@ function compileConfiguredBindingRegistry(params: {
       target,
       bindingConversationId,
       provider: resolvedChannel.provider,
+      consumer,
     });
     if (!rule) {
       continue;
@@ -199,31 +174,13 @@ function compileConfiguredBindingRegistry(params: {
 export function resolveCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
-  const registryVersion = getActivePluginRegistryVersion();
-  const cached = compiledRegistryCache.get(cfg);
-  if (cached?.registryVersion === registryVersion) {
-    return cached.registry;
-  }
-
-  const registry = compileConfiguredBindingRegistry({
-    cfg,
-  });
-  compiledRegistryCache.set(cfg, {
-    registryVersion,
-    registry,
-  });
-  return registry;
+  return compileConfiguredBindingRegistry({ cfg });
 }
 
 export function primeCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
-  const registry = compileConfiguredBindingRegistry({ cfg });
-  compiledRegistryCache.set(cfg, {
-    registryVersion: getActivePluginRegistryVersion(),
-    registry,
-  });
-  return registry;
+  return compileConfiguredBindingRegistry({ cfg });
 }
 
 export function countCompiledBindingRegistry(registry: CompiledConfiguredBindingRegistry): {

@@ -1,5 +1,9 @@
+// Filters known noisy process warnings once per runtime.
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
 
+/** Normalized process warning fields used by the shared warning suppressor. */
 export type ProcessWarning = {
   code?: string;
   name?: string;
@@ -10,6 +14,7 @@ type ProcessWarningInstallState = {
   installed: boolean;
 };
 
+/** Returns whether a process warning matches a known noisy runtime/dependency warning. */
 export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
   if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
     return true;
@@ -62,11 +67,12 @@ function normalizeWarningArgs(args: unknown[]): ProcessWarning {
   return { name, code, message };
 }
 
+/** Installs the global process warning filter once for the current JS realm. */
 export function installProcessWarningFilter(): void {
-  const globalState = globalThis as typeof globalThis & {
-    [warningFilterKey]?: ProcessWarningInstallState;
-  };
-  if (globalState[warningFilterKey]?.installed) {
+  const state = resolveGlobalSingleton<ProcessWarningInstallState>(warningFilterKey, () => ({
+    installed: false,
+  }));
+  if (state.installed) {
     return;
   }
 
@@ -75,6 +81,8 @@ export function installProcessWarningFilter(): void {
     if (shouldIgnoreWarning(normalizeWarningArgs(args))) {
       return;
     }
+    // Node does not emit Error + options warnings through the same path after wrapping; preserve
+    // visibility by re-emitting a normalized warning object for unsuppressed cases.
     if (
       args[0] instanceof Error &&
       args[1] &&
@@ -89,11 +97,9 @@ export function installProcessWarningFilter(): void {
       process.emit("warning", emitted);
       return;
     }
-    return Reflect.apply(originalEmitWarning, process, args);
+    Reflect.apply(originalEmitWarning, process, args);
   }) as typeof process.emitWarning;
 
   process.emitWarning = wrappedEmitWarning;
-  globalState[warningFilterKey] = {
-    installed: true,
-  };
+  state.installed = true;
 }

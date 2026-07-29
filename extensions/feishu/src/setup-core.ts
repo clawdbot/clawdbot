@@ -1,8 +1,11 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+// Feishu plugin module implements setup core behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   type ChannelSetupAdapter,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import { resolveDefaultFeishuAccountId } from "./accounts.js";
 import type { FeishuConfig } from "./types.js";
 
 export function setFeishuNamedAccountEnabled(
@@ -30,7 +33,7 @@ export function setFeishuNamedAccountEnabled(
 }
 
 export const feishuSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
+  resolveAccountId: ({ cfg, accountId }) => accountId?.trim() || resolveDefaultFeishuAccountId(cfg),
   applyAccountConfig: ({ cfg, accountId }) => {
     const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
     if (isDefault) {
@@ -48,3 +51,8 @@ export const feishuSetupAdapter: ChannelSetupAdapter = {
     return setFeishuNamedAccountEnabled(cfg, accountId, true);
   },
 };
+
+export const feishuSetupContract = defineChannelSetupContract({
+  fields: {},
+  legacyAdapter: feishuSetupAdapter,
+});

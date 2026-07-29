@@ -14,10 +14,12 @@ enum SessionKey {
         return "agent:\(trimmedAgent):\(normalizedBase)"
     }
 
-    static func isCanonicalMainSessionKey(_ value: String?) -> Bool {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return false }
-        if trimmed == "global" { return true }
-        return trimmed.hasPrefix("agent:")
+    static func agentId(from value: String?) -> String? {
+        let parts = (value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 3, parts[0].lowercased() == "agent" else { return nil }
+        let agentId = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return agentId.isEmpty ? nil : agentId
     }
 }

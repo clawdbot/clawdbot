@@ -1,63 +1,12 @@
-import {
-  formatInboundFromLabel as formatInboundFromLabelShared,
-  resolveThreadSessionKeys as resolveThreadSessionKeysShared,
-  type OpenClawConfig,
-} from "../runtime-api.js";
-export { createDedupeCache, rawDataToString } from "../runtime-api.js";
+// Mattermost helper module supports monitor helpers behavior.
+import { formatInboundFromLabel as formatInboundFromLabelShared } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveThreadSessionKeys as resolveThreadSessionKeysShared } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 
-export type ResponsePrefixContext = {
-  model?: string;
-  modelFull?: string;
-  provider?: string;
-  thinkingLevel?: string;
-  identityName?: string;
-};
-
-export function extractShortModelName(fullModel: string): string {
-  const slash = fullModel.lastIndexOf("/");
-  const modelPart = slash >= 0 ? fullModel.slice(slash + 1) : fullModel;
-  return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
-}
+export { rawDataToString };
 
 export const formatInboundFromLabel = formatInboundFromLabelShared;
-
-function normalizeAgentId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return "main";
-  }
-  if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(trimmed)) {
-    return trimmed;
-  }
-  return (
-    trimmed
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+/, "")
-      .replace(/-+$/, "")
-      .slice(0, 64) || "main"
-  );
-}
-
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
-function isAgentEntry(entry: unknown): entry is AgentEntry {
-  return Boolean(entry && typeof entry === "object");
-}
-
-function listAgents(cfg: OpenClawConfig): AgentEntry[] {
-  return Array.isArray(cfg.agents?.list) ? cfg.agents.list.filter(isAgentEntry) : [];
-}
-
-function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
-  const id = normalizeAgentId(agentId);
-  return listAgents(cfg).find((entry) => normalizeAgentId(entry.id) === id);
-}
-
-export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
-  const entry = resolveAgentEntry(cfg, agentId);
-  return entry?.identity?.name?.trim() || undefined;
-}
 
 export function resolveThreadSessionKeys(params: {
   baseSessionKey: string;
@@ -104,4 +53,17 @@ export function normalizeMention(text: string, mention: string | undefined): str
   }
 
   return normalizedLines.map((line) => line.text).join("\n");
+}
+
+export function shouldDropEmptyMattermostBody(params: {
+  bodyText: string;
+  rawText: string;
+  botUsername?: string | null;
+}): boolean {
+  if (/[^\p{White_Space}\p{Cc}\p{Cf}\p{M}]/u.test(params.bodyText)) {
+    return false;
+  }
+  const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");
+  const bareMention = params.rawText.match(/^[ \t]*(@\S+)[ \t]*$/u)?.[1];
+  return !botUsername || normalizeLowercaseStringOrEmpty(bareMention ?? "") !== `@${botUsername}`;
 }

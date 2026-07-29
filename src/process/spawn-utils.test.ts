@@ -1,8 +1,8 @@
+// Spawn utility tests cover child process setup and stream handling helpers.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { createRestartIterationHook } from "./restart-recovery.js";
 import { spawnWithFallback } from "./spawn-utils.js";
 
 function createStubChild() {
@@ -17,6 +17,21 @@ function createStubChild() {
     child.emit("spawn");
   });
   return child;
+}
+
+function spawnOptionsAt(
+  spawnMock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+): { stdio?: unknown } {
+  const call = spawnMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected spawn call ${callIndex}`);
+  }
+  const options = call[2];
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new Error(`expected spawn call ${callIndex} options`);
+  }
+  return options;
 }
 
 describe("spawnWithFallback", () => {
@@ -40,8 +55,8 @@ describe("spawnWithFallback", () => {
     expect(result.usedFallback).toBe(true);
     expect(result.fallbackLabel).toBe("safe-stdin");
     expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnMock.mock.calls[0]?.[2]?.stdio).toEqual(["pipe", "pipe", "pipe"]);
-    expect(spawnMock.mock.calls[1]?.[2]?.stdio).toEqual(["ignore", "pipe", "pipe"]);
+    expect(spawnOptionsAt(spawnMock, 0).stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(spawnOptionsAt(spawnMock, 1).stdio).toEqual(["ignore", "pipe", "pipe"]);
   });
 
   it("does not retry on non-EBADF errors", async () => {
@@ -60,21 +75,5 @@ describe("spawnWithFallback", () => {
       }),
     ).rejects.toThrow(/ENOENT/);
     expect(spawnMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("restart-recovery", () => {
-  it("skips recovery on first iteration and runs on subsequent iterations", () => {
-    const onRestart = vi.fn();
-    const onIteration = createRestartIterationHook(onRestart);
-
-    expect(onIteration()).toBe(false);
-    expect(onRestart).not.toHaveBeenCalled();
-
-    expect(onIteration()).toBe(true);
-    expect(onRestart).toHaveBeenCalledTimes(1);
-
-    expect(onIteration()).toBe(true);
-    expect(onRestart).toHaveBeenCalledTimes(2);
   });
 });

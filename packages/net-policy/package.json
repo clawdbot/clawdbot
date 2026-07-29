@@ -1,0 +1,49 @@
+{
+  "name": "@openclaw/net-policy",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./ip": {
+      "types": "./dist/ip.d.mts",
+      "import": "./dist/ip.mjs",
+      "default": "./dist/ip.mjs"
+    },
+    "./ipv4": {
+      "types": "./dist/ipv4.d.mts",
+      "import": "./dist/ipv4.mjs",
+      "default": "./dist/ipv4.mjs"
+    },
+    "./redact-sensitive-url": {
+      "types": "./dist/redact-sensitive-url.d.mts",
+      "import": "./dist/redact-sensitive-url.mjs",
+      "default": "./dist/redact-sensitive-url.mjs"
+    },
+    "./url-protocol": {
+      "types": "./dist/url-protocol.d.mts",
+      "import": "./dist/url-protocol.mjs",
+      "default": "./dist/url-protocol.mjs"
+    },
+    "./url-userinfo": {
+      "types": "./dist/url-userinfo.d.mts",
+      "import": "./dist/url-userinfo.mjs",
+      "default": "./dist/url-userinfo.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/ip.ts src/ipv4.ts src/redact-sensitive-url.ts src/url-protocol.ts src/url-userinfo.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  },
+  "dependencies": {
+    "ipaddr.js": "2.4.0"
+  }
+}

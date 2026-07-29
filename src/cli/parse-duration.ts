@@ -1,36 +1,50 @@
-export type DurationMsParseOptions = {
+// Duration parser shared by CLI flags, command directives, and config-backed timing values.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import milliseconds from "ms";
+
+/** Options for choosing the unit used by bare numeric duration values. */
+type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
 
-const DURATION_MULTIPLIERS: Record<string, number> = {
-  ms: 1,
-  s: 1000,
-  m: 60_000,
-  h: 3_600_000,
-  d: 86_400_000,
-};
+function invalidDuration(raw: string, reason?: string): Error {
+  const value = raw.trim() ? `"${raw}"` : "empty value";
+  const prefix = reason ? `Invalid duration (${reason}): ${value}.` : `Invalid duration: ${value}.`;
+  return new Error(`${prefix} Use values like 500ms, 30s, 5m, 2h, or 1h30m.`);
+}
 
+function parseDurationToken(raw: string, value: string, unit: string): number {
+  const parsed = milliseconds(`${value}${unit}` as Parameters<typeof milliseconds>[0]);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw invalidDuration(raw);
+  }
+  return parsed;
+}
+
+function roundSafeDurationMs(raw: string, value: number): number {
+  const ms = Math.round(value);
+  if (!Number.isSafeInteger(ms)) {
+    throw invalidDuration(raw);
+  }
+  return ms;
+}
+
+/** Parse a non-negative duration into milliseconds, supporting single and composite units. */
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
-  const trimmed = String(raw ?? "")
-    .trim()
-    .toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
   if (!trimmed) {
-    throw new Error("invalid duration (empty)");
+    throw invalidDuration(raw, "empty");
   }
 
   // Fast path for a single token (supports default unit for bare numbers).
   const single = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
   if (single) {
-    const value = Number(single[1]);
-    if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`invalid duration: ${raw}`);
-    }
+    const value = single[1] ?? "";
     const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
-    const ms = Math.round(value * DURATION_MULTIPLIERS[unit]);
-    if (!Number.isFinite(ms)) {
-      throw new Error(`invalid duration: ${raw}`);
-    }
-    return ms;
+    return roundSafeDurationMs(raw, parseDurationToken(raw, value, unit));
   }
 
   // Composite form (e.g. "1h30m", "2m500ms"); each token must include a unit.
@@ -41,30 +55,18 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     const [full, valueRaw, unitRaw] = match;
     const index = match.index ?? -1;
     if (!full || !valueRaw || !unitRaw || index < 0) {
-      throw new Error(`invalid duration: ${raw}`);
+      throw invalidDuration(raw);
     }
     if (index !== consumed) {
-      throw new Error(`invalid duration: ${raw}`);
+      throw invalidDuration(raw, "each composite segment needs a unit");
     }
-    const value = Number(valueRaw);
-    if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`invalid duration: ${raw}`);
-    }
-    const multiplier = DURATION_MULTIPLIERS[unitRaw];
-    if (!multiplier) {
-      throw new Error(`invalid duration: ${raw}`);
-    }
-    totalMs += value * multiplier;
+    totalMs += parseDurationToken(raw, valueRaw, unitRaw);
     consumed += full.length;
   }
 
   if (consumed !== trimmed.length || consumed === 0) {
-    throw new Error(`invalid duration: ${raw}`);
+    throw invalidDuration(raw);
   }
 
-  const ms = Math.round(totalMs);
-  if (!Number.isFinite(ms)) {
-    throw new Error(`invalid duration: ${raw}`);
-  }
-  return ms;
+  return roundSafeDurationMs(raw, totalMs);
 }

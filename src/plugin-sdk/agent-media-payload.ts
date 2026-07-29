@@ -1,25 +1,21 @@
-export type AgentMediaPayload = {
-  MediaPath?: string;
-  MediaType?: string;
-  MediaUrl?: string;
-  MediaPaths?: string[];
-  MediaUrls?: string[];
-  MediaTypes?: string[];
-};
+import { projectMediaFacts, type MediaFactLegacyProjection } from "../media/media-facts.js";
 
-/** Convert outbound media descriptors into the legacy agent payload field layout. */
+/** @deprecated Import from `openclaw/plugin-sdk/media-local-roots`. */
+export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+
+/**
+ * Legacy agent media payload layout consumed by older agent adapters.
+ * @deprecated Pass ordered facts as `MsgContext.media`; use
+ * `toInboundMediaFacts` from `openclaw/plugin-sdk/channel-inbound`.
+ */
+export type AgentMediaPayload = Omit<MediaFactLegacyProjection, "MediaTranscribedIndexes">;
+
+/**
+ * @deprecated Pass ordered facts as `MsgContext.media`; use
+ * `toInboundMediaFacts` from `openclaw/plugin-sdk/channel-inbound`.
+ */
 export function buildAgentMediaPayload(
   mediaList: Array<{ path: string; contentType?: string | null }>,
 ): AgentMediaPayload {
-  const first = mediaList[0];
-  const mediaPaths = mediaList.map((media) => media.path);
-  const mediaTypes = mediaList.map((media) => media.contentType).filter(Boolean) as string[];
-  return {
-    MediaPath: first?.path,
-    MediaType: first?.contentType ?? undefined,
-    MediaUrl: first?.path,
-    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
-  };
+  return projectMediaFacts(mediaList, "compact");
 }

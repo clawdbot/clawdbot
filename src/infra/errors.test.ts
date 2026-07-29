@@ -1,3 +1,4 @@
+// Tests shared infra error formatting helpers.
 import { describe, expect, it } from "vitest";
 import {
   collectErrorGraphCandidates,
@@ -9,16 +10,28 @@ import {
   readErrorName,
 } from "./errors.js";
 
-describe("error helpers", () => {
-  it("extracts codes and names from string and numeric error metadata", () => {
-    expect(extractErrorCode({ code: "EADDRINUSE" })).toBe("EADDRINUSE");
-    expect(extractErrorCode({ code: 429 })).toBe("429");
-    expect(extractErrorCode({ code: false })).toBeUndefined();
-    expect(extractErrorCode("boom")).toBeUndefined();
+function createCircularObject() {
+  const circular: { self?: unknown } = {};
+  circular.self = circular;
+  return circular;
+}
 
-    expect(readErrorName({ name: "AbortError" })).toBe("AbortError");
-    expect(readErrorName({ name: 42 })).toBe("");
-    expect(readErrorName(null)).toBe("");
+describe("error helpers", () => {
+  it.each([
+    { value: { code: "EADDRINUSE" }, expected: "EADDRINUSE" },
+    { value: { code: 429 }, expected: "429" },
+    { value: { code: false }, expected: undefined },
+    { value: "boom", expected: undefined },
+  ])("extracts error codes from %j", ({ value, expected }) => {
+    expect(extractErrorCode(value)).toBe(expected);
+  });
+
+  it.each([
+    { value: { name: "AbortError" }, expected: "AbortError" },
+    { value: { name: 42 }, expected: "" },
+    { value: null, expected: "" },
+  ])("reads error names from %j", ({ value, expected }) => {
+    expect(readErrorName(value)).toBe(expected);
   });
 
   it("walks nested error graphs once in breadth-first order", () => {
@@ -37,7 +50,7 @@ describe("error helpers", () => {
         ...((current as { errors?: unknown[] }).errors ?? []),
       ]),
     ).toEqual([root, child, leaf]);
-    expect(collectErrorGraphCandidates(null)).toEqual([]);
+    expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
   });
 
   it("matches errno-shaped errors by code", () => {
@@ -48,13 +61,38 @@ describe("error helpers", () => {
     expect(isErrno("busy")).toBe(false);
   });
 
-  it("formats primitives and circular objects without throwing", () => {
-    const circular: { self?: unknown } = {};
-    circular.self = circular;
+  it.each([
+    { value: 123n, expected: "123" },
+    { value: false, expected: "false" },
+    { value: createCircularObject(), expected: "[object Object]" },
+  ])("formats error messages for case %#", ({ value, expected }) => {
+    expect(formatErrorMessage(value)).toBe(expected);
+  });
 
-    expect(formatErrorMessage(123n)).toBe("123");
-    expect(formatErrorMessage(false)).toBe("false");
-    expect(formatErrorMessage(circular)).toBe("[object Object]");
+  it("traverses .cause chain to include nested error messages", () => {
+    const rootCause = new Error("ECONNRESET");
+    const httpError = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      cause: rootCause,
+    });
+    const formatted = formatErrorMessage(httpError);
+    expect(formatted).toContain("Network request for 'sendMessage' failed!");
+    expect(formatted).toContain("ECONNRESET");
+  });
+
+  it("handles circular .cause references without infinite loop", () => {
+    const a: Error & { cause?: unknown } = new Error("error A");
+    const b: Error & { cause?: unknown } = new Error("error B");
+    a.cause = b;
+    b.cause = a;
+    const formatted = formatErrorMessage(a);
+    expect(formatted).toBe("error A | error B");
+  });
+
+  it("dedupes repeated cause messages while preserving deeper distinct causes", () => {
+    const rootCause = new Error("provider auth lookup failed");
+    const inner = new Error('No API key found for provider "openai".', { cause: rootCause });
+    const wrapper = new Error(inner.message, { cause: inner });
+    expect(formatErrorMessage(wrapper)).toBe(`${inner.message} | ${rootCause.message}`);
   });
 
   it("redacts sensitive tokens from formatted error messages", () => {
@@ -62,6 +100,25 @@ describe("error helpers", () => {
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
     expect(formatted).toContain("Authorization: Bearer");
     expect(formatted).not.toContain(token);
+  });
+
+  it("redacts HTTP client config secrets from formatted error chains", () => {
+    const appSecret = "feishu_app_secret_1234567890";
+    const tenantToken = "feishu_tenant_access_abcdef123456";
+    const rootCause = new Error(
+      `request config: { appSecret: '${appSecret}', headers: { authorization: 'Bearer ${tenantToken}' } }`,
+    );
+    const httpError = Object.assign(new Error(`POST /auth/v3/tenant_access_token failed`), {
+      cause: rootCause,
+    });
+
+    const formatted = formatErrorMessage(httpError);
+
+    expect(formatted).toContain("POST /auth/v3/tenant_access_token failed");
+    expect(formatted).toContain("appSecret:");
+    expect(formatted).toContain("authorization:");
+    expect(formatted).not.toContain(appSecret);
+    expect(formatted).not.toContain(tenantToken);
   });
 
   it("uses message-only formatting for INVALID_CONFIG and stack formatting otherwise", () => {

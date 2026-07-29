@@ -2,317 +2,123 @@
 summary: "CLI reference for `openclaw hooks` (agent hooks)"
 read_when:
   - You want to manage agent hooks
-  - You want to install or update hooks
-title: "hooks"
+  - You want to inspect hook availability or enable workspace hooks
+title: "Hooks"
 ---
 
 # `openclaw hooks`
 
-Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
+Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup). Bare `openclaw hooks` is equivalent to `openclaw hooks list`.
 
-Related:
+Related: [Hooks](/automation/hooks) - [Plugin hooks](/plugins/hooks)
 
-- Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugin hooks](/plugins/architecture#provider-runtime-hooks)
-
-## List All Hooks
+## List hooks
 
 ```bash
-openclaw hooks list
+openclaw hooks list [--eligible] [--json] [-v|--verbose]
 ```
 
-List all discovered hooks from workspace, managed, and bundled directories.
+Lists hooks discovered from workspace, managed, extra, and bundled directories.
 
-**Options:**
-
-- `--eligible`: Show only eligible hooks (requirements met)
-- `--json`: Output as JSON
-- `-v, --verbose`: Show detailed information including missing requirements
-
-**Example output:**
+- `--eligible`: only hooks whose requirements are met.
+- `--json`: structured output.
+- `-v, --verbose`: include a Missing column with unmet requirements.
 
 ```
-Hooks (4/4 ready)
+Hooks (4/5 ready)
 
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
-  📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
+  📎 bootstrap-extra-files ✓ - Inject additional workspace bootstrap files during agent bootstrap
   📝 command-logger ✓ - Log all command events to a centralized audit file
-  💾 session-memory ✓ - Save session context to memory when /new command is issued
+  💾 session-memory ✓ - Save session context to memory when /new or /reset command is issued
 ```
 
-**Example (verbose):**
+## Get hook info
 
 ```bash
-openclaw hooks list --verbose
+openclaw hooks info <name> [--json]
 ```
 
-Shows missing requirements for ineligible hooks.
+`<name>` is the hook name or hook key (for example `session-memory`). Shows source, file/handler paths, homepage, events, and per-requirement status (binaries, env, config, OS).
 
-**Example (JSON):**
+## Check eligibility
 
 ```bash
-openclaw hooks list --json
+openclaw hooks check [--json]
 ```
 
-Returns structured JSON for programmatic use.
+Prints a ready/not-ready count summary; with hooks not ready, lists each with its blocking reason.
 
-## Get Hook Information
-
-```bash
-openclaw hooks info <name>
-```
-
-Show detailed information about a specific hook.
-
-**Arguments:**
-
-- `<name>`: Hook name (e.g., `session-memory`)
-
-**Options:**
-
-- `--json`: Output as JSON
-
-**Example:**
-
-```bash
-openclaw hooks info session-memory
-```
-
-**Output:**
-
-```
-💾 session-memory ✓ Ready
-
-Save session context to memory when /new command is issued
-
-Details:
-  Source: openclaw-bundled
-  Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
-  Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
-  Events: command:new
-
-Requirements:
-  Config: ✓ workspace.dir
-```
-
-## Check Hooks Eligibility
-
-```bash
-openclaw hooks check
-```
-
-Show summary of hook eligibility status (how many are ready vs. not ready).
-
-**Options:**
-
-- `--json`: Output as JSON
-
-**Example output:**
-
-```
-Hooks Status
-
-Total hooks: 4
-Ready: 4
-Not ready: 0
-```
-
-## Enable a Hook
+## Enable a hook
 
 ```bash
 openclaw hooks enable <name>
 ```
 
-Enable a specific hook by adding it to your config (`~/.openclaw/config.json`).
+Adds/updates `hooks.internal.entries.<name>.enabled = true` in config and also flips the `hooks.internal.enabled` master switch on (the gateway does not load any internal hook handler until at least one is configured). Fails if the hook does not exist, is plugin-managed, or is not eligible (missing requirements).
 
-**Note:** Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and
-can’t be enabled/disabled here. Enable/disable the plugin instead.
+Plugin-managed hooks show `plugin:<id>` in `hooks list` and cannot be enabled/disabled here; enable or disable the owning plugin instead.
 
-**Arguments:**
+Restart the gateway after enabling (macOS menu bar app restart, or restart your gateway process in dev) so it reloads hooks.
 
-- `<name>`: Hook name (e.g., `session-memory`)
-
-**Example:**
-
-```bash
-openclaw hooks enable session-memory
-```
-
-**Output:**
-
-```
-✓ Enabled hook: 💾 session-memory
-```
-
-**What it does:**
-
-- Checks if hook exists and is eligible
-- Updates `hooks.internal.entries.<name>.enabled = true` in your config
-- Saves config to disk
-
-**After enabling:**
-
-- Restart the gateway so hooks reload (menu bar app restart on macOS, or restart your gateway process in dev).
-
-## Disable a Hook
+## Disable a hook
 
 ```bash
 openclaw hooks disable <name>
 ```
 
-Disable a specific hook by updating your config.
+Sets `hooks.internal.entries.<name>.enabled = false`. Restart the gateway afterward.
 
-**Arguments:**
-
-- `<name>`: Hook name (e.g., `command-logger`)
-
-**Example:**
+## Install and update hook packs
 
 ```bash
-openclaw hooks disable command-logger
+openclaw plugins install <package>        # npm by default
+openclaw plugins install npm:<package>    # npm only
+openclaw plugins install <package> --pin  # pin resolved version
+openclaw plugins install <path>           # local directory or archive
+openclaw plugins install -l <path>        # link a local directory instead of copying
+
+openclaw plugins update <id>
+openclaw plugins update --all
+openclaw plugins update --dry-run
 ```
 
-**Output:**
+Hook packs install through the unified plugins installer/updater; `openclaw hooks install` / `openclaw hooks update` still work as deprecated aliases that print a warning and forward to the `plugins` commands.
 
-```
-⏸ Disabled hook: 📝 command-logger
-```
+- Npm specs are registry-only: package name plus an optional exact version or dist-tag. Git/URL/file specs and semver ranges are rejected. Dependency installs run project-local with `--ignore-scripts`.
+- Bare specs and `@latest` stay on the stable track; if npm resolves to a prerelease, OpenClaw stops and asks you to opt in explicitly (`@beta`, `@rc`, or an exact prerelease version).
+- Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
+- `-l, --link` links a local directory instead of copying it (adds it to `hooks.internal.load.extraDirs`); linked hook packs are managed hooks from an operator-configured directory, not workspace hooks.
+- `--pin` records npm installs as an exact resolved `name@version` in shared SQLite state.
+- Install copies the pack into `~/.openclaw/hooks/<id>`, enables its hooks under `hooks.internal.entries.*`, and records install provenance in shared SQLite state.
+- If a stored integrity hash no longer matches the fetched artifact, OpenClaw warns and prompts before continuing; pass global `--yes` to bypass the prompt (for example in CI).
 
-**After disabling:**
+## Bundled hooks
 
-- Restart the gateway so hooks reload
+| Hook                  | Events                                            | What it does                                                                            |
+| --------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                       |
+| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`) during agent bootstrap |
+| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                  |
+| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                  |
+| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                   |
 
-## Install Hooks
+Enable any bundled hook with `openclaw hooks enable <hook-name>`. Full details, config keys, and defaults: [Bundled hooks](/automation/hooks#bundled-hooks).
+
+### command-logger log file
 
 ```bash
-openclaw hooks install <path-or-spec>
-openclaw hooks install <npm-spec> --pin
+tail -n 20 ~/.openclaw/logs/commands.log        # recent commands
+cat ~/.openclaw/logs/commands.log | jq .          # pretty-print
+grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 ```
 
-Install a hook pack from a local folder/archive or npm.
+## Notes
 
-Npm specs are **registry-only** (package name + optional **exact version** or
-**dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
-installs run with `--ignore-scripts` for safety.
+- `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
 
-Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
-prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
+## Related
 
-**What it does:**
-
-- Copies the hook pack into `~/.openclaw/hooks/<id>`
-- Enables the installed hooks in `hooks.internal.entries.*`
-- Records the install under `hooks.internal.installs`
-
-**Options:**
-
-- `-l, --link`: Link a local directory instead of copying (adds it to `hooks.internal.load.extraDirs`)
-- `--pin`: Record npm installs as exact resolved `name@version` in `hooks.internal.installs`
-
-**Supported archives:** `.zip`, `.tgz`, `.tar.gz`, `.tar`
-
-**Examples:**
-
-```bash
-# Local directory
-openclaw hooks install ./my-hook-pack
-
-# Local archive
-openclaw hooks install ./my-hook-pack.zip
-
-# NPM package
-openclaw hooks install @openclaw/my-hook-pack
-
-# Link a local directory without copying
-openclaw hooks install -l ./my-hook-pack
-```
-
-## Update Hooks
-
-```bash
-openclaw hooks update <id>
-openclaw hooks update --all
-```
-
-Update installed hook packs (npm installs only).
-
-**Options:**
-
-- `--all`: Update all tracked hook packs
-- `--dry-run`: Show what would change without writing
-
-When a stored integrity hash exists and the fetched artifact hash changes,
-OpenClaw prints a warning and asks for confirmation before proceeding. Use
-global `--yes` to bypass prompts in CI/non-interactive runs.
-
-## Bundled Hooks
-
-### session-memory
-
-Saves session context to memory when you issue `/new`.
-
-**Enable:**
-
-```bash
-openclaw hooks enable session-memory
-```
-
-**Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
-
-**See:** [session-memory documentation](/automation/hooks#session-memory)
-
-### bootstrap-extra-files
-
-Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TOOLS.md`) during `agent:bootstrap`.
-
-**Enable:**
-
-```bash
-openclaw hooks enable bootstrap-extra-files
-```
-
-**See:** [bootstrap-extra-files documentation](/automation/hooks#bootstrap-extra-files)
-
-### command-logger
-
-Logs all command events to a centralized audit file.
-
-**Enable:**
-
-```bash
-openclaw hooks enable command-logger
-```
-
-**Output:** `~/.openclaw/logs/commands.log`
-
-**View logs:**
-
-```bash
-# Recent commands
-tail -n 20 ~/.openclaw/logs/commands.log
-
-# Pretty-print
-cat ~/.openclaw/logs/commands.log | jq .
-
-# Filter by action
-grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
-```
-
-**See:** [command-logger documentation](/automation/hooks#command-logger)
-
-### boot-md
-
-Runs `BOOT.md` when the gateway starts (after channels start).
-
-**Events**: `gateway:startup`
-
-**Enable**:
-
-```bash
-openclaw hooks enable boot-md
-```
-
-**See:** [boot-md documentation](/automation/hooks#boot-md)
+- [CLI reference](/cli)
+- [Automation hooks](/automation/hooks)

@@ -1,3 +1,7 @@
+/** Parses daemon runtime command output into normalized key-value maps. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
+/** Parses command output key-value lines using a caller-supplied separator. */
 export function parseKeyValueOutput(output: string, separator: string): Record<string, string> {
   const entries: Record<string, string> = {};
   for (const rawLine of output.split(/\r?\n/)) {
@@ -9,7 +13,7 @@ export function parseKeyValueOutput(output: string, separator: string): Record<s
     if (idx <= 0) {
       continue;
     }
-    const key = line.slice(0, idx).trim().toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(line.slice(0, idx));
     if (!key) {
       continue;
     }

@@ -1,55 +1,51 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import {
+  applyMistralModelCompat,
+  MISTRAL_MEDIUM_3_5_ID,
+  MISTRAL_SMALL_4_ID,
+  MISTRAL_SMALL_LATEST_ID,
+} from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
+import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
+import { applyMistralConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
+function buildMistralReplayPolicy() {
+  return {
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict9" as const,
+  };
+}
 
-export default definePluginEntry({
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Mistral Provider",
   description: "Bundled Mistral provider plugin",
+  manifest,
+  provider: {
+    label: "Mistral",
+    docsPath: "/providers/models",
+    manifestAuth: { applyConfig: applyMistralConfig },
+    catalog: {
+      allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
+    },
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
+    normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
+    resolveThinkingProfile: ({ modelId }) =>
+      modelId === MISTRAL_SMALL_LATEST_ID ||
+      modelId === MISTRAL_SMALL_4_ID ||
+      modelId === MISTRAL_MEDIUM_3_5_ID
+        ? { levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" }
+        : undefined,
+    buildReplayPolicy: () => buildMistralReplayPolicy(),
+  },
   register(api) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Mistral",
-      docsPath: "/providers/models",
-      envVars: ["MISTRAL_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: PROVIDER_ID,
-          methodId: "api-key",
-          label: "Mistral API key",
-          hint: "API key",
-          optionKey: "mistralApiKey",
-          flagName: "--mistral-api-key",
-          envVar: "MISTRAL_API_KEY",
-          promptMessage: "Enter Mistral API key",
-          defaultModel: MISTRAL_DEFAULT_MODEL_REF,
-          expectedProviders: ["mistral"],
-          applyConfig: (cfg) => applyMistralConfig(cfg),
-          wizard: {
-            choiceId: "mistral-api-key",
-            choiceLabel: "Mistral API key",
-            groupId: "mistral",
-            groupLabel: "Mistral AI",
-            groupHint: "API key",
-          },
-        }),
-      ],
-      capabilities: {
-        transcriptToolCallIdMode: "strict9",
-        transcriptToolCallIdModelHints: [
-          "mistral",
-          "mixtral",
-          "codestral",
-          "pixtral",
-          "devstral",
-          "ministral",
-          "mistralai",
-        ],
-      },
-    });
+    api.registerMemoryEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
+    api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },
 });

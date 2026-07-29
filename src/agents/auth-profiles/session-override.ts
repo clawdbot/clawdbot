@@ -1,24 +1,131 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+/**
+ * Session-level auth profile override rotation.
+ * Keeps automatic profile choice stable within a session while still rotating
+ * across new sessions, compactions, provider changes, and cooldowns.
+ */
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
-  ensureAuthProfileStore,
-  isProfileInCooldown,
+  isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrder,
-} from "../auth-profiles.js";
-import { normalizeProviderId } from "../model-selection.js";
+} from "../auth-profiles/order.js";
+import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
+import { isProfileInCooldown } from "../auth-profiles/usage.js";
 
+const sessionAccessorLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-accessor.js"),
+);
+
+// Session accessor writes are lazy-loaded so read-only auth resolution paths do
+// not import persistence code unless an override must be updated.
+function loadSessionAccessor() {
+  return sessionAccessorLoader.load();
+}
+
+type SessionAuthProfileOverrideState = Pick<
+  SessionEntry,
+  "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+>;
+
+function applySessionAuthProfileOverrideState(
+  entry: SessionEntry,
+  state: SessionAuthProfileOverrideState,
+  updatedAt: number,
+): void {
+  if (state.authProfileOverride === undefined) {
+    delete entry.authProfileOverride;
+  } else {
+    entry.authProfileOverride = state.authProfileOverride;
+  }
+  if (state.authProfileOverrideSource === undefined) {
+    delete entry.authProfileOverrideSource;
+  } else {
+    entry.authProfileOverrideSource = state.authProfileOverrideSource;
+  }
+  if (state.authProfileOverrideCompactionCount === undefined) {
+    delete entry.authProfileOverrideCompactionCount;
+  } else {
+    entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
+  }
+  entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
+}
+
+async function persistSessionAuthProfileOverrideState(params: {
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
+  sessionKey: string;
+  state: SessionAuthProfileOverrideState;
+  storePath?: string;
+}): Promise<void> {
+  const { sessionEntry, sessionStore, sessionKey, state, storePath } = params;
+  const updatedAt = Date.now();
+  applySessionAuthProfileOverrideState(sessionEntry, state, updatedAt);
+  sessionStore[sessionKey] = sessionEntry;
+  if (!storePath) {
+    return;
+  }
+  const persisted = await (
+    await loadSessionAccessor()
+  ).patchSessionEntry(
+    { storePath, sessionKey },
+    (current) => ({
+      ...state,
+      updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
+    }),
+    { fallbackEntry: sessionEntry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+}
+
+// Current session overrides are only valid when the selected provider can use
+// that profile, including configured aws-sdk profiles without stored secrets.
 function isProfileForProvider(params: {
-  provider: string;
+  cfg: OpenClawConfig;
+  providers: readonly string[];
   profileId: string;
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
-  if (!entry?.provider) {
-    return false;
+  if (entry) {
+    if (!entry.provider) {
+      return false;
+    }
+    return params.providers.some((provider) =>
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: params.cfg,
+        provider,
+        credential: entry,
+      }),
+    );
   }
-  return normalizeProviderId(entry.provider) === normalizeProviderId(params.provider);
+  return params.providers.some((provider) =>
+    isConfiguredAwsSdkAuthProfileForProvider({
+      cfg: params.cfg,
+      provider,
+      profileId: params.profileId,
+    }),
+  );
 }
 
+function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
+  const providers = new Set<string>();
+  const push = (value: string | undefined) => {
+    const normalized = value?.trim();
+    if (normalized) {
+      providers.add(normalized);
+    }
+  };
+  const candidates =
+    acceptedProviderIds && acceptedProviderIds.length > 0 ? acceptedProviderIds : [provider];
+  candidates.forEach(push);
+  return [...providers];
+}
+
+/** Clears an auth-profile override from a session and persists it when possible. */
 export async function clearSessionAuthProfileOverride(params: {
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
@@ -26,18 +133,20 @@ export async function clearSessionAuthProfileOverride(params: {
   storePath?: string;
 }) {
   const { sessionEntry, sessionStore, sessionKey, storePath } = params;
-  delete sessionEntry.authProfileOverride;
-  delete sessionEntry.authProfileOverrideSource;
-  delete sessionEntry.authProfileOverrideCompactionCount;
-  sessionEntry.updatedAt = Date.now();
-  sessionStore[sessionKey] = sessionEntry;
-  if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = sessionEntry;
-    });
-  }
+  await persistSessionAuthProfileOverrideState({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    state: {
+      authProfileOverride: undefined,
+      authProfileOverrideSource: undefined,
+      authProfileOverrideCompactionCount: undefined,
+    },
+    storePath,
+  });
 }
 
+/** Resolves and optionally rotates the session auth-profile override. */
 export async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -47,6 +156,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   sessionKey?: string;
   storePath?: string;
   isNewSession: boolean;
+  acceptedProviderIds?: string[];
 }): Promise<string | undefined> {
   const {
     cfg,
@@ -62,21 +172,58 @@ export async function resolveSessionAuthProfileOverride(params: {
     return sessionEntry?.authProfileOverride;
   }
 
+  const hasConfiguredAuthProfiles =
+    Boolean(params.cfg.auth?.profiles && Object.keys(params.cfg.auth.profiles).length > 0) ||
+    Boolean(params.cfg.auth?.order && Object.keys(params.cfg.auth.order).length > 0);
+  if (
+    !sessionEntry.authProfileOverride?.trim() &&
+    !hasConfiguredAuthProfiles &&
+    !hasAnyAuthProfileStoreSource(agentDir)
+  ) {
+    return undefined;
+  }
+
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const order = resolveAuthProfileOrder({ cfg, store, provider });
+  const providers = uniqueProviders(provider, params.acceptedProviderIds);
+  const order = [
+    ...new Set(
+      providers.flatMap((candidateProvider) =>
+        resolveAuthProfileOrder({ cfg, store, provider: candidateProvider }),
+      ),
+    ),
+  ];
   let current = sessionEntry.authProfileOverride?.trim();
+  const source =
+    sessionEntry.authProfileOverrideSource ??
+    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
+      ? "auto"
+      : current
+        ? "user"
+        : undefined);
 
-  if (current && !store.profiles[current]) {
+  const currentProfileId = current;
+  if (
+    currentProfileId &&
+    !store.profiles[currentProfileId] &&
+    !providers.some((candidateProvider) =>
+      isConfiguredAwsSdkAuthProfileForProvider({
+        cfg,
+        provider: candidateProvider,
+        profileId: currentProfileId,
+      }),
+    )
+  ) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
 
-  if (current && !isProfileForProvider({ provider, profileId: current, store })) {
+  if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
 
-  if (current && order.length > 0 && !order.includes(current)) {
+  // Explicit user picks should survive provider rotation order changes.
+  if (current && order.length > 0 && !order.includes(current) && source !== "user") {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
@@ -94,7 +241,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     }
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
-      if (!isProfileInCooldown(store, candidate)) {
+      if (candidate && !isProfileInCooldown(store, candidate)) {
         return candidate;
       }
     }
@@ -106,20 +253,23 @@ export async function resolveSessionAuthProfileOverride(params: {
     typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
-
-  const source =
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
-      ? "auto"
-      : current
-        ? "user"
-        : undefined);
+  const replacementForUnusableCurrent =
+    current && isProfileInCooldown(store, current)
+      ? order.find((profileId) => profileId !== current && !isProfileInCooldown(store, profileId))
+      : undefined;
+  // User-pinned profiles persist unless unusable/mismatched. Auto-selected
+  // profiles rotate on new sessions or compaction boundaries.
+  if (replacementForUnusableCurrent) {
+    current = undefined;
+  }
   if (source === "user" && current && !isNewSession) {
     return current;
   }
 
   let next = current;
-  if (isNewSession) {
+  if (replacementForUnusableCurrent) {
+    next = replacementForUnusableCurrent;
+  } else if (isNewSession) {
     next = current ? pickNextAvailable(current) : pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);
@@ -135,16 +285,17 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionEntry.authProfileOverrideSource !== "auto" ||
     sessionEntry.authProfileOverrideCompactionCount !== compactionCount;
   if (shouldPersist) {
-    sessionEntry.authProfileOverride = next;
-    sessionEntry.authProfileOverrideSource = "auto";
-    sessionEntry.authProfileOverrideCompactionCount = compactionCount;
-    sessionEntry.updatedAt = Date.now();
-    sessionStore[sessionKey] = sessionEntry;
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
-      });
-    }
+    await persistSessionAuthProfileOverrideState({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      state: {
+        authProfileOverride: next,
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: compactionCount,
+      },
+      storePath,
+    });
   }
 
   return next;

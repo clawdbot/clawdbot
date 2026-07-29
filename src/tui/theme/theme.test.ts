@@ -1,17 +1,103 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// TUI theme tests cover theme defaults and environment-driven variants.
 
-const cliHighlightMocks = vi.hoisted(() => ({
-  highlight: vi.fn((code: string) => code),
-  supportsLanguage: vi.fn((_lang: string) => true),
-}));
+import { expectDefined } from "@openclaw/normalization-core";
+import chalk from "chalk";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
-vi.mock("cli-highlight", () => cliHighlightMocks);
+const originalChalkLevel = chalk.level;
+chalk.level = 3;
 
 const { markdownTheme, searchableSelectListTheme, selectListTheme, theme } =
   await import("./theme.js");
 
 const stripAnsi = (str: string) =>
   str.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
+
+let themeImportCase = 0;
+const originalEnv = { ...process.env };
+
+afterAll(() => {
+  chalk.level = originalChalkLevel;
+});
+
+afterEach(() => {
+  process.env = { ...originalEnv };
+});
+
+type ThemeEnvOverrides = {
+  OPENCLAW_THEME?: string | undefined;
+  COLORFGBG?: string | undefined;
+};
+
+type ThemeModule = typeof import("./theme.js");
+const ansiRgbPattern = new RegExp(
+  `${String.fromCharCode(27)}\\[(38|48);2;(\\d+);(\\d+);(\\d+)m`,
+  "u",
+);
+
+function colorFromStyle(style: (text: string) => string, layer: 38 | 48): string {
+  const match = style("x").match(ansiRgbPattern);
+  if (!match || Number(match[1]) !== layer) {
+    throw new Error(`expected ${layer === 38 ? "foreground" : "background"} RGB style`);
+  }
+  return `#${match
+    .slice(2, 5)
+    .map((channel) => Number(channel).toString(16).padStart(2, "0"))
+    .join("")}`.toUpperCase();
+}
+
+function readActivePalette(mod: ThemeModule) {
+  return {
+    text: colorFromStyle(mod.theme.fg, 38),
+    dim: colorFromStyle(mod.theme.dim, 38),
+    accent: colorFromStyle(mod.theme.accent, 38),
+    accentSoft: colorFromStyle(mod.theme.accentSoft, 38),
+    border: colorFromStyle(mod.theme.border, 38),
+    userBg: colorFromStyle(mod.theme.userBg, 48),
+    userText: colorFromStyle(mod.theme.userText, 38),
+    systemText: colorFromStyle(mod.theme.system, 38),
+    toolPendingBg: colorFromStyle(mod.theme.toolPendingBg, 48),
+    toolSuccessBg: colorFromStyle(mod.theme.toolSuccessBg, 48),
+    toolErrorBg: colorFromStyle(mod.theme.toolErrorBg, 48),
+    toolTitle: colorFromStyle(mod.theme.toolTitle, 38),
+    toolOutput: colorFromStyle(mod.theme.toolOutput, 38),
+    quote: colorFromStyle(mod.markdownTheme.quote, 38),
+    quoteBorder: colorFromStyle(mod.markdownTheme.quoteBorder, 38),
+    code: colorFromStyle(mod.markdownTheme.code, 38),
+    codeBorder: colorFromStyle(mod.markdownTheme.codeBlockBorder, 38),
+    link: colorFromStyle(mod.markdownTheme.link, 38),
+    error: colorFromStyle(mod.theme.error, 38),
+    success: colorFromStyle(mod.theme.success, 38),
+  };
+}
+
+async function importThemeWithEnv(env: ThemeEnvOverrides) {
+  if (Object.hasOwn(env, "OPENCLAW_THEME")) {
+    if (env.OPENCLAW_THEME === undefined) {
+      delete process.env.OPENCLAW_THEME;
+    } else {
+      process.env.OPENCLAW_THEME = env.OPENCLAW_THEME;
+    }
+  }
+  if (Object.hasOwn(env, "COLORFGBG")) {
+    if (env.COLORFGBG === undefined) {
+      delete process.env.COLORFGBG;
+    } else {
+      process.env.COLORFGBG = env.COLORFGBG;
+    }
+  }
+  const mod = await importFreshModule<ThemeModule>(
+    import.meta.url,
+    `./theme.js?env=${++themeImportCase}`,
+  );
+  const lightPalette = readActivePalette(mod);
+  return {
+    ...mod,
+    lightMode: lightPalette.text === "#1E1E1E",
+    lightPalette,
+  };
+}
 
 function relativeLuminance(hex: string): number {
   const channels = hex
@@ -22,53 +108,33 @@ function relativeLuminance(hex: string): number {
   if (!channels || channels.length !== 3) {
     throw new Error(`invalid color: ${hex}`);
   }
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  return (
+    0.2126 * expectDefined(channels[0], "channels[0] test invariant") +
+    0.7152 * expectDefined(channels[1], "channels[1] test invariant") +
+    0.0722 * expectDefined(channels[2], "channels[2] test invariant")
+  );
 }
 
 function contrastRatio(foreground: string, background: string): number {
   const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].toSorted(
     (a, b) => b - a,
   );
-  return (lighter + 0.05) / (darker + 0.05);
+  return (
+    (expectDefined(lighter, "lighter test invariant") + 0.05) /
+    (expectDefined(darker, "darker test invariant") + 0.05)
+  );
 }
 
 describe("markdownTheme", () => {
   describe("highlightCode", () => {
-    beforeEach(() => {
-      cliHighlightMocks.highlight.mockClear();
-      cliHighlightMocks.supportsLanguage.mockClear();
-      cliHighlightMocks.highlight.mockImplementation((code: string) => code);
-      cliHighlightMocks.supportsLanguage.mockReturnValue(true);
-    });
-
-    it("passes supported language through to the highlighter", () => {
-      markdownTheme.highlightCode!("const x = 42;", "javascript");
-      expect(cliHighlightMocks.supportsLanguage).toHaveBeenCalledWith("javascript");
-      expect(cliHighlightMocks.highlight).toHaveBeenCalledWith(
-        "const x = 42;",
-        expect.objectContaining({ language: "javascript" }),
-      );
-    });
-
-    it("falls back to auto-detect for unknown language and preserves lines", () => {
-      cliHighlightMocks.supportsLanguage.mockReturnValue(false);
-      cliHighlightMocks.highlight.mockImplementation((code: string) => `${code}\nline-2`);
+    it("renders code blocks with the theme code color and preserves lines", () => {
       const result = markdownTheme.highlightCode!(`echo "hello"`, "not-a-real-language");
-      expect(cliHighlightMocks.highlight).toHaveBeenCalledWith(
-        `echo "hello"`,
-        expect.objectContaining({ language: undefined }),
-      );
       expect(stripAnsi(result[0] ?? "")).toContain("echo");
-      expect(stripAnsi(result[1] ?? "")).toBe("line-2");
     });
 
-    it("returns plain highlighted lines when highlighting throws", () => {
-      cliHighlightMocks.highlight.mockImplementation(() => {
-        throw new Error("boom");
-      });
-      const result = markdownTheme.highlightCode!("echo hello", "javascript");
-      expect(result).toHaveLength(1);
-      expect(stripAnsi(result[0] ?? "")).toBe("echo hello");
+    it("preserves multi-line code blocks", () => {
+      const result = markdownTheme.highlightCode!("line-1\nline-2", "javascript");
+      expect(result.map((line) => stripAnsi(line))).toEqual(["line-1", "line-2"]);
     });
   });
 });
@@ -81,25 +147,6 @@ describe("theme", () => {
 });
 
 describe("light background detection", () => {
-  const originalEnv = { ...process.env };
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-    vi.resetModules();
-  });
-
-  async function importThemeWithEnv(env: Record<string, string | undefined>) {
-    vi.resetModules();
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    return import("./theme.js");
-  }
-
   it("uses dark palette by default", async () => {
     const mod = await importThemeWithEnv({
       OPENCLAW_THEME: undefined,
@@ -237,16 +284,14 @@ describe("light background detection", () => {
 
 describe("light palette accessibility", () => {
   it("keeps light theme text colors at WCAG AA contrast or better", async () => {
-    vi.resetModules();
-    process.env.OPENCLAW_THEME = "light";
-    const mod = await import("./theme.js");
+    const mod = await importThemeWithEnv({ OPENCLAW_THEME: "light" });
     const backgrounds = {
       page: "#FFFFFF",
       user: mod.lightPalette.userBg,
       pending: mod.lightPalette.toolPendingBg,
       success: mod.lightPalette.toolSuccessBg,
       error: mod.lightPalette.toolErrorBg,
-      code: mod.lightPalette.codeBlock,
+      code: "#FFFFFF",
     };
 
     const textPairs = [

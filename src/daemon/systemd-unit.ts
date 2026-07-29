@@ -1,3 +1,5 @@
+/** Renders and parses systemd unit snippets for managed gateway services. */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
@@ -14,6 +16,8 @@ function systemdEscapeArg(value: string): string {
   if (!/[\s"\\]/.test(value)) {
     return value;
   }
+  // systemd ExecStart/Environment parsing honors backslash escapes inside
+  // quotes; match that contract for round-trip parser tests.
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
 }
 
@@ -35,11 +39,22 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   });
 }
 
+function renderEnvironmentFileLines(environmentFiles: string[] | undefined): string[] {
+  if (!environmentFiles) {
+    return [];
+  }
+  return normalizeStringEntries(environmentFiles).map((entry) => {
+    assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
+    return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
+  });
+}
+
 export function buildSystemdUnit({
   description,
   programArguments,
   workingDirectory,
   environment,
+  environmentFiles,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
@@ -49,23 +64,32 @@ export function buildSystemdUnit({
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
   const envLines = renderEnvLines(environment);
+  const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
   return [
     "[Unit]",
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
+    "StartLimitBurst=5",
+    "StartLimitIntervalSec=60",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
+    "RestartPreventExitStatus=78",
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
+    // Transient child processes may be selected by the OOM killer before the
+    // gateway. Keep the service running when that happens; the child surface is
+    // already responsible for reporting the failed command/session.
+    "OOMPolicy=continue",
     // Keep service children in the same lifecycle so restarts do not leave
     // orphan ACP/runtime workers behind.
     "KillMode=control-group",
     workingDirLine,
+    ...environmentFileLines,
     ...envLines,
     "",
     "[Install]",
@@ -87,11 +111,13 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
   }
 
   const unquoted = (() => {
-    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    const quote = trimmed[0];
+    if (!((quote === '"' || quote === "'") && trimmed.endsWith(quote))) {
       return trimmed;
     }
     let out = "";
     let escapeNext = false;
+    // systemd quote parsing consumes one backslash before the next character.
     for (const ch of trimmed.slice(1, -1)) {
       if (escapeNext) {
         out += ch;
@@ -117,4 +143,19 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
   }
   const value = unquoted.slice(eq + 1);
   return { key, value };
+}
+
+export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; value: string }> {
+  return splitArgsPreservingQuotes(raw, {
+    escapeMode: "backslash",
+    quoteChars: ['"', "'"],
+    quoteStart: "item-start",
+  }).flatMap((entry) => {
+    const parsed = parseSystemdEnvAssignment(entry);
+    return parsed ? [parsed] : [];
+  });
+}
+
+export function renderSystemdEnvAssignment(key: string, value: string): string {
+  return systemdEscapeArg(`${key}=${value}`);
 }

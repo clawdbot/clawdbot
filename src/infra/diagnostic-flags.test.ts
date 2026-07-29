@@ -1,3 +1,4 @@
+// Covers diagnostic flag matching and normalization.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -18,17 +19,29 @@ describe("resolveDiagnosticFlags", () => {
     expect(resolveDiagnosticFlags(cfg, env)).toEqual(["telegram.http", "cache.*", "foo"]);
   });
 
-  it("treats false-like env values as no extra flags", () => {
+  it("treats blank env values as no extra flags", () => {
     const cfg = {
       diagnostics: { flags: ["telegram.http"] },
     } as OpenClawConfig;
 
-    for (const raw of ["0", "false", "off", "none", "   "]) {
+    expect(
+      resolveDiagnosticFlags(cfg, {
+        OPENCLAW_DIAGNOSTICS: "   ",
+      } as NodeJS.ProcessEnv),
+    ).toEqual(["telegram.http"]);
+  });
+
+  it("treats false-like env values as disable overrides", () => {
+    const cfg = {
+      diagnostics: { flags: ["telegram.http"] },
+    } as OpenClawConfig;
+
+    for (const raw of ["0", "false", "off", "none"]) {
       expect(
         resolveDiagnosticFlags(cfg, {
           OPENCLAW_DIAGNOSTICS: raw,
         } as NodeJS.ProcessEnv),
-      ).toEqual(["telegram.http"]);
+      ).toStrictEqual([]);
     }
   });
 });

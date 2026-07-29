@@ -1,10 +1,11 @@
-export type LaneDeliverySnapshot = {
+// Telegram plugin module implements lane delivery state behavior.
+type LaneDeliverySnapshot = {
   delivered: boolean;
   skippedNonSilent: number;
   failedNonSilent: number;
 };
 
-export type LaneDeliveryStateTracker = {
+type LaneDeliveryStateTracker = {
   markDelivered: () => void;
   markNonSilentSkip: () => void;
   markNonSilentFailure: () => void;

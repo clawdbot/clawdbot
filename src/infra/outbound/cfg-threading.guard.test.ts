@@ -1,27 +1,73 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+// Guards outbound/channel entrypoints from runtime config reads that would
+// force plugin discovery or filesystem scans on standard message actions.
+import { spawnSync } from "node:child_process";
+import fs, { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  sortRepoPaths,
+  toRepoRelativePath,
+} from "../../test-utils/repo-files.js";
 
 const thisFilePath = fileURLToPath(import.meta.url);
 const thisDir = path.dirname(thisFilePath);
 const repoRoot = path.resolve(thisDir, "../../..");
-const loadConfigPattern = /\b(?:loadConfig|config\.loadConfig)\s*\(/;
-
-function toPosix(relativePath: string): string {
-  return relativePath.split(path.sep).join("/");
-}
+const loadConfigPattern = /\b(?:getRuntimeConfig|config\.getRuntimeConfig)\s*\(/;
 
 function readRepoFile(relativePath: string): string {
   const absolute = path.join(repoRoot, relativePath);
   return readFileSync(absolute, "utf8");
 }
 
+function listGitFiles(pathspecs: string[]): string[] | null {
+  return listGitTrackedFiles({ repoRoot, pathspecs });
+}
+
+function listFindFiles(args: string[]): string[] | null {
+  const result = spawnSync("find", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((file) => toRepoRelativePath(repoRoot, file))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function listCoreOutboundEntryFiles(): string[] {
+  const externalFiles =
+    listGitFiles(["src/channels/plugins/outbound/*.ts"]) ??
+    listFindFiles([
+      path.join(repoRoot, "src/channels/plugins/outbound"),
+      "-maxdepth",
+      "1",
+      "-type",
+      "f",
+      "-name",
+      "*.ts",
+    ]);
+  if (externalFiles) {
+    return sortRepoPaths(externalFiles.filter((file) => !file.endsWith(".test.ts")));
+  }
+
   const outboundDir = path.join(repoRoot, "src/channels/plugins/outbound");
-  return readdirSync(outboundDir)
+  return fs
+    .readdirSync(outboundDir)
     .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
-    .map((name) => toPosix(path.join("src/channels/plugins/outbound", name)))
+    .map((name) =>
+      toRepoRelativePath(repoRoot, path.join(repoRoot, "src/channels/plugins/outbound", name)),
+    )
     .toSorted();
 }
 
@@ -29,18 +75,32 @@ function listExtensionFiles(): {
   adapterEntrypoints: string[];
   inlineChannelEntrypoints: string[];
 } {
+  const externalFiles =
+    listGitFiles(["extensions/*/src/outbound.ts", "extensions/*/src/channel.ts"]) ??
+    listFindFiles([
+      path.join(repoRoot, "extensions"),
+      "-path",
+      "*/src/outbound.ts",
+      "-o",
+      "-path",
+      "*/src/channel.ts",
+    ]);
+  if (externalFiles) {
+    return partitionExtensionEntrypoints(externalFiles);
+  }
+
   const extensionsRoot = path.join(repoRoot, "extensions");
   const adapterEntrypoints: string[] = [];
   const inlineChannelEntrypoints: string[] = [];
 
-  for (const entry of readdirSync(extensionsRoot, { withFileTypes: true })) {
+  for (const entry of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
       continue;
     }
     const srcDir = path.join(extensionsRoot, entry.name, "src");
     const outboundPath = path.join(srcDir, "outbound.ts");
     if (existsSync(outboundPath)) {
-      adapterEntrypoints.push(toPosix(path.join("extensions", entry.name, "src/outbound.ts")));
+      adapterEntrypoints.push(path.posix.join("extensions", entry.name, "src/outbound.ts"));
     }
 
     const channelPath = path.join(srcDir, "channel.ts");
@@ -48,8 +108,35 @@ function listExtensionFiles(): {
       continue;
     }
     const source = readFileSync(channelPath, "utf8");
-    if (source.includes("outbound:")) {
-      inlineChannelEntrypoints.push(toPosix(path.join("extensions", entry.name, "src/channel.ts")));
+    if (/\boutbound\s*:\s*\{/.test(source)) {
+      inlineChannelEntrypoints.push(path.posix.join("extensions", entry.name, "src/channel.ts"));
+    }
+  }
+
+  return {
+    adapterEntrypoints: adapterEntrypoints.toSorted(),
+    inlineChannelEntrypoints: inlineChannelEntrypoints.toSorted(),
+  };
+}
+
+function partitionExtensionEntrypoints(files: string[]): {
+  adapterEntrypoints: string[];
+  inlineChannelEntrypoints: string[];
+} {
+  const adapterEntrypoints: string[] = [];
+  const inlineChannelEntrypoints: string[] = [];
+
+  for (const file of files) {
+    if (file.endsWith("/src/outbound.ts")) {
+      adapterEntrypoints.push(file);
+      continue;
+    }
+    if (!file.endsWith("/src/channel.ts")) {
+      continue;
+    }
+    const source = readRepoFile(file);
+    if (/\boutbound\s*:\s*\{/.test(source)) {
+      inlineChannelEntrypoints.push(file);
     }
   }
 
@@ -61,10 +148,10 @@ function listExtensionFiles(): {
 
 function listHighRiskRuntimeCfgFiles(): string[] {
   return [
-    "extensions/telegram/src/action-runtime.ts",
-    "extensions/discord/src/monitor/reply-delivery.ts",
-    "extensions/discord/src/monitor/thread-bindings.discord-api.ts",
-    "extensions/discord/src/monitor/thread-bindings.manager.ts",
+    bundledPluginFile("telegram", "src/action-runtime.ts"),
+    bundledPluginFile("discord", "src/monitor/reply-delivery.ts"),
+    bundledPluginFile("discord", "src/monitor/thread-bindings.discord-api.ts"),
+    bundledPluginFile("discord", "src/monitor/thread-bindings.manager.ts"),
   ];
 }
 
@@ -162,35 +249,50 @@ function extractOutboundBlock(source: string, file: string): string {
 }
 
 describe("outbound cfg-threading guard", () => {
-  it("keeps outbound adapter entrypoints free of loadConfig calls", () => {
+  it("lists outbound entrypoints without scanning directories in-process", () => {
+    expectNoReaddirSyncDuring(() => {
+      const coreAdapterFiles = listCoreOutboundEntryFiles();
+      const extensionFiles = listExtensionFiles();
+
+      expect(coreAdapterFiles.length).toBeGreaterThan(0);
+      expect(extensionFiles.adapterEntrypoints.length).toBeGreaterThan(0);
+      expect(
+        coreAdapterFiles.every(
+          (file) => file.startsWith("src/channels/plugins/outbound/") && file.endsWith(".ts"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("keeps outbound adapter entrypoints free of getRuntimeConfig calls", () => {
     const coreAdapterFiles = listCoreOutboundEntryFiles();
     const extensionAdapterFiles = listExtensionFiles().adapterEntrypoints;
     const adapterFiles = [...coreAdapterFiles, ...extensionAdapterFiles];
 
     for (const file of adapterFiles) {
       const source = readRepoFile(file);
-      expect(source, `${file} must not call loadConfig in outbound entrypoint`).not.toMatch(
+      expect(source, `${file} must not call getRuntimeConfig in outbound entrypoint`).not.toMatch(
         loadConfigPattern,
       );
     }
   });
 
-  it("keeps inline channel outbound blocks free of loadConfig calls", () => {
+  it("keeps inline channel outbound blocks free of getRuntimeConfig calls", () => {
     const inlineFiles = listExtensionFiles().inlineChannelEntrypoints;
     for (const file of inlineFiles) {
       const source = readRepoFile(file);
       const outboundBlock = extractOutboundBlock(source, file);
-      expect(outboundBlock, `${file} outbound block must not call loadConfig`).not.toMatch(
+      expect(outboundBlock, `${file} outbound block must not call getRuntimeConfig`).not.toMatch(
         loadConfigPattern,
       );
     }
   });
 
-  it("keeps high-risk runtime delivery paths free of loadConfig calls", () => {
+  it("keeps high-risk runtime delivery paths free of getRuntimeConfig calls", () => {
     const runtimeFiles = listHighRiskRuntimeCfgFiles();
     for (const file of runtimeFiles) {
       const source = readRepoFile(file);
-      expect(source, `${file} must not call loadConfig`).not.toMatch(loadConfigPattern);
+      expect(source, `${file} must not call getRuntimeConfig`).not.toMatch(loadConfigPattern);
     }
   });
 });

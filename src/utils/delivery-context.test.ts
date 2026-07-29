@@ -1,24 +1,26 @@
+// Delivery context tests cover context normalization for channel delivery.
 import { describe, expect, it } from "vitest";
 import {
-  formatConversationTarget,
   deliveryContextKey,
   deliveryContextFromSession,
-  mergeDeliveryContext,
   normalizeDeliveryContext,
-  normalizeSessionDeliveryFields,
-  resolveConversationDeliveryTarget,
 } from "./delivery-context.js";
+import {
+  mergeDeliveryContext,
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+} from "./delivery-context.shared.js";
 
 describe("delivery context helpers", () => {
   it("normalizes channel/to/accountId and drops empty contexts", () => {
     expect(
       normalizeDeliveryContext({
-        channel: " whatsapp ",
+        channel: " demo-channel ",
         to: " +1555 ",
         accountId: " acct-1 ",
       }),
     ).toEqual({
-      channel: "whatsapp",
+      channel: "demo-channel",
       to: "+1555",
       accountId: "acct-1",
     });
@@ -28,12 +30,12 @@ describe("delivery context helpers", () => {
 
   it("does not inherit route fields from fallback when channels conflict", () => {
     const merged = mergeDeliveryContext(
-      { channel: "telegram" },
-      { channel: "discord", to: "channel:def", accountId: "acct", threadId: "99" },
+      { channel: "demo-primary" },
+      { channel: "demo-fallback", to: "channel:def", accountId: "acct", threadId: "99" },
     );
 
     expect(merged).toEqual({
-      channel: "telegram",
+      channel: "demo-primary",
       to: undefined,
       accountId: undefined,
     });
@@ -42,26 +44,51 @@ describe("delivery context helpers", () => {
 
   it("inherits missing route fields when channels match", () => {
     const merged = mergeDeliveryContext(
-      { channel: "telegram" },
-      { channel: "telegram", to: "123", accountId: "acct", threadId: "99" },
+      { channel: "demo-channel" },
+      { channel: "demo-channel", to: "123", accountId: "acct", threadId: "99" },
     );
 
     expect(merged).toEqual({
-      channel: "telegram",
+      channel: "demo-channel",
       to: "123",
       accountId: "acct",
       threadId: "99",
     });
   });
 
-  it("uses fallback route fields when fallback has no channel", () => {
+  it("does not inherit route fields from a different account on the same channel", () => {
     const merged = mergeDeliveryContext(
-      { channel: "telegram" },
-      { to: "123", accountId: "acct", threadId: "99" },
+      { channel: "telegram", accountId: "bot-a" },
+      { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
     );
 
     expect(merged).toEqual({
       channel: "telegram",
+      to: undefined,
+      accountId: "bot-a",
+    });
+    expect(merged?.threadId).toBeUndefined();
+
+    expect(
+      mergeDeliveryContext(
+        { accountId: "bot-a" },
+        { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
+      ),
+    ).toEqual({
+      channel: undefined,
+      to: undefined,
+      accountId: "bot-a",
+    });
+  });
+
+  it("uses fallback route fields when fallback has no channel", () => {
+    const merged = mergeDeliveryContext(
+      { channel: "demo-channel" },
+      { to: "123", accountId: "acct", threadId: "99" },
+    );
+
+    expect(merged).toEqual({
+      channel: "demo-channel",
       to: "123",
       accountId: "acct",
       threadId: "99",
@@ -69,121 +96,126 @@ describe("delivery context helpers", () => {
   });
 
   it("builds stable keys only when channel and to are present", () => {
-    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555" })).toBe("whatsapp|+1555||");
-    expect(deliveryContextKey({ channel: "whatsapp" })).toBeUndefined();
-    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555", accountId: "acct-1" })).toBe(
-      "whatsapp|+1555|acct-1|",
+    expect(deliveryContextKey({ channel: "demo-channel", to: "+1555" })).toBe(
+      "demo-channel|+1555||",
     );
-    expect(deliveryContextKey({ channel: "slack", to: "channel:C1", threadId: "123.456" })).toBe(
-      "slack|channel:C1||123.456",
-    );
-  });
-
-  it("formats channel-aware conversation targets", () => {
-    expect(formatConversationTarget({ channel: "discord", conversationId: "123" })).toBe(
-      "channel:123",
-    );
-    expect(formatConversationTarget({ channel: "matrix", conversationId: "!room:example" })).toBe(
-      "room:!room:example",
+    expect(deliveryContextKey({ channel: "demo-channel" })).toBeUndefined();
+    expect(deliveryContextKey({ channel: "demo-channel", to: "+1555", accountId: "acct-1" })).toBe(
+      "demo-channel|+1555|acct-1|",
     );
     expect(
-      formatConversationTarget({
-        channel: "matrix",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toBe("room:!room:example");
-    expect(formatConversationTarget({ channel: "matrix", conversationId: "  " })).toBeUndefined();
-  });
-
-  it("resolves delivery targets for Matrix child threads", () => {
-    expect(
-      resolveConversationDeliveryTarget({
-        channel: "matrix",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toEqual({
-      to: "room:!room:example",
-      threadId: "$thread",
-    });
+      deliveryContextKey({ channel: "demo-channel", to: "channel:C1", threadId: "123.456" }),
+    ).toBe("demo-channel|channel:C1||123.456");
+    expect(deliveryContextKey({ channel: "telegram", to: "-100123", threadId: 42.9 })).toBe(
+      "telegram|-100123||42",
+    );
   });
 
   it("derives delivery context from a session entry", () => {
-    expect(
-      deliveryContextFromSession({
-        channel: "webchat",
-        lastChannel: " whatsapp ",
-        lastTo: " +1777 ",
-        lastAccountId: " acct-9 ",
-      }),
-    ).toEqual({
-      channel: "whatsapp",
-      to: "+1777",
-      accountId: "acct-9",
+    const delivery = normalizeSessionDeliveryState({
+      route: {
+        channel: "slack",
+        accountId: "work",
+        target: { to: "channel:C123" },
+        thread: { id: "177000.123" },
+      },
     });
-
-    expect(
-      deliveryContextFromSession({
-        channel: "telegram",
-        lastTo: " 123 ",
-        lastThreadId: " 999 ",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      to: "123",
-      accountId: undefined,
-      threadId: "999",
-    });
-
-    expect(
-      deliveryContextFromSession({
-        channel: "telegram",
-        lastTo: " -1001 ",
-        origin: { threadId: 42 },
-      }),
-    ).toEqual({
-      channel: "telegram",
-      to: "-1001",
-      accountId: undefined,
-      threadId: 42,
-    });
-
-    expect(
-      deliveryContextFromSession({
-        channel: "telegram",
-        lastTo: " -1001 ",
-        deliveryContext: { threadId: " 777 " },
-        origin: { threadId: 42 },
-      }),
-    ).toEqual({
-      channel: "telegram",
-      to: "-1001",
-      accountId: undefined,
-      threadId: "777",
+    expect(deliveryContextFromSession({ delivery })).toEqual({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "work",
+      threadId: "177000.123",
     });
   });
 
-  it("normalizes delivery fields, mirrors session fields, and avoids cross-channel carryover", () => {
-    const normalized = normalizeSessionDeliveryFields({
-      deliveryContext: {
-        channel: " Slack ",
-        to: " channel:1 ",
-        accountId: " acct-2 ",
-        threadId: " 444 ",
-      },
-      lastChannel: " whatsapp ",
-      lastTo: " +1555 ",
-    });
+  it("does not reconstruct delivery from retired session fields at runtime", () => {
+    expect(
+      deliveryContextFromSession({
+        route: {
+          channel: "slack",
+          target: { to: "channel:C123" },
+        },
+        lastChannel: "slack",
+        lastTo: "channel:C123",
+      } as unknown as { delivery?: never }),
+    ).toBeUndefined();
+  });
 
-    expect(normalized.deliveryContext).toEqual({
-      channel: "whatsapp",
-      to: "+1555",
-      accountId: undefined,
+  it("normalizes the closed none, internal, and external states", () => {
+    expect(normalizeSessionDeliveryState()).toEqual({ kind: "none" });
+    expect(
+      normalizeSessionDeliveryState({ context: { channel: "webchat", to: "dashboard" } }),
+    ).toEqual({ kind: "internal" });
+
+    expect(
+      normalizeSessionDeliveryState({
+        route: {
+          channel: "Slack",
+          accountId: " work ",
+          target: { to: " channel:C123 ", rawTo: " slack://C123 ", chatType: "channel" },
+          thread: { id: " 177000.123 ", kind: "thread", source: "target" },
+        },
+        context: { channel: "discord", to: "channel:old" },
+        origin: { label: "Support" },
+      }),
+    ).toEqual({
+      kind: "external",
+      route: {
+        channel: "slack",
+        accountId: "work",
+        target: { to: "channel:C123", rawTo: "slack://C123", chatType: "channel" },
+        thread: { id: "177000.123", kind: "thread", source: "target" },
+      },
+      context: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "work",
+        threadId: "177000.123",
+      },
+      origin: {
+        label: "Support",
+        provider: "slack",
+        to: "channel:C123",
+        accountId: "work",
+        threadId: "177000.123",
+        chatType: "channel",
+      },
     });
-    expect(normalized.lastChannel).toBe("whatsapp");
-    expect(normalized.lastTo).toBe("+1555");
-    expect(normalized.lastAccountId).toBeUndefined();
-    expect(normalized.lastThreadId).toBeUndefined();
+  });
+
+  it("projects compatibility fields without duplicating them in the session row", () => {
+    const delivery = normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "-1001", accountId: "bot", threadId: 42 },
+      origin: { label: "Ops" },
+    });
+    const expectedProjection = {
+      route: {
+        channel: "telegram",
+        accountId: "bot",
+        target: { to: "-1001" },
+        thread: { id: 42 },
+      },
+      deliveryContext: {
+        channel: "telegram",
+        to: "-1001",
+        accountId: "bot",
+        threadId: 42,
+      },
+      origin: {
+        label: "Ops",
+        provider: "telegram",
+        to: "-1001",
+        accountId: "bot",
+        threadId: 42,
+      },
+      channel: "telegram",
+      lastChannel: "telegram",
+      lastTo: "-1001",
+      lastAccountId: "bot",
+      lastThreadId: 42,
+    };
+    const projection = projectSessionDeliveryFields(delivery);
+    expect(projection).toEqual(expectedProjection);
+    expect(JSON.stringify(projection)).toBe(JSON.stringify(expectedProjection));
   });
 });

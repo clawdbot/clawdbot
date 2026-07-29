@@ -1,5 +1,5 @@
 /** Telegram forum-topic service-message fields (Bot API). */
-export const TELEGRAM_FORUM_SERVICE_FIELDS = [
+const TELEGRAM_FORUM_SERVICE_FIELDS = [
   "forum_topic_created",
   "forum_topic_edited",
   "forum_topic_closed",
@@ -18,6 +18,8 @@ export function isTelegramForumServiceMessage(msg: unknown): boolean {
   if (!msg || typeof msg !== "object") {
     return false;
   }
-  const record = msg as Record<string, unknown>;
-  return TELEGRAM_FORUM_SERVICE_FIELDS.some((field) => record[field] != null);
+  const messageRecord = msg as Record<(typeof TELEGRAM_FORUM_SERVICE_FIELDS)[number], unknown>;
+  return TELEGRAM_FORUM_SERVICE_FIELDS.some(
+    (field) => field in messageRecord && messageRecord[field] != null,
+  );
 }

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+// Verifies plugin SDK subpath exports and generated entrypoint metadata.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { normalizeRepoPath, visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveSourceRoots,
@@ -11,7 +13,13 @@ import {
 } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const scanRoots = resolveSourceRoots(repoRoot, ["src", "extensions", "scripts", "test"]);
+const scanRoots = resolveSourceRoots(repoRoot, [
+  "src",
+  "packages",
+  "extensions",
+  "scripts",
+  "test",
+]);
 
 function readPackageExports() {
   const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
@@ -29,8 +37,14 @@ function readEntrypoints() {
   return new Set(entrypoints.filter((entry) => entry !== "index"));
 }
 
-function normalizePath(filePath) {
-  return path.relative(repoRoot, filePath).split(path.sep).join("/");
+function readPrivateLocalOnlySubpaths() {
+  const subpaths = JSON.parse(
+    readFileSync(
+      path.join(repoRoot, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"),
+      "utf8",
+    ),
+  );
+  return new Set(subpaths.filter((entry) => typeof entry === "string" && !entry.includes("/")));
 }
 
 function parsePluginSdkSubpath(specifier) {
@@ -39,6 +53,28 @@ function parsePluginSdkSubpath(specifier) {
   }
   const subpath = specifier.slice("openclaw/plugin-sdk/".length);
   return subpath || null;
+}
+
+function isGeneratedBuildArtifact(filePath) {
+  return normalizeRepoPath(repoRoot, filePath).split("/").includes("dist");
+}
+
+function isRuntimeModuleReference(node) {
+  // With verbatimModuleSyntax, inline `type` specifiers emit an empty import/export and still
+  // resolve the module. Only declaration-level `import type` and `export type` are erased.
+  if (ts.isImportDeclaration(node)) {
+    return !node.importClause?.isTypeOnly;
+  }
+  if (ts.isExportDeclaration(node)) {
+    return !node.isTypeOnly;
+  }
+  if (ts.isImportTypeNode(node)) {
+    return false;
+  }
+  if (ts.isImportEqualsDeclaration(node)) {
+    return !node.isTypeOnly;
+  }
+  return true;
 }
 
 function compareEntries(left, right) {
@@ -54,24 +90,45 @@ function compareEntries(left, right) {
 async function collectViolations() {
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
-  const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true })).toSorted(
-    (left, right) => normalizePath(left).localeCompare(normalizePath(right)),
+  const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
+  // Workspace packages resolve private facades through root TS paths and bundle them into dist;
+  // live jiti source stages inject the same private map. Core src callers must stay relative.
+  const coreRuntimeFiles = new Set(
+    (
+      await collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), {
+        includeTests: false,
+        extraTestSuffixes: [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"],
+      })
+    ).filter((filePath) => !isGeneratedBuildArtifact(filePath)),
   );
+  const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true }))
+    .filter((filePath) => !isGeneratedBuildArtifact(filePath))
+    .toSorted((left, right) =>
+      normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+    );
   const violations = [];
 
   for (const filePath of files) {
     const sourceText = readFileSync(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      sourceText,
-      ts.ScriptTarget.Latest,
-      true,
-      filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    );
+    const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
 
-    function push(kind, specifierNode, specifier) {
+    function push(kind, node, specifierNode, specifier) {
       const subpath = parsePluginSdkSubpath(specifier);
       if (!subpath) {
+        return;
+      }
+      if (privateLocalOnlySubpaths.has(subpath)) {
+        const repoPath = normalizeRepoPath(repoRoot, filePath);
+        if (coreRuntimeFiles.has(filePath) && isRuntimeModuleReference(node)) {
+          violations.push({
+            file: repoPath,
+            line: toLine(sourceFile, specifierNode),
+            kind,
+            specifier,
+            subpath,
+            reason: "private runtime helper used by core must use a relative import",
+          });
+        }
         return;
       }
 
@@ -87,36 +144,18 @@ async function collectViolations() {
       }
 
       violations.push({
-        file: normalizePath(filePath),
+        file: normalizeRepoPath(repoRoot, filePath),
         line: toLine(sourceFile, specifierNode),
         kind,
         specifier,
         subpath,
-        missingFrom,
+        reason: `missing from ${missingFrom.join(" and ")}`,
       });
     }
 
-    function visit(node) {
-      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-        push("import", node.moduleSpecifier, node.moduleSpecifier.text);
-      } else if (
-        ts.isExportDeclaration(node) &&
-        node.moduleSpecifier &&
-        ts.isStringLiteral(node.moduleSpecifier)
-      ) {
-        push("export", node.moduleSpecifier, node.moduleSpecifier.text);
-      } else if (
-        ts.isCallExpression(node) &&
-        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-        node.arguments.length === 1 &&
-        ts.isStringLiteral(node.arguments[0])
-      ) {
-        push("dynamic-import", node.arguments[0], node.arguments[0].text);
-      }
-      ts.forEachChild(node, visit);
-    }
-
-    visit(sourceFile);
+    visitModuleSpecifiers(ts, sourceFile, ({ kind, node, specifier, specifierNode }) => {
+      push(kind, node, specifierNode, specifier);
+    });
   }
 
   return violations.toSorted(compareEntries);
@@ -130,17 +169,19 @@ async function main() {
   }
 
   console.error(
-    "Rule: every referenced openclaw/plugin-sdk/<subpath> must exist in the public package exports.",
+    "Rule: every referenced openclaw/plugin-sdk/<subpath> must be public or use its required private boundary.",
   );
   for (const violation of violations) {
     console.error(
-      `- ${violation.file}:${violation.line} [${violation.kind}] ${violation.specifier} missing from ${violation.missingFrom.join(" and ")}`,
+      `- ${violation.file}:${violation.line} [${violation.kind}] ${violation.specifier}: ${violation.reason}`,
     );
   }
   process.exit(1);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main().catch(
+  /** @param {unknown} error */ (error) => {
+    console.error(error);
+    process.exit(1);
+  },
+);

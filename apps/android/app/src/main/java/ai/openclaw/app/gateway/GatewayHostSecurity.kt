@@ -1,0 +1,148 @@
+package ai.openclaw.app.gateway
+
+import android.os.Build
+import java.net.InetAddress
+import java.util.Locale
+
+/** Returns true only for loopback hosts safe to treat as local gateway origins. */
+internal fun isLoopbackGatewayHost(
+  rawHost: String?,
+  allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
+): Boolean {
+  var host =
+    rawHost
+      ?.trim()
+      ?.lowercase(Locale.US)
+      ?.trim('[', ']')
+      .orEmpty()
+  if (host.endsWith(".")) {
+    host = host.dropLast(1)
+  }
+  val zoneIndex = host.indexOf('%')
+  // Scoped IPv6 literals are not stable origin identifiers; reject them for
+  // loopback trust instead of guessing which interface the zone names.
+  if (zoneIndex >= 0) return false
+  if (host.isEmpty()) return false
+  if (host == "localhost") return true
+  // Android emulator maps host loopback through this bridge alias.
+  if (allowEmulatorBridgeAlias && host == "10.0.2.2") return true
+
+  parseIpv4Address(host)?.let { ipv4 ->
+    return ipv4.first() == 127.toByte()
+  }
+  if (!host.contains(':') || !host.all(::isIpv6LiteralChar)) return false
+
+  val address = runCatching { InetAddress.getByName(host) }.getOrNull()?.address ?: return false
+  if (address.size == 4) {
+    return address[0] == 127.toByte()
+  }
+  if (address.size != 16) return false
+  // `::1` is 15 zero bytes followed by `0x01`.
+  val isIpv6Loopback = address.copyOfRange(0, 15).all { it == 0.toByte() } && address[15] == 1.toByte()
+  if (isIpv6Loopback) return true
+
+  val isMappedIpv4 =
+    address.copyOfRange(0, 10).all { it == 0.toByte() } &&
+      address[10] == 0xFF.toByte() &&
+      address[11] == 0xFF.toByte()
+  return isMappedIpv4 && address[12] == 127.toByte()
+}
+
+/** Allows cleartext only for loopback, `.local`, and private/link-local network ranges. */
+internal fun isLocalCleartextGatewayHost(
+  rawHost: String?,
+  allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
+): Boolean {
+  var host =
+    rawHost
+      ?.trim()
+      ?.lowercase(Locale.US)
+      ?.trim('[', ']')
+      .orEmpty()
+  if (host.endsWith(".")) {
+    host = host.dropLast(1)
+  }
+  if (host.isEmpty()) return false
+  if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
+  if (isMdnsLocalHostname(host)) return true
+
+  val zoneIndex = host.indexOf('%')
+  if (zoneIndex >= 0) {
+    // Link-local cleartext policy is about the address range; strip the
+    // interface zone before InetAddress parsing rejects otherwise valid hosts.
+    host = host.substring(0, zoneIndex)
+  }
+  if (host.isEmpty()) return false
+
+  parseIpv4Address(host)?.let { ipv4 ->
+    val first = ipv4[0].toInt() and 0xff
+    val second = ipv4[1].toInt() and 0xff
+    return when {
+      first == 10 -> true
+      first == 172 && second in 16..31 -> true
+      first == 192 && second == 168 -> true
+      first == 169 && second == 254 -> true
+      else -> false
+    }
+  }
+  if (!host.contains(':') || !host.all(::isIpv6LiteralChar)) return false
+
+  val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
+  return when {
+    address.isLinkLocalAddress -> true
+    address.isSiteLocalAddress -> true
+    else -> {
+      val bytes = address.address
+      bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
+    }
+  }
+}
+
+private fun isAndroidEmulatorRuntime(): Boolean {
+  val fingerprint = Build.FINGERPRINT?.lowercase(Locale.US).orEmpty()
+  val model = Build.MODEL?.lowercase(Locale.US).orEmpty()
+  val manufacturer = Build.MANUFACTURER?.lowercase(Locale.US).orEmpty()
+  val brand = Build.BRAND?.lowercase(Locale.US).orEmpty()
+  val device = Build.DEVICE?.lowercase(Locale.US).orEmpty()
+  val product = Build.PRODUCT?.lowercase(Locale.US).orEmpty()
+
+  return fingerprint.contains("generic") ||
+    fingerprint.contains("robolectric") ||
+    model.contains("emulator") ||
+    model.contains("sdk_gphone") ||
+    manufacturer.contains("genymotion") ||
+    (brand.contains("generic") && device.contains("generic")) ||
+    product.contains("sdk_gphone") ||
+    product.contains("emulator") ||
+    product.contains("simulator")
+}
+
+/** Parses strict dotted-quad IPv4, rejecting shorthand and out-of-range octets. */
+private fun parseIpv4Address(host: String): ByteArray? {
+  val parts = host.split('.')
+  if (parts.size != 4) return null
+  val bytes = ByteArray(4)
+  for ((index, part) in parts.withIndex()) {
+    val value = part.toIntOrNull() ?: return null
+    if (value !in 0..255) return null
+    bytes[index] = value.toByte()
+  }
+  return bytes
+}
+
+private fun isMdnsLocalHostname(host: String): Boolean {
+  if (host.length > 253) return false
+  if (!host.endsWith(".local")) return false
+  val labels = host.split('.')
+  if (labels.size < 2 || labels.last() != "local") return false
+  return labels.dropLast(1).all(::isDnsHostnameLabel)
+}
+
+private fun isDnsHostnameLabel(label: String): Boolean {
+  if (label.isEmpty() || label.length > 63) return false
+  if (label.first() == '-' || label.last() == '-') return false
+  return label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
+}
+
+/** Cheap prefilter before handing potential IPv6 literals to InetAddress. */
+private fun isIpv6LiteralChar(char: Char): Boolean = char in '0'..'9' || char in 'a'..'f' || char == ':' || char == '.'

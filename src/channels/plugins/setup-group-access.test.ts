@@ -1,101 +1,43 @@
+// Setup group access tests cover group access setup flow decisions and outputs.
 import { describe, expect, it, vi } from "vitest";
-import {
-  formatAllowlistEntries,
-  parseAllowlistEntries,
-  promptChannelAccessConfig,
-  promptChannelAllowlist,
-  promptChannelAccessPolicy,
-} from "./setup-group-access.js";
+import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
+import { promptChannelAccessConfig } from "./setup-group-access.js";
 
 function createPrompter(params?: {
-  confirm?: (options: { message: string; initialValue: boolean }) => Promise<boolean>;
-  select?: (options: {
-    message: string;
-    options: Array<{ value: string; label: string }>;
-    initialValue?: string;
-  }) => Promise<string>;
-  text?: (options: {
-    message: string;
-    placeholder?: string;
-    initialValue?: string;
-  }) => Promise<string>;
+  confirm?: boolean;
+  select?: string;
+  text?: string;
+  textError?: string;
 }) {
+  const confirm = vi.fn(async () => params?.confirm ?? true);
+  const text = vi.fn(async () => {
+    if (params?.textError) {
+      throw new Error(params.textError);
+    }
+    return params?.text ?? "";
+  });
+  const prompter = createWizardPrompter(
+    { confirm, text },
+    { defaultSelect: params?.select ?? "allowlist" },
+  );
   return {
-    confirm: vi.fn(params?.confirm ?? (async () => true)),
-    select: vi.fn(params?.select ?? (async () => "allowlist")),
-    text: vi.fn(params?.text ?? (async () => "")),
+    ...prompter,
+    confirm,
+    select: vi.mocked(prompter.select),
+    text,
   };
 }
 
-describe("parseAllowlistEntries", () => {
-  it("splits comma/newline/semicolon-separated entries", () => {
-    expect(parseAllowlistEntries("alpha, beta\n gamma;delta")).toEqual([
-      "alpha",
-      "beta",
-      "gamma",
-      "delta",
-    ]);
-  });
-});
-
-describe("formatAllowlistEntries", () => {
-  it("formats compact comma-separated output", () => {
-    expect(formatAllowlistEntries([" alpha ", "", "beta"])).toBe("alpha, beta");
-  });
-});
-
-describe("promptChannelAllowlist", () => {
-  it("uses existing entries as initial value", async () => {
-    const prompter = createPrompter({
-      text: async () => "one,two",
-    });
-
-    const result = await promptChannelAllowlist({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
-      label: "Test",
-      currentEntries: ["alpha", "beta"],
-    });
-
-    expect(result).toEqual(["one", "two"]);
-    expect(prompter.text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialValue: "alpha, beta",
-      }),
-    );
-  });
-});
-
-describe("promptChannelAccessPolicy", () => {
-  it("returns selected policy", async () => {
-    const prompter = createPrompter({
-      select: async () => "open",
-    });
-
-    const result = await promptChannelAccessPolicy({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
-      label: "Discord",
-      currentPolicy: "allowlist",
-    });
-
-    expect(result).toBe("open");
-  });
-});
-
-describe("promptChannelAccessConfig", () => {
+describe("promptChannelAccessConfig policy-only entries", () => {
   it("skips the allowlist text prompt when entries are policy-only", async () => {
     const prompter = createPrompter({
-      confirm: async () => true,
-      select: async () => "allowlist",
-      text: async () => {
-        throw new Error("text prompt should not run");
-      },
+      confirm: true,
+      select: "allowlist",
+      textError: "text prompt should not run",
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
+      prompter,
       label: "Twitch chat",
       skipAllowlistEntries: true,
     });
@@ -104,15 +46,14 @@ describe("promptChannelAccessConfig", () => {
   });
 });
 
-describe("promptChannelAccessConfig", () => {
+describe("promptChannelAccessConfig skip flow", () => {
   it("returns null when user skips configuration", async () => {
     const prompter = createPrompter({
-      confirm: async () => false,
+      confirm: false,
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
+      prompter,
       label: "Slack",
     });
 
@@ -121,14 +62,13 @@ describe("promptChannelAccessConfig", () => {
 
   it("returns allowlist entries when policy is allowlist", async () => {
     const prompter = createPrompter({
-      confirm: async () => true,
-      select: async () => "allowlist",
-      text: async () => "c1, c2",
+      confirm: true,
+      select: "allowlist",
+      text: "c1, c2",
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
+      prompter,
       label: "Slack",
     });
 
@@ -140,13 +80,12 @@ describe("promptChannelAccessConfig", () => {
 
   it("returns non-allowlist policy with empty entries", async () => {
     const prompter = createPrompter({
-      confirm: async () => true,
-      select: async () => "open",
+      confirm: true,
+      select: "open",
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      prompter: prompter as any,
+      prompter,
       label: "Slack",
       allowDisabled: true,
     });

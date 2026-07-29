@@ -1,0 +1,438 @@
+// Audits gateway config for bind, auth, and exposure risks.
+import { isIP } from "node:net";
+import {
+  hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import type { SecurityAuditFinding } from "./audit.types.js";
+import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
+import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
+
+type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
+
+type CollectGatewayConfigFindingsOptions = {
+  collectDangerousConfigFlags?: CollectDangerousConfigFlags;
+  gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
+};
+
+export function collectGatewayConfigFindings(
+  cfg: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  options: CollectGatewayConfigFindingsOptions = {},
+): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+
+  const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+  const auth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    authOverride: options.gatewayAuthOverride,
+    tailscaleMode,
+    env,
+  });
+  const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
+  const controlUiAllowedOrigins = normalizeStringEntries(
+    cfg.gateway?.controlUi?.allowedOrigins ?? [],
+  );
+  const dangerouslyAllowHostHeaderOriginFallback =
+    cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+  const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
+    ? cfg.gateway.trustedProxies
+    : [];
+  const hasToken = typeof auth.token === "string" && auth.token.trim().length > 0;
+  const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
+  const envTokenConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN);
+  const envPasswordConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD);
+  const tokenConfiguredFromConfig = hasConfiguredSecretInput(
+    sourceConfig.gateway?.auth?.token,
+    sourceConfig.secrets?.defaults,
+  );
+  const passwordConfiguredFromConfig = hasConfiguredSecretInput(
+    sourceConfig.gateway?.auth?.password,
+    sourceConfig.secrets?.defaults,
+  );
+  const remoteTokenConfigured = hasConfiguredSecretInput(
+    sourceConfig.gateway?.remote?.token,
+    sourceConfig.secrets?.defaults,
+  );
+  const explicitAuthMode = options.gatewayAuthOverride?.mode ?? sourceConfig.gateway?.auth?.mode;
+  const tokenCanWin =
+    hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
+  const passwordCanWin =
+    explicitAuthMode === "password" ||
+    (explicitAuthMode !== "token" &&
+      explicitAuthMode !== "none" &&
+      explicitAuthMode !== "trusted-proxy" &&
+      !tokenCanWin);
+  const tokenConfigured = tokenCanWin;
+  const passwordConfigured =
+    hasPassword || (passwordCanWin && (envPasswordConfigured || passwordConfiguredFromConfig));
+  const hasSharedSecret =
+    explicitAuthMode === "token"
+      ? tokenConfigured
+      : explicitAuthMode === "password"
+        ? passwordConfigured
+        : explicitAuthMode === "none" || explicitAuthMode === "trusted-proxy"
+          ? false
+          : tokenConfigured || passwordConfigured;
+  const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
+  const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
+  const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
+
+  // HTTP /tools/invoke is intended for narrow automation, not session orchestration/admin operations.
+  // If operators opt-in to re-enabling these tools over HTTP, warn loudly so the choice is explicit.
+  const gatewayToolsAllowRaw = Array.isArray(cfg.gateway?.tools?.allow)
+    ? cfg.gateway?.tools?.allow
+    : [];
+  const gatewayToolsAllow = new Set(
+    gatewayToolsAllowRaw.map((v) => normalizeOptionalLowercaseString(v) ?? "").filter(Boolean),
+  );
+  const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) =>
+    gatewayToolsAllow.has(name),
+  );
+  if (reenabledOverHttp.length > 0) {
+    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    findings.push({
+      checkId: "gateway.tools_invoke_http.dangerous_allow",
+      severity: extraRisk ? "critical" : "warn",
+      title: "Gateway HTTP /tools/invoke re-enables dangerous tools",
+      detail:
+        `gateway.tools.allow includes ${reenabledOverHttp.join(", ")} which removes them from the default HTTP deny list. ` +
+        "This can allow remote session spawning / control-plane actions via HTTP and increases RCE blast radius if the gateway is reachable.",
+      remediation:
+        "Remove these entries from gateway.tools.allow (recommended). " +
+        "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
+    });
+  }
+  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
+    findings.push({
+      checkId: "gateway.bind_no_auth",
+      severity: "critical",
+      title: "Gateway binds beyond loopback without auth",
+      detail: `gateway.bind="${bind}" but no gateway.auth token/password is configured.`,
+      remediation: `Set gateway.auth (token recommended) or bind to loopback.`,
+    });
+  }
+
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
+  if (tokenConflict) {
+    findings.push({
+      checkId: tokenConflict.checkId,
+      severity: "warn",
+      title: tokenConflict.title,
+      detail: tokenConflict.detail,
+      remediation: tokenConflict.remediation,
+    });
+  }
+
+  if (bind === "loopback" && controlUiEnabled && trustedProxies.length === 0) {
+    findings.push({
+      checkId: "gateway.trusted_proxies_missing",
+      severity: "warn",
+      title: "Reverse proxy headers are not trusted",
+      detail:
+        "gateway.bind is loopback and gateway.trustedProxies is empty. " +
+        "If you expose the Control UI through a reverse proxy, configure trusted proxies " +
+        "so local-client checks cannot be spoofed.",
+      remediation:
+        "Set gateway.trustedProxies to your proxy IPs or keep the Control UI local-only.",
+    });
+  }
+
+  if (bind === "loopback" && controlUiEnabled && !hasGatewayAuth) {
+    findings.push({
+      checkId: "gateway.loopback_no_auth",
+      severity: "critical",
+      title: "Gateway auth missing on loopback",
+      detail:
+        "gateway.bind is loopback but no gateway auth secret is configured. " +
+        "If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.",
+      remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
+    });
+  }
+  if (
+    bind !== "loopback" &&
+    controlUiEnabled &&
+    controlUiAllowedOrigins.length === 0 &&
+    !dangerouslyAllowHostHeaderOriginFallback
+  ) {
+    findings.push({
+      checkId: "gateway.control_ui.allowed_origins_required",
+      severity: "critical",
+      title: "Non-loopback Control UI missing explicit allowed origins",
+      detail:
+        "Control UI is enabled on a non-loopback bind but gateway.controlUi.allowedOrigins is empty. " +
+        "Strict origin policy requires explicit allowed origins for non-loopback deployments.",
+      remediation:
+        "Set gateway.controlUi.allowedOrigins to full trusted origins (for example https://control.example.com). " +
+        "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
+    });
+  }
+  if (controlUiAllowedOrigins.includes("*")) {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "gateway.control_ui.allowed_origins_wildcard",
+      severity: exposed ? "critical" : "warn",
+      title: "Control UI allowed origins contains wildcard",
+      detail:
+        'gateway.controlUi.allowedOrigins includes "*" which means allow any browser origin for Control UI/WebChat requests. This disables origin allowlisting and should be treated as an intentional allow-all policy.',
+      remediation:
+        'Replace wildcard origins with explicit trusted origins (for example https://control.example.com). Do not use "*" outside tightly controlled local testing.',
+    });
+  }
+  if (dangerouslyAllowHostHeaderOriginFallback) {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "gateway.control_ui.host_header_origin_fallback",
+      severity: exposed ? "critical" : "warn",
+      title: "DANGEROUS: Host-header origin fallback enabled",
+      detail:
+        "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true enables Host-header origin fallback " +
+        "for Control UI/WebChat websocket checks and weakens DNS rebinding protections.",
+      remediation:
+        "Disable gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback and configure explicit gateway.controlUi.allowedOrigins.",
+    });
+  }
+
+  if (allowRealIpFallback) {
+    const hasNonLoopbackTrustedProxy = trustedProxies.some(
+      (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
+    );
+    const exposed =
+      bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
+    findings.push({
+      checkId: "gateway.real_ip_fallback_enabled",
+      severity: exposed ? "critical" : "warn",
+      title: "X-Real-IP fallback is enabled",
+      detail:
+        "gateway.allowRealIpFallback=true trusts X-Real-IP when trusted proxies omit X-Forwarded-For. " +
+        "Misconfigured proxies that forward client-supplied X-Real-IP can spoof source IP and local-client checks.",
+      remediation:
+        "Keep gateway.allowRealIpFallback=false (default). Only enable this when your trusted proxy " +
+        "always overwrites X-Real-IP and cannot provide X-Forwarded-For.",
+    });
+  }
+
+  if (mdnsMode === "full") {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "discovery.mdns_full_mode",
+      severity: exposed ? "critical" : "warn",
+      title: "mDNS full mode can leak host metadata",
+      detail:
+        'discovery.mdns.mode="full" publishes cliPath/sshPort in local-network TXT records. ' +
+        "This can reveal usernames, filesystem layout, and management ports.",
+      remediation:
+        'Prefer discovery.mdns.mode="minimal" (recommended) or "off", especially when gateway.bind is not loopback.',
+    });
+  }
+
+  if (tailscaleMode === "funnel") {
+    findings.push({
+      checkId: "gateway.tailscale_funnel",
+      severity: "critical",
+      title: "Tailscale Funnel exposure enabled",
+      detail: `gateway.tailscale.mode="funnel" exposes the Gateway publicly; keep auth strict and treat it as internet-facing.`,
+      remediation: `Prefer tailscale.mode="serve" (tailnet-only) or set tailscale.mode="off".`,
+    });
+  } else if (tailscaleMode === "serve") {
+    findings.push({
+      checkId: "gateway.tailscale_serve",
+      severity: "info",
+      title: "Tailscale Serve exposure enabled",
+      detail: `gateway.tailscale.mode="serve" exposes the Gateway to your tailnet (loopback behind Tailscale).`,
+    });
+  }
+
+  if (cfg.mcp?.apps?.enabled === true) {
+    findings.push({
+      checkId: "mcp.apps.enabled",
+      severity: "warn",
+      title: "MCP Apps UI bridge enabled",
+      detail:
+        "mcp.apps.enabled=true allows configured MCP servers to provide interactive HTML. Views are CSP-restricted and origin-isolated, but they can call app-visible tools on their owning MCP server while the session runtime remains active.",
+      remediation:
+        "Keep this enabled only for MCP servers you trust. Disable with `openclaw config set mcp.apps.enabled false --strict-json` when it is not needed.",
+    });
+  }
+
+  const enabledDangerousFlags = (
+    options.collectDangerousConfigFlags ?? collectCoreInsecureOrDangerousFlags
+  )(cfg);
+  for (const enabledFlag of enabledDangerousFlags) {
+    findings.push({
+      checkId: "config.insecure_or_dangerous_flags",
+      severity: "warn",
+      title: "Insecure or dangerous config flag enabled",
+      detail: `Detected enabled flag: ${enabledFlag}.`,
+      remediation:
+        "Disable this flag when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
+    });
+  }
+
+  const token =
+    typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
+  if (auth.mode === "token" && token && token.length < 24) {
+    findings.push({
+      checkId: "gateway.token_too_short",
+      severity: "warn",
+      title: "Gateway token looks short",
+      detail: `gateway auth token is ${token.length} chars; prefer a long random token.`,
+    });
+  }
+
+  if (auth.mode === "trusted-proxy") {
+    const trustedProxiesLocal = cfg.gateway?.trustedProxies ?? [];
+    const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
+
+    findings.push({
+      checkId: "gateway.trusted_proxy_auth",
+      severity: "critical",
+      title: "Trusted-proxy auth mode enabled",
+      detail:
+        'gateway.auth.mode="trusted-proxy" delegates authentication to a reverse proxy. ' +
+        "Ensure your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
+        "only contains IPs of your actual proxy servers.",
+      remediation:
+        "Verify: (1) Your proxy terminates TLS and authenticates users. " +
+        "(2) gateway.trustedProxies is restricted to proxy IPs only. " +
+        "(3) Direct access to the Gateway port is blocked by firewall. " +
+        "See /gateway/trusted-proxy-auth for setup guidance.",
+    });
+
+    if (trustedProxiesLocal.length === 0) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_proxies",
+        severity: "critical",
+        title: "Trusted-proxy auth enabled but no trusted proxies configured",
+        detail:
+          'gateway.auth.mode="trusted-proxy" but gateway.trustedProxies is empty. ' +
+          "All requests will be rejected.",
+        remediation: "Set gateway.trustedProxies to the IP(s) of your reverse proxy.",
+      });
+    }
+
+    if (!trustedProxyConfig?.userHeader) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_user_header",
+        severity: "critical",
+        title: "Trusted-proxy auth missing userHeader config",
+        detail:
+          'gateway.auth.mode="trusted-proxy" but gateway.auth.trustedProxy.userHeader is not configured.',
+        remediation:
+          "Set gateway.auth.trustedProxy.userHeader to the header name your proxy uses " +
+          '(e.g., "x-forwarded-user", "x-pomerium-claim-email").',
+      });
+    }
+
+    if (trustedProxyConfig?.allowLoopback === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_allow_loopback",
+        severity: "warn",
+        title: "Trusted-proxy auth allows loopback proxy sources",
+        detail:
+          "gateway.auth.trustedProxy.allowLoopback=true allows loopback-source requests " +
+          "from configured gateway.trustedProxies entries to satisfy trusted-proxy auth.",
+        remediation:
+          "Enable this only when a same-host reverse proxy is the intended trust boundary. " +
+          "Keep direct Gateway access private to the host and require the proxy to strip or overwrite identity headers.",
+      });
+    }
+
+    if (trustedProxyConfig?.deviceAutoApprove?.enabled === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_device_auto_approve",
+        severity: "warn",
+        title: "Trusted-proxy browser device auto-approval enabled",
+        detail:
+          "gateway.auth.trustedProxy.deviceAutoApprove.enabled=true delegates new Control UI and WebChat device pairing entirely to the reverse-proxy identity.",
+        remediation:
+          "Enable this only when the proxy is the exclusive Gateway ingress, strongly authenticates users, overwrites identity headers, and restricts access with allowUsers.",
+      });
+
+      if (
+        trustedProxyConfig.deviceAutoApprove.scopes?.some(
+          (scope) => scope.trim() === "operator.admin",
+        )
+      ) {
+        findings.push({
+          checkId: "gateway.trusted_proxy_device_auto_approve_admin",
+          severity: "critical",
+          title: "Trusted-proxy device auto-approval allows full admin",
+          detail:
+            "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+          remediation:
+            "Remove operator.admin and approve admin access manually, or use per-identity roles when they become available.",
+        });
+      }
+    }
+
+    const allowUsers = trustedProxyConfig?.allowUsers ?? [];
+    if (allowUsers.length === 0) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_allowlist",
+        severity: "warn",
+        title: "Trusted-proxy auth allows all authenticated users",
+        detail:
+          "gateway.auth.trustedProxy.allowUsers is empty, so any user authenticated by your proxy can access the Gateway.",
+        remediation:
+          "Consider setting gateway.auth.trustedProxy.allowUsers to restrict access to specific users " +
+          '(e.g., ["nick@example.com"]).',
+      });
+    }
+  }
+
+  if (bind !== "loopback" && auth.mode !== "trusted-proxy" && !cfg.gateway?.auth?.rateLimit) {
+    findings.push({
+      checkId: "gateway.auth_no_rate_limit",
+      severity: "warn",
+      title: "No auth rate limiting configured",
+      detail:
+        "gateway.bind is not loopback but no gateway.auth.rateLimit is configured. " +
+        "Without rate limiting, brute-force auth attacks are not mitigated.",
+      remediation:
+        "Set gateway.auth.rateLimit (e.g. { maxAttempts: 10, windowMs: 60000, lockoutMs: 300000 }).",
+    });
+  }
+
+  return findings;
+}
+
+// Keep this stricter than isLoopbackAddress on purpose: this check is for
+// trust boundaries, so only explicit localhost proxy hops are treated as local.
+function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
+  const candidate = entry.trim();
+  if (!candidate) {
+    return false;
+  }
+  if (!candidate.includes("/")) {
+    return candidate === "127.0.0.1" || candidate.toLowerCase() === "::1";
+  }
+
+  const [rawIp, rawPrefix] = candidate.split("/", 2);
+  if (!rawIp || !rawPrefix) {
+    return false;
+  }
+  const ipVersion = isIP(rawIp.trim());
+  const prefix = parseStrictNonNegativeInteger(rawPrefix);
+  if (prefix === undefined) {
+    return false;
+  }
+  if (ipVersion === 4) {
+    return rawIp.trim() === "127.0.0.1" && prefix === 32;
+  }
+  if (ipVersion === 6) {
+    return prefix === 128 && normalizeLowercaseStringOrEmpty(rawIp) === "::1";
+  }
+  return false;
+}

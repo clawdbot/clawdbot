@@ -1,3 +1,4 @@
+// Common tool helper tests cover shared parsing used by multiple agent tools.
 import { describe, expect, test } from "vitest";
 import { parseAvailableTags } from "./common.js";
 

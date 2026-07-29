@@ -1,7 +1,10 @@
+// Group policy warning tests cover user-facing warnings for channel group access policy.
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
+  composeAccountWarningCollectors,
   composeWarningCollectors,
   createAllowlistProviderGroupPolicyWarningCollector,
   createConditionalWarningCollector,
@@ -11,13 +14,16 @@ import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
   createOpenProviderGroupPolicyWarningCollector,
   createOpenProviderConfiguredRouteWarningCollector,
+  projectAccountConfigWarningCollector,
+  projectAccountWarningCollector,
+  projectConfigAccountIdWarningCollector,
+  projectConfigWarningCollector,
   projectWarningCollector,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
-  buildOpenGroupPolicyNoRouteAllowlistWarning,
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
 } from "./group-policy-warnings.js";
@@ -42,6 +48,62 @@ describe("group policy warning builders", () => {
     expect(collect({ value: "abc" })).toEqual(["ABC"]);
   });
 
+  it("projects cfg-only warning collector inputs", () => {
+    const collect = projectConfigWarningCollector<{ cfg: OpenClawConfig; accountId: string }>(
+      ({ cfg }) => [cfg.channels ? "configured" : "none"],
+    );
+
+    expect(
+      collect({
+        cfg: { channels: { slack: {} } } as OpenClawConfig,
+        accountId: "acct-1",
+      }),
+    ).toEqual(["configured"]);
+  });
+
+  it("projects cfg+accountId warning collector inputs", () => {
+    const collect = projectConfigAccountIdWarningCollector<{
+      cfg: OpenClawConfig;
+      accountId?: string | null;
+      account: { accountId: string };
+    }>(({ accountId }) => [accountId ?? "default"]);
+
+    expect(
+      collect({
+        cfg: {} as OpenClawConfig,
+        accountId: "acct-1",
+        account: { accountId: "ignored" },
+      }),
+    ).toEqual(["acct-1"]);
+  });
+
+  it("projects account-only warning collector inputs", () => {
+    const collect = projectAccountWarningCollector<
+      { accountId: string },
+      { account: { accountId: string } }
+    >((account) => [account.accountId]);
+
+    expect(collect({ account: { accountId: "acct-1" } })).toEqual(["acct-1"]);
+  });
+
+  it("projects account+cfg warning collector inputs", () => {
+    const collect = projectAccountConfigWarningCollector<
+      { accountId: string },
+      Record<string, unknown>,
+      { account: { accountId: string }; cfg: OpenClawConfig }
+    >(
+      (cfg: OpenClawConfig) => cfg.channels ?? {},
+      ({ account, cfg }) => [account.accountId, Object.keys(cfg).join(",") || "none"],
+    );
+
+    expect(
+      collect({
+        account: { accountId: "acct-1" },
+        cfg: { channels: { slack: {} } } as OpenClawConfig,
+      }),
+    ).toEqual(["acct-1", "slack"]);
+  });
+
   it("builds conditional warning collectors", () => {
     const collect = createConditionalWarningCollector<{ open: boolean; token?: string }>(
       ({ open }) => (open ? "open" : undefined),
@@ -49,7 +111,26 @@ describe("group policy warning builders", () => {
     );
 
     expect(collect({ open: true })).toEqual(["open", "missing token", "cannot send replies"]);
-    expect(collect({ open: false, token: "x" })).toEqual([]);
+    expect(collect({ open: false, token: "x" })).toStrictEqual([]);
+  });
+
+  it("composes account-scoped warning collectors", () => {
+    const collect = composeAccountWarningCollectors<
+      { enabled: boolean },
+      { account: { enabled: boolean } }
+    >(
+      () => ["base"],
+      (account) => (account.enabled ? "enabled" : undefined),
+      () => ["extra-a", "extra-b"],
+    );
+
+    expect(collect({ account: { enabled: true } })).toEqual([
+      "base",
+      "enabled",
+      "extra-a",
+      "extra-b",
+    ]);
+    expect(collect({ account: { enabled: false } })).toEqual(["base", "extra-a", "extra-b"]);
   });
 
   it("builds base open-policy warning", () => {
@@ -77,20 +158,6 @@ describe("group policy warning builders", () => {
     );
   });
 
-  it("builds no-route-allowlist warning", () => {
-    expect(
-      buildOpenGroupPolicyNoRouteAllowlistWarning({
-        surface: "Example groups",
-        routeAllowlistPath: "channels.example.groups",
-        routeScope: "group",
-        groupPolicyPath: "channels.example.groupPolicy",
-        groupAllowFromPath: "channels.example.groupAllowFrom",
-      }),
-    ).toBe(
-      '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
-    );
-  });
-
   it("builds configure-route-allowlist warning", () => {
     expect(
       buildOpenGroupPolicyConfigureRouteAllowlistWarning({
@@ -113,7 +180,7 @@ describe("group policy warning builders", () => {
         groupPolicyPath: "channels.example.groupPolicy",
         groupAllowFromPath: "channels.example.groupAllowFrom",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       collectOpenGroupPolicyRestrictSendersWarnings({
@@ -141,7 +208,7 @@ describe("group policy warning builders", () => {
         groupPolicyPath: "channels.example.groupPolicy",
         groupAllowFromPath: "channels.example.groupAllowFrom",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       collectAllowlistProviderRestrictSendersWarnings({
@@ -258,7 +325,9 @@ describe("group policy warning builders", () => {
         ...params,
         routeAllowlistConfigured: false,
       }),
-    ).toEqual([buildOpenGroupPolicyNoRouteAllowlistWarning(params.noRouteAllowlist)]);
+    ).toEqual([
+      '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
+    ]);
   });
 
   it("collects configured-route warning variants", () => {
@@ -325,7 +394,7 @@ describe("group policy warning builders", () => {
       cfg: {
         channels?: {
           defaults?: { groupPolicy?: "open" | "allowlist" | "disabled" };
-          example?: unknown;
+          example?: Record<string, unknown>;
         };
       };
       channelLabel: string;
@@ -375,13 +444,7 @@ describe("group policy warning builders", () => {
         cfg: { channels: { example: {} } },
       }),
     ).toEqual([
-      buildOpenGroupPolicyNoRouteAllowlistWarning({
-        surface: "Example groups",
-        routeAllowlistPath: "channels.example.groups",
-        routeScope: "group",
-        groupPolicyPath: "channels.example.groupPolicy",
-        groupAllowFromPath: "channels.example.groupAllowFrom",
-      }),
+      '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
     ]);
   });
 
@@ -424,7 +487,7 @@ describe("group policy warning builders", () => {
 
   it("builds config-aware open-provider collectors", () => {
     const collectWarnings = createOpenProviderGroupPolicyWarningCollector<{
-      cfg: { channels?: { example?: unknown } };
+      cfg: { channels?: { example?: Record<string, unknown> } };
       configuredGroupPolicy?: "open" | "allowlist" | "disabled";
     }>({
       providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,
@@ -482,7 +545,7 @@ describe("group policy warning builders", () => {
       mentionGated: false,
     });
 
-    expect(collectWarnings({ groupPolicy: "allowlist" })).toEqual([]);
+    expect(collectWarnings({ groupPolicy: "allowlist" })).toStrictEqual([]);
     expect(collectWarnings({ groupPolicy: "open" })).toEqual([
       buildOpenGroupPolicyRestrictSendersWarning({
         surface: "Example groups",

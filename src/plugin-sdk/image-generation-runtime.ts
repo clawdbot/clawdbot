@@ -1,3 +1,9 @@
-// Public runtime-facing image-generation helpers for feature/channel plugins.
-
-export { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
+/**
+ * Runtime SDK subpath for image generation provider access.
+ */
+export {
+  generateImage,
+  listRuntimeImageGenerationProviders,
+  type GenerateImageParams,
+  type GenerateImageRuntimeResult,
+} from "../image-generation/runtime.js";

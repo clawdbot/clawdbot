@@ -1,3 +1,4 @@
+// Covers SCP remote host and path normalization.
 import { describe, expect, it } from "vitest";
 import {
   isSafeScpRemoteHost,
@@ -40,38 +41,40 @@ describe("scp remote host", () => {
 });
 
 describe("scp remote path", () => {
-  it.each([
-    {
-      value: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
-      expected: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
-    },
-    {
-      value: " /Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg ",
-      expected: "/Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg",
-    },
-  ])("normalizes safe paths for %j", ({ value, expected }) => {
-    expect(normalizeScpRemotePath(value)).toBe(expected);
-    expect(isSafeScpRemotePath(value)).toBe(true);
-  });
-
-  it.each([
-    null,
-    undefined,
-    "",
-    "   ",
-    "relative/path.jpg",
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad$path.jpg",
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad`path`.jpg",
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad;path.jpg",
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad|path.jpg",
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad&path.jpg",
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad<path.jpg",
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad>path.jpg",
-    '/Users/demo/Library/Messages/Attachments/ab/cd/bad"path.jpg',
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad'path.jpg",
-    "/Users/demo/Library/Messages/Attachments/ab/cd/bad\\path.jpg",
-  ])("rejects unsafe path tokens: %j", (value) => {
-    expect(normalizeScpRemotePath(value)).toBeUndefined();
-    expect(isSafeScpRemotePath(value)).toBe(false);
+  it.each(
+    [
+      {
+        value: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
+        normalized: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
+        safe: true,
+      },
+      {
+        value: " /Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg ",
+        normalized: "/Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg",
+        safe: true,
+      },
+      null,
+      undefined,
+      "",
+      "   ",
+      "relative/path.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad$path.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad`path`.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad;path.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad|path.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad&path.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad<path.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad>path.jpg",
+      '/Users/demo/Library/Messages/Attachments/ab/cd/bad"path.jpg',
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad'path.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad\\path.jpg",
+    ].map((entry) =>
+      typeof entry === "object" && entry !== null && "value" in entry
+        ? entry
+        : { value: entry, normalized: undefined, safe: false },
+    ),
+  )("classifies path token %j", ({ value, normalized, safe }) => {
+    expect(normalizeScpRemotePath(value)).toBe(normalized);
+    expect(isSafeScpRemotePath(value)).toBe(safe);
   });
 });

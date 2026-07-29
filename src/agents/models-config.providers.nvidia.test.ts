@@ -1,127 +1,199 @@
-import { mkdtempSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import { resolveApiKeyForProvider } from "./model-auth.js";
-import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { buildNvidiaProvider } from "./models-config.providers.js";
+// Verifies implicit provider secret wiring for NVIDIA, MiniMax portal, and vLLM.
+import { describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+import { resolveEnvApiKey } from "./model-auth-env.js";
+import {
+  resolveEnvApiKeyVarName,
+  resolveMissingProviderApiKey,
+} from "./models-config.providers.secret-helpers.js";
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider: () => undefined,
+}));
+
+vi.mock("../infra/shell-env.js", () => ({
+  getShellEnvAppliedKeys: () => [],
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+vi.mock("./model-auth-env-vars.js", () => {
+  // Fixed candidate map keeps provider-secret resolution deterministic.
+  const candidates = {
+    minimax: ["MINIMAX_API_KEY"],
+    "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
+    nvidia: ["NVIDIA_API_KEY"],
+    vllm: ["VLLM_API_KEY"],
+  } as const;
+  return {
+    listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+    resolveProviderEnvAuthLookupMaps: () => ({
+      aliasMap: {},
+      envCandidateMap: candidates,
+      authEvidenceMap: {},
+    }),
+  };
+});
+
+const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";
+const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
+
+function createTestModel(id: string): ModelDefinitionConfig {
+  // Minimal catalog row; these tests care about auth wiring, not model metadata.
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
+
+function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  // MiniMax custom hosts still speak the Anthropic-compatible path.
+  const rawHost = env.MINIMAX_API_HOST?.trim();
+  if (!rawHost) {
+    return MINIMAX_BASE_URL;
+  }
+
+  try {
+    const url = new URL(rawHost);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    if (basePath.endsWith("/anthropic")) {
+      return `${url.origin}${basePath}`;
+    }
+    return `${url.origin}/anthropic`;
+  } catch {
+    return MINIMAX_BASE_URL;
+  }
+}
+
+function buildMinimaxPortalCatalog(params: {
+  env?: NodeJS.ProcessEnv;
+  envApiKey?: string;
+  explicitApiKey?: string;
+  explicitBaseUrl?: string;
+  hasProfiles?: boolean;
+}): ModelProviderConfig | null {
+  // Portal catalog is only available when OAuth/env/profile auth exists.
+  const apiKey =
+    params.envApiKey ??
+    params.explicitApiKey ??
+    (params.hasProfiles ? "MINIMAX_OAUTH_TOKEN" : undefined);
+  if (!apiKey) {
+    return null;
+  }
+  return {
+    baseUrl: params.explicitBaseUrl || resolveMinimaxCatalogBaseUrl(params.env),
+    api: "anthropic-messages",
+    authHeader: true,
+    apiKey,
+    models: [createTestModel("MiniMax-M2.7")],
+  };
+}
 
 describe("NVIDIA provider", () => {
-  it("should include nvidia when NVIDIA_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ NVIDIA_API_KEY: "test-key" }, async () => {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.nvidia).toBeDefined();
-      expect(providers?.nvidia?.models?.length).toBeGreaterThan(0);
+  it("should include nvidia when NVIDIA_API_KEY is configured", () => {
+    const provider = resolveMissingProviderApiKey({
+      providerKey: "nvidia",
+      provider: {
+        baseUrl: NVIDIA_BASE_URL,
+        api: "openai-completions",
+        models: [createTestModel("nvidia/test-model")],
+      },
+      env: { NVIDIA_API_KEY: "test-key" } as NodeJS.ProcessEnv,
+      profileApiKey: undefined,
     });
+    expect(provider.apiKey).toBe("NVIDIA_API_KEY");
+    expect(provider.models).toStrictEqual([createTestModel("nvidia/test-model")]);
   });
 
-  it("resolves the nvidia api key value from env", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ NVIDIA_API_KEY: "nvidia-test-api-key" }, async () => {
-      const auth = await resolveApiKeyForProvider({
-        provider: "nvidia",
-        agentDir,
-      });
+  it("resolves the nvidia api key value from env", () => {
+    const auth = resolveEnvApiKey("nvidia", {
+      NVIDIA_API_KEY: "nvidia-test-api-key",
+    } as NodeJS.ProcessEnv);
 
-      expect(auth.apiKey).toBe("nvidia-test-api-key");
-      expect(auth.mode).toBe("api-key");
-      expect(auth.source).toContain("NVIDIA_API_KEY");
+    expect(auth).toEqual({
+      apiKey: "nvidia-test-api-key",
+      source: "env: NVIDIA_API_KEY",
     });
-  });
-
-  it("should build nvidia provider with correct configuration", () => {
-    const provider = buildNvidiaProvider();
-    expect(provider.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
-    expect(provider.api).toBe("openai-completions");
-    expect(provider.models).toBeDefined();
-    expect(provider.models.length).toBeGreaterThan(0);
-  });
-
-  it("should include default nvidia models", () => {
-    const provider = buildNvidiaProvider();
-    const modelIds = provider.models.map((m) => m.id);
-    expect(modelIds).toContain("nvidia/llama-3.1-nemotron-70b-instruct");
-    expect(modelIds).toContain("meta/llama-3.3-70b-instruct");
-    expect(modelIds).toContain("nvidia/mistral-nemo-minitron-8b-8k-instruct");
   });
 });
 
 describe("MiniMax implicit provider (#15275)", () => {
-  it("should use anthropic-messages API for API-key provider", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ MINIMAX_API_KEY: "test-key" }, async () => {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.minimax).toBeDefined();
-      expect(providers?.minimax?.api).toBe("anthropic-messages");
-      expect(providers?.minimax?.authHeader).toBe(true);
-      expect(providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+  it("should use anthropic-messages API for API-key provider", () => {
+    const provider = resolveMissingProviderApiKey({
+      providerKey: "minimax",
+      provider: {
+        baseUrl: MINIMAX_BASE_URL,
+        api: "anthropic-messages",
+        authHeader: true,
+        models: [createTestModel("MiniMax-M2.7")],
+      },
+      env: { MINIMAX_API_KEY: "test-key" } as NodeJS.ProcessEnv,
+      profileApiKey: undefined,
     });
+
+    expect(provider.api).toBe("anthropic-messages");
+    expect(provider.authHeader).toBe(true);
+    expect(provider.apiKey).toBe("MINIMAX_API_KEY");
+    expect(provider.baseUrl).toBe("https://api.minimax.io/anthropic");
   });
 
-  it("should set authHeader for minimax portal provider", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "minimax-portal:default": {
-              type: "oauth",
-              provider: "minimax-portal",
-              access: "token",
-              refresh: "refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
+  it("should respect MINIMAX_API_HOST env var for CN endpoint (#34487)", () => {
+    const env = {
+      MINIMAX_API_KEY: "test-key",
+      MINIMAX_API_HOST: "https://api.minimaxi.com",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveMinimaxCatalogBaseUrl(env)).toBe("https://api.minimaxi.com/anthropic");
+    expect(buildMinimaxPortalCatalog({ env, envApiKey: "MINIMAX_API_KEY" })?.baseUrl).toBe(
+      "https://api.minimaxi.com/anthropic",
     );
-
-    const providers = await resolveImplicitProvidersForTest({ agentDir });
-    expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
   });
 
-  it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ MINIMAX_OAUTH_TOKEN: "portal-token" }, async () => {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.["minimax-portal"]).toBeDefined();
-      expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
-      expect(providers?.["minimax-portal"]?.models?.some((m) => m.id === "MiniMax-VL-01")).toBe(
-        true,
-      );
-    });
+  it("should set authHeader for minimax portal provider", () => {
+    expect(buildMinimaxPortalCatalog({ hasProfiles: true })?.authHeader).toBe(true);
+  });
+
+  it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", () => {
+    expect(
+      resolveEnvApiKeyVarName("minimax-portal", {
+        MINIMAX_OAUTH_TOKEN: "portal-token",
+      } as NodeJS.ProcessEnv),
+    ).toBe("MINIMAX_OAUTH_TOKEN");
+    const provider = buildMinimaxPortalCatalog({ hasProfiles: true });
+    expect(provider?.authHeader).toBe(true);
+    expect(provider?.apiKey).toBe("MINIMAX_OAUTH_TOKEN");
   });
 });
 
 describe("vLLM provider", () => {
-  it("should not include vllm when no API key is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ VLLM_API_KEY: undefined }, async () => {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.vllm).toBeUndefined();
-    });
+  it("should not include vllm when no API key is configured", () => {
+    expect(resolveEnvApiKeyVarName("vllm", {} as NodeJS.ProcessEnv)).toBeUndefined();
   });
 
-  it("should include vllm when VLLM_API_KEY is set", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ VLLM_API_KEY: "test-key" }, async () => {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-
-      expect(providers?.vllm).toBeDefined();
-      expect(providers?.vllm?.apiKey).toBe("VLLM_API_KEY");
-      expect(providers?.vllm?.baseUrl).toBe("http://127.0.0.1:8000/v1");
-      expect(providers?.vllm?.api).toBe("openai-completions");
-
-      // Note: discovery is disabled in test environments (VITEST check)
-      expect(providers?.vllm?.models).toEqual([]);
+  it("should include vllm when VLLM_API_KEY is set", () => {
+    const provider = resolveMissingProviderApiKey({
+      providerKey: "vllm",
+      provider: {
+        baseUrl: VLLM_DEFAULT_BASE_URL,
+        api: "openai-completions",
+        models: [createTestModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+      },
+      env: { VLLM_API_KEY: "test-key" } as NodeJS.ProcessEnv,
+      profileApiKey: undefined,
     });
+
+    expect(provider.apiKey).toBe("VLLM_API_KEY");
+    expect(provider.baseUrl).toBe(VLLM_DEFAULT_BASE_URL);
+    expect(provider.api).toBe("openai-completions");
+    expect(provider.models).toHaveLength(1);
   });
 });

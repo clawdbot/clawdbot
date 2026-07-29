@@ -1,19 +1,18 @@
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveChannelImplicitMentions,
+  resolveStableChannelMessageIngress,
+  type StableChannelIngressIdentityParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Tlon helper module supports utils behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeShip } from "../targets.js";
-
-// Cite types for message references
-export interface ChanCite {
-  chan: { nest: string; where: string };
-}
-export interface GroupCite {
-  group: string;
-}
-export interface DeskCite {
-  desk: { flag: string; where: string };
-}
-export interface BaitCite {
-  bait: { group: string; graph: string; where: string };
-}
-export type Cite = ChanCite | GroupCite | DeskCite | BaitCite;
 
 export interface ParsedCite {
   type: "chan" | "group" | "desk" | "bait";
@@ -25,7 +24,6 @@ export interface ParsedCite {
   where?: string;
 }
 
-// Extract all cites from message content
 export function extractCites(content: unknown): ParsedCite[] {
   if (!content || !Array.isArray(content)) {
     return [];
@@ -69,7 +67,9 @@ export function formatModelName(modelString?: string | null): string {
   if (!modelString) {
     return "AI";
   }
-  const modelName = modelString.includes("/") ? modelString.split("/")[1] : modelString;
+  const modelName = modelString.includes("/")
+    ? expectDefined(modelString.split("/").at(1), "provider/model second segment")
+    : modelString;
   const modelMappings: Record<string, string> = {
     "claude-opus-4-5": "Claude Opus 4.5",
     "claude-sonnet-4-5": "Claude Sonnet 4.5",
@@ -81,8 +81,9 @@ export function formatModelName(modelString?: string | null): string {
     "gemini-pro": "Gemini Pro",
   };
 
-  if (modelMappings[modelName]) {
-    return modelMappings[modelName];
+  const mappedName = modelMappings[modelName];
+  if (mappedName !== undefined) {
+    return mappedName;
   }
   return modelName
     .replace(/-/g, " ")
@@ -100,12 +101,10 @@ export function isBotMentioned(
     return false;
   }
 
-  // Check for @all mention
   if (/@all\b/i.test(messageText)) {
     return true;
   }
 
-  // Check for ship mention
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = normalizedBotShip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
@@ -113,7 +112,6 @@ export function isBotMentioned(
     return true;
   }
 
-  // Check for nickname mention (case-insensitive, word boundary)
   if (nickname) {
     const escapedNickname = nickname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
@@ -125,46 +123,109 @@ export function isBotMentioned(
   return false;
 }
 
-/**
- * Strip bot ship mention from message text for command detection.
- * "~bot-ship /status" → "/status"
- */
 export function stripBotMention(messageText: string, botShipName: string): string {
-  if (!messageText || !botShipName) return messageText;
+  if (!messageText || !botShipName) {
+    return messageText;
+  }
   return messageText.replace(normalizeShip(botShipName), "").trim();
 }
 
-export function isDmAllowed(senderShip: string, allowlist: string[] | undefined): boolean {
-  if (!allowlist || allowlist.length === 0) {
-    return false;
-  }
-  const normalizedSender = normalizeShip(senderShip);
-  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedSender);
+const tlonIngressIdentity = {
+  key: "sender-ship",
+  normalize: normalizeShip,
+  sensitivity: "pii",
+  isWildcardEntry: () => false,
+  entryIdPrefix: "tlon-entry",
+} satisfies StableChannelIngressIdentityParams;
+
+export async function isDmAllowedWithIngress(
+  senderShip: string,
+  allowlist: string[] | undefined,
+): Promise<boolean> {
+  const access = await resolveStableChannelMessageIngress({
+    channelId: "tlon",
+    accountId: "default",
+    identity: tlonIngressIdentity,
+    subject: { stableId: senderShip },
+    conversation: {
+      kind: "direct",
+      id: "direct",
+    },
+    dmPolicy: "allowlist",
+    allowFrom: allowlist ?? [],
+  });
+  return access.senderAccess.allowed;
 }
 
-/**
- * Check if a group invite from a ship should be auto-accepted.
- *
- * SECURITY: Fail-safe to deny. If allowlist is empty or undefined,
- * ALL invites are rejected - even if autoAcceptGroupInvites is enabled.
- * This prevents misconfigured bots from accepting malicious invites.
- */
+export async function resolveTlonCommandAuthorizationWithIngress(params: {
+  senderShip: string;
+  ownerShip: string | null | undefined;
+  useAccessGroups: boolean;
+}) {
+  const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
+  return await resolveStableChannelMessageIngress({
+    channelId: "tlon",
+    accountId: "default",
+    identity: tlonIngressIdentity,
+    useAccessGroups: params.useAccessGroups,
+    subject: { stableId: params.senderShip },
+    conversation: {
+      kind: "direct",
+      id: "command",
+    },
+    event: {
+      authMode: "none",
+      mayPair: false,
+    },
+    dmPolicy: "allowlist",
+    groupPolicy: "open",
+    allowFrom: normalizedOwner ? [normalizedOwner] : [],
+    command: {},
+  });
+}
+
+export function resolveTlonGroupMentionDecision(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  wasMentioned: boolean;
+  botParticipatedInThread: boolean;
+}) {
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg: params.cfg,
+    channel: "tlon",
+    accountId: params.accountId,
+  });
+  return resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      implicitMentionKinds: implicitMentionKindWhen(
+        "bot_thread_participant",
+        params.botParticipatedInThread,
+      ),
+    },
+    policy: {
+      isGroup: true,
+      requireMention: true,
+      implicitMentions,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
+  });
+}
+
 export function isGroupInviteAllowed(
   inviterShip: string,
   allowlist: string[] | undefined,
 ): boolean {
-  // SECURITY: Fail-safe to deny when no allowlist configured
-  if (!allowlist || allowlist.length === 0) {
-    return false;
-  }
   const normalizedInviter = normalizeShip(inviterShip);
-  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedInviter);
+  return resolveAllowlistMatchByCandidates({
+    allowList: (allowlist ?? []).map((ship) => normalizeShip(ship)),
+    candidates: [{ value: normalizedInviter, source: "ship" }],
+  }).allowed;
 }
 
-/**
- * Resolve quoted/cited content only after the caller has passed authorization.
- * Unauthorized paths must keep raw text and must not trigger cross-channel cite fetches.
- */
 export async function resolveAuthorizedMessageText(params: {
   rawText: string;
   content: unknown;
@@ -179,9 +240,27 @@ export async function resolveAuthorizedMessageText(params: {
   return citedContent + rawText;
 }
 
+export const asRecord = asNullableObjectRecord;
+export const formatErrorMessage = sharedFormatErrorMessage;
+export const readString = readStringField;
+
+function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readStringField(
+  record: Record<string, unknown> | null | undefined,
+  field: string,
+): string | undefined {
+  const value = record?.[field];
+  return typeof value === "string" ? value : undefined;
+}
+
 // Helper to recursively extract text from inline content
 function renderInlineItem(
-  item: any,
+  item: unknown,
   options?: {
     linkMode?: "content-or-href" | "href";
     allowBreak?: boolean;
@@ -191,44 +270,57 @@ function renderInlineItem(
   if (typeof item === "string") {
     return item;
   }
-  if (!item || typeof item !== "object") {
+  const record = asRecord(item);
+  if (!record) {
     return "";
   }
-  if (item.ship) {
-    return item.ship;
+  const ship = readString(record, "ship");
+  if (ship) {
+    return ship;
   }
-  if ("sect" in item) {
-    return `@${item.sect || "all"}`;
+  if ("sect" in record) {
+    const sect = record.sect;
+    if (typeof sect === "string") {
+      return `@${sect || "all"}`;
+    }
+    if (sect === null) {
+      return "@all";
+    }
   }
-  if (options?.allowBreak && item.break !== undefined) {
+  if (options?.allowBreak && "break" in record) {
     return "\n";
   }
-  if (item["inline-code"]) {
-    return `\`${item["inline-code"]}\``;
+  const inlineCode = readString(record, "inline-code");
+  if (inlineCode) {
+    return `\`${inlineCode}\``;
   }
-  if (item.code) {
-    return `\`${item.code}\``;
+  const code = readString(record, "code");
+  if (code) {
+    return `\`${code}\``;
   }
-  if (item.link && item.link.href) {
-    return options?.linkMode === "href" ? item.link.href : item.link.content || item.link.href;
+  const link = asRecord(record.link);
+  const linkHref = link ? readString(link, "href") : undefined;
+  if (link && linkHref) {
+    const linkContent = readString(link, "content");
+    return options?.linkMode === "href" ? linkHref : linkContent || linkHref;
   }
-  if (item.bold && Array.isArray(item.bold)) {
-    return `**${extractInlineText(item.bold)}**`;
+  if (Array.isArray(record.bold)) {
+    return `**${extractInlineText(record.bold)}**`;
   }
-  if (item.italics && Array.isArray(item.italics)) {
-    return `*${extractInlineText(item.italics)}*`;
+  if (Array.isArray(record.italics)) {
+    return `*${extractInlineText(record.italics)}*`;
   }
-  if (item.strike && Array.isArray(item.strike)) {
-    return `~~${extractInlineText(item.strike)}~~`;
+  if (Array.isArray(record.strike)) {
+    return `~~${extractInlineText(record.strike)}~~`;
   }
-  if (options?.allowBlockquote && item.blockquote && Array.isArray(item.blockquote)) {
-    return `> ${extractInlineText(item.blockquote)}`;
+  if (options?.allowBlockquote && Array.isArray(record.blockquote)) {
+    return `> ${extractInlineText(record.blockquote)}`;
   }
   return "";
 }
 
-function extractInlineText(items: any[]): string {
-  return items.map((item: any) => renderInlineItem(item)).join("");
+function extractInlineText(items: readonly unknown[]): string {
+  return items.map((item) => renderInlineItem(item)).join("");
 }
 
 export function extractMessageText(content: unknown): string {
@@ -237,11 +329,16 @@ export function extractMessageText(content: unknown): string {
   }
 
   return content
-    .map((verse: any) => {
+    .map((verse) => {
+      const verseRecord = asRecord(verse);
+      if (!verseRecord) {
+        return "";
+      }
+
       // Handle inline content (text, ships, links, etc.)
-      if (verse.inline && Array.isArray(verse.inline)) {
-        return verse.inline
-          .map((item: any) =>
+      if (Array.isArray(verseRecord.inline)) {
+        return verseRecord.inline
+          .map((item) =>
             renderInlineItem(item, {
               linkMode: "href",
               allowBreak: true,
@@ -252,38 +349,46 @@ export function extractMessageText(content: unknown): string {
       }
 
       // Handle block content (images, code blocks, etc.)
-      if (verse.block && typeof verse.block === "object") {
-        const block = verse.block;
+      const block = asRecord(verseRecord.block);
+      if (block) {
+        const image = asRecord(block.image);
 
         // Image blocks
-        if (block.image && block.image.src) {
-          const alt = block.image.alt ? ` (${block.image.alt})` : "";
-          return `\n${block.image.src}${alt}\n`;
+        if (image) {
+          const imageSrc = readString(image, "src");
+          if (imageSrc) {
+            const altText = readString(image, "alt");
+            const alt = altText ? ` (${altText})` : "";
+            return `\n${imageSrc}${alt}\n`;
+          }
         }
 
         // Code blocks
-        if (block.code && typeof block.code === "object") {
-          const lang = block.code.lang || "";
-          const code = block.code.code || "";
+        const codeBlock = asRecord(block.code);
+        if (codeBlock) {
+          const lang = readString(codeBlock, "lang") ?? "";
+          const code = readString(codeBlock, "code") ?? "";
           return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
         }
 
         // Header blocks
-        if (block.header && typeof block.header === "object") {
+        const header = asRecord(block.header);
+        if (header) {
+          const headerContent = Array.isArray(header.content) ? header.content : [];
           const text =
-            block.header.content
-              ?.map((item: any) => (typeof item === "string" ? item : ""))
-              .join("") || "";
+            headerContent.map((item) => (typeof item === "string" ? item : "")).join("") || "";
           return `\n## ${text}\n`;
         }
 
         // Cite/quote blocks - parse the reference structure
-        if (block.cite && typeof block.cite === "object") {
-          const cite = block.cite;
+        const cite = asRecord(block.cite);
+        if (cite) {
+          const chanCite = asRecord(cite.chan);
 
           // ChanCite - reference to a channel message
-          if (cite.chan && typeof cite.chan === "object") {
-            const { nest, where } = cite.chan;
+          if (chanCite) {
+            const nest = readString(chanCite, "nest");
+            const where = readString(chanCite, "where");
             // where is typically /msg/~author/timestamp
             const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
             if (whereMatch) {
@@ -294,18 +399,28 @@ export function extractMessageText(content: unknown): string {
           }
 
           // GroupCite - reference to a group
-          if (cite.group && typeof cite.group === "string") {
-            return `\n> [ref: group ${cite.group}]\n`;
+          const group = readString(cite, "group");
+          if (group) {
+            return `\n> [ref: group ${group}]\n`;
           }
 
           // DeskCite - reference to an app/desk
-          if (cite.desk && typeof cite.desk === "object") {
-            return `\n> [ref: ${cite.desk.flag}]\n`;
+          const desk = asRecord(cite.desk);
+          if (desk) {
+            const flag = readString(desk, "flag");
+            if (flag) {
+              return `\n> [ref: ${flag}]\n`;
+            }
           }
 
           // BaitCite - reference with group+graph context
-          if (cite.bait && typeof cite.bait === "object") {
-            return `\n> [ref: ${cite.bait.graph} in ${cite.bait.group}]\n`;
+          const bait = asRecord(cite.bait);
+          if (bait) {
+            const graph = readString(bait, "graph");
+            const groupName = readString(bait, "group");
+            if (graph && groupName) {
+              return `\n> [ref: ${graph} in ${groupName}]\n`;
+            }
           }
 
           return `\n> [quoted message]\n`;
@@ -327,13 +442,4 @@ export function isSummarizationRequest(messageText: string): boolean {
     /tldr/i,
   ];
   return patterns.some((pattern) => pattern.test(messageText));
-}
-
-export function formatChangesDate(daysAgo = 5): string {
-  const now = new Date();
-  const targetDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
-  const year = targetDate.getFullYear();
-  const month = targetDate.getMonth() + 1;
-  const day = targetDate.getDate();
-  return `~${year}.${month}.${day}..20.19.51..9b9d`;
 }

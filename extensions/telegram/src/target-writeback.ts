@@ -1,14 +1,20 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Telegram plugin module implements target writeback behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readConfigFileSnapshotForWrite,
-  writeConfigFile,
-} from "openclaw/plugin-sdk/config-runtime";
+  replaceConfigFile,
+} from "openclaw/plugin-sdk/config-mutation";
 import {
   loadCronStore,
   resolveCronStorePath,
   saveCronStore,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/cron-store-runtime";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
@@ -16,20 +22,14 @@ import {
 } from "./targets.js";
 
 const writebackLogger = createSubsystemLogger("telegram/target-writeback");
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
+const TELEGRAM_ADMIN_SCOPE = "operator.admin";
 
 function normalizeTelegramLookupTargetForMatch(raw: string): string | undefined {
   const normalized = normalizeTelegramLookupTarget(raw);
   if (!normalized) {
     return undefined;
   }
-  return normalized.startsWith("@") ? normalized.toLowerCase() : normalized;
+  return normalized.startsWith("@") ? normalizeLowercaseStringOrEmpty(normalized) : normalized;
 }
 
 function normalizeTelegramTargetForMatch(raw: string): string | undefined {
@@ -87,7 +87,7 @@ function rewriteTargetIfMatch(params: {
   if (typeof params.rawValue !== "string" && typeof params.rawValue !== "number") {
     return null;
   }
-  const value = String(params.rawValue).trim();
+  const value = normalizeOptionalString(String(params.rawValue)) ?? "";
   if (!value) {
     return null;
   }
@@ -141,6 +141,8 @@ export async function maybePersistResolvedTelegramTarget(params: {
   rawTarget: string;
   resolvedChatId: string;
   verbose?: boolean;
+  gatewayClientScopes?: readonly string[];
+  trustedInternalWriteback?: boolean;
 }): Promise<void> {
   const raw = params.rawTarget.trim();
   if (!raw) {
@@ -154,6 +156,15 @@ export async function maybePersistResolvedTelegramTarget(params: {
     return;
   }
   const { matchKey, resolvedTarget } = rewrite;
+  const hasGatewayAdminScope = params.gatewayClientScopes?.includes(TELEGRAM_ADMIN_SCOPE) === true;
+  const trustedInternalWriteback =
+    params.gatewayClientScopes === undefined && params.trustedInternalWriteback === true;
+  if (!hasGatewayAdminScope && !trustedInternalWriteback) {
+    writebackLogger.warn(
+      `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
+    );
+    return;
+  }
 
   try {
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
@@ -164,7 +175,12 @@ export async function maybePersistResolvedTelegramTarget(params: {
       resolvedTarget,
     });
     if (configChanged) {
-      await writeConfigFile(nextConfig, writeOptions);
+      await replaceConfigFile({
+        nextConfig,
+        snapshot,
+        writeOptions,
+        afterWrite: { mode: "auto" },
+      });
       if (params.verbose) {
         writebackLogger.warn(`resolved Telegram defaultTo target ${raw} -> ${resolvedTarget}`);
       }
@@ -176,7 +192,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   }
 
   try {
-    const storePath = resolveCronStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronStorePath();
     const store = await loadCronStore(storePath);
     let cronChanged = false;
     for (const job of store.jobs) {

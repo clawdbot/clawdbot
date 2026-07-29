@@ -1,5 +1,11 @@
 {
   "id": "zalo",
+  "name": "Zalo",
+  "description": "OpenClaw Zalo channel plugin for bot and webhook chats.",
+  "icon": "https://cdn.simpleicons.org/zalo",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["zalo"],
   "configSchema": {
     "type": "object",

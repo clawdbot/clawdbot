@@ -1,33 +1,45 @@
+// Discord API module exposes the plugin public contract.
 export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-} from "../../../src/plugin-sdk/discord.js";
+} from "openclaw/plugin-sdk/channel-status";
+export { buildChannelConfigSchema, DiscordConfigSchema } from "../config-api.js";
+export type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
+export type {
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "openclaw/plugin-sdk/channel-plugin-common";
+export type {
+  DiscordAccountConfig,
+  DiscordActionConfig,
+  DiscordConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 export {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
   jsonResult,
+  readNonNegativeIntegerParam,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
   resolvePollMaxSelections,
-  type ActionGate,
-  type ChannelPlugin,
-  type DiscordAccountConfig,
-  type DiscordActionConfig,
-  type DiscordConfig,
-  type OpenClawConfig,
-} from "../../../src/plugin-sdk/discord-core.js";
-export { DiscordConfigSchema } from "../../../src/plugin-sdk/discord-core.js";
+} from "openclaw/plugin-sdk/channel-actions";
+export type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 export { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 export {
   assertMediaNotDataUrl,
   parseAvailableTags,
   readReactionParams,
   withNormalizedTimestamp,
-} from "../../../src/plugin-sdk/discord-core.js";
+} from "openclaw/plugin-sdk/channel-actions";
 export {
   createHybridChannelConfigAdapter,
   createScopedChannelConfigAdapter,
@@ -40,13 +52,16 @@ export {
   createAccountListHelpers,
 } from "openclaw/plugin-sdk/account-helpers";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+export {
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+} from "openclaw/plugin-sdk/channel-plugin-common";
+export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-export type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-contract";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+export { getChatChannelMeta } from "./channel-api.js";
+export { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";

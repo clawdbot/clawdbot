@@ -33,24 +33,39 @@ struct CronJobEditor: View {
     @State var wakeMode: CronWakeMode = .now
     @State var deleteAfterRun: Bool = false
 
-    enum ScheduleKind: String, CaseIterable, Identifiable { case at, every, cron; var id: String {
-        rawValue
-    } }
+    enum ScheduleKind: String, CaseIterable, Identifiable {
+        case at, every, cron
+
+        var id: String {
+            rawValue
+        }
+    }
+
     @State var scheduleKind: ScheduleKind = .every
     @State var atDate: Date = .init().addingTimeInterval(60 * 5)
     @State var everyText: String = "1h"
     @State var cronExpr: String = "0 9 * * 3"
     @State var cronTz: String = ""
 
-    enum PayloadKind: String, CaseIterable, Identifiable { case systemEvent, agentTurn; var id: String {
-        rawValue
-    } }
+    enum PayloadKind: String, CaseIterable, Identifiable {
+        case systemEvent, agentTurn
+
+        var id: String {
+            rawValue
+        }
+    }
+
     @State var payloadKind: PayloadKind = .systemEvent
     @State var systemEventText: String = ""
     @State var agentMessage: String = ""
-    enum DeliveryChoice: String, CaseIterable, Identifiable { case announce, none; var id: String {
-        rawValue
-    } }
+    enum DeliveryChoice: String, CaseIterable, Identifiable {
+        case announce, none
+
+        var id: String {
+            rawValue
+        }
+    }
+
     @State var deliveryMode: DeliveryChoice = .announce
     @State var channel: String = "last"
     @State var to: String = ""

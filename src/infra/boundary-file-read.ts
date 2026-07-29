@@ -1,202 +1,82 @@
-import fs from "node:fs";
-import path from "node:path";
+// Exposes root-scoped file open helpers with fs-safe defaults.
+import "./fs-safe-defaults.js";
 import {
-  resolveBoundaryPath,
-  resolveBoundaryPathSync,
-  type ResolvedBoundaryPath,
-} from "./boundary-path.js";
-import type { PathAliasPolicy } from "./path-alias-guards.js";
-import {
-  openVerifiedFileSync,
-  type SafeOpenSyncAllowedType,
-  type SafeOpenSyncFailureReason,
-} from "./safe-open-sync.js";
+  matchRootFileOpenFailure as matchRootFileOpenFailureFsSafe,
+  readFileDescriptorBounded as readFileDescriptorBoundedFsSafe,
+  readFileDescriptorBoundedSync as readFileDescriptorBoundedSyncFsSafe,
+  type RootFileOpenFailure,
+} from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 
-type BoundaryReadFs = Pick<
-  typeof fs,
-  | "closeSync"
-  | "constants"
-  | "fstatSync"
-  | "lstatSync"
-  | "openSync"
-  | "readFileSync"
-  | "realpathSync"
->;
+// Root-scoped file open helpers. Use these for user paths that must stay under
+// an already trusted boundary.
+export {
+  canUseRootFileOpen,
+  matchRootFileOpenFailure,
+  openRootFile,
+  openRootFileSync,
+  type RootFileOpenFailure,
+  type RootFileOpenResult,
+} from "@openclaw/fs-safe/advanced";
 
-export type BoundaryFileOpenFailureReason = SafeOpenSyncFailureReason | "validation";
+// fs-safe folds ENOENT, ENOTDIR, and ELOOP into its `path` reason. Only the
+// first two mean the artifact is absent; a symlink loop is an unreadable path.
+const MISSING_PATH_ERROR_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"]);
 
-export type BoundaryFileOpenResult =
-  | { ok: true; path: string; fd: number; stat: fs.Stats; rootRealPath: string }
-  | { ok: false; reason: BoundaryFileOpenFailureReason; error?: unknown };
+function readFailureErrorCode(error: unknown): string | undefined {
+  const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+  return typeof code === "string" && code ? code : undefined;
+}
 
-export type OpenBoundaryFileSyncParams = {
-  absolutePath: string;
-  rootPath: string;
+/**
+ * Describes a root-scoped open failure without collapsing every cause into a
+ * containment violation. Only `validation` means the path failed the boundary or
+ * alias check; a missing artifact or an unreadable descriptor is an ordinary
+ * operational state, and reporting those as escapes sends operators hunting a
+ * security incident that never happened.
+ */
+export function describeRootFileOpenFailure(params: {
+  failure: RootFileOpenFailure;
+  subject: string;
   boundaryLabel: string;
-  rootRealPath?: string;
-  maxBytes?: number;
-  rejectHardlinks?: boolean;
-  allowedType?: SafeOpenSyncAllowedType;
-  skipLexicalRootCheck?: boolean;
-  ioFs?: BoundaryReadFs;
-};
-
-export type OpenBoundaryFileParams = OpenBoundaryFileSyncParams & {
-  aliasPolicy?: PathAliasPolicy;
-};
-
-type ResolvedBoundaryFilePath = {
-  absolutePath: string;
-  resolvedPath: string;
-  rootRealPath: string;
-};
-
-export function canUseBoundaryFileOpen(ioFs: typeof fs): boolean {
-  return (
-    typeof ioFs.openSync === "function" &&
-    typeof ioFs.closeSync === "function" &&
-    typeof ioFs.fstatSync === "function" &&
-    typeof ioFs.lstatSync === "function" &&
-    typeof ioFs.realpathSync === "function" &&
-    typeof ioFs.readFileSync === "function" &&
-    typeof ioFs.constants === "object" &&
-    ioFs.constants !== null
-  );
+  filePath: string;
+}): string {
+  const unreadable = (code?: string) =>
+    `${params.subject} could not be read${code ? ` (${code})` : ""}: ${params.filePath}`;
+  return matchRootFileOpenFailureFsSafe(params.failure, {
+    path: (failure) => {
+      const code = readFailureErrorCode(failure.error);
+      return code && !MISSING_PATH_ERROR_CODES.has(code)
+        ? unreadable(code)
+        : `${params.subject} not found: ${params.filePath}`;
+    },
+    validation: () =>
+      `${params.subject} escapes ${params.boundaryLabel} or fails alias checks: ${params.filePath}`,
+    fallback: (failure) => unreadable(readFailureErrorCode(failure.error)),
+  });
 }
 
-export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): BoundaryFileOpenResult {
-  const ioFs = params.ioFs ?? fs;
-  const resolved = resolveBoundaryFilePathGeneric({
-    absolutePath: params.absolutePath,
-    resolve: (absolutePath) =>
-      resolveBoundaryPathSync({
-        absolutePath,
-        rootPath: params.rootPath,
-        rootCanonicalPath: params.rootRealPath,
-        boundaryLabel: params.boundaryLabel,
-        skipLexicalRootCheck: params.skipLexicalRootCheck,
-      }),
-  });
-  if (resolved instanceof Promise) {
-    return toBoundaryValidationError(new Error("Unexpected async boundary resolution"));
+function preserveOpenClawOverflowError(error: unknown, maxBytes: number): never {
+  if (error instanceof FsSafeError && error.code === "too-large") {
+    throw new RangeError(`File exceeds ${maxBytes} bytes`, { cause: error });
   }
-  return finalizeBoundaryFileOpen({
-    resolved,
-    maxBytes: params.maxBytes,
-    rejectHardlinks: params.rejectHardlinks,
-    allowedType: params.allowedType,
-    ioFs,
-  });
+  throw error;
 }
 
-function openBoundaryFileResolved(params: {
-  absolutePath: string;
-  resolvedPath: string;
-  rootRealPath: string;
-  maxBytes?: number;
-  rejectHardlinks?: boolean;
-  allowedType?: SafeOpenSyncAllowedType;
-  ioFs: BoundaryReadFs;
-}): BoundaryFileOpenResult {
-  const opened = openVerifiedFileSync({
-    filePath: params.absolutePath,
-    resolvedPath: params.resolvedPath,
-    rejectHardlinks: params.rejectHardlinks ?? true,
-    maxBytes: params.maxBytes,
-    allowedType: params.allowedType,
-    ioFs: params.ioFs,
-  });
-  if (!opened.ok) {
-    return opened;
-  }
-  return {
-    ok: true,
-    path: opened.path,
-    fd: opened.fd,
-    stat: opened.stat,
-    rootRealPath: params.rootRealPath,
-  };
-}
-
-function finalizeBoundaryFileOpen(params: {
-  resolved: ResolvedBoundaryFilePath | BoundaryFileOpenResult;
-  maxBytes?: number;
-  rejectHardlinks?: boolean;
-  allowedType?: SafeOpenSyncAllowedType;
-  ioFs: BoundaryReadFs;
-}): BoundaryFileOpenResult {
-  if ("ok" in params.resolved) {
-    return params.resolved;
-  }
-  return openBoundaryFileResolved({
-    absolutePath: params.resolved.absolutePath,
-    resolvedPath: params.resolved.resolvedPath,
-    rootRealPath: params.resolved.rootRealPath,
-    maxBytes: params.maxBytes,
-    rejectHardlinks: params.rejectHardlinks,
-    allowedType: params.allowedType,
-    ioFs: params.ioFs,
-  });
-}
-
-export async function openBoundaryFile(
-  params: OpenBoundaryFileParams,
-): Promise<BoundaryFileOpenResult> {
-  const ioFs = params.ioFs ?? fs;
-  const maybeResolved = resolveBoundaryFilePathGeneric({
-    absolutePath: params.absolutePath,
-    resolve: (absolutePath) =>
-      resolveBoundaryPath({
-        absolutePath,
-        rootPath: params.rootPath,
-        rootCanonicalPath: params.rootRealPath,
-        boundaryLabel: params.boundaryLabel,
-        policy: params.aliasPolicy,
-        skipLexicalRootCheck: params.skipLexicalRootCheck,
-      }),
-  });
-  const resolved = maybeResolved instanceof Promise ? await maybeResolved : maybeResolved;
-  return finalizeBoundaryFileOpen({
-    resolved,
-    maxBytes: params.maxBytes,
-    rejectHardlinks: params.rejectHardlinks,
-    allowedType: params.allowedType,
-    ioFs,
-  });
-}
-
-function toBoundaryValidationError(error: unknown): BoundaryFileOpenResult {
-  return { ok: false, reason: "validation", error };
-}
-
-function mapResolvedBoundaryPath(
-  absolutePath: string,
-  resolved: ResolvedBoundaryPath,
-): ResolvedBoundaryFilePath {
-  return {
-    absolutePath,
-    resolvedPath: resolved.canonicalPath,
-    rootRealPath: resolved.rootCanonicalPath,
-  };
-}
-
-function resolveBoundaryFilePathGeneric(params: {
-  absolutePath: string;
-  resolve: (absolutePath: string) => ResolvedBoundaryPath | Promise<ResolvedBoundaryPath>;
-}):
-  | ResolvedBoundaryFilePath
-  | BoundaryFileOpenResult
-  | Promise<ResolvedBoundaryFilePath | BoundaryFileOpenResult> {
-  const absolutePath = path.resolve(params.absolutePath);
+/** Read a pinned descriptor without changing OpenClaw's user-facing overflow error. */
+export async function readFileDescriptorBounded(fd: number, maxBytes: number): Promise<Buffer> {
   try {
-    const resolved = params.resolve(absolutePath);
-    if (resolved instanceof Promise) {
-      return resolved
-        .then((value) => mapResolvedBoundaryPath(absolutePath, value))
-        .catch((error) => toBoundaryValidationError(error));
-    }
-    return mapResolvedBoundaryPath(absolutePath, resolved);
+    return await readFileDescriptorBoundedFsSafe(fd, maxBytes);
   } catch (error) {
-    return toBoundaryValidationError(error);
+    return preserveOpenClawOverflowError(error, maxBytes);
+  }
+}
+
+/** Synchronous variant for callers that own a pinned descriptor. */
+export function readFileDescriptorBoundedSync(fd: number, maxBytes: number): Buffer {
+  try {
+    return readFileDescriptorBoundedSyncFsSafe(fd, maxBytes);
+  } catch (error) {
+    return preserveOpenClawOverflowError(error, maxBytes);
   }
 }

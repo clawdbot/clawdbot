@@ -1,14 +1,25 @@
+/**
+ * Channel pairing adapter helpers.
+ *
+ * Creates prefix-stripping normalizers and logged/text pairing approval notifiers.
+ */
 import type { ChannelPairingAdapter } from "./types.adapters.js";
 
 type PairingNotifyParams = Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0];
 
+/**
+ * Creates an allowlist normalizer that strips a channel-specific target prefix.
+ */
 export function createPairingPrefixStripper(
   prefixRe: RegExp,
   map: (entry: string) => string = (entry) => entry,
 ): NonNullable<ChannelPairingAdapter["normalizeAllowEntry"]> {
-  return (entry) => map(entry.replace(prefixRe, ""));
+  return (entry) => map(entry.trim().replace(prefixRe, "").trim());
 }
 
+/**
+ * Creates a pairing notifier that logs a formatted approval message.
+ */
 export function createLoggedPairingApprovalNotifier(
   format: string | ((params: PairingNotifyParams) => string),
   log: (message: string) => void = console.log,
@@ -18,6 +29,9 @@ export function createLoggedPairingApprovalNotifier(
   };
 }
 
+/**
+ * Creates a text-message pairing adapter with optional allowlist normalization.
+ */
 export function createTextPairingAdapter(params: {
   idLabel: string;
   message: string;

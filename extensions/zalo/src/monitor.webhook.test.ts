@@ -1,34 +1,24 @@
-import { createServer, type RequestListener } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+// Zalo tests cover monitor.webhook plugin behavior.
+import type { RequestListener } from "node:http";
 import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
+import type { ZaloRuntimeEnv } from "./monitor.types.js";
+import { zaloWebhookRuntime } from "./monitor.webhook.js";
+import type { ResolvedZaloAccount } from "./types.js";
+import { ZaloWebhookPayloadError } from "./webhook-spool.js";
+
+const {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
-  handleZaloWebhookRequest,
+  handleZaloWebhookRequest: handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget,
-} from "./monitor.js";
-import type { ResolvedZaloAccount } from "./types.js";
-
-async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
-  const server = createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("missing server address");
-  }
-  try {
-    await fn(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-}
+} = zaloWebhookRuntime;
 
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",
@@ -38,13 +28,19 @@ const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   config: {},
 };
 
-const webhookRequestHandler: RequestListener = async (req, res) => {
-  const handled = await handleZaloWebhookRequest(req, res);
-  if (!handled) {
-    res.statusCode = 404;
-    res.end("not found");
-  }
-};
+function createWebhookRequestHandler(): RequestListener {
+  return (req, res) => {
+    void (async () => {
+      const handled = await handleZaloWebhookRequestInternal(req, res);
+      if (!handled) {
+        res.statusCode = 404;
+        res.end("not found");
+      }
+    })();
+  };
+}
+
+const webhookRequestHandler = createWebhookRequestHandler();
 
 function registerTarget(params: {
   path: string;
@@ -52,47 +48,46 @@ function registerTarget(params: {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   account?: ResolvedZaloAccount;
   config?: OpenClawConfig;
-  core?: PluginRuntime;
+  runtime?: Partial<ZaloRuntimeEnv>;
+  acceptWebhook?: (rawEvent: string) => Promise<void>;
 }): () => void {
   return registerZaloWebhookTarget({
-    token: "tok",
     account: params.account ?? DEFAULT_ACCOUNT,
     config: params.config ?? ({} as OpenClawConfig),
-    runtime: {},
-    core: params.core ?? ({} as PluginRuntime),
+    runtime: (params.runtime ?? {}) as ZaloRuntimeEnv,
     secret: params.secret ?? "secret",
     path: params.path,
-    mediaMaxMb: 5,
-    statusSink: params.statusSink,
+    acceptWebhook:
+      params.acceptWebhook ??
+      (async (rawEvent) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(rawEvent);
+        } catch (error) {
+          throw new ZaloWebhookPayloadError("invalid JSON", { cause: error });
+        }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new ZaloWebhookPayloadError("payload must be an object");
+        }
+        params.statusSink?.({ lastInboundAt: Date.now() });
+      }),
   });
 }
 
-function createPairingAuthCore(params?: { storeAllowFrom?: string[]; pairingCreated?: boolean }): {
-  core: PluginRuntime;
-  readAllowFromStore: ReturnType<typeof vi.fn>;
-  upsertPairingRequest: ReturnType<typeof vi.fn>;
-} {
-  const readAllowFromStore = vi.fn().mockResolvedValue(params?.storeAllowFrom ?? []);
-  const upsertPairingRequest = vi
-    .fn()
-    .mockResolvedValue({ code: "PAIRCODE", created: params?.pairingCreated ?? false });
-  const core = {
-    logging: {
-      shouldLogVerbose: () => false,
+async function postWebhook(params: {
+  baseUrl: string;
+  path: string;
+  body: string;
+  secret?: string;
+}) {
+  return await fetch(`${params.baseUrl}${params.path}`, {
+    method: "POST",
+    headers: {
+      "x-bot-api-secret-token": params.secret ?? "secret",
+      "content-type": "application/json",
     },
-    channel: {
-      pairing: {
-        readAllowFromStore,
-        upsertPairingRequest,
-        buildPairingReply: vi.fn(() => "Pairing code: PAIRCODE"),
-      },
-      commands: {
-        shouldComputeCommandAuthorized: vi.fn(() => false),
-        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
-      },
-    },
-  } as unknown as PluginRuntime;
-  return { core, readAllowFromStore, upsertPairingRequest };
+    body: params.body,
+  });
 }
 
 async function postUntilRateLimited(params: {
@@ -126,27 +121,6 @@ describe("handleZaloWebhookRequest", () => {
   afterEach(() => {
     clearZaloWebhookSecurityStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  it("registers and unregisters plugin HTTP route at path boundaries", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    const unregisterA = registerTarget({ path: "/hook" });
-    const unregisterB = registerTarget({ path: "/hook" });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toEqual(
-      expect.objectContaining({
-        pluginId: "zalo",
-        path: "/hook",
-        source: "zalo-webhook",
-      }),
-    );
-
-    unregisterA();
-    expect(registry.httpRoutes).toHaveLength(1);
-    unregisterB();
-    expect(registry.httpRoutes).toHaveLength(0);
   });
 
   it("returns 400 for non-object payloads", async () => {
@@ -219,156 +193,76 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("deduplicates webhook replay by event_name + message_id", async () => {
-    const sink = vi.fn();
-    const unregister = registerTarget({ path: "/hook-replay", statusSink: sink });
-
-    const payload = {
-      event_name: "message.text.received",
-      message: {
-        from: { id: "123" },
-        chat: { id: "123", chat_type: "PRIVATE" },
-        message_id: "msg-replay-1",
-        date: Math.floor(Date.now() / 1000),
-        text: "hello",
-      },
-    };
+  it("waits for durable admission before acknowledging", async () => {
+    let releaseAdmission = () => {};
+    const admission = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const acceptWebhook = vi.fn(async () => {
+      await admission;
+    });
+    const unregister = registerTarget({ path: "/hook-durable-ack", acceptWebhook });
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const first = await fetch(`${baseUrl}/hook-replay`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-        const second = await fetch(`${baseUrl}/hook-replay`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
+        let settled = false;
+        const responsePromise = postWebhook({
+          baseUrl,
+          path: "/hook-durable-ack",
+          body: '{"event_name":"message.text.received"}',
+        }).then((response) => {
+          settled = true;
+          return response;
         });
 
-        expect(first.status).toBe(200);
-        expect(second.status).toBe(200);
-        expect(sink).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(acceptWebhook).toHaveBeenCalledTimes(1));
+        expect(settled).toBe(false);
+        releaseAdmission();
+        const response = await responsePromise;
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
       });
+    } finally {
+      releaseAdmission();
+      unregister();
+    }
+  });
+
+  it("passes the exact raw webhook JSON to durable admission", async () => {
+    const acceptWebhook = vi.fn(async () => {});
+    const unregister = registerTarget({ path: "/hook-raw", acceptWebhook });
+    const body = '{ "event_name": "message.text.received", "extra": true }';
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await postWebhook({ baseUrl, path: "/hook-raw", body });
+        expect(response.status).toBe(200);
+      });
+      expect(acceptWebhook).toHaveBeenCalledWith(body);
     } finally {
       unregister();
     }
   });
 
-  it("downloads inbound image media from webhook photo_url and preserves display_name", async () => {
-    const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-    const recordInboundSessionMock = vi.fn(async () => undefined);
-    const fetchRemoteMediaMock = vi.fn(async () => ({
-      buffer: Buffer.from("image-bytes"),
-      contentType: "image/jpeg",
-    }));
-    const saveMediaBufferMock = vi.fn(async () => ({
-      path: "/tmp/zalo-photo.jpg",
-      contentType: "image/jpeg",
-    }));
-    const core = createPluginRuntimeMock({
-      channel: {
-        media: {
-          fetchRemoteMedia:
-            fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
-          saveMediaBuffer:
-            saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
-        },
-        reply: {
-          finalizeInboundContext:
-            finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-          dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-            async () => undefined,
-          ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-        },
-        session: {
-          recordInboundSession:
-            recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
-        },
-        commands: {
-          shouldComputeCommandAuthorized: vi.fn(
-            () => false,
-          ) as unknown as PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"],
-          resolveCommandAuthorizedFromAuthorizers: vi.fn(
-            () => false,
-          ) as unknown as PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"],
-          isControlCommandMessage: vi.fn(
-            () => false,
-          ) as unknown as PluginRuntime["channel"]["commands"]["isControlCommandMessage"],
-        },
-      },
+  it("does not acknowledge a durable admission failure", async () => {
+    const acceptWebhook = vi.fn(async () => {
+      throw new Error("sqlite unavailable");
     });
-    const unregister = registerTarget({
-      path: "/hook-image",
-      core,
-      account: {
-        ...DEFAULT_ACCOUNT,
-        config: {
-          dmPolicy: "open",
-        },
-      },
-    });
-
-    const payload = {
-      event_name: "message.image.received",
-      message: {
-        date: 1774086023728,
-        chat: { chat_type: "PRIVATE", id: "chat-123" },
-        caption: "",
-        message_id: "msg-123",
-        message_type: "CHAT_PHOTO",
-        from: { id: "user-123", is_bot: false, display_name: "Test User" },
-        photo_url: "https://example.com/test-image.jpg",
-      },
-    };
+    const unregister = registerTarget({ path: "/hook-append-failure", acceptWebhook });
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/hook-image`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
+        const response = await postWebhook({
+          baseUrl,
+          path: "/hook-append-failure",
+          body: '{"event_name":"message.text.received"}',
         });
-
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(500);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       });
     } finally {
       unregister();
     }
-
-    await vi.waitFor(() =>
-      expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
-        url: "https://example.com/test-image.jpg",
-        maxBytes: 5 * 1024 * 1024,
-      }),
-    );
-    expect(saveMediaBufferMock).toHaveBeenCalledTimes(1);
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        SenderName: "Test User",
-        MediaPath: "/tmp/zalo-photo.jpg",
-        MediaType: "image/jpeg",
-      }),
-    );
-    expect(recordInboundSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          SenderName: "Test User",
-          MediaPath: "/tmp/zalo-photo.jpg",
-          MediaType: "image/jpeg",
-        }),
-      }),
-    );
   });
 
   it("returns 429 when per-path request rate exceeds threshold", async () => {
@@ -521,66 +415,5 @@ describe("handleZaloWebhookRequest", () => {
     } finally {
       unregister();
     }
-  });
-
-  it("scopes DM pairing store reads and writes to accountId", async () => {
-    const { core, readAllowFromStore, upsertPairingRequest } = createPairingAuthCore({
-      pairingCreated: false,
-    });
-    const account: ResolvedZaloAccount = {
-      ...DEFAULT_ACCOUNT,
-      accountId: "work",
-      config: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-      },
-    };
-    const unregister = registerTarget({
-      path: "/hook-account-scope",
-      account,
-      core,
-    });
-
-    const payload = {
-      event_name: "message.text.received",
-      message: {
-        from: { id: "123", name: "Attacker" },
-        chat: { id: "dm-work", chat_type: "PRIVATE" },
-        message_id: "msg-work-1",
-        date: Math.floor(Date.now() / 1000),
-        text: "hello",
-      },
-    };
-
-    try {
-      await withServer(webhookRequestHandler, async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/hook-account-scope`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "secret",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        expect(response.status).toBe(200);
-      });
-    } finally {
-      unregister();
-    }
-
-    expect(readAllowFromStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        accountId: "work",
-      }),
-    );
-    expect(upsertPairingRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        id: "123",
-        accountId: "work",
-      }),
-    );
   });
 });

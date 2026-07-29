@@ -1,4 +1,6 @@
-import type { RuntimeEnv } from "../../api.js";
+// Tlon plugin module implements approval runtime behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { PendingApproval, TlonSettingsStore } from "../settings.js";
 import { normalizeShip } from "../targets.js";
 import { sendDm } from "../urbit/send.js";
@@ -215,7 +217,7 @@ export function createTlonApprovalRuntime(params: {
     );
 
     if (existingIndex !== -1) {
-      const existing = approvals[existingIndex];
+      const existing = expectDefined(approvals[existingIndex], "located pending approval index");
       if (approval.originalMessage) {
         existing.originalMessage = approval.originalMessage;
         existing.messagePreview = approval.messagePreview;
@@ -352,6 +354,7 @@ export function createTlonApprovalRuntime(params: {
         return true;
       }
     }
+    throw new Error("Unsupported Tlon admin command");
   };
 
   return {

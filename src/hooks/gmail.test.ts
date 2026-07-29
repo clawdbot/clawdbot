@@ -1,7 +1,10 @@
+// Gmail hook tests cover Gmail hook configuration and setup helpers.
 import { describe, expect, it } from "vitest";
 import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
+  buildGogWatchServeArgs,
+  buildGogWatchServeLogArgs,
   buildTopicPath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
@@ -77,6 +80,43 @@ describe("gmail hook config", () => {
       expect(result.value.serve.port).toBe(8788);
       expect(result.value.hookUrl).toBe(`http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`);
     }
+  });
+
+  it("builds watch serve log args without secrets", () => {
+    const result = resolveGmailHookRuntimeConfig(baseConfig, {});
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    const serveArgs = buildGogWatchServeArgs(result.value);
+    expect(serveArgs).toContain("--exclude-labels");
+    expect(serveArgs[serveArgs.indexOf("--exclude-labels") + 1]).toBe("SPAM,TRASH,DRAFT,SENT");
+
+    const args = buildGogWatchServeLogArgs(result.value);
+    expect(args).not.toContain("push-token");
+    expect(args).not.toContain("hook-token");
+    expect(args).not.toContain("--token");
+    expect(args).not.toContain("--hook-token");
+    // --token, --hook-url, and --hook-token are stripped from the log args.
+    expect(args).toEqual([
+      "gmail",
+      "watch",
+      "serve",
+      "--account",
+      "openclaw@gmail.com",
+      "--bind",
+      "127.0.0.1",
+      "--port",
+      "8788",
+      "--path",
+      "/gmail-pubsub",
+      "--include-body",
+      "--exclude-labels",
+      "SPAM,TRASH,DRAFT,SENT",
+      "--max-bytes",
+      "20000",
+    ]);
   });
 
   it("fails without hook token", () => {

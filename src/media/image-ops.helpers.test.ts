@@ -1,18 +1,31 @@
+// Image operation helper tests cover dimension and format utility behavior.
 import { describe, expect, it } from "vitest";
 import { buildImageResizeSideGrid, IMAGE_REDUCE_QUALITY_STEPS } from "./image-ops.js";
 
 describe("buildImageResizeSideGrid", () => {
-  it("returns descending unique sides capped by maxSide", () => {
-    expect(buildImageResizeSideGrid(1200, 900)).toEqual([1200, 1000, 900, 800]);
-  });
+  function expectImageResizeSideGridCase(width: number, height: number, expected: number[]) {
+    expect(buildImageResizeSideGrid(width, height)).toEqual(expected);
+  }
 
-  it("keeps only positive side values", () => {
-    expect(buildImageResizeSideGrid(0, 0)).toEqual([]);
+  it.each([
+    { width: 1200, height: 900, expected: [1200, 1000, 900, 800] },
+    { width: 0, height: 0, expected: [] },
+  ] as const)("builds resize side grid for %ix%i", ({ width, height, expected }) => {
+    expectImageResizeSideGridCase(width, height, [...expected]);
   });
 });
 
 describe("IMAGE_REDUCE_QUALITY_STEPS", () => {
-  it("keeps expected quality ladder", () => {
-    expect([...IMAGE_REDUCE_QUALITY_STEPS]).toEqual([85, 75, 65, 55, 45, 35]);
+  function expectQualityLadderCase(expectedQualityLadder: number[]) {
+    expect([...IMAGE_REDUCE_QUALITY_STEPS]).toEqual(expectedQualityLadder);
+  }
+
+  it.each([
+    {
+      name: "keeps expected quality ladder",
+      expectedQualityLadder: [85, 75, 65, 55, 45, 35],
+    },
+  ] as const)("$name", ({ expectedQualityLadder }) => {
+    expectQualityLadderCase([...expectedQualityLadder]);
   });
 });

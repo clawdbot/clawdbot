@@ -1,6 +1,22 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { whatsappSetupPlugin } from "./src/channel.setup.js";
+// Whatsapp plugin module implements setup entry behavior.
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { whatsappSetupPlugin } from "./src/channel.setup.js";
-
-export default defineSetupPluginEntry(whatsappSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  features: {
+    legacyStateMigrations: true,
+    legacySessionSurfaces: true,
+  },
+  plugin: {
+    specifier: "./setup-plugin-api.js",
+    exportName: "whatsappSetupPlugin",
+  },
+  legacyStateMigrations: {
+    specifier: "./legacy-state-migrations-api.js",
+    exportName: "detectWhatsAppLegacyStateMigrations",
+  },
+  legacySessionSurface: {
+    specifier: "./legacy-session-surface-api.js",
+    exportName: "whatsappLegacySessionSurface",
+  },
+});

@@ -1,9 +1,20 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * Auth profile repair helpers.
+ * Migrates legacy provider:default OAuth config references to safer modern
+ * profile ids chosen from store metadata and auth order.
+ */
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileConfig } from "../../config/types.js";
-import { findNormalizedProviderKey, normalizeProviderId } from "../model-selection.js";
-import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAuthProfileMetadata } from "./identity.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 
+// Legacy OAuth setup used provider:default profile ids. Repair prefers a
+// matching email/lastGood/current OAuth profile instead of guessing broadly.
 function getProfileSuffix(profileId: string): string {
   const idx = profileId.indexOf(":");
   if (idx < 0) {
@@ -20,6 +31,7 @@ function isEmailLike(value: string): boolean {
   return trimmed.includes("@") && trimmed.includes(".");
 }
 
+/** Suggests a modern OAuth profile id for a legacy provider:default profile. */
 export function suggestOAuthProfileIdForLegacyDefault(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -51,11 +63,11 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   const configuredEmail = legacyCfg?.email?.trim();
   if (configuredEmail) {
     const byEmail = oauthProfiles.find((id) => {
-      const cred = params.store.profiles[id];
-      if (!cred || cred.type !== "oauth") {
-        return false;
-      }
-      const email = cred.email?.trim();
+      const email = resolveAuthProfileMetadata({
+        cfg: params.cfg,
+        store: params.store,
+        profileId: id,
+      }).email;
       return email === configuredEmail || id === `${providerKey}:${configuredEmail}`;
     });
     if (byEmail) {
@@ -81,6 +93,7 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   return null;
 }
 
+/** Migrates config auth profile references away from a legacy OAuth default id. */
 export function repairOAuthProfileIdMismatch(params: {
   cfg: OpenClawConfig;
   store: AuthProfileStore;
@@ -110,15 +123,28 @@ export function repairOAuthProfileIdMismatch(params: {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
-  const toCred = params.store.profiles[toProfileId];
-  const toEmail = toCred?.type === "oauth" ? toCred.email?.trim() : undefined;
+  // Skip repair if destination profile already exists as a separate
+  // user-configured account. Overwriting it would destroy the existing
+  // account's config (displayName, email, etc.) and collapse two distinct
+  // accounts into one. See #97522.
+  if (params.cfg.auth?.profiles?.[toProfileId]) {
+    return { config: params.cfg, changes: [], migrated: false };
+  }
+
+  const { email: toEmail, displayName: toDisplayName } = resolveAuthProfileMetadata({
+    cfg: params.cfg,
+    store: params.store,
+    profileId: toProfileId,
+  });
+  const { email: _legacyEmail, displayName: _legacyDisplayName, ...legacyCfgRest } = legacyCfg;
 
   const nextProfiles = {
     ...params.cfg.auth?.profiles,
   } as Record<string, AuthProfileConfig>;
   delete nextProfiles[legacyProfileId];
   nextProfiles[toProfileId] = {
-    ...legacyCfg,
+    ...legacyCfgRest,
+    ...(toDisplayName ? { displayName: toDisplayName } : {}),
     ...(toEmail ? { email: toEmail } : {}),
   };
 

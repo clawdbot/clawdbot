@@ -165,7 +165,6 @@ pct_of() {
   awk -v total="$total" -v pct="$pct" 'BEGIN { printf "%d", total * pct }'
 }
 
-tab_connect_x="$(pct_of "$display_width" "0.11")"
 tab_chat_x="$(pct_of "$display_width" "0.31")"
 tab_screen_x="$(pct_of "$display_width" "0.69")"
 tab_y="$(pct_of "$display_height" "0.93")"

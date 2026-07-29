@@ -1,16 +1,14 @@
+// Zalouser tests cover channel.setup plugin behavior.
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserSetupPlugin } from "./channel.setup.js";
+import { zalouserSetupPlugin } from "./setup-test-helpers.js";
 
-const zalouserSetupAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: zalouserSetupPlugin,
-  wizard: zalouserSetupPlugin.setupWizard!,
-});
+const zalouserSetupGetStatus = createPluginSetupWizardStatus(zalouserSetupPlugin);
 
 describe("zalouser setup plugin", () => {
   it("builds setup status without an initialized runtime", async () => {
@@ -18,16 +16,13 @@ describe("zalouser setup plugin", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          zalouserSetupAdapter.getStatus({
-            cfg: {},
-            accountOverrides: {},
-          }),
-        ).resolves.toMatchObject({
-          channel: "zalouser",
-          configured: false,
-          statusLines: ["Zalo Personal: needs QR login"],
+        const status = await zalouserSetupGetStatus({
+          cfg: {},
+          accountOverrides: {},
         });
+        expect(status.channel).toBe("zalouser");
+        expect(status.configured).toBe(false);
+        expect(status.statusLines).toEqual(["Zalo Personal: needs QR login"]);
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });

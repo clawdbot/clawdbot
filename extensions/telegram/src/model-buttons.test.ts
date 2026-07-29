@@ -1,3 +1,4 @@
+// Telegram tests cover model buttons plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildModelSelectionCallbackData,
@@ -18,6 +19,7 @@ describe("parseModelCallbackData", () => {
       ["mdl_back", { type: "back" }],
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
+      ["mdl_list_hf.co_1", { type: "list", provider: "hf.co", page: 1 }],
       [
         "mdl_sel_anthropic/claude-sonnet-4-5",
         { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },
@@ -45,6 +47,7 @@ describe("parseModelCallbackData", () => {
       "",
       "mdl_invalid",
       "mdl_list_",
+      "mdl_list_openai_9007199254740993",
       "mdl_sel_noslash",
       "mdl_sel/",
     ];
@@ -205,6 +208,11 @@ describe("buildModelsKeyboard", () => {
         currentModel: "anthropic/claude-sonnet-4",
         firstText: "claude-sonnet-4 ✓",
       },
+      {
+        name: "legacy bare model id fallback still marks current model",
+        currentModel: "claude-sonnet-4",
+        firstText: "claude-sonnet-4 ✓",
+      },
     ] as const;
     for (const testCase of cases) {
       const result = buildModelsKeyboard({
@@ -221,6 +229,101 @@ describe("buildModelsKeyboard", () => {
       expect(result[1]?.[0]?.text).toBe("claude-opus-4");
       expect(result[2]?.[0]?.text).toBe("<< Back");
     }
+  });
+
+  it("uses modelNames for display text when provided", () => {
+    const modelNames = new Map([
+      ["nexos/a1b2c3d4-e5f6-7890-abcd-ef1234567890", "Claude Sonnet 4"],
+      ["nexos/claude-opus-4", "Claude Opus 4"],
+    ]);
+    const result = buildModelsKeyboard({
+      provider: "nexos",
+      models: ["a1b2c3d4-e5f6-7890-abcd-ef1234567890", "claude-opus-4"],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+    // 2 model rows + back button
+    expect(result).toHaveLength(3);
+    expect(result[0]?.[0]?.text).toBe("Claude Sonnet 4");
+    expect(result[1]?.[0]?.text).toBe("Claude Opus 4");
+    // callback_data still uses the raw model ID, not the display name
+    expect(result[0]?.[0]?.callback_data).toBe(
+      "mdl_sel_nexos/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    );
+  });
+
+  it("falls back to model ID when modelNames does not contain an entry", () => {
+    const modelNames = new Map([["anthropic/known-id", "Known Model"]]);
+    const result = buildModelsKeyboard({
+      provider: "anthropic",
+      models: ["known-id", "unknown-id"],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+    expect(result[0]?.[0]?.text).toBe("Known Model");
+    expect(result[1]?.[0]?.text).toBe("unknown-id");
+  });
+
+  it("prefixes provider in fallback label for nested provider-local ids (OpenRouter)", () => {
+    const result = buildModelsKeyboard({
+      provider: "openrouter",
+      models: ["openai/gpt-5.4-mini"],
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result[0]?.[0]?.text).toBe("openrouter/openai/gpt-5.4-mini");
+  });
+
+  it("marks nested provider-local id as current when full ref matches", () => {
+    const result = buildModelsKeyboard({
+      provider: "openrouter",
+      models: ["openai/gpt-5.4-mini"],
+      currentModel: "openrouter/openai/gpt-5.4-mini",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result[0]?.[0]?.text).toBe("openrouter/openai/gpt-5.4-mini ✓");
+  });
+
+  it("uses provider-scoped modelNames keys to avoid cross-provider collisions", () => {
+    const modelNames = new Map([
+      ["openai/shared-id", "OpenAI Shared"],
+      ["anthropic/shared-id", "Anthropic Shared"],
+    ]);
+
+    const openaiResult = buildModelsKeyboard({
+      provider: "openai",
+      models: ["shared-id"],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+    const anthropicResult = buildModelsKeyboard({
+      provider: "anthropic",
+      models: ["shared-id"],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+
+    expect(openaiResult[0]?.[0]?.text).toBe("OpenAI Shared");
+    expect(anthropicResult[0]?.[0]?.text).toBe("Anthropic Shared");
+  });
+
+  it("does not mark same-id models from other providers as current", () => {
+    const result = buildModelsKeyboard({
+      provider: "openai",
+      models: ["gpt-5.4", "gpt-5.3-codex-spark"],
+      currentModel: "github-copilot/gpt-5.4",
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    const texts = result.flat().map((button) => button.text);
+    expect(texts).toContain("gpt-5.4");
+    expect(texts).not.toContain("gpt-5.4 ✓");
   });
 
   it("renders pagination controls for first, middle, and last pages", () => {
@@ -291,6 +394,33 @@ describe("buildModelsKeyboard", () => {
         expect(text?.startsWith(testCase.startsWith), testCase.name).toBe(true);
         expect(text?.length, testCase.name).toBeLessThanOrEqual(testCase.maxLength);
       }
+    }
+  });
+
+  it("does not split surrogate pairs when truncating model labels", () => {
+    const longLabel = `a😀${"b".repeat(36)}`;
+    const cases = [
+      {
+        name: "model ID fallback",
+        model: longLabel,
+      },
+      {
+        name: "configured display name",
+        model: "short-model-id",
+        modelNames: new Map([["test/short-model-id", longLabel]]),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = buildModelsKeyboard({
+        provider: "test",
+        models: [testCase.model],
+        currentPage: 1,
+        totalPages: 1,
+        modelNames: "modelNames" in testCase ? testCase.modelNames : undefined,
+      });
+
+      expect(result[0]?.[0]?.text, testCase.name).toBe(`…${"b".repeat(36)}`);
     }
   });
 

@@ -5,6 +5,23 @@ import org.junit.Test
 
 class GatewaySessionInvokeTimeoutTest {
   @Test
+  fun formatGatewayAuthority_bracketsIpv6Hosts() {
+    assertEquals("[::1]:18789", formatGatewayAuthority("::1", 18_789))
+  }
+
+  @Test
+  fun buildGatewayWebSocketUrl_bracketsIpv6Hosts() {
+    assertEquals("ws://[::1]:18789", buildGatewayWebSocketUrl("::1", 18_789, useTls = false))
+    assertEquals("wss://[::1]:443", buildGatewayWebSocketUrl("::1", 443, useTls = true))
+  }
+
+  @Test
+  fun buildGatewayWebSocketUrl_normalizesPersistedBracketedIpv6Hosts() {
+    assertEquals("ws://[::1]:18789", buildGatewayWebSocketUrl("[::1]", 18_789, useTls = false))
+    assertEquals("wss://[::1]:443", buildGatewayWebSocketUrl("[::1]", 443, useTls = true))
+  }
+
+  @Test
   fun resolveInvokeResultAckTimeoutMs_usesFloorWhenMissingOrTooSmall() {
     assertEquals(15_000L, resolveInvokeResultAckTimeoutMs(null))
     assertEquals(15_000L, resolveInvokeResultAckTimeoutMs(0L))
@@ -24,24 +41,14 @@ class GatewaySessionInvokeTimeoutTest {
   }
 
   @Test
-  fun replaceCanvasCapabilityInScopedHostUrl_rewritesTerminalCapabilitySegment() {
-    assertEquals(
-      "http://127.0.0.1:18789/__openclaw__/cap/new-token",
-      replaceCanvasCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token",
-        "new-token",
-      ),
-    )
+  fun resolveInvokeExecutionTimeoutMs_defaultsAndAllowsExplicitDisable() {
+    assertEquals(30_000L, resolveInvokeExecutionTimeoutMs(null))
+    assertEquals(null, resolveInvokeExecutionTimeoutMs(0L))
+    assertEquals(null, resolveInvokeExecutionTimeoutMs(-1L))
   }
 
   @Test
-  fun replaceCanvasCapabilityInScopedHostUrl_rewritesWhenQueryAndFragmentPresent() {
-    assertEquals(
-      "http://127.0.0.1:18789/__openclaw__/cap/new-token?a=1#frag",
-      replaceCanvasCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token?a=1#frag",
-        "new-token",
-      ),
-    )
+  fun resolveInvokeExecutionTimeoutMs_capsAtCoroutineTimerBound() {
+    assertEquals(Int.MAX_VALUE.toLong(), resolveInvokeExecutionTimeoutMs(Long.MAX_VALUE))
   }
 }

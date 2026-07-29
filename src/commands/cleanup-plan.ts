@@ -1,12 +1,14 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Resolves cleanup inputs from current OpenClaw config and state paths.
 import {
-  loadConfig,
+  getRuntimeConfig,
   resolveConfigPath,
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
 
+/** Build the cleanup plan for the current runtime config/state/credential paths on disk. */
 export function resolveCleanupPlanFromDisk(): {
   cfg: OpenClawConfig;
   stateDir: string;
@@ -16,7 +18,7 @@ export function resolveCleanupPlanFromDisk(): {
   oauthInsideState: boolean;
   workspaceDirs: string[];
 } {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const stateDir = resolveStateDir();
   const configPath = resolveConfigPath();
   const oauthDir = resolveOAuthDir();

@@ -1,29 +1,34 @@
+// Slack API module exposes the plugin public contract.
 export {
   buildComputedAccountStatusSnapshot,
-  DEFAULT_ACCOUNT_ID,
-  looksLikeSlackTargetId,
-  normalizeSlackMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromRequiredCredentialStatuses,
-  type ChannelPlugin,
-  type OpenClawConfig,
-  type SlackAccountConfig,
-} from "../../../src/plugin-sdk/slack.js";
+} from "openclaw/plugin-sdk/channel-status";
+export { buildChannelConfigSchema, SlackConfigSchema } from "../config-api.js";
+export type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+export type {
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "openclaw/plugin-sdk/channel-plugin-common";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 export {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-} from "./directory-config.js";
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+} from "openclaw/plugin-sdk/channel-plugin-common";
+export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+export { looksLikeSlackTargetId, normalizeSlackMessagingTarget } from "./target-parsing.js";
+export { getChatChannelMeta } from "./channel-api.js";
 export {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
   createActionGate,
   imageResultFromFile,
   jsonResult,
   readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
-  SlackConfigSchema,
   withNormalizedTimestamp,
-} from "../../../src/plugin-sdk/slack-core.js";
-export { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+} from "openclaw/plugin-sdk/channel-actions";

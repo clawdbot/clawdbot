@@ -3,110 +3,143 @@ summary: "Run multiple OpenClaw Gateways on one host (isolation, ports, and prof
 read_when:
   - Running more than one Gateway on the same machine
   - You need isolated config/state/ports per Gateway
-title: "Multiple Gateways"
+title: "Multiple gateways"
 ---
 
-# Multiple Gateways (same host)
+Most setups need one Gateway - a single Gateway handles multiple messaging connections and agents. Run separate Gateways with isolated profiles/ports only when you need stronger isolation or redundancy (e.g., a rescue bot).
 
-Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. If you need stronger isolation or redundancy (e.g., a rescue bot), run separate Gateways with isolated profiles/ports.
+## Rescue-bot quickstart
 
-## Isolation checklist (required)
+The simplest rescue-bot setup:
 
-- `OPENCLAW_CONFIG_PATH` — per-instance config file
-- `OPENCLAW_STATE_DIR` — per-instance sessions, creds, caches
-- `agents.defaults.workspace` — per-instance workspace root
-- `gateway.port` (or `--port`) — unique per instance
-- Derived ports (browser/canvas) must not overlap
+- Keep the main bot on the default profile.
+- Run the rescue bot on `--profile rescue`, with its own Telegram bot token.
+- Put the rescue bot on a different base port, e.g. `19789`.
 
-If these are shared, you will hit config races and port conflicts.
-
-## Recommended: profiles (`--profile`)
-
-Profiles auto-scope `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` and suffix service names.
+This keeps the rescue bot able to debug or apply config changes if the primary bot is down. Leave at least 20 ports between base ports so derived browser/CDP ports never collide.
 
 ```bash
-# main
+# Rescue bot (separate Telegram bot, separate profile, port 19789)
+openclaw --profile rescue onboard
+openclaw --profile rescue gateway install --port 19789
+```
+
+If your main bot is already running, that's usually all you need. If onboarding already installed the rescue service, skip the final `gateway install`.
+
+During `openclaw --profile rescue onboard`:
+
+- Use a separate Telegram bot token, dedicated to the rescue account (easy to keep operator-only, independent from the main bot's channel/app install, and a simple DM-based recovery path).
+- Keep the `rescue` profile name.
+- Use a base port at least 20 higher than the main bot.
+- Accept the default rescue workspace unless you already manage one yourself.
+
+### What `--profile rescue onboard` changes
+
+`--profile rescue onboard` runs the normal onboarding flow but writes everything into a separate profile, so the rescue bot gets its own:
+
+- Profile/config file
+- State directory
+- Workspace (default: `~/.openclaw/workspace-rescue`)
+- Managed service name
+- Base port (plus derived ports)
+- Telegram bot token
+
+Prompts are otherwise identical to normal onboarding.
+
+## General multi-gateway setup
+
+The same isolation pattern works for any pair or group of Gateways on one host - give each extra Gateway its own named profile and base port:
+
+```bash
+# main (default profile)
+openclaw setup
+openclaw gateway --port 18789
+
+# extra gateway
+openclaw --profile ops setup
+openclaw --profile ops gateway --port 19789
+```
+
+Named profiles on both sides also work:
+
+```bash
 openclaw --profile main setup
 openclaw --profile main gateway --port 18789
 
-# rescue
-openclaw --profile rescue setup
-openclaw --profile rescue gateway --port 19001
+openclaw --profile ops setup
+openclaw --profile ops gateway --port 19789
 ```
 
-Per-profile services:
+Services follow the same pattern:
 
 ```bash
-openclaw --profile main gateway install
-openclaw --profile rescue gateway install
-```
-
-## Rescue-bot guide
-
-Run a second Gateway on the same host with its own:
-
-- profile/config
-- state dir
-- workspace
-- base port (plus derived ports)
-
-This keeps the rescue bot isolated from the main bot so it can debug or apply config changes if the primary bot is down.
-
-Port spacing: leave at least 20 ports between base ports so the derived browser/canvas/CDP ports never collide.
-
-### How to install (rescue bot)
-
-```bash
-# Main bot (existing or fresh, without --profile param)
-# Runs on port 18789 + Chrome CDC/Canvas/... Ports
-openclaw onboard
 openclaw gateway install
-
-# Rescue bot (isolated profile + ports)
-openclaw --profile rescue onboard
-# Notes:
-# - workspace name will be postfixed with -rescue per default
-# - Port should be at least 18789 + 20 Ports,
-#   better choose completely different base port, like 19789,
-# - rest of the onboarding is the same as normal
-
-# To install the service (if not happened automatically during setup)
-openclaw --profile rescue gateway install
+openclaw --profile ops gateway install --port 19789
 ```
+
+Use the rescue-bot quickstart for a fallback operator lane; use the general profile pattern for multiple long-lived Gateways across different channels, tenants, workspaces, or operational roles.
+
+## Isolation checklist
+
+Keep these unique per Gateway instance:
+
+| Setting                      | Purpose                              |
+| ---------------------------- | ------------------------------------ |
+| `OPENCLAW_CONFIG_PATH`       | Per-instance config file             |
+| `OPENCLAW_STATE_DIR`         | Per-instance sessions, creds, caches |
+| `agents.defaults.workspace`  | Per-instance workspace root          |
+| `gateway.port` (or `--port`) | Unique per instance                  |
+| Derived browser/CDP ports    | See below                            |
+
+Sharing any of these causes config, state, or port conflicts. Gateway startup
+enforces unique state-directory ownership even when
+`OPENCLAW_ALLOW_MULTI_GATEWAY=1` skips the per-config singleton.
 
 ## Port mapping (derived)
 
 Base port = `gateway.port` (or `OPENCLAW_GATEWAY_PORT` / `--port`).
 
-- browser control service port = base + 2 (loopback only)
-- canvas host is served on the Gateway HTTP server (same port as `gateway.port`)
-- Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108`
+- Browser control service port = base + 2 (loopback only).
+- Canvas host is served on the Gateway HTTP server itself (same port as `gateway.port`).
+- Browser profile CDP ports auto-allocate from `browser control port + 9` through `+ 108`.
 
-If you override any of these in config or env, you must keep them unique per instance.
+Override any of these in config or env and you must keep them unique per instance.
 
 ## Browser/CDP notes (common footgun)
 
-- Do **not** pin `browser.cdpUrl` to the same values on multiple instances.
+- Do **not** pin `browser.cdpUrl` to the same value on multiple instances.
 - Each instance needs its own browser control port and CDP range (derived from its gateway port).
-- If you need explicit CDP ports, set `browser.profiles.<name>.cdpPort` per instance.
-- Remote Chrome: use `browser.profiles.<name>.cdpUrl` (per profile, per instance).
+- For explicit CDP ports, set `browser.profiles.<name>.cdpPort` per instance.
+- For remote Chrome, use `browser.profiles.<name>.cdpUrl` (per profile, per instance).
 
 ## Manual env example
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/main.json \
-OPENCLAW_STATE_DIR=~/.openclaw-main \
+OPENCLAW_STATE_DIR=~/.openclaw \
 openclaw gateway --port 18789
 
 OPENCLAW_CONFIG_PATH=~/.openclaw/rescue.json \
 OPENCLAW_STATE_DIR=~/.openclaw-rescue \
-openclaw gateway --port 19001
+openclaw gateway --port 19789
 ```
 
 ## Quick checks
 
 ```bash
-openclaw --profile main status
+openclaw gateway status --deep
+openclaw --profile rescue gateway status --deep
+openclaw --profile rescue gateway probe
+openclaw status
 openclaw --profile rescue status
 openclaw --profile rescue browser status
 ```
+
+- `gateway status --deep` catches stale launchd/systemd/schtasks services from older installs.
+- `gateway probe` warning text such as `multiple reachable gateway identities detected` is expected only when you intentionally run more than one isolated gateway, or when OpenClaw cannot prove reachable probe targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one gateway with multiple transports, even when transport ports differ.
+
+## Related
+
+- [Gateway runbook](/gateway)
+- [Gateway lock](/gateway/gateway-lock)
+- [Configuration](/gateway/configuration)

@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
+// Inventories core web-search surfaces that still mention bundled providers.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { diffInventoryEntries, runBaselineInventoryCheck } from "./lib/guard-inventory-utils.mjs";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,6 +51,7 @@ const providerIds = new Set([
 const allowedGenericFiles = new Set([
   "src/agents/tools/web-search.ts",
   "src/commands/onboard-search.ts",
+  "src/plugins/bundled-web-search-registry.ts",
   "src/secrets/runtime-web-tools.ts",
   "src/web-search/runtime.ts",
 ]);
@@ -60,41 +64,7 @@ const ignoredFiles = new Set([
   "src/secrets/runtime-web-tools.test.ts",
 ]);
 
-function normalizeRelativePath(filePath) {
-  return path.relative(repoRoot, filePath).split(path.sep).join("/");
-}
-
-async function walkFiles(rootDir) {
-  const out = [];
-  let entries = [];
-  try {
-    entries = await fs.readdir(rootDir, { withFileTypes: true });
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return out;
-    }
-    throw error;
-  }
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const entryPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      if (ignoredDirNames.has(entry.name)) {
-        continue;
-      }
-      out.push(...(await walkFiles(entryPath)));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    if (!scanExtensions.has(path.extname(entry.name))) {
-      continue;
-    }
-    out.push(entryPath);
-  }
-  return out;
-}
+let webSearchProviderInventoryPromise;
 
 function compareInventoryEntries(left, right) {
   return (
@@ -184,35 +154,43 @@ function scanGenericCoreImports(lines, relativeFile, inventory) {
   }
 }
 
+/**
+ * Collects web-search provider boundary inventory from core source files.
+ */
 export async function collectWebSearchProviderBoundaryInventory() {
-  const inventory = [];
-  const files = (
-    await Promise.all(scanRoots.map(async (root) => await walkFiles(path.join(repoRoot, root))))
-  )
-    .flat()
-    .toSorted((left, right) =>
-      normalizeRelativePath(left).localeCompare(normalizeRelativePath(right)),
-    );
+  if (!webSearchProviderInventoryPromise) {
+    webSearchProviderInventoryPromise = (async () => {
+      const inventory = [];
+      const files = await collectSourceFileContents({
+        repoRoot,
+        scanRoots,
+        scanExtensions,
+        ignoredDirNames,
+      });
 
-  for (const filePath of files) {
-    const relativeFile = normalizeRelativePath(filePath);
-    if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
-      continue;
-    }
-    const content = await fs.readFile(filePath, "utf8");
-    const lines = content.split(/\r?\n/);
+      for (const { relativeFile, content } of files) {
+        if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
+          continue;
+        }
+        const lines = content.split(/\r?\n/);
 
-    if (relativeFile === "src/plugins/web-search-providers.ts") {
-      scanWebSearchProviderRegistry(lines, relativeFile, inventory);
-      continue;
-    }
+        if (relativeFile === "src/plugins/web-search-providers.ts") {
+          scanWebSearchProviderRegistry(lines, relativeFile, inventory);
+          continue;
+        }
 
-    scanGenericCoreImports(lines, relativeFile, inventory);
+        scanGenericCoreImports(lines, relativeFile, inventory);
+      }
+
+      return inventory.toSorted(compareInventoryEntries);
+    })();
   }
-
-  return inventory.toSorted(compareInventoryEntries);
+  return await webSearchProviderInventoryPromise;
 }
 
+/**
+ * Reads the expected web-search provider boundary inventory baseline.
+ */
 export async function readExpectedInventory() {
   try {
     return JSON.parse(await fs.readFile(baselinePath, "utf8"));
@@ -224,15 +202,11 @@ export async function readExpectedInventory() {
   }
 }
 
+/**
+ * Diffs expected and actual web-search provider boundary inventory entries.
+ */
 export function diffInventory(expected, actual) {
-  const expectedKeys = new Set(expected.map((entry) => JSON.stringify(entry)));
-  const actualKeys = new Set(actual.map((entry) => JSON.stringify(entry)));
-  const missing = expected.filter((entry) => !actualKeys.has(JSON.stringify(entry)));
-  const unexpected = actual.filter((entry) => !expectedKeys.has(JSON.stringify(entry)));
-  return {
-    missing: missing.toSorted(compareInventoryEntries),
-    unexpected: unexpected.toSorted(compareInventoryEntries),
-  };
+  return diffInventoryEntries(expected, actual, compareInventoryEntries);
 }
 
 function formatInventoryHuman(inventory) {
@@ -255,41 +229,30 @@ function formatEntry(entry) {
   return `${entry.provider} ${entry.file}:${entry.line} ${entry.reason}`;
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const json = argv.includes("--json");
-  const actual = await collectWebSearchProviderBoundaryInventory();
-  const expected = await readExpectedInventory();
-  const { missing, unexpected } = diffInventory(expected, actual);
-  const matchesBaseline = missing.length === 0 && unexpected.length === 0;
+/**
+ * Runs the web-search provider boundary baseline check.
+ */
+async function runWebSearchProviderBoundaryCheck(argv, io) {
+  return await runBaselineInventoryCheck({
+    argv: argv ?? process.argv.slice(2),
+    io,
+    collectActual: collectWebSearchProviderBoundaryInventory,
+    readExpected: readExpectedInventory,
+    diffInventory,
+    formatInventoryHuman,
+    formatEntry,
+  });
+}
 
-  if (json) {
-    process.stdout.write(`${JSON.stringify(actual, null, 2)}\n`);
-  } else {
-    console.log(formatInventoryHuman(actual));
-    console.log(
-      matchesBaseline
-        ? `Baseline matches (${actual.length} entries).`
-        : `Baseline mismatch (${unexpected.length} unexpected, ${missing.length} missing).`,
-    );
-    if (!matchesBaseline) {
-      if (unexpected.length > 0) {
-        console.error("Unexpected entries:");
-        for (const entry of unexpected) {
-          console.error(`- ${formatEntry(entry)}`);
-        }
-      }
-      if (missing.length > 0) {
-        console.error("Missing baseline entries:");
-        for (const entry of missing) {
-          console.error(`- ${formatEntry(entry)}`);
-        }
-      }
-    }
+/**
+ * Entrypoint wrapper for the web-search provider boundary check.
+ */
+export async function main(argv, io) {
+  const exitCode = await runWebSearchProviderBoundaryCheck(argv, io);
+  if (!io && exitCode !== 0) {
+    process.exit(exitCode);
   }
-
-  if (!matchesBaseline) {
-    process.exit(1);
-  }
+  return exitCode;
 }
 
 runAsScript(import.meta.url, main);

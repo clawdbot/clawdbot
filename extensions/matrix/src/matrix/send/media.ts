@@ -1,4 +1,6 @@
+// Matrix plugin module implements media behavior.
 import { parseBuffer, type IFileInfo } from "music-metadata";
+import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
   DimensionalFileInfo,
@@ -8,18 +10,16 @@ import type {
   TimedFileInfo,
   VideoFileInfo,
 } from "../sdk.js";
-import { applyMatrixFormatting } from "./formatting.js";
-import {
-  type MatrixMediaContent,
-  type MatrixMediaInfo,
-  type MatrixMediaMsgType,
-  type MatrixRelation,
-  type MediaKind,
+import type {
+  MatrixMediaContent,
+  MatrixMediaInfo,
+  MatrixMediaMsgType,
+  MatrixRelation,
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
 
-export function buildMatrixMediaInfo(params: {
+function buildMatrixMediaInfo(params: {
   size: number;
   mimetype?: string;
   durationMs?: number;
@@ -103,7 +103,6 @@ export function buildMediaContent(params: {
   if (params.relation) {
     base["m.relates_to"] = params.relation;
   }
-  applyMatrixFormatting(base, params.body);
   return base;
 }
 
@@ -122,10 +121,6 @@ export async function prepareImageInfo(params: {
     return undefined;
   }
   const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
-  if (params.encrypted) {
-    // For E2EE media, avoid uploading plaintext thumbnails.
-    return imageInfo;
-  }
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
     try {
@@ -138,12 +133,16 @@ export async function prepareImageInfo(params: {
       const thumbMeta = await getCore()
         .media.getImageMetadata(thumbBuffer)
         .catch(() => null);
-      const thumbUri = await params.client.uploadContent(
-        thumbBuffer,
-        "image/jpeg",
-        "thumbnail.jpg",
-      );
-      imageInfo.thumbnail_url = thumbUri;
+      const result = await uploadMediaWithEncryption(params.client, thumbBuffer, {
+        contentType: "image/jpeg",
+        filename: "thumbnail.jpg",
+        encrypted: params.encrypted === true,
+      });
+      if (result.file) {
+        imageInfo.thumbnail_file = result.file;
+      } else {
+        imageInfo.thumbnail_url = result.url;
+      }
       if (thumbMeta) {
         imageInfo.thumbnail_info = {
           w: thumbMeta.width,
@@ -163,7 +162,7 @@ export async function resolveMediaDurationMs(params: {
   buffer: Buffer;
   contentType?: string;
   fileName?: string;
-  kind: MediaKind;
+  kind: Exclude<MediaKind, "sticker">;
 }): Promise<number | undefined> {
   if (params.kind !== "audio" && params.kind !== "video") {
     return undefined;
@@ -202,6 +201,29 @@ async function uploadFile(
   return await client.uploadContent(file, params.contentType, params.filename);
 }
 
+async function uploadMediaWithEncryption(
+  client: MatrixClient,
+  buffer: Buffer,
+  params: {
+    contentType?: string;
+    filename?: string;
+    encrypted: boolean;
+  },
+): Promise<{ url: string; file?: EncryptedFile }> {
+  if (params.encrypted && client.crypto) {
+    const encrypted = await client.crypto.encryptMedia(buffer);
+    const mxc = await client.uploadContent(encrypted.buffer, params.contentType, params.filename);
+    const file: EncryptedFile = { url: mxc, ...encrypted.file };
+    return {
+      url: mxc,
+      file,
+    };
+  }
+
+  const mxc = await uploadFile(client, buffer, params);
+  return { url: mxc };
+}
+
 /**
  * Upload media with optional encryption for E2EE rooms.
  */
@@ -215,20 +237,9 @@ export async function uploadMediaMaybeEncrypted(
   },
 ): Promise<{ url: string; file?: EncryptedFile }> {
   // Check if room is encrypted and crypto is available
-  const isEncrypted = client.crypto && (await client.crypto.isRoomEncrypted(roomId));
-
-  if (isEncrypted && client.crypto) {
-    // Encrypt the media before uploading
-    const encrypted = await client.crypto.encryptMedia(buffer);
-    const mxc = await client.uploadContent(encrypted.buffer, params.contentType, params.filename);
-    const file: EncryptedFile = { url: mxc, ...encrypted.file };
-    return {
-      url: mxc,
-      file,
-    };
-  }
-
-  // Upload unencrypted
-  const mxc = await uploadFile(client, buffer, params);
-  return { url: mxc };
+  const isEncrypted = Boolean(client.crypto && (await client.crypto.isRoomEncrypted(roomId)));
+  return await uploadMediaWithEncryption(client, buffer, {
+    ...params,
+    encrypted: isEncrypted,
+  });
 }

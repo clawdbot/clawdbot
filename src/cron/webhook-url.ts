@@ -1,7 +1,6 @@
-function isAllowedWebhookProtocol(protocol: string) {
-  return protocol === "http:" || protocol === "https:";
-}
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 
+/** Normalizes cron webhook URLs while rejecting empty, malformed, and non-HTTP(S) values. */
 export function normalizeHttpWebhookUrl(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -10,17 +9,8 @@ export function normalizeHttpWebhookUrl(value: unknown): string | null {
   if (!trimmed) {
     return null;
   }
-  try {
-    const parsed = new URL(trimmed);
-    if (!isAllowedWebhookProtocol(parsed.protocol)) {
-      return null;
-    }
-    // Do not allow embedded credentials in webhook URLs.
-    if (parsed.username || parsed.password) {
-      return null;
-    }
-    return trimmed;
-  } catch {
+  if (!isHttpUrl(trimmed)) {
     return null;
   }
+  return trimmed;
 }

@@ -1,80 +1,66 @@
+// Provides shared helpers for plugin hook tests.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
-import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
+import { createPluginRecord } from "./status.test-helpers.js";
+import type { PluginHookAgentTrigger, PluginHookRegistration } from "./types.js";
 
 export function createMockPluginRegistry(
-  hooks: Array<{ hookName: string; handler: (...args: unknown[]) => unknown }>,
+  hooks: Array<{
+    hookName: string;
+    handler: (...args: unknown[]) => unknown;
+    pluginId?: string;
+    priority?: number;
+    registrationId?: string;
+    timeoutMs?: number;
+    eligibleTriggers?: readonly PluginHookAgentTrigger[];
+  }>,
 ): PluginRegistry {
+  const pluginIds =
+    hooks.length > 0
+      ? uniqueStrings(hooks.map((hook) => hook.pluginId ?? "test-plugin"))
+      : ["test-plugin"];
   return {
-    plugins: [
-      {
-        id: "test-plugin",
+    ...createEmptyPluginRegistry(),
+    plugins: pluginIds.map((pluginId) =>
+      createPluginRecord({
+        id: pluginId,
         name: "Test Plugin",
         source: "test",
-        origin: "workspace",
-        enabled: true,
-        status: "loaded",
-        toolNames: [],
-        hookNames: [],
-        channelIds: [],
-        providerIds: [],
-        speechProviderIds: [],
-        mediaUnderstandingProviderIds: [],
-        imageGenerationProviderIds: [],
-        webSearchProviderIds: [],
-        gatewayMethods: [],
-        cliCommands: [],
-        services: [],
-        commands: [],
-        httpRoutes: 0,
-        hookCount: hooks.length,
-        configSchema: false,
-      },
-    ],
+        hookCount: hooks.filter((hook) => (hook.pluginId ?? "test-plugin") === pluginId).length,
+      }),
+    ),
     hooks: hooks as never[],
     typedHooks: hooks.map((h) => ({
-      pluginId: "test-plugin",
+      pluginId: h.pluginId ?? "test-plugin",
       hookName: h.hookName,
       handler: h.handler,
-      priority: 0,
+      priority: h.priority ?? 0,
+      ...(h.registrationId ? { registrationId: h.registrationId } : {}),
+      ...(h.timeoutMs !== undefined ? { timeoutMs: h.timeoutMs } : {}),
+      ...(h.eligibleTriggers !== undefined ? { eligibleTriggers: h.eligibleTriggers } : {}),
       source: "test",
-    })),
-    tools: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    speechProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    webSearchProviders: [],
-    httpRoutes: [],
-    gatewayHandlers: {},
-    cliRegistrars: [],
-    services: [],
-    commands: [],
-    diagnostics: [],
-  } as unknown as PluginRegistry;
+    })) as PluginRegistry["typedHooks"],
+  };
 }
-
-export const TEST_PLUGIN_AGENT_CTX: PluginHookAgentContext = {
-  agentId: "test-agent",
-  sessionKey: "test-session",
-  sessionId: "test-session-id",
-  workspaceDir: "/tmp/openclaw-test",
-  messageProvider: "test",
-};
-
 export function addTestHook(params: {
   registry: PluginRegistry;
   pluginId: string;
   hookName: PluginHookRegistration["hookName"];
   handler: PluginHookRegistration["handler"];
   priority?: number;
+  registrationId?: string;
+  timeoutMs?: number;
+  eligibleTriggers?: readonly PluginHookAgentTrigger[];
 }) {
   params.registry.typedHooks.push({
     pluginId: params.pluginId,
     hookName: params.hookName,
     handler: params.handler,
     priority: params.priority ?? 0,
+    ...(params.registrationId ? { registrationId: params.registrationId } : {}),
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.eligibleTriggers !== undefined ? { eligibleTriggers: params.eligibleTriggers } : {}),
     source: "test",
   } as PluginHookRegistration);
 }

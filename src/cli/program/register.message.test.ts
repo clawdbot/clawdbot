@@ -1,72 +1,92 @@
+// Register message tests cover message command registration in the CLI program.
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
+import { registerMessageCommands } from "./register.message.js";
 
-const createMessageCliHelpersMock = vi.fn(() => ({ helper: true }));
-const registerMessageSendCommandMock = vi.fn();
-const registerMessageBroadcastCommandMock = vi.fn();
-const registerMessagePollCommandMock = vi.fn();
-const registerMessageReactionsCommandsMock = vi.fn();
-const registerMessageReadEditDeleteCommandsMock = vi.fn();
-const registerMessagePinCommandsMock = vi.fn();
-const registerMessagePermissionsCommandMock = vi.fn();
-const registerMessageSearchCommandMock = vi.fn();
-const registerMessageThreadCommandsMock = vi.fn();
-const registerMessageEmojiCommandsMock = vi.fn();
-const registerMessageStickerCommandsMock = vi.fn();
-const registerMessageDiscordAdminCommandsMock = vi.fn();
+const mocks = vi.hoisted(() => ({
+  createMessageCliHelpersMock: vi.fn(() => ({ helper: true })),
+  registerMessageSendCommandMock: vi.fn(),
+  registerMessageBroadcastCommandMock: vi.fn(),
+  registerMessagePollCommandMock: vi.fn(),
+  registerMessageReactionsCommandsMock: vi.fn(),
+  registerMessageReadEditDeleteCommandsMock: vi.fn(),
+  registerMessagePinCommandsMock: vi.fn(),
+  registerMessagePermissionsCommandMock: vi.fn(),
+  registerMessageSearchCommandMock: vi.fn(),
+  registerMessageThreadCommandsMock: vi.fn(),
+  registerMessageEmojiCommandsMock: vi.fn(),
+  registerMessageStickerCommandsMock: vi.fn(),
+  registerMessageDiscordAdminCommandsMock: vi.fn(),
+}));
+
+const createMessageCliHelpersMock = mocks.createMessageCliHelpersMock;
+const registerMessageSendCommandMock = mocks.registerMessageSendCommandMock;
+const registerMessageBroadcastCommandMock = mocks.registerMessageBroadcastCommandMock;
+const registerMessagePollCommandMock = mocks.registerMessagePollCommandMock;
+const registerMessageReactionsCommandsMock = mocks.registerMessageReactionsCommandsMock;
+const registerMessageReadEditDeleteCommandsMock = mocks.registerMessageReadEditDeleteCommandsMock;
+const registerMessagePinCommandsMock = mocks.registerMessagePinCommandsMock;
+const registerMessagePermissionsCommandMock = mocks.registerMessagePermissionsCommandMock;
+const registerMessageSearchCommandMock = mocks.registerMessageSearchCommandMock;
+const registerMessageThreadCommandsMock = mocks.registerMessageThreadCommandsMock;
+const registerMessageEmojiCommandsMock = mocks.registerMessageEmojiCommandsMock;
+const registerMessageStickerCommandsMock = mocks.registerMessageStickerCommandsMock;
+const registerMessageDiscordAdminCommandsMock = mocks.registerMessageDiscordAdminCommandsMock;
+
+function requireProgramCommand(program: Command, name: string): Command {
+  const command = program.commands.find((entry) => entry.name() === name);
+  if (!command) {
+    throw new Error(`expected ${name} command`);
+  }
+  return command;
+}
 
 vi.mock("./message/helpers.js", () => ({
-  createMessageCliHelpers: createMessageCliHelpersMock,
+  createMessageCliHelpers: mocks.createMessageCliHelpersMock,
 }));
 
 vi.mock("./message/register.send.js", () => ({
-  registerMessageSendCommand: registerMessageSendCommandMock,
+  registerMessageSendCommand: mocks.registerMessageSendCommandMock,
 }));
 
 vi.mock("./message/register.broadcast.js", () => ({
-  registerMessageBroadcastCommand: registerMessageBroadcastCommandMock,
+  registerMessageBroadcastCommand: mocks.registerMessageBroadcastCommandMock,
 }));
 
 vi.mock("./message/register.poll.js", () => ({
-  registerMessagePollCommand: registerMessagePollCommandMock,
+  registerMessagePollCommand: mocks.registerMessagePollCommandMock,
 }));
 
 vi.mock("./message/register.reactions.js", () => ({
-  registerMessageReactionsCommands: registerMessageReactionsCommandsMock,
+  registerMessageReactionsCommands: mocks.registerMessageReactionsCommandsMock,
 }));
 
 vi.mock("./message/register.read-edit-delete.js", () => ({
-  registerMessageReadEditDeleteCommands: registerMessageReadEditDeleteCommandsMock,
+  registerMessageReadEditDeleteCommands: mocks.registerMessageReadEditDeleteCommandsMock,
 }));
 
 vi.mock("./message/register.pins.js", () => ({
-  registerMessagePinCommands: registerMessagePinCommandsMock,
+  registerMessagePinCommands: mocks.registerMessagePinCommandsMock,
 }));
 
 vi.mock("./message/register.permissions-search.js", () => ({
-  registerMessagePermissionsCommand: registerMessagePermissionsCommandMock,
-  registerMessageSearchCommand: registerMessageSearchCommandMock,
+  registerMessagePermissionsCommand: mocks.registerMessagePermissionsCommandMock,
+  registerMessageSearchCommand: mocks.registerMessageSearchCommandMock,
 }));
 
 vi.mock("./message/register.thread.js", () => ({
-  registerMessageThreadCommands: registerMessageThreadCommandsMock,
+  registerMessageThreadCommands: mocks.registerMessageThreadCommandsMock,
 }));
 
 vi.mock("./message/register.emoji-sticker.js", () => ({
-  registerMessageEmojiCommands: registerMessageEmojiCommandsMock,
-  registerMessageStickerCommands: registerMessageStickerCommandsMock,
+  registerMessageEmojiCommands: mocks.registerMessageEmojiCommandsMock,
+  registerMessageStickerCommands: mocks.registerMessageStickerCommandsMock,
 }));
 
 vi.mock("./message/register.discord-admin.js", () => ({
-  registerMessageDiscordAdminCommands: registerMessageDiscordAdminCommandsMock,
+  registerMessageDiscordAdminCommands: mocks.registerMessageDiscordAdminCommandsMock,
 }));
-
-let registerMessageCommands: typeof import("./register.message.js").registerMessageCommands;
-
-beforeAll(async () => {
-  ({ registerMessageCommands } = await import("./register.message.js"));
-});
 
 describe("registerMessageCommands", () => {
   const ctx: ProgramContext = {
@@ -85,8 +105,7 @@ describe("registerMessageCommands", () => {
     const program = new Command();
     registerMessageCommands(program, ctx);
 
-    const message = program.commands.find((command) => command.name() === "message");
-    expect(message).toBeDefined();
+    const message = requireProgramCommand(program, "message");
     expect(createMessageCliHelpersMock).toHaveBeenCalledWith(message, "telegram|discord");
 
     const expectedRegistrars = [
@@ -111,9 +130,8 @@ describe("registerMessageCommands", () => {
   it("shows command help when root message command is invoked", async () => {
     const program = new Command().exitOverride();
     registerMessageCommands(program, ctx);
-    const message = program.commands.find((command) => command.name() === "message");
-    expect(message).toBeDefined();
-    const helpSpy = vi.spyOn(message as Command, "help").mockImplementation(() => {
+    const message = requireProgramCommand(program, "message");
+    const helpSpy = vi.spyOn(message, "help").mockImplementation(() => {
       throw new Error("help-called");
     });
 

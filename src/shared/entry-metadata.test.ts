@@ -1,3 +1,4 @@
+// Entry metadata tests cover display metadata resolution for agents and jobs.
 import { describe, expect, it } from "vitest";
 import { resolveEmojiAndHomepage } from "./entry-metadata.js";
 
@@ -20,7 +21,7 @@ describe("shared/entry-metadata", () => {
         metadata: { emoji: "", homepage: "   " },
         frontmatter: { emoji: "🙂", homepage: "https://example.com" },
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("falls back through frontmatter homepage aliases and drops blanks", () => {
@@ -37,7 +38,7 @@ describe("shared/entry-metadata", () => {
         metadata: { homepage: "   " },
         frontmatter: { url: "   " },
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       resolveEmojiAndHomepage({
         frontmatter: { url: " https://openclaw.ai/install " },
@@ -56,6 +57,6 @@ describe("shared/entry-metadata", () => {
           url: "https://openclaw.ai/install",
         },
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });

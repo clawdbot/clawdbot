@@ -1,14 +1,24 @@
 {
   "id": "synthetic",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
   "providers": ["synthetic"],
-  "providerAuthEnvVars": {
-    "synthetic": ["SYNTHETIC_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "synthetic",
+        "envVars": ["SYNTHETIC_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "synthetic",
       "method": "api-key",
       "choiceId": "synthetic-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Synthetic API key",
       "groupId": "synthetic",
       "groupLabel": "Synthetic",

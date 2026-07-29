@@ -5,10 +5,8 @@ services:
     plan: starter
     healthCheckPath: /health
     envVars:
-      - key: PORT
+      - key: OPENCLAW_GATEWAY_PORT
         value: "8080"
-      - key: SETUP_PASSWORD
-        sync: false
       - key: OPENCLAW_STATE_DIR
         value: /data/.openclaw
       - key: OPENCLAW_WORKSPACE_DIR

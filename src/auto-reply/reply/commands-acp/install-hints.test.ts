@@ -1,22 +1,15 @@
-import fs from "node:fs";
-import os from "node:os";
+// Tests ACP install hint detection and command guidance.
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./install-hints.js";
-
-const originalCwd = process.cwd();
-const tempDirs: string[] = [];
+import { resolveAcpInstallCommandHint } from "./install-hints.js";
 
 function withAcpConfig(acp: OpenClawConfig["acp"]): OpenClawConfig {
   return { acp } as OpenClawConfig;
 }
 
 afterEach(() => {
-  process.chdir(originalCwd);
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  vi.restoreAllMocks();
 });
 
 describe("ACP install hints", () => {
@@ -28,21 +21,14 @@ describe("ACP install hints", () => {
   });
 
   it("uses local acpx extension path when present", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acp-install-hint-"));
-    tempDirs.push(tempRoot);
-    fs.mkdirSync(path.join(tempRoot, "extensions", "acpx"), { recursive: true });
-    process.chdir(tempRoot);
-
+    const repoRoot = process.cwd();
     const cfg = withAcpConfig({ backend: "acpx" });
     const hint = resolveAcpInstallCommandHint(cfg);
-    expect(hint).toContain("openclaw plugins install ");
-    expect(hint).toContain(path.join("extensions", "acpx"));
+    expect(hint).toBe(`openclaw plugins install ${path.join(repoRoot, "extensions", "acpx")}`);
   });
 
-  it("falls back to npm install hint for acpx when local extension is absent", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acp-install-hint-"));
-    tempDirs.push(tempRoot);
-    process.chdir(tempRoot);
+  it("falls back to scoped install hint for acpx when local extension is absent", () => {
+    vi.spyOn(process, "cwd").mockReturnValue(path.join(process.cwd(), "missing-workspace"));
 
     const cfg = withAcpConfig({ backend: "acpx" });
     expect(resolveAcpInstallCommandHint(cfg)).toBe("openclaw plugins install acpx");
@@ -50,7 +36,8 @@ describe("ACP install hints", () => {
 
   it("returns generic plugin hint for non-acpx backend", () => {
     const cfg = withAcpConfig({ backend: "custom-backend" });
-    expect(resolveConfiguredAcpBackendId(cfg)).toBe("custom-backend");
-    expect(resolveAcpInstallCommandHint(cfg)).toContain('ACP backend "custom-backend"');
+    expect(resolveAcpInstallCommandHint(cfg)).toBe(
+      'Install and enable the plugin that provides ACP backend "custom-backend".',
+    );
   });
 });

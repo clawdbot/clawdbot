@@ -1,17 +1,194 @@
+// Regresses known config schema edge cases and compatibility expectations.
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
-  it("accepts nested telegram groupPolicy overrides", () => {
+  it.each([0, 3_000])(
+    "accepts the documented global exec approval running notice delay %i",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        tools: {
+          exec: {
+            approvalRunningNoticeMs,
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.tools?.exec?.approvalRunningNoticeMs).toBe(approvalRunningNoticeMs);
+      }
+    },
+  );
+
+  it.each([0, 3_000])(
+    "preserves the per-agent exec approval running notice delay %i",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.agents?.entries?.main?.tools?.exec?.approvalRunningNoticeMs).toBe(
+          approvalRunningNoticeMs,
+        );
+      }
+    },
+  );
+
+  it.each([-1, 1.5, "3000"])(
+    "rejects invalid global exec approval running notice delay %s",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        tools: {
+          exec: {
+            approvalRunningNoticeMs,
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.path)).toContain(
+          "tools.exec.approvalRunningNoticeMs",
+        );
+      }
+    },
+  );
+
+  it.each([-1, 1.5, "3000"])(
+    "rejects invalid per-agent exec approval running notice delay %s",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.path)).toContain(
+          "agents.entries.main.tools.exec.approvalRunningNoticeMs",
+        );
+      }
+    },
+  );
+
+  it.each([
+    {
+      scope: "global",
+      config: {
+        tools: {
+          exec: {
+            approvalRunningNoticeMs: 0,
+            unknownApprovalRunningNoticeMs: 0,
+          },
+        },
+      },
+    },
+    {
+      scope: "per-agent",
+      config: {
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs: 0,
+                  unknownApprovalRunningNoticeMs: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  ])("keeps $scope exec configuration strict", ({ config }) => {
+    expect(validateConfigObject(config).ok).toBe(false);
+  });
+
+  it.each([
+    { field: "fallback", value: "voyage" },
+    { field: "provider", value: "mistral" },
+    { field: "provider", value: "bedrock" },
+  ])('accepts memorySearch $field "$value"', ({ field, value }) => {
+    expect(
+      validateConfigObject({
+        memory: { search: { [field]: value } },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("rejects local memorySearch GPU policy", () => {
     const res = validateConfigObject({
-      channels: {
-        telegram: {
-          groups: {
-            "-1001234567890": {
-              groupPolicy: "open",
-              topics: {
-                "42": {
-                  groupPolicy: "disabled",
+      memory: {
+        search: {
+          provider: "local",
+          local: {
+            gpu: "cpu",
+          },
+        },
+      },
+
+      agents: {
+        defaults: {},
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      memory: {
+        search: {
+          qmd: {
+            extraCollections: [
+              { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+            ],
+          },
+        },
+      },
+
+      agents: {
+        defaults: {},
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.entries.*.memory.search.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: {
+          main: {
+            memory: {
+              search: {
+                qmd: {
+                  extraCollections: [
+                    { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+                  ],
                 },
               },
             },
@@ -23,12 +200,17 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it('accepts memorySearch fallback "voyage"', () => {
+  it("accepts agents.defaults.startupContext overrides", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
-          memorySearch: {
-            fallback: "voyage",
+          startupContext: {
+            enabled: true,
+            applyOn: ["new"],
+            dailyMemoryDays: 3,
+            maxFileBytes: 8192,
+            maxFileChars: 1000,
+            maxTotalChars: 2500,
           },
         },
       },
@@ -37,70 +219,99 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it('accepts memorySearch provider "mistral"', () => {
+  it("rejects oversized agents.defaults.startupContext overrides", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
-          memorySearch: {
-            provider: "mistral",
+          startupContext: {
+            dailyMemoryDays: 99,
+            maxFileBytes: 999_999,
           },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts safe iMessage remoteHost", () => {
-    const res = validateConfigObject({
-      channels: {
-        imessage: {
-          remoteHost: "bot@gateway-host",
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts channels.whatsapp.enabled", () => {
-    const res = validateConfigObject({
-      channels: {
-        whatsapp: {
-          enabled: true,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects unsafe iMessage remoteHost", () => {
-    const res = validateConfigObject({
-      channels: {
-        imessage: {
-          remoteHost: "bot@gateway-host -oProxyCommand=whoami",
         },
       },
     });
 
     expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.imessage.remoteHost");
-    }
   });
 
-  it("accepts iMessage attachment root patterns", () => {
+  it("accepts agents.defaults and agents.entries contextLimits overrides", () => {
     const res = validateConfigObject({
-      channels: {
-        imessage: {
-          attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
-          remoteAttachmentRoots: ["/Volumes/relay/attachments"],
+      agents: {
+        defaults: {
+          contextLimits: {
+            memoryGetMaxChars: 20_000,
+            postCompactionMaxChars: 4_000,
+          },
+        },
+        entries: {
+          writer: {
+            skillsLimits: {
+              maxSkillsPromptChars: 30_000,
+            },
+            contextLimits: {
+              memoryGetMaxChars: 24_000,
+            },
+          },
         },
       },
     });
 
     expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.entries experimental localModelLean overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: {
+          gemma: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([
+    { name: "accepts Matrix queue byChannel overrides", mode: "steer" },
+    { name: "accepts Matrix interrupt queue byChannel overrides", mode: "interrupt" },
+  ])("$name", ({ mode }) => {
+    expect(validateConfigObject({ messages: { queue: { byChannel: { matrix: mode } } } }).ok).toBe(
+      true,
+    );
+  });
+
+  it("keeps queue byChannel schema and config type providers aligned", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            googlechat: "followup",
+            mattermost: "collect",
+            matrix: "steer",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown queue byChannel providers", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            unknown: "steer",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
   });
 
   it("accepts string values for agents defaults model inputs", () => {
@@ -122,9 +333,9 @@ describe("config schema regressions", () => {
         defaults: {
           pdfModel: {
             primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["openai/gpt-5-mini"],
+            fallbacks: ["openai/gpt-5.4-mini"],
           },
-          pdfMaxBytesMb: 12,
+          pdfMaxMb: 12,
           pdfMaxPages: 25,
         },
       },
@@ -137,8 +348,8 @@ describe("config schema regressions", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
-          pdfModel: { primary: "openai/gpt-5-mini" },
-          pdfMaxBytesMb: 0,
+          pdfModel: { primary: "openai/gpt-5.4-mini" },
+          pdfMaxMb: 0,
           pdfMaxPages: 0,
         },
       },
@@ -146,22 +357,9 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
-    }
-  });
-
-  it("rejects relative iMessage attachment roots", () => {
-    const res = validateConfigObject({
-      channels: {
-        imessage: {
-          attachmentRoots: ["./attachments"],
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
+      const issuePaths = res.issues.map((issue) => issue.path);
+      expect(issuePaths).toContain("agents.defaults.pdfMaxMb");
+      expect(issuePaths).toContain("agents.defaults.pdfMaxPages");
     }
   });
 
@@ -185,11 +383,23 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts signal accountUuid for loop protection", () => {
+  it("rejects unknown keys under browser.tabCleanup", () => {
     const res = validateConfigObject({
-      channels: {
-        signal: {
-          accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      browser: {
+        tabCleanup: {
+          unknownKey: true as unknown,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
+    const res = validateConfigObject({
+      discovery: {
+        wideArea: {
+          domain: "openclaw.internal",
         },
       },
     });
@@ -197,13 +407,91 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts telegram actions editMessage and createForumTopic", () => {
+  it("rejects bindings referencing an agentId missing from agents.entries (openclaw#84692)", () => {
     const res = validateConfigObject({
-      channels: {
-        telegram: {
-          actions: {
-            editMessage: true,
-            createForumTopic: false,
+      agents: {
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.message.includes('Unknown agent id "ghost"'))).toBe(true);
+    }
+  });
+
+  it("accepts bindings whose agentId is present in agents.entries", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "alpha",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-addressable agents.entries keys", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { "Team Ops": { model: "anthropic/claude-3-5-sonnet" } },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects non-default bindings when the implicit-main roster is materialized", () => {
+    const res = validateConfigObject({
+      bindings: [
+        {
+          type: "route",
+          agentId: "alpha",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts a microsoft-foundry model entry carrying thinkingLevelMap (openclaw#91011)", () => {
+    // Foundry's writer (buildFoundryThinkingLevelMap) persists this during Entra ID onboarding; the
+    // strict schema used to reject thinkingLevelMap, so updateConfig rolled the whole write back.
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            models: [
+              {
+                id: "gpt-5.1-chat",
+                name: "gpt-5.1-chat",
+                api: "openai-responses",
+                reasoning: true,
+                thinkingLevelMap: {
+                  off: "none",
+                  minimal: null,
+                  low: "low",
+                  medium: "medium",
+                  high: "high",
+                  xhigh: null,
+                  max: null,
+                },
+              },
+            ],
           },
         },
       },
@@ -212,16 +500,24 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
+  it("rejects thinkingLevelMap keys outside the model thinking levels", () => {
+    // "adaptive" is a valid agent thinkingDefault but not a ModelThinkingLevel; the map stays strict.
     const res = validateConfigObject({
-      discovery: {
-        wideArea: {
-          enabled: true,
-          domain: "openclaw.internal",
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            models: [
+              {
+                id: "gpt-5.1-chat",
+                name: "gpt-5.1-chat",
+                thinkingLevelMap: { adaptive: "high" },
+              },
+            ],
+          },
         },
       },
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
   });
 });

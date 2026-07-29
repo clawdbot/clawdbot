@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Covers outbound identity normalization and configured agent identity/avatar
+// projection.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveAgentIdentityMock = vi.hoisted(() => vi.fn());
 const resolveAgentAvatarMock = vi.hoisted(() => vi.fn());
@@ -16,82 +18,91 @@ type IdentityModule = typeof import("./identity.js");
 let normalizeOutboundIdentity: IdentityModule["normalizeOutboundIdentity"];
 let resolveAgentOutboundIdentity: IdentityModule["resolveAgentOutboundIdentity"];
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ normalizeOutboundIdentity, resolveAgentOutboundIdentity } = await import("./identity.js"));
 });
 
+beforeEach(() => {
+  resolveAgentIdentityMock.mockReset();
+  resolveAgentAvatarMock.mockReset();
+});
+
 describe("normalizeOutboundIdentity", () => {
-  it("trims fields and drops empty identities", () => {
-    expect(
-      normalizeOutboundIdentity({
+  it.each([
+    {
+      input: {
         name: "  Demo Bot  ",
         avatarUrl: " https://example.com/a.png ",
         emoji: "  🤖  ",
         theme: "  ocean  ",
-      }),
-    ).toEqual({
-      name: "Demo Bot",
-      avatarUrl: "https://example.com/a.png",
-      emoji: "🤖",
-      theme: "ocean",
-    });
-    expect(
-      normalizeOutboundIdentity({
+      },
+      expected: {
+        name: "Demo Bot",
+        avatarUrl: "https://example.com/a.png",
+        emoji: "🤖",
+        theme: "ocean",
+      },
+    },
+    {
+      input: {
         name: "  ",
         avatarUrl: "\n",
         emoji: "",
-      }),
-    ).toBeUndefined();
+      },
+      expected: undefined,
+    },
+  ])("normalizes outbound identity for %j", ({ input, expected }) => {
+    expect(normalizeOutboundIdentity(input)).toEqual(expected);
   });
 });
 
 describe("resolveAgentOutboundIdentity", () => {
-  it("builds normalized identity data and keeps only remote avatars", () => {
-    resolveAgentIdentityMock.mockReturnValueOnce({
-      name: "  Agent Smith  ",
-      emoji: "  🕶️  ",
-      theme: "  noir  ",
-    });
-    resolveAgentAvatarMock.mockReturnValueOnce({
-      kind: "remote",
-      url: "https://example.com/avatar.png",
-    });
-
-    expect(resolveAgentOutboundIdentity({} as never, "main")).toEqual({
-      name: "Agent Smith",
-      emoji: "🕶️",
-      avatarUrl: "https://example.com/avatar.png",
-      theme: "noir",
-    });
-  });
-
-  it("drops blank and non-remote avatar values after normalization", () => {
-    resolveAgentIdentityMock.mockReturnValueOnce({
-      name: "   ",
-      emoji: "",
-    });
-    resolveAgentAvatarMock.mockReturnValueOnce({
-      kind: "data",
-      dataUrl: "data:image/png;base64,abc",
-    });
-
-    expect(resolveAgentOutboundIdentity({} as never, "main")).toBeUndefined();
-  });
-
-  it("drops blank remote avatar urls while keeping other identity fields", () => {
-    resolveAgentIdentityMock.mockReturnValueOnce({
-      name: "  Agent Smith  ",
-      emoji: "  🕶️  ",
-    });
-    resolveAgentAvatarMock.mockReturnValueOnce({
-      kind: "remote",
-      url: "   ",
-    });
-
-    expect(resolveAgentOutboundIdentity({} as never, "main")).toEqual({
-      name: "Agent Smith",
-      emoji: "🕶️",
-    });
+  it.each([
+    {
+      identity: {
+        name: "  Agent Smith  ",
+        emoji: "  🕶️  ",
+        theme: "  noir  ",
+      },
+      avatar: {
+        kind: "remote",
+        url: "https://example.com/avatar.png",
+      },
+      expected: {
+        name: "Agent Smith",
+        emoji: "🕶️",
+        avatarUrl: "https://example.com/avatar.png",
+        theme: "noir",
+      },
+    },
+    {
+      identity: {
+        name: "   ",
+        emoji: "",
+      },
+      avatar: {
+        kind: "data",
+        dataUrl: "data:image/png;base64,abc",
+      },
+      expected: undefined,
+    },
+    {
+      identity: {
+        name: "  Agent Smith  ",
+        emoji: "  🕶️  ",
+      },
+      avatar: {
+        kind: "remote",
+        url: "   ",
+      },
+      expected: {
+        name: "Agent Smith",
+        emoji: "🕶️",
+      },
+    },
+  ])("resolves outbound identity for %j", ({ identity, avatar, expected }) => {
+    resolveAgentIdentityMock.mockReturnValueOnce(identity);
+    resolveAgentAvatarMock.mockReturnValueOnce(avatar);
+    expect(resolveAgentOutboundIdentity({} as never, "main")).toEqual(expected);
   });
 });

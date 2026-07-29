@@ -1,4 +1,5 @@
-import { vi, type Mock } from "vitest";
+// Matrix helper module supports client resolver helpers behavior.
+import { expect, vi, type Mock } from "vitest";
 import type { MatrixClient } from "./sdk.js";
 
 type MatrixClientResolverMocks = {
@@ -23,12 +24,28 @@ export const matrixClientResolverMocks: MatrixClientResolverMocks = {
   resolveMatrixAuthContextMock: vi.fn(),
 };
 
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
+  );
+  return {
+    ...actual,
+    requireRuntimeConfig: vi.fn((cfg: unknown) => {
+      if (cfg) {
+        return cfg;
+      }
+      return matrixClientResolverMocks.loadConfigMock();
+    }),
+  };
+});
+
 export function createMockMatrixClient(): MatrixClient {
   return {
     prepareForOneOff: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
+    stopWithoutPersist: vi.fn(() => undefined),
   } as unknown as MatrixClient;
 }
 
@@ -65,7 +82,7 @@ export function primeMatrixClientResolverMocks(params?: {
   loadConfigMock.mockReturnValue(cfg);
   getMatrixRuntimeMock.mockReturnValue({
     config: {
-      loadConfig: loadConfigMock,
+      current: loadConfigMock,
     },
   });
   getActiveMatrixClientMock.mockReturnValue(null);
@@ -91,4 +108,57 @@ export function primeMatrixClientResolverMocks(params?: {
   acquireSharedMatrixClientMock.mockResolvedValue(client);
 
   return client;
+}
+
+export async function expectOneOffSharedMatrixClient(params?: {
+  cfg?: unknown;
+  accountId?: string;
+  timeoutMs?: number;
+  prepareForOneOffCalls?: number;
+  startCalls?: number;
+  releaseMode?: "persist" | "stop" | "discard";
+}) {
+  const {
+    getActiveMatrixClientMock,
+    acquireSharedMatrixClientMock,
+    releaseSharedClientInstanceMock,
+  } = matrixClientResolverMocks;
+  const accountId = params?.accountId ?? "default";
+  const prepareForOneOffCalls = params?.prepareForOneOffCalls ?? 1;
+  const startCalls = params?.startCalls ?? 0;
+  const releaseMode = params?.releaseMode ?? "stop";
+
+  expect(getActiveMatrixClientMock).toHaveBeenCalledWith(accountId);
+  expect(acquireSharedMatrixClientMock).toHaveBeenCalledTimes(1);
+  expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
+    cfg: params?.cfg ?? {},
+    timeoutMs: params?.timeoutMs,
+    accountId,
+    startClient: false,
+  });
+
+  const sharedClient = await acquireSharedMatrixClientMock.mock.results[0]?.value;
+  expect(sharedClient.prepareForOneOff).toHaveBeenCalledTimes(prepareForOneOffCalls);
+  expect(sharedClient.start).toHaveBeenCalledTimes(startCalls);
+  expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, releaseMode);
+
+  return sharedClient;
+}
+
+export function expectExplicitMatrixClientConfig(params: { cfg: unknown; accountId?: string }) {
+  const { getMatrixRuntimeMock, resolveMatrixAuthContextMock, acquireSharedMatrixClientMock } =
+    matrixClientResolverMocks;
+  const accountId = params.accountId ?? "default";
+
+  expect(getMatrixRuntimeMock).not.toHaveBeenCalled();
+  expect(resolveMatrixAuthContextMock).toHaveBeenCalledWith({
+    cfg: params.cfg,
+    accountId,
+  });
+  expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
+    cfg: params.cfg,
+    timeoutMs: undefined,
+    accountId,
+    startClient: false,
+  });
 }

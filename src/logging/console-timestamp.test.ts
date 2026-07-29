@@ -1,3 +1,4 @@
+// Console timestamp tests cover timestamp prefixes for console logging.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatConsoleTimestamp } from "./console.js";
 
@@ -29,15 +30,16 @@ describe("formatConsoleTimestamp", () => {
     return `${year}-${month}-${day}T${h}:${m}:${s}.${ms}${tzSign}${tzHours}:${tzMinutes}`;
   }
 
-  it("pretty style returns local HH:MM:SS", () => {
+  it("pretty style returns local HH:MM:SS without timezone suffix", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
 
     const result = formatConsoleTimestamp("pretty");
     const now = new Date();
-    expect(result).toBe(
-      `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`,
-    );
+    const h = pad2(now.getHours());
+    const m = pad2(now.getMinutes());
+    const s = pad2(now.getSeconds());
+    expect(result).toBe(`${h}:${m}:${s}`);
   });
 
   it("compact style returns local ISO-like timestamp with timezone offset", () => {

@@ -1,14 +1,12 @@
+// Matrix plugin module implements encryption guidance behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { resolveMatrixDefaultOrOnlyAccountId } from "../account-selection.js";
 import type { CoreConfig } from "../types.js";
-import { resolveDefaultMatrixAccountId } from "./accounts.js";
-import { resolveMatrixConfigFieldPath } from "./config-update.js";
+import { resolveMatrixConfigFieldPath } from "./config-paths.js";
 
-export function resolveMatrixEncryptionConfigPath(
-  cfg: CoreConfig,
-  accountId?: string | null,
-): string {
+function resolveMatrixEncryptionConfigPath(cfg: CoreConfig, accountId?: string | null): string {
   const effectiveAccountId =
-    normalizeOptionalAccountId(accountId) ?? resolveDefaultMatrixAccountId(cfg);
+    normalizeOptionalAccountId(accountId) ?? resolveMatrixDefaultOrOnlyAccountId(cfg);
   return resolveMatrixConfigFieldPath(cfg, effectiveAccountId, "encryption");
 }
 

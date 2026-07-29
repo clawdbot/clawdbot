@@ -1,11 +1,14 @@
+// Zalo plugin module implements token behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
-import type { BaseTokenResolution } from "./runtime-api.js";
-import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
-import type { ZaloConfig } from "./types.js";
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import { resolveSecretInputString, type SecretInputStringResolutionMode } from "./secret-input.js";
+import type { ZaloConfig, ZaloTokenStatus } from "./types.js";
 
-export type ZaloTokenResolution = BaseTokenResolution & {
+type ZaloTokenResolution = BaseTokenResolution & {
   source: "env" | "config" | "configFile" | "none";
+  status: ZaloTokenStatus;
 };
 
 function readTokenFromFile(tokenFile: string | undefined): string {
@@ -15,74 +18,66 @@ function readTokenFromFile(tokenFile: string | undefined): string {
 export function resolveZaloToken(
   config: ZaloConfig | undefined,
   accountId?: string | null,
-  options?: { allowUnresolvedSecretRef?: boolean },
+  options?: { mode?: SecretInputStringResolutionMode },
 ): ZaloTokenResolution {
-  const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = normalizeAccountId(accountId ?? config?.defaultAccount);
   const isDefaultAccount = resolvedAccountId === DEFAULT_ACCOUNT_ID;
   const baseConfig = config;
-  const resolveAccountConfig = (id: string): ZaloConfig | undefined => {
-    const accounts = baseConfig?.accounts;
-    if (!accounts || typeof accounts !== "object") {
-      return undefined;
-    }
-    const direct = accounts[id] as ZaloConfig | undefined;
-    if (direct) {
-      return direct;
-    }
-    const normalized = normalizeAccountId(id);
-    const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-    return matchKey ? ((accounts as Record<string, ZaloConfig>)[matchKey] ?? undefined) : undefined;
-  };
-  const accountConfig = resolveAccountConfig(resolvedAccountId);
-  const accountHasBotToken = Boolean(
-    accountConfig && Object.prototype.hasOwnProperty.call(accountConfig, "botToken"),
+  const accountConfig = resolveAccountEntry(
+    baseConfig?.accounts as Record<string, ZaloConfig> | undefined,
+    normalizeAccountId(resolvedAccountId),
   );
+  const accountHasBotToken = Boolean(accountConfig && Object.hasOwn(accountConfig, "botToken"));
 
   if (accountConfig && accountHasBotToken) {
-    const token = options?.allowUnresolvedSecretRef
-      ? normalizeSecretInputString(accountConfig.botToken)
-      : normalizeResolvedSecretInputString({
-          value: accountConfig.botToken,
-          path: `channels.zalo.accounts.${resolvedAccountId}.botToken`,
-        });
-    if (token) {
-      return { token, source: "config" };
+    const token = resolveSecretInputString({
+      value: accountConfig.botToken,
+      path: `channels.zalo.accounts.${resolvedAccountId}.botToken`,
+      mode: options?.mode,
+    });
+    if (token.status === "available") {
+      return { token: token.value, source: "config", status: "available" };
+    }
+    if (token.status === "configured_unavailable") {
+      return { token: "", source: "config", status: "configured_unavailable" };
     }
     const fileToken = readTokenFromFile(accountConfig.tokenFile);
     if (fileToken) {
-      return { token: fileToken, source: "configFile" };
+      return { token: fileToken, source: "configFile", status: "available" };
     }
   }
 
   if (!accountHasBotToken) {
     const fileToken = readTokenFromFile(accountConfig?.tokenFile);
     if (fileToken) {
-      return { token: fileToken, source: "configFile" };
+      return { token: fileToken, source: "configFile", status: "available" };
     }
   }
 
   if (!accountHasBotToken) {
-    const token = options?.allowUnresolvedSecretRef
-      ? normalizeSecretInputString(baseConfig?.botToken)
-      : normalizeResolvedSecretInputString({
-          value: baseConfig?.botToken,
-          path: "channels.zalo.botToken",
-        });
-    if (token) {
-      return { token, source: "config" };
+    const token = resolveSecretInputString({
+      value: baseConfig?.botToken,
+      path: "channels.zalo.botToken",
+      mode: options?.mode,
+    });
+    if (token.status === "available") {
+      return { token: token.value, source: "config", status: "available" };
+    }
+    if (token.status === "configured_unavailable") {
+      return { token: "", source: "config", status: "configured_unavailable" };
     }
     const fileToken = readTokenFromFile(baseConfig?.tokenFile);
     if (fileToken) {
-      return { token: fileToken, source: "configFile" };
+      return { token: fileToken, source: "configFile", status: "available" };
     }
   }
 
   if (isDefaultAccount) {
     const envToken = process.env.ZALO_BOT_TOKEN?.trim();
     if (envToken) {
-      return { token: envToken, source: "env" };
+      return { token: envToken, source: "env", status: "available" };
     }
   }
 
-  return { token: "", source: "none" };
+  return { token: "", source: "none", status: "missing" };
 }

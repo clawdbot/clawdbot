@@ -1,13 +1,15 @@
+// Twitch plugin module implements probe behavior.
 import { StaticAuthProvider } from "@twurple/auth";
 import { ChatClient } from "@twurple/chat";
-import type { BaseProbeResult } from "../runtime-api.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
 /**
  * Result of probing a Twitch account
  */
-export type ProbeTwitchResult = BaseProbeResult<string> & {
+type ProbeTwitchResult = BaseProbeResult<string> & {
   username?: string;
   elapsedMs: number;
   connected?: boolean;
@@ -49,9 +51,6 @@ export async function probeTwitch(
     // Create a promise that resolves when connected
     const connectionPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
-      let connectListener: ReturnType<ChatClient["onConnect"]> | undefined;
-      let disconnectListener: ReturnType<ChatClient["onDisconnect"]> | undefined;
-      let authFailListener: ReturnType<ChatClient["onAuthenticationFailure"]> | undefined;
 
       const cleanup = () => {
         if (settled) {
@@ -64,30 +63,44 @@ export async function probeTwitch(
       };
 
       // Success: connection established
-      connectListener = client?.onConnect(() => {
-        cleanup();
-        resolve();
-      });
+      const connectListener: ReturnType<ChatClient["onConnect"]> | undefined = client?.onConnect(
+        () => {
+          cleanup();
+          resolve();
+        },
+      );
 
       // Failure: disconnected (e.g., auth failed)
-      disconnectListener = client?.onDisconnect((_manually, reason) => {
-        cleanup();
-        reject(reason || new Error("Disconnected"));
-      });
+      const disconnectListener: ReturnType<ChatClient["onDisconnect"]> | undefined =
+        client?.onDisconnect((_manually, reason) => {
+          cleanup();
+          reject(reason || new Error("Disconnected"));
+        });
 
       // Failure: authentication failed
-      authFailListener = client?.onAuthenticationFailure(() => {
-        cleanup();
-        reject(new Error("Authentication failed"));
-      });
+      const authFailListener: ReturnType<ChatClient["onAuthenticationFailure"]> | undefined =
+        client?.onAuthenticationFailure(() => {
+          cleanup();
+          reject(new Error("Authentication failed"));
+        });
     });
 
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`timeout after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
     });
 
     client.connect();
-    await Promise.race([connectionPromise, timeout]);
+    try {
+      await Promise.race([connectionPromise, timeout]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
 
     client.quit();
     client = undefined;
@@ -102,7 +115,7 @@ export async function probeTwitch(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
       username: account.username,
       channel: account.channel,
       elapsedMs: Date.now() - started,

@@ -1,5 +1,6 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
+// Resolves abort cutoff markers used to stop stale reply streams.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { MsgContext } from "../templating.js";
 
 export type AbortCutoff = {
@@ -11,9 +12,7 @@ type SessionAbortCutoffEntry = Pick<SessionEntry, "abortCutoffMessageSid" | "abo
 
 export function resolveAbortCutoffFromContext(ctx: MsgContext): AbortCutoff | undefined {
   const messageSid =
-    (typeof ctx.MessageSidFull === "string" && ctx.MessageSidFull.trim()) ||
-    (typeof ctx.MessageSid === "string" && ctx.MessageSid.trim()) ||
-    undefined;
+    normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid);
   const timestamp =
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   if (!messageSid && timestamp === undefined) {
@@ -28,7 +27,7 @@ export function readAbortCutoffFromSessionEntry(
   if (!entry) {
     return undefined;
   }
-  const messageSid = entry.abortCutoffMessageSid?.trim() || undefined;
+  const messageSid = normalizeOptionalString(entry.abortCutoffMessageSid);
   const timestamp =
     typeof entry.abortCutoffTimestamp === "number" && Number.isFinite(entry.abortCutoffTimestamp)
       ? entry.abortCutoffTimestamp
@@ -51,38 +50,8 @@ export function applyAbortCutoffToSessionEntry(
   entry.abortCutoffTimestamp = cutoff?.timestamp;
 }
 
-export async function clearAbortCutoffInSession(params: {
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-}): Promise<boolean> {
-  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
-  if (!sessionEntry || !sessionStore || !sessionKey || !hasAbortCutoff(sessionEntry)) {
-    return false;
-  }
-
-  applyAbortCutoffToSessionEntry(sessionEntry, undefined);
-  sessionEntry.updatedAt = Date.now();
-  sessionStore[sessionKey] = sessionEntry;
-
-  if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      const existing = store[sessionKey] ?? sessionEntry;
-      if (!existing) {
-        return;
-      }
-      applyAbortCutoffToSessionEntry(existing, undefined);
-      existing.updatedAt = Date.now();
-      store[sessionKey] = existing;
-    });
-  }
-
-  return true;
-}
-
 function toNumericMessageSid(value: string | undefined): bigint | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed || !/^\d+$/.test(trimmed)) {
     return undefined;
   }
@@ -99,8 +68,8 @@ export function shouldSkipMessageByAbortCutoff(params: {
   messageSid?: string;
   timestamp?: number;
 }): boolean {
-  const cutoffSid = params.cutoffMessageSid?.trim();
-  const currentSid = params.messageSid?.trim();
+  const cutoffSid = normalizeOptionalString(params.cutoffMessageSid);
+  const currentSid = normalizeOptionalString(params.messageSid);
   if (cutoffSid && currentSid) {
     const cutoffNumeric = toNumericMessageSid(cutoffSid);
     const currentNumeric = toNumericMessageSid(currentSid);
@@ -126,8 +95,8 @@ export function shouldPersistAbortCutoff(params: {
   commandSessionKey?: string;
   targetSessionKey?: string;
 }): boolean {
-  const commandSessionKey = params.commandSessionKey?.trim();
-  const targetSessionKey = params.targetSessionKey?.trim();
+  const commandSessionKey = normalizeOptionalString(params.commandSessionKey);
+  const targetSessionKey = normalizeOptionalString(params.targetSessionKey);
   if (!commandSessionKey || !targetSessionKey) {
     return true;
   }

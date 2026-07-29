@@ -1,7 +1,9 @@
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+// Audio transcription runner executes the configured media-understanding audio
+// pipeline and extracts the first transcript output.
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
-  type ActiveMediaModel,
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
@@ -9,6 +11,7 @@ import {
 } from "./runner.js";
 import type { MediaAttachment, MediaUnderstandingProvider } from "./types.js";
 
+/** Runs the configured audio-understanding pipeline and returns the first transcript output. */
 export async function runAudioTranscription(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -23,11 +26,11 @@ export async function runAudioTranscription(params: {
     return { transcript: undefined, attachments };
   }
 
-  const providerRegistry = buildProviderRegistry(params.providers);
-  const cache = createMediaAttachmentCache(
-    attachments,
-    params.localPathRoots ? { localPathRoots: params.localPathRoots } : undefined,
-  );
+  const providerRegistry = buildProviderRegistry(params.providers, params.cfg);
+  const cache = createMediaAttachmentCache(attachments, {
+    ...(params.localPathRoots ? { localPathRoots: params.localPathRoots } : {}),
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+  });
 
   try {
     const result = await runCapability({

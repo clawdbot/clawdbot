@@ -1,4 +1,5 @@
-const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
+// Feishu plugin module implements external keys behavior.
+const CONTROL_CHARS_RE = /\p{Cc}/u;
 const MAX_EXTERNAL_KEY_LENGTH = 512;
 
 export function normalizeFeishuExternalKey(value: unknown): string | undefined {

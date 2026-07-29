@@ -1,288 +1,62 @@
-import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
-import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+/**
+ * Interactive custom provider onboarding prompts and endpoint verification.
+ *
+ * The pure config helpers are re-exported from here because setup and configure
+ * flows import this command module as their custom API entrypoint.
+ */
+import { modelKey } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
-import {
-  normalizeSecretInput,
-  normalizeOptionalSecretInput,
-} from "../utils/normalize-secret-input.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { ensureApiKeyFromEnvOrPrompt } from "./auth-choice.apply-helpers.js";
-import { applyPrimaryModel } from "./model-picker.js";
-import { normalizeAlias } from "./models/shared.js";
+import {
+  applyCustomApiConfig,
+  buildAnthropicVerificationProbeRequest,
+  buildEndpointIdFromUrl,
+  buildOpenAiVerificationProbeRequest,
+  normalizeEndpointId,
+  normalizeOptionalProviderApiKey,
+  resolveCustomModelAliasError,
+  resolveCustomModelImageInputInference,
+  resolveCustomProviderId,
+  type CustomApiCompatibility,
+  type CustomApiResult,
+} from "./onboard-custom-config.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
-const DEFAULT_MAX_TOKENS = 4096;
-// Azure OpenAI uses the Responses API which supports larger defaults
-const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
-const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 const VERIFY_TIMEOUT_MS = 30_000;
-
-function normalizeContextWindowForCustomModel(value: unknown): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
-  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS ? parsed : CONTEXT_WINDOW_HARD_MIN_TOKENS;
-}
-
-function isAzureFoundryUrl(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
-    return host.endsWith(".services.ai.azure.com");
-  } catch {
-    return false;
-  }
-}
-
-function isAzureOpenAiUrl(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
-    return host.endsWith(".openai.azure.com");
-  } catch {
-    return false;
-  }
-}
-
-function isAzureUrl(baseUrl: string): boolean {
-  return isAzureFoundryUrl(baseUrl) || isAzureOpenAiUrl(baseUrl);
-}
-
-/**
- * Transforms an Azure AI Foundry/OpenAI URL to include the deployment path.
- * Azure requires: https://host/openai/deployments/<model-id>/chat/completions?api-version=2024-xx-xx-preview
- * But we can't add query params here, so we just add the path prefix.
- * The api-version will be handled by the Azure OpenAI client or as a query param.
- *
- * Example:
- *   https://my-resource.services.ai.azure.com + gpt-5-nano
- *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5-nano
- */
-function transformAzureUrl(baseUrl: string, modelId: string): string {
-  const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  // Check if the URL already includes the deployment path
-  if (normalizedUrl.includes("/openai/deployments/")) {
-    return normalizedUrl;
-  }
-  return `${normalizedUrl}/openai/deployments/${modelId}`;
-}
-
-/**
- * Transforms an Azure URL into the base URL stored in config.
- *
- * Example:
- *   https://my-resource.openai.azure.com
- *   => https://my-resource.openai.azure.com/openai/v1
- */
-function transformAzureConfigUrl(baseUrl: string): string {
-  const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  if (normalizedUrl.endsWith("/openai/v1")) {
-    return normalizedUrl;
-  }
-  // Strip a full deployment path back to the base origin
-  const deploymentIdx = normalizedUrl.indexOf("/openai/deployments/");
-  const base = deploymentIdx !== -1 ? normalizedUrl.slice(0, deploymentIdx) : normalizedUrl;
-  return `${base}/openai/v1`;
-}
-
-function hasSameHost(a: string, b: string): boolean {
-  try {
-    return new URL(a).hostname.toLowerCase() === new URL(b).hostname.toLowerCase();
-  } catch {
-    return false;
-  }
-}
-
-export type CustomApiCompatibility = "openai" | "anthropic";
 type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
-export type CustomApiResult = {
-  config: OpenClawConfig;
-  providerId?: string;
-  modelId?: string;
-  providerIdRenamedFrom?: string;
-};
-
-export type ApplyCustomApiConfigParams = {
-  config: OpenClawConfig;
-  baseUrl: string;
-  modelId: string;
-  compatibility: CustomApiCompatibility;
-  apiKey?: SecretInput;
-  providerId?: string;
-  alias?: string;
-};
-
-export type ParseNonInteractiveCustomApiFlagsParams = {
-  baseUrl?: string;
-  modelId?: string;
-  compatibility?: string;
-  apiKey?: string;
-  providerId?: string;
-};
-
-export type ParsedNonInteractiveCustomApiFlags = {
-  baseUrl: string;
-  modelId: string;
-  compatibility: CustomApiCompatibility;
-  apiKey?: string;
-  providerId?: string;
-};
-
-export type CustomApiErrorCode =
-  | "missing_required"
-  | "invalid_compatibility"
-  | "invalid_base_url"
-  | "invalid_model_id"
-  | "invalid_provider_id"
-  | "invalid_alias";
-
-export class CustomApiError extends Error {
-  readonly code: CustomApiErrorCode;
-
-  constructor(code: CustomApiErrorCode, message: string) {
-    super(message);
-    this.name = "CustomApiError";
-    this.code = code;
-  }
-}
-
-export type ResolveCustomProviderIdParams = {
-  config: OpenClawConfig;
-  baseUrl: string;
-  providerId?: string;
-};
-
-export type ResolvedCustomProviderId = {
-  providerId: string;
-  providerIdRenamedFrom?: string;
-};
 
 const COMPATIBILITY_OPTIONS: Array<{
   value: CustomApiCompatibilityChoice;
-  label: string;
-  hint: string;
+  labelKey: string;
+  hintKey: string;
 }> = [
   {
     value: "openai",
-    label: "OpenAI-compatible",
-    hint: "Uses /chat/completions",
+    labelKey: "wizard.customProvider.compatibilityOpenAi",
+    hintKey: "wizard.customProvider.compatibilityOpenAiHint",
+  },
+  {
+    value: "openai-responses",
+    labelKey: "wizard.customProvider.compatibilityOpenAiResponses",
+    hintKey: "wizard.customProvider.compatibilityOpenAiResponsesHint",
   },
   {
     value: "anthropic",
-    label: "Anthropic-compatible",
-    hint: "Uses /messages",
+    labelKey: "wizard.customProvider.compatibilityAnthropic",
+    hintKey: "wizard.customProvider.compatibilityAnthropicHint",
   },
   {
     value: "unknown",
-    label: "Unknown (detect automatically)",
-    hint: "Probes OpenAI then Anthropic endpoints",
+    labelKey: "wizard.customProvider.compatibilityUnknown",
+    hintKey: "wizard.customProvider.compatibilityUnknownHint",
   },
 ];
-
-function normalizeEndpointId(raw: string): string {
-  const trimmed = raw.trim().toLowerCase();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
-function buildEndpointIdFromUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    const host = url.hostname.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-    const port = url.port ? `-${url.port}` : "";
-    const candidate = `custom-${host}${port}`;
-    return normalizeEndpointId(candidate) || "custom";
-  } catch {
-    return "custom";
-  }
-}
-
-function resolveUniqueEndpointId(params: {
-  requestedId: string;
-  baseUrl: string;
-  providers: Record<string, ModelProviderConfig | undefined>;
-}) {
-  const normalized = normalizeEndpointId(params.requestedId) || "custom";
-  const existing = params.providers[normalized];
-  if (
-    !existing?.baseUrl ||
-    existing.baseUrl === params.baseUrl ||
-    (isAzureUrl(params.baseUrl) && hasSameHost(existing.baseUrl, params.baseUrl))
-  ) {
-    return { providerId: normalized, renamed: false };
-  }
-  let suffix = 2;
-  let candidate = `${normalized}-${suffix}`;
-  while (params.providers[candidate]) {
-    suffix += 1;
-    candidate = `${normalized}-${suffix}`;
-  }
-  return { providerId: candidate, renamed: true };
-}
-
-function resolveAliasError(params: {
-  raw: string;
-  cfg: OpenClawConfig;
-  modelRef: string;
-}): string | undefined {
-  const trimmed = params.raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  let normalized: string;
-  try {
-    normalized = normalizeAlias(trimmed);
-  } catch (err) {
-    return err instanceof Error ? err.message : "Alias is invalid.";
-  }
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-  });
-  const aliasKey = normalized.toLowerCase();
-  const existing = aliasIndex.byAlias.get(aliasKey);
-  if (!existing) {
-    return undefined;
-  }
-  const existingKey = modelKey(existing.ref.provider, existing.ref.model);
-  if (existingKey === params.modelRef) {
-    return undefined;
-  }
-  return `Alias ${normalized} already points to ${existingKey}.`;
-}
-
-function buildAzureOpenAiHeaders(apiKey: string) {
-  const headers: Record<string, string> = {};
-  if (apiKey) {
-    headers["api-key"] = apiKey;
-  }
-  return headers;
-}
-
-function buildOpenAiHeaders(apiKey: string) {
-  const headers: Record<string, string> = {};
-  if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
-  }
-  return headers;
-}
-
-function buildAnthropicHeaders(apiKey: string) {
-  const headers: Record<string, string> = {
-    "anthropic-version": "2023-06-01",
-  };
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-  return headers;
-}
 
 function formatVerificationError(error: unknown): string {
   if (!error) {
@@ -307,29 +81,16 @@ type VerificationResult = {
   error?: unknown;
 };
 
-function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefined {
-  if (isSecretRef(value)) {
-    return value;
+function isJsonVerificationResponse(res: Response): boolean {
+  const contentType =
+    typeof res.headers?.get === "function" ? (res.headers.get("content-type") ?? "") : "";
+  if (!contentType.trim()) {
+    return true;
   }
-  return normalizeOptionalSecretInput(value);
-}
-
-function resolveVerificationEndpoint(params: {
-  baseUrl: string;
-  modelId: string;
-  endpointPath: "chat/completions" | "messages";
-}) {
-  const resolvedUrl = isAzureUrl(params.baseUrl)
-    ? transformAzureUrl(params.baseUrl, params.modelId)
-    : params.baseUrl;
-  const endpointUrl = new URL(
-    params.endpointPath,
-    resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`,
+  const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    mediaType === "application/json" || (mediaType !== undefined && mediaType.endsWith("+json"))
   );
-  if (isAzureUrl(params.baseUrl)) {
-    endpointUrl.searchParams.set("api-version", "2024-10-21");
-  }
-  return endpointUrl.href;
 }
 
 async function requestVerification(params: {
@@ -337,8 +98,9 @@ async function requestVerification(params: {
   headers: Record<string, string>;
   body: Record<string, unknown>;
 }): Promise<VerificationResult> {
+  let res: Response | undefined;
   try {
-    const res = await fetchWithTimeout(
+    res = await fetchWithTimeout(
       params.endpoint,
       {
         method: "POST",
@@ -350,9 +112,20 @@ async function requestVerification(params: {
       },
       VERIFY_TIMEOUT_MS,
     );
+    if (res.ok && !isJsonVerificationResponse(res)) {
+      const contentType = res.headers.get("content-type") || "missing content-type";
+      // HTML success often means the user pasted a dashboard/root URL instead
+      // of the API base path; fail before storing a config that cannot run.
+      return {
+        ok: false,
+        error: `Verification returned ${contentType} instead of JSON. Check the provider base URL; OpenAI-compatible endpoints usually need a /v1 path prefix.`,
+      };
+    }
     return { ok: res.ok, status: res.status };
   } catch (error) {
     return { ok: false, error };
+  } finally {
+    await res?.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -360,43 +133,9 @@ async function requestOpenAiVerification(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  responsesApi?: boolean;
 }): Promise<VerificationResult> {
-  const isBaseUrlAzureUrl = isAzureUrl(params.baseUrl);
-  const headers = isBaseUrlAzureUrl
-    ? buildAzureOpenAiHeaders(params.apiKey)
-    : buildOpenAiHeaders(params.apiKey);
-  if (isAzureOpenAiUrl(params.baseUrl)) {
-    const endpoint = new URL(
-      "responses",
-      transformAzureConfigUrl(params.baseUrl).replace(/\/?$/, "/"),
-    ).href;
-    return await requestVerification({
-      endpoint,
-      headers,
-      body: {
-        model: params.modelId,
-        input: "Hi",
-        max_output_tokens: 16,
-        stream: false,
-      },
-    });
-  } else {
-    const endpoint = resolveVerificationEndpoint({
-      baseUrl: params.baseUrl,
-      modelId: params.modelId,
-      endpointPath: "chat/completions",
-    });
-    return await requestVerification({
-      endpoint,
-      headers,
-      body: {
-        model: params.modelId,
-        messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 1,
-        stream: false,
-      },
-    });
-  }
+  return await requestVerification(buildOpenAiVerificationProbeRequest(params));
 }
 
 async function requestAnthropicVerification(params: {
@@ -404,27 +143,7 @@ async function requestAnthropicVerification(params: {
   apiKey: string;
   modelId: string;
 }): Promise<VerificationResult> {
-  // Use a base URL with /v1 injected for this raw fetch only. The rest of the app uses the
-  // Anthropic client, which appends /v1 itself; config should store the base URL
-  // without /v1 to avoid /v1/v1/messages at runtime. See docs/gateway/configuration-reference.md.
-  const baseUrlForRequest = /\/v1\/?$/.test(params.baseUrl.trim())
-    ? params.baseUrl.trim()
-    : params.baseUrl.trim().replace(/\/?$/, "") + "/v1";
-  const endpoint = resolveVerificationEndpoint({
-    baseUrl: baseUrlForRequest,
-    modelId: params.modelId,
-    endpointPath: "messages",
-  });
-  return await requestVerification({
-    endpoint,
-    headers: buildAnthropicHeaders(params.apiKey),
-    body: {
-      model: params.modelId,
-      max_tokens: 1,
-      messages: [{ role: "user", content: "Hi" }],
-      stream: false,
-    },
-  });
+  return await requestVerification(buildAnthropicVerificationProbeRequest(params));
 }
 
 async function promptBaseUrlAndKey(params: {
@@ -434,26 +153,23 @@ async function promptBaseUrlAndKey(params: {
   initialBaseUrl?: string;
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
-    message: "API Base URL",
-    initialValue: params.initialBaseUrl ?? OLLAMA_DEFAULT_BASE_URL,
+    message: t("wizard.customProvider.apiBaseUrl"),
+    initialValue: params.initialBaseUrl,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
-      try {
-        new URL(val);
-        return undefined;
-      } catch {
-        return "Please enter a valid URL (e.g. http://...)";
-      }
+      return URL.canParse(val) ? undefined : t("wizard.customProvider.validUrl");
     },
   });
   const baseUrl = baseUrlInput.trim();
   const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
   let apiKeyInput: SecretInput | undefined;
+  // Keep the persisted key shape from the credential helper while also keeping
+  // the resolved plaintext only for the immediate verification probe.
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
     provider: providerHint,
     envLabel: "CUSTOM_API_KEY",
-    promptMessage: "API Key (leave blank if not required)",
+    promptMessage: t("wizard.customProvider.apiKeyPrompt"),
     normalize: normalizeSecretInput,
     validate: () => undefined,
     prompter: params.prompter,
@@ -473,11 +189,11 @@ type CustomApiRetryChoice = "baseUrl" | "model" | "both";
 
 async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
   return await prompter.select({
-    message: "What would you like to change?",
+    message: t("wizard.customProvider.retryChoice"),
     options: [
-      { value: "baseUrl", label: "Change base URL" },
-      { value: "model", label: "Change model" },
-      { value: "both", label: "Change base URL and model" },
+      { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
+      { value: "model", label: t("wizard.customProvider.changeModel") },
+      { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
     ],
   });
 }
@@ -485,9 +201,9 @@ async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<Cus
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
   return (
     await prompter.text({
-      message: "Model ID",
-      placeholder: "e.g. llama3, claude-3-7-sonnet",
-      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
+      message: t("wizard.customProvider.modelId"),
+      placeholder: t("wizard.customProvider.modelIdPlaceholder"),
+      validate: (val) => (val.trim() ? undefined : t("wizard.customProvider.modelIdRequired")),
     })
   ).trim();
 }
@@ -517,254 +233,7 @@ async function applyCustomApiRetryChoice(params: {
   return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
 
-function resolveProviderApi(
-  compatibility: CustomApiCompatibility,
-): "openai-completions" | "anthropic-messages" {
-  return compatibility === "anthropic" ? "anthropic-messages" : "openai-completions";
-}
-
-function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
-  const compatibilityRaw = raw?.trim().toLowerCase();
-  if (!compatibilityRaw) {
-    return "openai";
-  }
-  if (compatibilityRaw !== "openai" && compatibilityRaw !== "anthropic") {
-    throw new CustomApiError(
-      "invalid_compatibility",
-      'Invalid --custom-compatibility (use "openai" or "anthropic").',
-    );
-  }
-  return compatibilityRaw;
-}
-
-export function resolveCustomProviderId(
-  params: ResolveCustomProviderIdParams,
-): ResolvedCustomProviderId {
-  const providers = params.config.models?.providers ?? {};
-  const baseUrl = params.baseUrl.trim();
-  const explicitProviderId = params.providerId?.trim();
-  if (explicitProviderId && !normalizeEndpointId(explicitProviderId)) {
-    throw new CustomApiError(
-      "invalid_provider_id",
-      "Custom provider ID must include letters, numbers, or hyphens.",
-    );
-  }
-  const requestedProviderId = explicitProviderId || buildEndpointIdFromUrl(baseUrl);
-  const providerIdResult = resolveUniqueEndpointId({
-    requestedId: requestedProviderId,
-    baseUrl,
-    providers,
-  });
-
-  return {
-    providerId: providerIdResult.providerId,
-    ...(providerIdResult.renamed
-      ? {
-          providerIdRenamedFrom: normalizeEndpointId(requestedProviderId) || "custom",
-        }
-      : {}),
-  };
-}
-
-export function parseNonInteractiveCustomApiFlags(
-  params: ParseNonInteractiveCustomApiFlagsParams,
-): ParsedNonInteractiveCustomApiFlags {
-  const baseUrl = params.baseUrl?.trim() ?? "";
-  const modelId = params.modelId?.trim() ?? "";
-  if (!baseUrl || !modelId) {
-    throw new CustomApiError(
-      "missing_required",
-      [
-        'Auth choice "custom-api-key" requires a base URL and model ID.',
-        "Use --custom-base-url and --custom-model-id.",
-      ].join("\n"),
-    );
-  }
-
-  const apiKey = params.apiKey?.trim();
-  const providerId = params.providerId?.trim();
-  if (providerId && !normalizeEndpointId(providerId)) {
-    throw new CustomApiError(
-      "invalid_provider_id",
-      "Custom provider ID must include letters, numbers, or hyphens.",
-    );
-  }
-  return {
-    baseUrl,
-    modelId,
-    compatibility: parseCustomApiCompatibility(params.compatibility),
-    ...(apiKey ? { apiKey } : {}),
-    ...(providerId ? { providerId } : {}),
-  };
-}
-
-export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
-  const baseUrl = params.baseUrl.trim();
-  try {
-    new URL(baseUrl);
-  } catch {
-    throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
-  }
-
-  if (params.compatibility !== "openai" && params.compatibility !== "anthropic") {
-    throw new CustomApiError(
-      "invalid_compatibility",
-      'Custom provider compatibility must be "openai" or "anthropic".',
-    );
-  }
-
-  const modelId = params.modelId.trim();
-  if (!modelId) {
-    throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
-  }
-
-  const isAzure = isAzureUrl(baseUrl);
-  const isAzureOpenAi = isAzureOpenAiUrl(baseUrl);
-  const resolvedBaseUrl = isAzure ? transformAzureConfigUrl(baseUrl) : baseUrl;
-
-  const providerIdResult = resolveCustomProviderId({
-    config: params.config,
-    baseUrl: resolvedBaseUrl,
-    providerId: params.providerId,
-  });
-  const providerId = providerIdResult.providerId;
-  const providers = params.config.models?.providers ?? {};
-
-  const modelRef = modelKey(providerId, modelId);
-  const alias = params.alias?.trim() ?? "";
-  const aliasError = resolveAliasError({
-    raw: alias,
-    cfg: params.config,
-    modelRef,
-  });
-  if (aliasError) {
-    throw new CustomApiError("invalid_alias", aliasError);
-  }
-
-  const existingProvider = providers[providerId];
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const hasModel = existingModels.some((model) => model.id === modelId);
-  const isLikelyReasoningModel = isAzure && /\b(o[134]|gpt-([5-9]|\d{2,}))\b/i.test(modelId);
-  const nextModel = isAzure
-    ? {
-        id: modelId,
-        name: `${modelId} (Custom Provider)`,
-        contextWindow: AZURE_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: AZURE_DEFAULT_MAX_TOKENS,
-        input: isLikelyReasoningModel
-          ? (["text", "image"] as Array<"text" | "image">)
-          : (["text"] as ["text"]),
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        reasoning: isLikelyReasoningModel,
-        compat: { supportsStore: false },
-      }
-    : {
-        id: modelId,
-        name: `${modelId} (Custom Provider)`,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        input: ["text"] as ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        reasoning: false,
-      };
-  const mergedModels = hasModel
-    ? existingModels.map((model) =>
-        model.id === modelId
-          ? {
-              ...model,
-              ...(isAzure ? nextModel : {}),
-              name: model.name ?? nextModel.name,
-              cost: model.cost ?? nextModel.cost,
-              contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
-              maxTokens: model.maxTokens ?? nextModel.maxTokens,
-            }
-          : model,
-      )
-    : [...existingModels, nextModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
-  const normalizedApiKey =
-    normalizeOptionalProviderApiKey(params.apiKey) ??
-    normalizeOptionalProviderApiKey(existingApiKey);
-
-  const providerApi = isAzureOpenAi
-    ? ("openai-responses" as const)
-    : resolveProviderApi(params.compatibility);
-  const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
-
-  let config: OpenClawConfig = {
-    ...params.config,
-    models: {
-      ...params.config.models,
-      mode: params.config.models?.mode ?? "merge",
-      providers: {
-        ...providers,
-        [providerId]: {
-          ...existingProviderRest,
-          baseUrl: resolvedBaseUrl,
-          api: providerApi,
-          ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-          ...(isAzure ? { authHeader: false } : {}),
-          ...(azureHeaders ? { headers: azureHeaders } : {}),
-          models: mergedModels.length > 0 ? mergedModels : [nextModel],
-        },
-      },
-    },
-  };
-
-  config = applyPrimaryModel(config, modelRef);
-  if (isAzure && isLikelyReasoningModel) {
-    const existingPerModelThinking = config.agents?.defaults?.models?.[modelRef]?.params?.thinking;
-    if (!existingPerModelThinking) {
-      config = {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            models: {
-              ...config.agents?.defaults?.models,
-              [modelRef]: {
-                ...config.agents?.defaults?.models?.[modelRef],
-                params: {
-                  ...config.agents?.defaults?.models?.[modelRef]?.params,
-                  thinking: "medium",
-                },
-              },
-            },
-          },
-        },
-      };
-    }
-  }
-  if (alias) {
-    config = {
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: {
-          ...config.agents?.defaults,
-          models: {
-            ...config.agents?.defaults?.models,
-            [modelRef]: {
-              ...config.agents?.defaults?.models?.[modelRef],
-              alias,
-            },
-          },
-        },
-      },
-    };
-  }
-
-  return {
-    config,
-    providerId,
-    modelId,
-    ...(providerIdResult.providerIdRenamedFrom
-      ? { providerIdRenamedFrom: providerIdResult.providerIdRenamedFrom }
-      : {}),
-  };
-}
-
+/** Prompts for a custom API provider, verifies it, and persists the selected model. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -783,11 +252,11 @@ export async function promptCustomApiConfig(params: {
   let resolvedApiKey = baseInput.resolvedApiKey;
 
   const compatibilityChoice = await prompter.select({
-    message: "Endpoint compatibility",
+    message: t("wizard.customProvider.compatibility"),
     options: COMPATIBILITY_OPTIONS.map((option) => ({
       value: option.value,
-      label: option.label,
-      hint: option.hint,
+      label: t(option.labelKey),
+      hint: t(option.hintKey),
     })),
   });
 
@@ -799,41 +268,55 @@ export async function promptCustomApiConfig(params: {
   while (true) {
     let verifiedFromProbe = false;
     if (!compatibility) {
-      const probeSpinner = prompter.progress("Detecting endpoint type...");
+      // Probe in a fixed order so unknown endpoints converge to a concrete
+      // config API value before we write provider metadata.
+      const probeSpinner = prompter.progress(t("wizard.customProvider.detectionProgress"));
       const openaiProbe = await requestOpenAiVerification({
         baseUrl,
         apiKey: resolvedApiKey,
         modelId,
       });
       if (openaiProbe.ok) {
-        probeSpinner.stop("Detected OpenAI-compatible endpoint.");
+        probeSpinner.stop(t("wizard.customProvider.detectedOpenAi"));
         compatibility = "openai";
         verifiedFromProbe = true;
       } else {
-        const anthropicProbe = await requestAnthropicVerification({
+        const openaiResponsesProbe = await requestOpenAiVerification({
           baseUrl,
           apiKey: resolvedApiKey,
           modelId,
+          responsesApi: true,
         });
-        if (anthropicProbe.ok) {
-          probeSpinner.stop("Detected Anthropic-compatible endpoint.");
-          compatibility = "anthropic";
+        if (openaiResponsesProbe.ok) {
+          probeSpinner.stop(t("wizard.customProvider.detectedOpenAiResponses"));
+          compatibility = "openai-responses";
           verifiedFromProbe = true;
         } else {
-          probeSpinner.stop("Could not detect endpoint type.");
-          await prompter.note(
-            "This endpoint did not respond to OpenAI or Anthropic style requests.",
-            "Endpoint detection",
-          );
-          const retryChoice = await promptCustomApiRetryChoice(prompter);
-          ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
-            prompter,
-            config,
-            secretInputMode: params.secretInputMode,
-            retryChoice,
-            current: { baseUrl, apiKey, resolvedApiKey, modelId },
-          }));
-          continue;
+          const anthropicProbe = await requestAnthropicVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+          });
+          if (anthropicProbe.ok) {
+            probeSpinner.stop(t("wizard.customProvider.detectedAnthropic"));
+            compatibility = "anthropic";
+            verifiedFromProbe = true;
+          } else {
+            probeSpinner.stop(t("wizard.customProvider.detectionFailed"));
+            await prompter.note(
+              t("wizard.customProvider.detectionFailedNote"),
+              t("wizard.customProvider.detectionNoteTitle"),
+            );
+            const retryChoice = await promptCustomApiRetryChoice(prompter);
+            ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+              prompter,
+              config,
+              secretInputMode: params.secretInputMode,
+              retryChoice,
+              current: { baseUrl, apiKey, resolvedApiKey, modelId },
+            }));
+            continue;
+          }
         }
       }
     }
@@ -842,19 +325,32 @@ export async function promptCustomApiConfig(params: {
       break;
     }
 
-    const verifySpinner = prompter.progress("Verifying...");
+    // Explicit compatibility choices still get a live probe so setup does not
+    // persist endpoints or models that fail the selected protocol.
+    const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
     const result =
       compatibility === "anthropic"
         ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
+        : await requestOpenAiVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+            responsesApi: compatibility === "openai-responses",
+          });
     if (result.ok) {
-      verifySpinner.stop("Verification successful.");
+      verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
       break;
     }
-    if (result.status !== undefined) {
-      verifySpinner.stop(`Verification failed: status ${result.status}`);
+    if (result.error !== undefined) {
+      verifySpinner.stop(
+        t("wizard.customProvider.verificationFailedError", {
+          error: formatVerificationError(result.error),
+        }),
+      );
     } else {
-      verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
+      verifySpinner.stop(
+        t("wizard.customProvider.verificationFailedStatus", { status: result.status }),
+      );
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
     ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
@@ -869,35 +365,43 @@ export async function promptCustomApiConfig(params: {
     }
   }
 
-  const providers = config.models?.providers ?? {};
   const suggestedId = buildEndpointIdFromUrl(baseUrl);
   const providerIdInput = await prompter.text({
-    message: "Endpoint ID",
+    message: t("wizard.customProvider.endpointId"),
     initialValue: suggestedId,
     placeholder: "custom",
     validate: (value) => {
       const normalized = normalizeEndpointId(value);
       if (!normalized) {
-        return "Endpoint ID is required.";
+        return t("wizard.customProvider.endpointIdRequired");
       }
       return undefined;
     },
   });
   const aliasInput = await prompter.text({
-    message: "Model alias (optional)",
-    placeholder: "e.g. local, ollama",
+    message: t("wizard.customProvider.modelAlias"),
+    placeholder: t("wizard.customProvider.modelAliasPlaceholder"),
     initialValue: "",
     validate: (value) => {
-      const requestedId = normalizeEndpointId(providerIdInput) || "custom";
-      const providerIdResult = resolveUniqueEndpointId({
-        requestedId,
+      const resolvedProvider = resolveCustomProviderId({
+        config,
         baseUrl,
-        providers,
+        providerId: providerIdInput,
       });
-      const modelRef = modelKey(providerIdResult.providerId, modelId);
-      return resolveAliasError({ raw: value, cfg: config, modelRef });
+      // Alias validation must use the post-collision provider id, otherwise a
+      // renamed endpoint could incorrectly collide with the requested id.
+      const modelRef = modelKey(resolvedProvider.providerId, modelId);
+      return resolveCustomModelAliasError({ raw: value, cfg: config, modelRef });
     },
   });
+  const imageInputInference = resolveCustomModelImageInputInference(modelId);
+  const supportsImageInput =
+    imageInputInference.confidence === "known"
+      ? imageInputInference.supportsImageInput
+      : await prompter.confirm({
+          message: t("wizard.customProvider.imageInput"),
+          initialValue: imageInputInference.supportsImageInput,
+        });
   const resolvedCompatibility = compatibility ?? "openai";
   const result = applyCustomApiConfig({
     config,
@@ -907,12 +411,16 @@ export async function promptCustomApiConfig(params: {
     apiKey,
     providerId: providerIdInput,
     alias: aliasInput,
+    supportsImageInput,
   });
 
   if (result.providerIdRenamedFrom && result.providerId) {
     await prompter.note(
-      `Endpoint ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
-      "Endpoint ID",
+      t("wizard.customProvider.endpointIdRenamed", {
+        from: result.providerIdRenamedFrom,
+        to: result.providerId,
+      }),
+      t("wizard.customProvider.endpointIdTitle"),
     );
   }
 

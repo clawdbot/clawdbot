@@ -1,0 +1,223 @@
+/**
+ * Browser CLI file upload, dialog, and download commands.
+ */
+import type { Command } from "commander";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BROWSER_TAB_REFERENCE_HELP,
+  callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
+import {
+  danger,
+  defaultRuntime,
+  resolveExistingUploadPaths,
+  shortenHomePath,
+} from "../core-api.js";
+import { resolveBrowserActionContext, withBrowserActionTimeoutSlack } from "./shared.js";
+
+const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
+
+async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
+  const result = await resolveExistingUploadPaths({ requestedPaths: paths });
+  if (!result.ok) {
+    throw new Error(result.error);
+  }
+  return result.paths;
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Browser request result type is shared between request and success formatter.
+async function runBrowserPostAction<T>(params: {
+  parent: BrowserParentOpts;
+  profile: string | undefined;
+  path: string;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+  describeSuccess: (result: T) => string;
+}): Promise<void> {
+  try {
+    const result = await callBrowserRequest<T>(
+      params.parent,
+      {
+        method: "POST",
+        path: params.path,
+        query: params.profile ? { profile: params.profile } : undefined,
+        body: params.body,
+      },
+      { timeoutMs: withBrowserActionTimeoutSlack(params.timeoutMs) },
+    );
+    if (params.parent?.json) {
+      defaultRuntime.writeJson(result);
+      return;
+    }
+    defaultRuntime.log(params.describeSuccess(result));
+  } catch (err) {
+    defaultRuntime.error(danger(String(err)));
+    defaultRuntime.exit(1);
+  }
+}
+
+/** Registers Browser file chooser, dialog, and download commands. */
+export function registerBrowserFilesAndDownloadsCommands(
+  browser: Command,
+  parentOpts: (cmd: Command) => BrowserParentOpts,
+) {
+  const resolveTimeoutAndTarget = (opts: { timeoutMs?: unknown; targetId?: unknown }) => {
+    const timeoutMs = Number.isFinite(opts.timeoutMs) ? Number(opts.timeoutMs) : undefined;
+    const targetId = normalizeOptionalString(opts.targetId);
+    return { timeoutMs, targetId };
+  };
+
+  const runDownloadCommand = async (
+    cmd: Command,
+    opts: { timeoutMs?: unknown; targetId?: unknown },
+    request: { path: string; body: Record<string, unknown> },
+  ) => {
+    const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+    const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+    await runBrowserPostAction<{ download: { path: string } }>({
+      parent,
+      profile,
+      path: request.path,
+      body: {
+        ...request.body,
+        targetId,
+        timeoutMs,
+      },
+      timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
+      describeSuccess: (result) => `downloaded: ${shortenHomePath(result.download.path)}`,
+    });
+  };
+
+  browser
+    .command("upload")
+    .description("Arm file upload for the next file chooser")
+    .argument(
+      "<paths...>",
+      "File paths to upload from OpenClaw temp uploads or managed inbound media (e.g. /tmp/openclaw/uploads/file.pdf or media://inbound/<id>)",
+    )
+    .option("--ref <ref>", "Ref id from snapshot to click after arming")
+    .option("--input-ref <ref>", "Ref id for <input type=file> to set directly")
+    .option("--element <selector>", "CSS selector for <input type=file>")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for the next file chooser (default: 120000)",
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
+    )
+    .action(async (paths: string[], opts, cmd) => {
+      try {
+        const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+        const normalizedPaths = await normalizeUploadPaths(paths);
+        const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+        await runBrowserPostAction({
+          parent,
+          profile,
+          path: "/hooks/file-chooser",
+          body: {
+            paths: normalizedPaths,
+            ref: normalizeOptionalString(opts.ref),
+            inputRef: normalizeOptionalString(opts.inputRef),
+            element: normalizeOptionalString(opts.element),
+            targetId,
+            timeoutMs,
+          },
+          timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
+          describeSuccess: () => `upload armed for ${paths.length} file(s)`,
+        });
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("waitfordownload")
+    .description("Wait for the next download (and save it)")
+    .argument(
+      "[path]",
+      "Save path within openclaw temp downloads dir (default: /tmp/openclaw/downloads/...; fallback: os.tmpdir()/openclaw/downloads/...)",
+    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for the next download (default: 120000)",
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
+    )
+    .action(async (outPath: string | undefined, opts, cmd) => {
+      await runDownloadCommand(cmd, opts, {
+        path: "/wait/download",
+        body: {
+          path: normalizeOptionalString(outPath),
+        },
+      });
+    });
+
+  browser
+    .command("download")
+    .description("Click a ref and save the resulting download")
+    .argument("<ref>", "Ref id from snapshot to click")
+    .argument(
+      "<path>",
+      "Save path within openclaw temp downloads dir (e.g. report.pdf or /tmp/openclaw/downloads/report.pdf)",
+    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for the download to start (default: 120000)",
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
+    )
+    .action(async (ref: string, outPath: string, opts, cmd) => {
+      await runDownloadCommand(cmd, opts, {
+        path: "/download",
+        body: {
+          ref,
+          path: outPath,
+        },
+      });
+    });
+
+  browser
+    .command("dialog")
+    .description("Arm the next modal dialog (alert/confirm/prompt)")
+    .option("--accept", "Accept the dialog", false)
+    .option("--dismiss", "Dismiss the dialog", false)
+    .option("--prompt <text>", "Prompt response text")
+    .option("--dialog-id <id>", "Pending dialog id from snapshot/browser state")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for the next dialog (default: 120000)",
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
+    )
+    .action(async (opts, cmd) => {
+      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      if (opts.accept && opts.dismiss) {
+        defaultRuntime.error(danger("Specify only one of --accept or --dismiss"));
+        defaultRuntime.exit(1);
+        return;
+      }
+      const accept = opts.accept ? true : opts.dismiss ? false : undefined;
+      if (accept === undefined) {
+        defaultRuntime.error(danger("Specify --accept or --dismiss"));
+        defaultRuntime.exit(1);
+        return;
+      }
+      const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+      await runBrowserPostAction({
+        parent,
+        profile,
+        path: "/hooks/dialog",
+        body: {
+          accept,
+          promptText: normalizeOptionalString(opts.prompt),
+          dialogId: normalizeOptionalString(opts.dialogId),
+          targetId,
+          timeoutMs,
+        },
+        timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
+        describeSuccess: () => "dialog armed",
+      });
+    });
+}

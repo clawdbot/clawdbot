@@ -1,3 +1,4 @@
+// Tests Control UI asset discovery and expected bundled files.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +8,7 @@ type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 const state = vi.hoisted(() => ({
   entries: new Map<string, FakeFsEntry>(),
   realpaths: new Map<string, string>(),
+  runCommandWithTimeout: vi.fn(),
 }));
 
 const abs = (p: string) => path.resolve(p);
@@ -19,8 +21,8 @@ function setDir(p: string) {
   state.entries.set(abs(p), { kind: "dir" });
 }
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("./control-ui-assets.fs.runtime.js", async () => {
+  const actual = await import("node:fs");
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
   const fixturesRoot = `${absInMock("fixtures")}${pathMod.sep}`;
@@ -31,13 +33,11 @@ vi.mock("node:fs", async (importOriginal) => {
   const readFixtureEntry = (p: string) => state.entries.get(absInMock(p));
 
   const wrapped = {
-    ...actual,
     existsSync: (p: string) =>
       isFixturePath(p) ? state.entries.has(absInMock(p)) : actual.existsSync(p),
-    readFileSync: (p: string, encoding?: unknown) => {
+    readFileSync: (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return actual.readFileSync(p as any, encoding as any) as unknown;
+        return actual.readFileSync(p, encoding);
       }
       const entry = readFixtureEntry(p);
       if (entry?.kind === "file") {
@@ -47,8 +47,7 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     statSync: (p: string) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return actual.statSync(p as any) as unknown;
+        return actual.statSync(p);
       }
       const entry = readFixtureEntry(p);
       if (entry?.kind === "file") {
@@ -64,17 +63,18 @@ vi.mock("node:fs", async (importOriginal) => {
         ? (state.realpaths.get(absInMock(p)) ?? absInMock(p))
         : actual.realpathSync(p),
   };
-
-  return { ...wrapped, default: wrapped };
+  return wrapped;
 });
 
 vi.mock("./openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(async () => null),
   resolveOpenClawPackageRootSync: vi.fn(() => null),
 }));
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: state.runCommandWithTimeout,
+}));
 
-let resolveControlUiRepoRoot: typeof import("./control-ui-assets.js").resolveControlUiRepoRoot;
-let resolveControlUiDistIndexPath: typeof import("./control-ui-assets.js").resolveControlUiDistIndexPath;
+let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
 let resolveControlUiDistIndexHealth: typeof import("./control-ui-assets.js").resolveControlUiDistIndexHealth;
 let isPackageProvenControlUiRootSync: typeof import("./control-ui-assets.js").isPackageProvenControlUiRootSync;
 let resolveControlUiRootOverrideSync: typeof import("./control-ui-assets.js").resolveControlUiRootOverrideSync;
@@ -84,8 +84,7 @@ let openclawRoot: typeof import("./openclaw-root.js");
 describe("control UI assets helpers (fs-mocked)", () => {
   beforeAll(async () => {
     ({
-      resolveControlUiRepoRoot,
-      resolveControlUiDistIndexPath,
+      ensureControlUiAssetsBuilt,
       resolveControlUiDistIndexHealth,
       isPackageProvenControlUiRootSync,
       resolveControlUiRootOverrideSync,
@@ -97,73 +96,8 @@ describe("control UI assets helpers (fs-mocked)", () => {
   beforeEach(() => {
     state.entries.clear();
     state.realpaths.clear();
+    state.runCommandWithTimeout.mockReset();
     vi.clearAllMocks();
-  });
-
-  it("resolves repo root from src argv1", () => {
-    const root = abs("fixtures/ui-src");
-    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
-
-    const argv1 = path.join(root, "src", "index.ts");
-    expect(resolveControlUiRepoRoot(argv1)).toBe(root);
-  });
-
-  it("resolves repo root by traversing up (dist argv1)", () => {
-    const root = abs("fixtures/ui-dist");
-    setFile(path.join(root, "package.json"), "{}\n");
-    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
-
-    const argv1 = path.join(root, "dist", "index.js");
-    expect(resolveControlUiRepoRoot(argv1)).toBe(root);
-  });
-
-  it("resolves dist control-ui index path for dist argv1", async () => {
-    const argv1 = abs(path.join("fixtures", "pkg", "dist", "index.js"));
-    const distDir = path.dirname(argv1);
-    await expect(resolveControlUiDistIndexPath(argv1)).resolves.toBe(
-      path.join(distDir, "control-ui", "index.html"),
-    );
-  });
-
-  it("resolves dist control-ui index path for symlinked argv1 via realpath", async () => {
-    const pkgRoot = abs("fixtures/bun-global/openclaw");
-    const wrapperArgv1 = abs("fixtures/bin/openclaw");
-    const realEntrypoint = path.join(pkgRoot, "dist", "index.js");
-
-    state.realpaths.set(wrapperArgv1, realEntrypoint);
-
-    await expect(resolveControlUiDistIndexPath(wrapperArgv1)).resolves.toBe(
-      path.join(pkgRoot, "dist", "control-ui", "index.html"),
-    );
-  });
-
-  it("uses resolveOpenClawPackageRoot when available", async () => {
-    const pkgRoot = abs("fixtures/openclaw");
-    (
-      openclawRoot.resolveOpenClawPackageRoot as unknown as ReturnType<typeof vi.fn>
-    ).mockResolvedValueOnce(pkgRoot);
-
-    await expect(resolveControlUiDistIndexPath(abs("fixtures/bin/openclaw"))).resolves.toBe(
-      path.join(pkgRoot, "dist", "control-ui", "index.html"),
-    );
-  });
-
-  it("falls back to package.json name matching when root resolution fails", async () => {
-    const root = abs("fixtures/fallback");
-    setFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    setFile(path.join(root, "dist", "control-ui", "index.html"), "<html></html>\n");
-
-    await expect(resolveControlUiDistIndexPath(path.join(root, "openclaw.mjs"))).resolves.toBe(
-      path.join(root, "dist", "control-ui", "index.html"),
-    );
-  });
-
-  it("returns null when fallback package name does not match", async () => {
-    const root = abs("fixtures/not-openclaw");
-    setFile(path.join(root, "package.json"), JSON.stringify({ name: "malicious-pkg" }));
-    setFile(path.join(root, "dist", "control-ui", "index.html"), "<html></html>\n");
-
-    await expect(resolveControlUiDistIndexPath(path.join(root, "index.mjs"))).resolves.toBeNull();
   });
 
   it("reports health for missing + existing dist assets", async () => {
@@ -182,6 +116,44 @@ describe("control UI assets helpers (fs-mocked)", () => {
     });
   });
 
+  it("keeps a truncated build failure diagnostic within its UTF-16 limit", async () => {
+    const root = abs("fixtures/build-failure");
+    const argv1 = path.join(root, "src", "index.ts");
+    const originalArgv1 = process.argv[1];
+    setFile(path.join(root, "package.json"), '{"name":"openclaw"}\n');
+    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
+    setFile(path.join(root, "scripts", "ui.js"), "");
+    state.runCommandWithTimeout.mockResolvedValueOnce({
+      stdout: "",
+      stderr: `${"y".repeat(238)}🚀xx`,
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+    process.argv[1] = argv1;
+
+    try {
+      const result = await ensureControlUiAssetsBuilt({
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        built: false,
+        message: `Control UI build failed: ${"y".repeat(238)}…`,
+      });
+    } finally {
+      if (originalArgv1 === undefined) {
+        process.argv.splice(1, 1);
+      } else {
+        process.argv[1] = originalArgv1;
+      }
+    }
+  });
+
   it("resolves control-ui root from override file or directory", () => {
     const root = abs("fixtures/override");
     const uiDir = path.join(root, "dist", "control-ui");
@@ -195,7 +167,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
     expect(resolveControlUiRootOverrideSync(path.join(uiDir, "missing.html"))).toBeNull();
   });
 
-  it("resolves control-ui root for dist bundle argv1 and moduleUrl candidates", async () => {
+  it("resolves control-ui root for dist bundle argv1 and moduleUrl candidates", () => {
     const pkgRoot = abs("fixtures/openclaw-bundle");
     (
       openclawRoot.resolveOpenClawPackageRootSync as unknown as ReturnType<typeof vi.fn>
@@ -212,6 +184,16 @@ describe("control UI assets helpers (fs-mocked)", () => {
     // moduleUrl candidate: <moduleDir>/control-ui
     const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "bundle.js")).toString();
     expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
+  });
+
+  it("prefers packaged app Control UI assets in Contents/Resources", () => {
+    const execPath = abs("fixtures/OpenClaw.app/Contents/MacOS/OpenClaw");
+    const bundledUiDir = abs("fixtures/OpenClaw.app/Contents/Resources/control-ui");
+    setFile(path.join(bundledUiDir, "index.html"), "<html></html>\n");
+
+    state.realpaths.set(execPath, execPath);
+
+    expect(resolveControlUiRootSync({ execPath })).toBe(bundledUiDir);
   });
 
   it("resolves control-ui root for symlinked argv1 via realpath", () => {

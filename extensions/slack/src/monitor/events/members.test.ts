@@ -1,23 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
-import { registerSlackMemberEvents } from "./members.js";
-import {
-  createSlackSystemEventTestHarness as initSlackHarness,
-  type SlackSystemEventTestOverrides as MemberOverrides,
-} from "./system-event-test-harness.js";
+// Slack tests cover members plugin behavior.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memberMocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
-  readAllow: vi.fn(),
 }));
+let registerSlackMemberEvents: typeof import("./members.js").registerSlackMemberEvents;
+let initSlackHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
+type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-vi.mock("../../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: memberMocks.enqueue,
+vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
 }));
-
-vi.mock("../../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: memberMocks.readAllow,
+vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
 }));
-
 type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 type MemberCaseArgs = {
@@ -56,7 +52,6 @@ function getMemberHandlers(params: {
 
 async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
   memberMocks.enqueue.mockClear();
-  memberMocks.readAllow.mockReset().mockResolvedValue([]);
   const handlers = getMemberHandlers({
     overrides: args.overrides,
     trackEvent: args.trackEvent,
@@ -64,14 +59,26 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
   });
   const key = args.handler ?? "joined";
   const handler = handlers[key];
-  expect(handler).toBeTruthy();
-  await handler!({
+  if (!handler) {
+    throw new Error(`expected Slack member ${key} handler`);
+  }
+  await handler({
     event: (args.event ?? makeMemberEvent()) as Record<string, unknown>,
     body: args.body ?? {},
   });
 }
 
 describe("registerSlackMemberEvents", () => {
+  beforeAll(async () => {
+    ({ registerSlackMemberEvents } = await import("./members.js"));
+    ({ createSlackSystemEventTestHarness: initSlackHarness } =
+      await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    memberMocks.enqueue.mockClear();
+  });
+
   const cases: Array<{ name: string; args: MemberCaseArgs; calls: number }> = [
     {
       name: "enqueues DM member events when dmPolicy is open",

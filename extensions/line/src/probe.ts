@@ -1,0 +1,35 @@
+// Line plugin module implements probe behavior.
+import { messagingApi } from "@line/bot-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { LineProbeResult } from "./types.js";
+
+export async function probeLineBot(
+  channelAccessToken: string,
+  timeoutMs = 5000,
+): Promise<LineProbeResult> {
+  if (!channelAccessToken?.trim()) {
+    return { ok: false, error: "Channel access token not configured" };
+  }
+
+  const client = new messagingApi.MessagingApiClient({
+    channelAccessToken: channelAccessToken.trim(),
+  });
+
+  return await runChannelProbe(
+    timeoutMs,
+    async () => {
+      const profile = await client.getBotInfo();
+      return {
+        ok: true,
+        bot: {
+          displayName: profile.displayName,
+          userId: profile.userId,
+          basicId: profile.basicId,
+          pictureUrl: profile.pictureUrl,
+        },
+      };
+    },
+    (error) => ({ ok: false, error: formatErrorMessage(error) }),
+  );
+}

@@ -1,12 +1,10 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Matrix plugin module implements startup behavior.
 import type { RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig, MatrixConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
-import { updateMatrixAccountConfig } from "../config-update.js";
-import { summarizeMatrixDeviceHealth } from "../device-health.js";
-import { syncMatrixOwnProfile } from "../profile.js";
 import type { MatrixClient } from "../sdk.js";
-import { maybeRestoreLegacyMatrixBackup } from "./legacy-crypto-restore.js";
-import { ensureMatrixStartupVerification } from "./startup-verification.js";
+import { isMatrixStartupAbortError, throwIfMatrixStartupAborted } from "../startup-abort.js";
 
 type MatrixStartupClient = Pick<
   MatrixClient,
@@ -20,30 +18,58 @@ type MatrixStartupClient = Pick<
   | "uploadContent"
 >;
 
-export async function runMatrixStartupMaintenance(params: {
-  client: MatrixStartupClient;
-  auth: MatrixAuth;
-  accountId: string;
-  effectiveAccountId: string;
-  accountConfig: MatrixConfig;
-  logger: RuntimeLogger;
-  logVerboseMessage: (message: string) => void;
-  loadConfig: () => CoreConfig;
-  writeConfigFile: (cfg: never) => Promise<void>;
-  loadWebMedia: (
-    url: string,
-    maxBytes: number,
-  ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
+type MatrixStartupMaintenanceDeps = {
+  updateMatrixAccountConfig: typeof import("../config-update.js").updateMatrixAccountConfig;
+  summarizeMatrixDeviceHealth: typeof import("../device-health.js").summarizeMatrixDeviceHealth;
+  syncMatrixOwnProfile: typeof import("../profile.js").syncMatrixOwnProfile;
+  ensureMatrixStartupVerification: typeof import("./startup-verification.js").ensureMatrixStartupVerification;
+};
+
+const loadMatrixStartupMaintenanceDeps = createLazyRuntimeModule(() =>
+  Promise.all([
+    import("../config-update.js"),
+    import("../device-health.js"),
+    import("../profile.js"),
+    import("./startup-verification.js"),
+  ]).then(([configUpdateModule, deviceHealthModule, profileModule, startupVerificationModule]) => ({
+    updateMatrixAccountConfig: configUpdateModule.updateMatrixAccountConfig,
+    summarizeMatrixDeviceHealth: deviceHealthModule.summarizeMatrixDeviceHealth,
+    syncMatrixOwnProfile: profileModule.syncMatrixOwnProfile,
+    ensureMatrixStartupVerification: startupVerificationModule.ensureMatrixStartupVerification,
+  })),
+);
+
+export async function runMatrixStartupMaintenance(
+  params: {
+    client: MatrixStartupClient;
+    auth: MatrixAuth;
+    accountId: string;
+    effectiveAccountId: string;
+    accountConfig: MatrixConfig;
+    logger: RuntimeLogger;
+    logVerboseMessage: (message: string) => void;
+    getRuntimeConfig: () => CoreConfig;
+    replaceConfigFile: (cfg: never) => Promise<void>;
+    loadWebMedia: (
+      url: string,
+      maxBytes: number,
+    ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
+    env?: NodeJS.ProcessEnv;
+    abortSignal?: AbortSignal;
+  },
+  deps?: MatrixStartupMaintenanceDeps,
+): Promise<void> {
+  const runtimeDeps = deps ?? (await loadMatrixStartupMaintenanceDeps());
+  throwIfMatrixStartupAborted(params.abortSignal);
   try {
-    const profileSync = await syncMatrixOwnProfile({
+    const profileSync = await runtimeDeps.syncMatrixOwnProfile({
       client: params.client,
       userId: params.auth.userId,
       displayName: params.accountConfig.name,
       avatarUrl: params.accountConfig.avatarUrl,
       loadAvatarFromUrl: async (url, maxBytes) => await params.loadWebMedia(url, maxBytes),
     });
+    throwIfMatrixStartupAborted(params.abortSignal);
     if (profileSync.displayNameUpdated) {
       params.logger.info(`matrix: profile display name updated for ${params.auth.userId}`);
     }
@@ -55,16 +81,20 @@ export async function runMatrixStartupMaintenance(params: {
       profileSync.resolvedAvatarUrl &&
       params.accountConfig.avatarUrl !== profileSync.resolvedAvatarUrl
     ) {
-      const latestCfg = params.loadConfig();
-      const updatedCfg = updateMatrixAccountConfig(latestCfg, params.accountId, {
+      const latestCfg = params.getRuntimeConfig();
+      const updatedCfg = runtimeDeps.updateMatrixAccountConfig(latestCfg, params.accountId, {
         avatarUrl: profileSync.resolvedAvatarUrl,
       });
-      await params.writeConfigFile(updatedCfg as never);
+      await params.replaceConfigFile(updatedCfg as never);
+      throwIfMatrixStartupAborted(params.abortSignal);
       params.logVerboseMessage(
         `matrix: persisted converted avatar URL for account ${params.accountId} (${profileSync.resolvedAvatarUrl})`,
       );
     }
   } catch (err) {
+    if (isMatrixStartupAbortError(err)) {
+      throw err;
+    }
     params.logger.warn("matrix: failed to sync profile from config", { error: String(err) });
   }
 
@@ -73,25 +103,33 @@ export async function runMatrixStartupMaintenance(params: {
   }
 
   try {
-    const deviceHealth = summarizeMatrixDeviceHealth(await params.client.listOwnDevices());
+    throwIfMatrixStartupAborted(params.abortSignal);
+    const deviceHealth = runtimeDeps.summarizeMatrixDeviceHealth(
+      await params.client.listOwnDevices(),
+    );
     if (deviceHealth.staleOpenClawDevices.length > 0) {
       params.logger.warn(
         `matrix: stale OpenClaw devices detected for ${params.auth.userId}: ${deviceHealth.staleOpenClawDevices.map((device) => device.deviceId).join(", ")}. Run 'openclaw matrix devices prune-stale --account ${params.effectiveAccountId}' to keep encrypted-room trust healthy.`,
       );
     }
   } catch (err) {
+    if (isMatrixStartupAbortError(err)) {
+      throw err;
+    }
     params.logger.debug?.("Failed to inspect matrix device hygiene (non-fatal)", {
       error: String(err),
     });
   }
 
   try {
-    const startupVerification = await ensureMatrixStartupVerification({
+    throwIfMatrixStartupAborted(params.abortSignal);
+    const startupVerification = await runtimeDeps.ensureMatrixStartupVerification({
       client: params.client,
       auth: params.auth,
       accountConfig: params.accountConfig,
       env: params.env,
     });
+    throwIfMatrixStartupAborted(params.abortSignal);
     if (startupVerification.kind === "verified") {
       params.logger.info("matrix: device is verified by its owner and ready for encrypted rooms");
     } else if (
@@ -122,38 +160,10 @@ export async function runMatrixStartupMaintenance(params: {
       );
     }
   } catch (err) {
-    params.logger.debug?.("Failed to resolve matrix verification status (non-fatal)", {
-      error: String(err),
-    });
-  }
-
-  try {
-    const legacyCryptoRestore = await maybeRestoreLegacyMatrixBackup({
-      client: params.client,
-      auth: params.auth,
-      env: params.env,
-    });
-    if (legacyCryptoRestore.kind === "restored") {
-      params.logger.info(
-        `matrix: restored ${legacyCryptoRestore.imported}/${legacyCryptoRestore.total} room key(s) from legacy encrypted-state backup`,
-      );
-      if (legacyCryptoRestore.localOnlyKeys > 0) {
-        params.logger.warn(
-          `matrix: ${legacyCryptoRestore.localOnlyKeys} legacy local-only room key(s) were never backed up and could not be restored automatically`,
-        );
-      }
-    } else if (legacyCryptoRestore.kind === "failed") {
-      params.logger.warn(
-        `matrix: failed restoring room keys from legacy encrypted-state backup: ${legacyCryptoRestore.error}`,
-      );
-      if (legacyCryptoRestore.localOnlyKeys > 0) {
-        params.logger.warn(
-          `matrix: ${legacyCryptoRestore.localOnlyKeys} legacy local-only room key(s) were never backed up and may remain unavailable until manually recovered`,
-        );
-      }
+    if (isMatrixStartupAbortError(err)) {
+      throw err;
     }
-  } catch (err) {
-    params.logger.warn("matrix: failed restoring legacy encrypted-state backup", {
+    params.logger.debug?.("Failed to resolve matrix verification status (non-fatal)", {
       error: String(err),
     });
   }

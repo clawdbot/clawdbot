@@ -46,4 +46,18 @@ class OpenClawCanvasA2UIActionTest {
       js,
     )
   }
+
+  @Test
+  fun jsDispatchA2uiStatusQuotesControlCharacters() {
+    val js =
+      OpenClawCanvasA2UIAction.jsDispatchA2UIActionStatus(
+        actionId = "a1\n\u2028\"",
+        ok = false,
+        error = "parse failed\n\t\u2029\\",
+      )
+    assertEquals(
+      "window.dispatchEvent(new CustomEvent('openclaw:a2ui-action-status', { detail: { id: \"a1\\n\\u2028\\\"\", ok: false, error: \"parse failed\\n\\t\\u2029\\\\\" } }));",
+      js,
+    )
+  }
 }

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Matrix tests cover http client plugin behavior.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { performMatrixRequestMock } = vi.hoisted(() => ({
   performMatrixRequestMock: vi.fn(),
@@ -8,9 +9,13 @@ vi.mock("./transport.js", () => ({
   performMatrixRequest: performMatrixRequestMock,
 }));
 
-import { MatrixAuthedHttpClient } from "./http-client.js";
+let MatrixAuthedHttpClient: typeof import("./http-client.js").MatrixAuthedHttpClient;
 
 describe("MatrixAuthedHttpClient", () => {
+  beforeAll(async () => {
+    ({ MatrixAuthedHttpClient } = await import("./http-client.js"));
+  });
+
   beforeEach(() => {
     performMatrixRequestMock.mockReset();
   });
@@ -25,8 +30,16 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: Buffer.from('{"ok":true}', "utf8"),
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token", {
-      allowPrivateNetwork: true,
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+      },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:8080",
+      },
     });
     const result = await client.requestJson({
       method: "GET",
@@ -36,15 +49,71 @@ describe("MatrixAuthedHttpClient", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(performMatrixRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "GET",
-        endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
-        allowAbsoluteEndpoint: true,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    );
+    expect(performMatrixRequestMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      method: "GET",
+      endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
+      qs: undefined,
+      body: undefined,
+      timeoutMs: 5000,
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:8080",
+      },
+      allowAbsoluteEndpoint: true,
+    });
   });
+
+  it("parses JSON responses when the media type casing differs", async () => {
+    performMatrixRequestMock.mockResolvedValue({
+      response: new Response('{"ok":true}', {
+        status: 200,
+        headers: { "content-type": "Application/JSON; charset=utf-8" },
+      }),
+      text: '{"ok":true}',
+      buffer: Buffer.from('{"ok":true}', "utf8"),
+    });
+
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
+    const result = await client.requestJson({
+      method: "GET",
+      endpoint: "/_matrix/client/v3/account/whoami",
+      timeoutMs: 5000,
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it.each(["application/json-seq", 'text/plain; profile="application/json"'])(
+    "does not parse a non-JSON media type containing application/json (%s)",
+    async (contentType) => {
+      performMatrixRequestMock.mockResolvedValue({
+        response: new Response('{"ok":true}', {
+          status: 200,
+          headers: { "content-type": contentType },
+        }),
+        text: '{"ok":true}',
+        buffer: Buffer.from('{"ok":true}', "utf8"),
+      });
+
+      const client = new MatrixAuthedHttpClient({
+        homeserver: "https://matrix.example.org",
+        accessToken: "token",
+      });
+      const result = await client.requestJson({
+        method: "GET",
+        endpoint: "/_matrix/client/v3/account/whoami",
+        timeoutMs: 5000,
+      });
+
+      expect(result).toBe('{"ok":true}');
+    },
+  );
 
   it("returns plain text when response is not JSON", async () => {
     performMatrixRequestMock.mockResolvedValue({
@@ -56,7 +125,10 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: Buffer.from("pong", "utf8"),
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token");
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
     const result = await client.requestJson({
       method: "GET",
       endpoint: "/_matrix/client/v3/ping",
@@ -74,7 +146,10 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: payload,
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token");
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
     const result = await client.requestRaw({
       method: "GET",
       endpoint: "/_matrix/media/v3/download/example/id",
@@ -94,16 +169,53 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: Buffer.from(JSON.stringify({ error: "forbidden" }), "utf8"),
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token");
-    await expect(
-      client.requestJson({
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
+    let rejection: unknown;
+    try {
+      await client.requestJson({
         method: "GET",
         endpoint: "/_matrix/client/v3/rooms",
         timeoutMs: 5000,
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    const httpError = rejection as Error & { statusCode?: unknown };
+    expect(httpError.message).toBe("forbidden");
+    expect(httpError.statusCode).toBe(403);
+  });
+
+  it("throws descriptive error on malformed JSON success response", async () => {
+    performMatrixRequestMock.mockResolvedValue({
+      response: new Response("NOT JSON {{{", {
+        status: 200,
+        headers: { "content-type": "application/json" },
       }),
-    ).rejects.toMatchObject({
-      message: "forbidden",
-      statusCode: 403,
+      text: "NOT JSON {{{",
+      buffer: Buffer.from("NOT JSON {{{", "utf8"),
     });
+
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
+    let rejection: unknown;
+    try {
+      await client.requestJson({
+        method: "GET",
+        endpoint: "/_matrix/client/v3/sync",
+        timeoutMs: 5000,
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain("malformed JSON");
   });
 });

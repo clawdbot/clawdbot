@@ -1,8 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// PTY command supervisor tests cover supervised terminal command lifecycles.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createPtyAdapterMock } = vi.hoisted(() => ({
   createPtyAdapterMock: vi.fn(),
 }));
+
+function firstPtyAdapterParams(): { args?: string[] } {
+  const [call] = createPtyAdapterMock.mock.calls;
+  if (!call) {
+    throw new Error("expected createPtyAdapter call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected createPtyAdapter params to be an object");
+  }
+  return params;
+}
 
 vi.mock("../../agents/shell-utils.js", () => ({
   getShellConfig: () => ({ shell: "sh", args: ["-c"] }),
@@ -35,9 +48,11 @@ function createStubPtyAdapter() {
 describe("process supervisor PTY command contract", () => {
   let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ createProcessSupervisor } = await import("./supervisor.js"));
+  });
+
+  beforeEach(() => {
     createPtyAdapterMock.mockClear();
   });
 
@@ -57,7 +72,7 @@ describe("process supervisor PTY command contract", () => {
 
     expect(exit.reason).toBe("exit");
     expect(createPtyAdapterMock).toHaveBeenCalledTimes(1);
-    const params = createPtyAdapterMock.mock.calls[0]?.[0] as { args?: string[] };
+    const params = firstPtyAdapterParams();
     expect(params.args).toEqual(["-c", command]);
   });
 

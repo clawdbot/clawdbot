@@ -1,3 +1,4 @@
+/** Agent Client Protocol bridge that translates ACP sessions/prompts to Gateway chat sessions. */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type {
@@ -6,6 +7,8 @@ import type {
   AuthenticateRequest,
   AuthenticateResponse,
   CancelNotification,
+  CloseSessionRequest,
+  CloseSessionResponse,
   InitializeRequest,
   InitializeResponse,
   ListSessionsRequest,
@@ -16,8 +19,9 @@ import type {
   NewSessionResponse,
   PromptRequest,
   PromptResponse,
-  SessionConfigOption,
-  SessionModeState,
+  ResumeSessionRequest,
+  ResumeSessionResponse,
+  SessionInfo,
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
   SetSessionModeRequest,
@@ -26,17 +30,30 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
-import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
-import { listThinkingLevels } from "../auto-reply/thinking.js";
+import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
+import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
+import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeFastMode,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
 import {
   createFixedWindowRateLimiter,
+  resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { getAvailableCommands } from "./commands.js";
+import {
+  createInMemoryAcpEventLedger,
+  type AcpEventLedger,
+  type AcpEventLedgerReplay,
+} from "./event-ledger.js";
 import {
   extractAttachmentsFromPrompt,
   extractToolCallContent,
@@ -45,30 +62,105 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
-import { readBool, readNumber, readString } from "./meta.js";
+import {
+  buildAcpPermissionRequest,
+  parseGatewayExecApprovalEventData,
+  parseGatewayExecApprovalRequestEventPayload,
+  resolveGatewayDecisionFromPermissionOutcome,
+  type GatewayExecApprovalDecision,
+  type GatewayExecApprovalDetails,
+  type GatewayExecApprovalEvent,
+} from "./permission-relay.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
-import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
-import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
+import {
+  ACP_ELEVATED_LEVEL_CONFIG_ID,
+  ACP_FAST_MODE_CONFIG_ID,
+  ACP_REASONING_LEVEL_CONFIG_ID,
+  ACP_RESPONSE_USAGE_CONFIG_ID,
+  ACP_THOUGHT_LEVEL_CONFIG_ID,
+  ACP_TIMEOUT_CONFIG_ID,
+  ACP_TIMEOUT_SECONDS_CONFIG_ID,
+  ACP_TRACE_LEVEL_CONFIG_ID,
+  ACP_VERBOSE_LEVEL_CONFIG_ID,
+  buildSessionMetadata,
+  buildSessionPresentation,
+  buildSessionUsageSnapshot,
+  type GatewaySessionPresentationRow,
+  type SessionSnapshot,
+} from "./translator.presentation.js";
+import {
+  extractReplayChunks,
+  type GatewayChatContentBlock,
+  type GatewayTranscriptMessage,
+} from "./translator.replay.js";
+import {
+  ACP_LIST_SESSIONS_MAX_FETCH_LIMIT,
+  assertAbsoluteCwd,
+  decodeListSessionsCursor,
+  encodeListSessionsCursor,
+  resolveListSessionsPageSize,
+} from "./translator.session-list.js";
+import { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
+import { ACP_AGENT_INFO } from "./types.js";
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
-const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
-const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
-const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
-const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
-const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
-const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
+const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
+
+type ChatSendAck = {
+  runId?: unknown;
+  status?: unknown;
+};
+
+function normalizedChatSendAckStatus(status: unknown): string {
+  return typeof status === "string" ? status.trim().toLowerCase() : "";
+}
+
+function isTerminalChatSendAckFailure(status: unknown): boolean {
+  const normalized = normalizedChatSendAckStatus(status);
+  return normalized === "timeout" || normalized === "error";
+}
+
+function isTerminalChatSendAckSuccess(status: unknown): boolean {
+  return normalizedChatSendAckStatus(status) === "ok";
+}
+
+const loadAcpCommandsModule = createLazyRuntimeModule(() => import("./commands.js"));
+const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
+
+async function getAvailableCommandsForAcp() {
+  const { getAvailableCommands } = await loadAcpCommandsModule();
+  return getAvailableCommands();
+}
+
+type DisconnectContext = {
+  generation: number;
+  reason: string;
+};
 
 type PendingPrompt = {
   sessionId: string;
   sessionKey: string;
+  ledgerSessionId?: string;
   idempotencyKey: string;
+  sendAccepted?: boolean;
+  disconnectContext?: DisconnectContext;
   resolve: (response: PromptResponse) => void;
   reject: (err: Error) => void;
   sentTextLength?: number;
   sentText?: string;
+  sentThoughtLength?: number;
+  sentThought?: string;
   toolCalls?: Map<string, PendingToolCall>;
+};
+
+type PendingApprovalRelay = {
+  approvalId: string;
+  runId: string;
+  sessionId: string;
+  sessionKey: string;
+  state: "active" | "completed";
 };
 
 type PendingToolCall = {
@@ -79,236 +171,37 @@ type PendingToolCall = {
 };
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
+  eventLedger?: AcpEventLedger;
   sessionStore?: AcpSessionStore;
 };
 
-type GatewaySessionPresentationRow = Pick<
-  GatewaySessionRow,
-  | "displayName"
-  | "label"
-  | "derivedTitle"
-  | "updatedAt"
-  | "thinkingLevel"
-  | "fastMode"
-  | "modelProvider"
-  | "model"
-  | "verboseLevel"
-  | "reasoningLevel"
-  | "responseUsage"
-  | "elevatedLevel"
-  | "totalTokens"
-  | "totalTokensFresh"
-  | "contextTokens"
->;
+function isAdminScopeProvenanceRejection(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const gatewayCode =
+    typeof (err as { gatewayCode?: unknown }).gatewayCode === "string"
+      ? (err as { gatewayCode?: string }).gatewayCode
+      : undefined;
+  return (
+    err.name === "GatewayClientRequestError" &&
+    gatewayCode === "INVALID_REQUEST" &&
+    err.message.includes("system provenance fields require admin scope")
+  );
+}
 
-type SessionPresentation = {
-  configOptions: SessionConfigOption[];
-  modes: SessionModeState;
-};
+function isGatewayCloseError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.startsWith("gateway closed (");
+}
 
-type SessionMetadata = {
-  title?: string | null;
-  updatedAt?: string | null;
-};
-
-type SessionUsageSnapshot = {
-  size: number;
-  used: number;
-};
-
-type SessionSnapshot = SessionPresentation & {
-  metadata?: SessionMetadata;
-  usage?: SessionUsageSnapshot;
-};
-
-type GatewayTranscriptMessage = {
-  role?: unknown;
-  content?: unknown;
+type AgentWaitResult = {
+  status?: "ok" | "error" | "timeout";
+  error?: string;
 };
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
-
-function formatThinkingLevelName(level: string): string {
-  switch (level) {
-    case "xhigh":
-      return "Extra High";
-    case "adaptive":
-      return "Adaptive";
-    default:
-      return level.length > 0 ? `${level[0].toUpperCase()}${level.slice(1)}` : "Unknown";
-  }
-}
-
-function buildThinkingModeDescription(level: string): string | undefined {
-  if (level === "adaptive") {
-    return "Use the Gateway session default thought level.";
-  }
-  return undefined;
-}
-
-function formatConfigValueName(value: string): string {
-  switch (value) {
-    case "xhigh":
-      return "Extra High";
-    default:
-      return value.length > 0 ? `${value[0].toUpperCase()}${value.slice(1)}` : "Unknown";
-  }
-}
-
-function buildSelectConfigOption(params: {
-  id: string;
-  name: string;
-  description: string;
-  currentValue: string;
-  values: readonly string[];
-  category?: string;
-}): SessionConfigOption {
-  return {
-    type: "select",
-    id: params.id,
-    name: params.name,
-    category: params.category,
-    description: params.description,
-    currentValue: params.currentValue,
-    options: params.values.map((value) => ({
-      value,
-      name: formatConfigValueName(value),
-    })),
-  };
-}
-
-function buildSessionPresentation(params: {
-  row?: GatewaySessionPresentationRow;
-  overrides?: Partial<GatewaySessionPresentationRow>;
-}): SessionPresentation {
-  const row = {
-    ...params.row,
-    ...params.overrides,
-  };
-  const availableLevelIds: string[] = [...listThinkingLevels(row.modelProvider, row.model)];
-  const currentModeId = row.thinkingLevel?.trim() || "adaptive";
-  if (!availableLevelIds.includes(currentModeId)) {
-    availableLevelIds.push(currentModeId);
-  }
-
-  const modes: SessionModeState = {
-    currentModeId,
-    availableModes: availableLevelIds.map((level) => ({
-      id: level,
-      name: formatThinkingLevelName(level),
-      description: buildThinkingModeDescription(level),
-    })),
-  };
-
-  const configOptions: SessionConfigOption[] = [
-    buildSelectConfigOption({
-      id: ACP_THOUGHT_LEVEL_CONFIG_ID,
-      name: "Thought level",
-      category: "thought_level",
-      description:
-        "Controls how much deliberate reasoning OpenClaw requests from the Gateway model.",
-      currentValue: currentModeId,
-      values: availableLevelIds,
-    }),
-    buildSelectConfigOption({
-      id: ACP_FAST_MODE_CONFIG_ID,
-      name: "Fast mode",
-      description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
-      currentValue: row.fastMode ? "on" : "off",
-      values: ["off", "on"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_VERBOSE_LEVEL_CONFIG_ID,
-      name: "Tool verbosity",
-      description:
-        "Controls how much tool progress and output detail OpenClaw keeps enabled for the session.",
-      currentValue: row.verboseLevel?.trim() || "off",
-      values: ["off", "on", "full"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_REASONING_LEVEL_CONFIG_ID,
-      name: "Reasoning stream",
-      description: "Controls whether reasoning-capable models emit reasoning text for the session.",
-      currentValue: row.reasoningLevel?.trim() || "off",
-      values: ["off", "on", "stream"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_RESPONSE_USAGE_CONFIG_ID,
-      name: "Usage detail",
-      description:
-        "Controls how much usage information OpenClaw attaches to responses for the session.",
-      currentValue: row.responseUsage?.trim() || "off",
-      values: ["off", "tokens", "full"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_ELEVATED_LEVEL_CONFIG_ID,
-      name: "Elevated actions",
-      description: "Controls how aggressively the session allows elevated execution behavior.",
-      currentValue: row.elevatedLevel?.trim() || "off",
-      values: ["off", "on", "ask", "full"],
-    }),
-  ];
-
-  return { configOptions, modes };
-}
-
-function extractReplayText(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content.length > 0 ? content : undefined;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .map((block) => {
-      if (!block || typeof block !== "object" || Array.isArray(block)) {
-        return "";
-      }
-      const typedBlock = block as { type?: unknown; text?: unknown };
-      return typedBlock.type === "text" && typeof typedBlock.text === "string"
-        ? typedBlock.text
-        : "";
-    })
-    .join("");
-  return text.length > 0 ? text : undefined;
-}
-
-function buildSessionMetadata(params: {
-  row?: GatewaySessionPresentationRow;
-  sessionKey: string;
-}): SessionMetadata {
-  const title =
-    params.row?.derivedTitle?.trim() ||
-    params.row?.displayName?.trim() ||
-    params.row?.label?.trim() ||
-    params.sessionKey;
-  const updatedAt =
-    typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
-      ? new Date(params.row.updatedAt).toISOString()
-      : null;
-  return { title, updatedAt };
-}
-
-function buildSessionUsageSnapshot(
-  row?: GatewaySessionPresentationRow,
-): SessionUsageSnapshot | undefined {
-  const totalTokens = row?.totalTokens;
-  const contextTokens = row?.contextTokens;
-  if (
-    row?.totalTokensFresh !== true ||
-    typeof totalTokens !== "number" ||
-    !Number.isFinite(totalTokens) ||
-    typeof contextTokens !== "number" ||
-    !Number.isFinite(contextTokens) ||
-    contextTokens <= 0
-  ) {
-    return undefined;
-  }
-  const size = Math.max(0, Math.floor(contextTokens));
-  const used = Math.max(0, Math.min(Math.floor(totalTokens), size));
-  return { size, used };
-}
 
 function buildSystemInputProvenance(originSessionId: string) {
   return {
@@ -336,14 +229,42 @@ function buildSystemProvenanceReceipt(params: {
   ].join("\n");
 }
 
+function hasExplicitSessionRouting(
+  meta: ReturnType<typeof parseSessionMeta>,
+  opts: AcpServerOptions,
+): boolean {
+  return Boolean(
+    meta.sessionKey || meta.sessionLabel || opts.defaultSessionKey || opts.defaultSessionLabel,
+  );
+}
+
+/** ACP Agent implementation backed by the OpenClaw Gateway and replay ledger. */
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
   private gateway: GatewayClient;
   private opts: AcpGatewayAgentOptions;
   private log: (msg: string) => void;
   private sessionStore: AcpSessionStore;
+  private sessionUpdates: AcpTranslatorSessionUpdates;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
+  private settlingPromptKeys = new Set<string>();
+  private approvalRelays = new Map<string, PendingApprovalRelay>();
+  private disconnectTimer: NodeJS.Timeout | null = null;
+  private activeDisconnectContext: DisconnectContext | null = null;
+  private disconnectGeneration = 0;
+
+  private pendingPromptKey(sessionId: string, runId: string): string {
+    return `${sessionId}\u0000${runId}`;
+  }
+
+  private getPendingPrompt(sessionId: string, runId: string): PendingPrompt | undefined {
+    const pending = this.pendingPrompts.get(sessionId);
+    if (pending?.idempotencyKey !== runId) {
+      return undefined;
+    }
+    return pending;
+  }
 
   constructor(
     connection: AgentSideConnection,
@@ -355,14 +276,22 @@ export class AcpGatewayAgent implements Agent {
     this.opts = opts;
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
+    this.sessionUpdates = new AcpTranslatorSessionUpdates({
+      connection,
+      eventLedger: opts.eventLedger ?? createInMemoryAcpEventLedger(),
+      getAvailableCommands: getAvailableCommandsForAcp,
+      log: this.log,
+    });
     this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
-      maxRequests: Math.max(
-        1,
-        opts.sessionCreateRateLimit?.maxRequests ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+      maxRequests: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.maxRequests,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+        { min: 1 },
       ),
-      windowMs: Math.max(
-        1_000,
-        opts.sessionCreateRateLimit?.windowMs ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+      windowMs: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.windowMs,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+        { min: 1_000 },
       ),
     });
   }
@@ -371,22 +300,46 @@ export class AcpGatewayAgent implements Agent {
     this.log("ready");
   }
 
+  shutdown(): void {
+    this.sessionUpdates.stop();
+    this.activeDisconnectContext = null;
+    this.clearDisconnectTimer();
+  }
+
   handleGatewayReconnect(): void {
     this.log("gateway reconnected");
+    const disconnectContext = this.activeDisconnectContext;
+    this.activeDisconnectContext = null;
+    if (!disconnectContext) {
+      return;
+    }
+    void this.reconcilePendingPrompts(disconnectContext.generation, false);
   }
 
   handleGatewayDisconnect(reason: string): void {
     this.log(`gateway disconnected: ${reason}`);
-    for (const pending of this.pendingPrompts.values()) {
-      pending.reject(new Error(`Gateway disconnected: ${reason}`));
-      this.sessionStore.clearActiveRun(pending.sessionId);
+    const disconnectContext = {
+      generation: this.disconnectGeneration + 1,
+      reason,
+    };
+    this.disconnectGeneration = disconnectContext.generation;
+    this.activeDisconnectContext = disconnectContext;
+    if (this.pendingPrompts.size === 0) {
+      return;
     }
-    this.pendingPrompts.clear();
+    for (const pending of this.pendingPrompts.values()) {
+      pending.disconnectContext = disconnectContext;
+    }
+    this.armDisconnectTimer(disconnectContext);
   }
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
     if (evt.event === "chat") {
       await this.handleChatEvent(evt);
+      return;
+    }
+    if (evt.event === "exec.approval.requested") {
+      this.handleExecApprovalRequestEvent(evt);
       return;
     }
     if (evt.event === "agent") {
@@ -396,7 +349,7 @@ export class AcpGatewayAgent implements Agent {
 
   async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
     return {
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: (await loadAcpSdkModule()).PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: {
@@ -410,6 +363,8 @@ export class AcpGatewayAgent implements Agent {
         },
         sessionCapabilities: {
           list: {},
+          resume: {},
+          close: {},
         },
       },
       agentInfo: ACP_AGENT_INFO,
@@ -422,10 +377,10 @@ export class AcpGatewayAgent implements Agent {
     this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
-      fallbackKey: `acp:${sessionId}`,
+      fallbackKey: `acp-bridge:${sessionId}`,
     });
 
     const session = this.sessionStore.createSession({
@@ -433,12 +388,14 @@ export class AcpGatewayAgent implements Agent {
       sessionKey,
       cwd: params.cwd,
     });
+    await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.getSessionSnapshot(session.sessionKey);
-    await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+    await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
+      record: true,
     });
-    await this.sendAvailableCommands(session.sessionId);
+    await this.sessionUpdates.sendAvailableCommands(session, { record: true });
     const { configOptions, modes } = sessionSnapshot;
     return {
       sessionId: session.sessionId,
@@ -453,52 +410,165 @@ export class AcpGatewayAgent implements Agent {
       this.enforceSessionCreateRateLimit("loadSession");
     }
 
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
+    const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
+    const exactLedgerReplay: AcpEventLedgerReplay = hasExplicitRouting
+      ? { complete: false, events: [] }
+      : await this.sessionUpdates.readLedgerReplayBySessionId(params.sessionId);
+    const listedLedgerReplay: AcpEventLedgerReplay =
+      !hasExplicitRouting && !exactLedgerReplay.complete
+        ? await this.sessionUpdates.readLedgerReplayBySessionKey(params.sessionId)
+        : { complete: false, events: [] };
+    const routedLedgerReplay = exactLedgerReplay.complete ? exactLedgerReplay : listedLedgerReplay;
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
-      fallbackKey: params.sessionId,
+      fallbackKey: routedLedgerReplay.sessionKey ?? params.sessionId,
     });
+    const ledgerReplay =
+      exactLedgerReplay.complete && exactLedgerReplay.sessionKey === sessionKey
+        ? exactLedgerReplay
+        : listedLedgerReplay.complete && listedLedgerReplay.sessionKey === sessionKey
+          ? listedLedgerReplay
+          : await this.sessionUpdates.readLedgerReplay({
+              sessionId: params.sessionId,
+              sessionKey,
+            });
+
+    const session = this.sessionStore.createSession({
+      sessionId: params.sessionId,
+      sessionKey,
+      ...(ledgerReplay.sessionId ? { ledgerSessionId: ledgerReplay.sessionId } : {}),
+      cwd: params.cwd,
+    });
+    await this.sessionUpdates.startLedgerSession(session, { complete: ledgerReplay.complete });
+    this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
+    const [sessionSnapshot, transcript] = await Promise.all([
+      this.getSessionSnapshot(session.sessionKey),
+      ledgerReplay.complete
+        ? Promise.resolve([])
+        : this.getSessionTranscript(session.sessionKey).catch((err: unknown) => {
+            this.log(`session transcript fallback for ${session.sessionKey}: ${String(err)}`);
+            return [];
+          }),
+    ]);
+    if (ledgerReplay.complete) {
+      await this.replayLedgerSession(session.sessionId, ledgerReplay);
+    } else {
+      await this.replaySessionTranscript(session.sessionId, transcript);
+    }
+    await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
+      includeControls: false,
+      record: false,
+    });
+    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
+    const { configOptions, modes } = sessionSnapshot;
+    return { configOptions, modes };
+  }
+
+  async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+    const requestedCwd = normalizeOptionalString(params.cwd);
+    if (requestedCwd) {
+      assertAbsoluteCwd(requestedCwd, "session/list");
+    }
+    const fallbackCwd = requestedCwd ?? process.cwd();
+    const rawCursor = params.cursor;
+    const cursor = decodeListSessionsCursor(rawCursor);
+    if (rawCursor && cursor.cwd !== requestedCwd) {
+      throw new Error("ACP session list cursor does not match the cwd filter.");
+    }
+
+    const pageSize = resolveListSessionsPageSize(params["_meta"]);
+    const start = cursor.offset;
+    const end = start + pageSize;
+    let fetchLimit = end + 1;
+    let rows: SessionInfo[] = [];
+
+    while (true) {
+      const result = await this.gateway.request<SessionsListResult>("sessions.list", {
+        limit: fetchLimit,
+        includeDerivedTitles: true,
+      });
+      rows = result.sessions
+        .filter((session) => {
+          if (!requestedCwd) {
+            return true;
+          }
+          return (
+            (normalizeOptionalString(session.spawnedCwd) ??
+              normalizeOptionalString(session.spawnedWorkspaceDir)) === requestedCwd
+          );
+        })
+        .map((session) => this.mapGatewaySessionToAcpSessionInfo(session, fallbackCwd));
+      if (
+        rows.length > end ||
+        result.hasMore !== true ||
+        fetchLimit >= ACP_LIST_SESSIONS_MAX_FETCH_LIMIT
+      ) {
+        break;
+      }
+      fetchLimit = Math.min(fetchLimit * 2, ACP_LIST_SESSIONS_MAX_FETCH_LIMIT);
+    }
+
+    const page = rows.slice(start, end);
+    const hasMore = rows.length > end;
+    return {
+      sessions: page,
+      nextCursor: hasMore
+        ? encodeListSessionsCursor({
+            offset: end,
+            ...(requestedCwd ? { cwd: requestedCwd } : {}),
+          })
+        : null,
+    };
+  }
+
+  async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.assertSupportedSessionSetup(params.mcpServers ?? []);
+    assertAbsoluteCwd(params.cwd, "session/resume");
+
+    const existingSession = this.sessionStore.getSession(params.sessionId);
+    if (!existingSession) {
+      this.enforceSessionCreateRateLimit("resumeSession");
+    }
+
+    const meta = parseSessionMeta(params["_meta"]);
+    const fallbackKey = existingSession?.sessionKey ?? params.sessionId;
+    const sessionKey = await this.resolveSessionKeyFromMeta({
+      meta,
+      fallbackKey,
+    });
+
+    const shouldRequireGatewaySession =
+      !existingSession || sessionKey !== existingSession.sessionKey;
+    const sessionSnapshot = shouldRequireGatewaySession
+      ? await this.getExistingSessionSnapshot(sessionKey)
+      : await this.getSessionSnapshot(sessionKey);
 
     const session = this.sessionStore.createSession({
       sessionId: params.sessionId,
       sessionKey,
       cwd: params.cwd,
     });
-    this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
-    const [sessionSnapshot, transcript] = await Promise.all([
-      this.getSessionSnapshot(session.sessionKey),
-      this.getSessionTranscript(session.sessionKey).catch((err) => {
-        this.log(`session transcript fallback for ${session.sessionKey}: ${String(err)}`);
-        return [];
-      }),
-    ]);
-    await this.replaySessionTranscript(session.sessionId, transcript);
-    await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+    await this.sessionUpdates.startLedgerSession(session, { complete: false });
+    this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
+    await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
+      record: false,
     });
-    await this.sendAvailableCommands(session.sessionId);
+    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
     const { configOptions, modes } = sessionSnapshot;
     return { configOptions, modes };
   }
 
-  async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
-    const limit = readNumber(params._meta, ["limit"]) ?? 100;
-    const result = await this.gateway.request<SessionsListResult>("sessions.list", { limit });
-    const cwd = params.cwd ?? process.cwd();
-    return {
-      sessions: result.sessions.map((session) => ({
-        sessionId: session.key,
-        cwd,
-        title: session.displayName ?? session.label ?? session.key,
-        updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
-        _meta: {
-          sessionKey: session.key,
-          kind: session.kind,
-          channel: session.channel,
-        },
-      })),
-      nextCursor: null,
-    };
+  async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
+    const session = this.sessionStore.getSession(params.sessionId);
+    if (!session) {
+      throw new Error(`Session ${params.sessionId} not found`);
+    }
+    await this.cancelSessionWork(session);
+    this.sessionStore.deleteSession(params.sessionId);
+    this.log(`closeSession: ${params.sessionId}`);
+    return {};
   }
 
   async authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse> {
@@ -522,8 +592,9 @@ export class AcpGatewayAgent implements Agent {
       const sessionSnapshot = await this.getSessionSnapshot(session.sessionKey, {
         thinkingLevel: params.modeId,
       });
-      await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+      await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
         includeControls: true,
+        record: true,
       });
     } catch (err) {
       this.log(`setSessionMode error: ${String(err)}`);
@@ -542,10 +613,12 @@ export class AcpGatewayAgent implements Agent {
     const sessionPatch = this.resolveSessionConfigPatch(params.configId, params.value);
 
     try {
-      await this.gateway.request("sessions.patch", {
-        key: session.sessionKey,
-        ...sessionPatch.patch,
-      });
+      if (sessionPatch.patch) {
+        await this.gateway.request("sessions.patch", {
+          key: session.sessionKey,
+          ...sessionPatch.patch,
+        });
+      }
       this.log(
         `setSessionConfigOption: ${session.sessionId} -> ${params.configId}=${params.value}`,
       );
@@ -553,8 +626,9 @@ export class AcpGatewayAgent implements Agent {
         session.sessionKey,
         sessionPatch.overrides,
       );
-      await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+      await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
         includeControls: true,
+        record: true,
       });
       return {
         configOptions: sessionSnapshot.configOptions,
@@ -575,7 +649,7 @@ export class AcpGatewayAgent implements Agent {
       this.sessionStore.cancelActiveRun(params.sessionId);
     }
 
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
     // block-by-block, before the full string is ever assembled in memory (CWE-400)
     const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
@@ -603,37 +677,120 @@ export class AcpGatewayAgent implements Agent {
     const abortController = new AbortController();
     const runId = randomUUID();
     this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
+    const requestParams = {
+      sessionKey: session.sessionKey,
+      message,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      idempotencyKey: runId,
+      thinking: readString(params["_meta"], ["thinking", "thinkingLevel"]),
+      deliver: readBool(params["_meta"], ["deliver"]),
+      timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
+    };
 
     return new Promise<PromptResponse>((resolve, reject) => {
       this.pendingPrompts.set(params.sessionId, {
         sessionId: params.sessionId,
         sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         idempotencyKey: runId,
+        disconnectContext: this.activeDisconnectContext ?? undefined,
         resolve,
         reject,
       });
+      if (this.activeDisconnectContext && !this.disconnectTimer) {
+        this.armDisconnectTimer(this.activeDisconnectContext);
+      }
 
-      this.gateway
-        .request(
-          "chat.send",
-          {
-            sessionKey: session.sessionKey,
-            message,
-            attachments: attachments.length > 0 ? attachments : undefined,
-            idempotencyKey: runId,
-            thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
-            deliver: readBool(params._meta, ["deliver"]),
-            timeoutMs: readNumber(params._meta, ["timeoutMs"]),
+      const sendWithProvenanceFallback = async () => {
+        const markSendAccepted = () => {
+          const pending = this.getPendingPrompt(params.sessionId, runId);
+          if (pending) {
+            pending.sendAccepted = true;
+          }
+        };
+        const applyTerminalAck = async (ack: ChatSendAck | undefined): Promise<boolean> => {
+          const status = normalizedChatSendAckStatus(ack?.status);
+          const pending = () => this.getPendingPrompt(params.sessionId, runId);
+          if (status === "timeout") {
+            const current = pending();
+            if (current) {
+              await this.finishPrompt(params.sessionId, current, "cancelled");
+            }
+            return true;
+          }
+          if (status === "error") {
+            const current = pending();
+            if (current) {
+              await this.rejectPendingPrompt(
+                current,
+                new Error("Chat failed before the run started; try again."),
+              );
+            }
+            return true;
+          }
+          if (status === "ok") {
+            markSendAccepted();
+            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+            const current = pending();
+            if (current) {
+              await this.finishPrompt(params.sessionId, current, "end_turn");
+            }
+            return true;
+          }
+          return isTerminalChatSendAckFailure(status) || isTerminalChatSendAckSuccess(status);
+        };
+
+        const sendChat = async (payload: Record<string, unknown>): Promise<boolean> => {
+          const ack = await this.gateway.request<ChatSendAck>("chat.send", payload, {
+            timeoutMs: null,
+          });
+          return await applyTerminalAck(ack);
+        };
+
+        try {
+          const terminal = await sendChat({
+            ...requestParams,
             systemInputProvenance,
             systemProvenanceReceipt,
-          },
-          { expectFinal: true },
-        )
-        .catch((err) => {
-          this.pendingPrompts.delete(params.sessionId);
-          this.sessionStore.clearActiveRun(params.sessionId);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        });
+          });
+          if (terminal) {
+            return;
+          }
+          markSendAccepted();
+          await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+        } catch (err) {
+          if (
+            (systemInputProvenance || systemProvenanceReceipt) &&
+            isAdminScopeProvenanceRejection(err)
+          ) {
+            const terminal = await sendChat(requestParams);
+            if (terminal) {
+              return;
+            }
+            markSendAccepted();
+            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+            return;
+          }
+          throw err;
+        }
+      };
+
+      void sendWithProvenanceFallback().catch(async (err: unknown) => {
+        const promptKey = this.pendingPromptKey(params.sessionId, runId);
+        if (this.settlingPromptKeys.has(promptKey)) {
+          return;
+        }
+        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
+          return;
+        }
+        const error = err instanceof Error ? err : new Error(String(err));
+        const current = this.getPendingPrompt(params.sessionId, runId);
+        if (current) {
+          await this.rejectPendingPrompt(current, error);
+          return;
+        }
+        reject(error);
+      });
     });
   }
 
@@ -642,29 +799,7 @@ export class AcpGatewayAgent implements Agent {
     if (!session) {
       return;
     }
-    // Capture runId before cancelActiveRun clears session.activeRunId.
-    const activeRunId = session.activeRunId;
-
-    this.sessionStore.cancelActiveRun(params.sessionId);
-    const pending = this.pendingPrompts.get(params.sessionId);
-    const scopedRunId = activeRunId ?? pending?.idempotencyKey;
-    if (!scopedRunId) {
-      return;
-    }
-
-    try {
-      await this.gateway.request("chat.abort", {
-        sessionKey: session.sessionKey,
-        runId: scopedRunId,
-      });
-    } catch (err) {
-      this.log(`cancel error: ${String(err)}`);
-    }
-
-    if (pending) {
-      this.pendingPrompts.delete(params.sessionId);
-      pending.resolve({ stopReason: "cancelled" });
-    }
+    await this.cancelSessionWork(session);
   }
 
   private async resolveSessionKeyFromMeta(params: {
@@ -696,6 +831,11 @@ export class AcpGatewayAgent implements Agent {
     const data = payload.data as Record<string, unknown> | undefined;
     const sessionKey = payload.sessionKey as string | undefined;
     if (!stream || !data || !sessionKey) {
+      return;
+    }
+
+    if (stream === "approval") {
+      await this.handleApprovalEvent({ sessionKey, runId, data });
       return;
     }
 
@@ -731,8 +871,12 @@ export class AcpGatewayAgent implements Agent {
         rawInput: args,
         locations,
       });
-      await this.connection.sessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: pending.sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
         update: {
           sessionUpdate: "tool_call",
           toolCallId,
@@ -749,8 +893,12 @@ export class AcpGatewayAgent implements Agent {
     if (phase === "update") {
       const toolState = pending.toolCalls?.get(toolCallId);
       const partialResult = data.partialResult;
-      await this.connection.sessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: pending.sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
         update: {
           sessionUpdate: "tool_call_update",
           toolCallId,
@@ -767,8 +915,12 @@ export class AcpGatewayAgent implements Agent {
       const isError = Boolean(data.isError);
       const toolState = pending.toolCalls?.get(toolCallId);
       pending.toolCalls?.delete(toolCallId);
-      await this.connection.sessionUpdate({
+      await this.sessionUpdates.emit({
         sessionId: pending.sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
         update: {
           sessionUpdate: "tool_call_update",
           toolCallId,
@@ -778,6 +930,197 @@ export class AcpGatewayAgent implements Agent {
           locations: extractToolCallLocations(toolState?.locations, data.result),
         },
       });
+    }
+  }
+
+  private async handleApprovalEvent(params: {
+    sessionKey: string;
+    runId?: string;
+    data: Record<string, unknown>;
+  }): Promise<void> {
+    const approvalEvent = parseGatewayExecApprovalEventData(params.data);
+    if (!approvalEvent) {
+      return;
+    }
+    this.startApprovalRelay({
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      approvalEvent,
+    });
+  }
+
+  private handleExecApprovalRequestEvent(evt: EventFrame): void {
+    const payload = evt.payload as Record<string, unknown> | undefined;
+    if (!payload) {
+      return;
+    }
+    const approvalEvent = parseGatewayExecApprovalRequestEventPayload(payload);
+    if (!approvalEvent) {
+      return;
+    }
+    const request = payload.request as Record<string, unknown> | undefined;
+    const sessionKey = normalizeOptionalString(request?.sessionKey);
+    if (!sessionKey) {
+      return;
+    }
+    this.startApprovalRelay({ sessionKey, approvalEvent });
+  }
+
+  private startApprovalRelay(params: {
+    sessionKey: string;
+    runId?: string;
+    approvalEvent: GatewayExecApprovalEvent;
+  }): void {
+    const approvalEvent = params.approvalEvent;
+    if (this.approvalRelays.has(approvalEvent.approvalId)) {
+      return;
+    }
+
+    const pending = this.findPendingForApproval(params);
+    if (!pending) {
+      return;
+    }
+    const pendingToolCall = approvalEvent.toolCallId
+      ? pending.toolCalls?.get(approvalEvent.toolCallId)
+      : undefined;
+    const correlatedApprovalEvent =
+      !approvalEvent.title && pendingToolCall?.kind === "execute"
+        ? { ...approvalEvent, title: pendingToolCall.title }
+        : approvalEvent;
+
+    const relay: PendingApprovalRelay = {
+      approvalId: approvalEvent.approvalId,
+      runId: pending.idempotencyKey,
+      sessionId: pending.sessionId,
+      sessionKey: pending.sessionKey,
+      state: "active",
+    };
+    this.approvalRelays.set(relay.approvalId, relay);
+    void this.runApprovalRelay(relay, correlatedApprovalEvent);
+  }
+
+  private findPendingForApproval(params: {
+    sessionKey: string;
+    runId?: string;
+    approvalEvent: GatewayExecApprovalEvent;
+  }): PendingPrompt | undefined {
+    if (params.runId) {
+      return this.findPendingBySessionKey(params.sessionKey, params.runId);
+    }
+    const toolCallId = params.approvalEvent.toolCallId;
+    if (!toolCallId) {
+      return this.findUniquePendingBySessionKey(params.sessionKey);
+    }
+
+    let match: PendingPrompt | undefined;
+    for (const pending of this.pendingPrompts.values()) {
+      if (
+        pending.sessionKey !== params.sessionKey ||
+        pending.toolCalls?.get(toolCallId)?.kind !== "execute"
+      ) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = pending;
+    }
+    return match;
+  }
+
+  private async runApprovalRelay(
+    relay: PendingApprovalRelay,
+    approvalEvent: GatewayExecApprovalEvent,
+  ): Promise<void> {
+    let resolved = false;
+    try {
+      const details = await this.getGatewayApprovalDetails(relay.approvalId);
+      if (!this.isApprovalRelayActive(relay)) {
+        resolved = await this.resolveGatewayApproval(relay.approvalId, "deny");
+        return;
+      }
+
+      const request = buildAcpPermissionRequest({
+        sessionId: relay.sessionId,
+        event: approvalEvent,
+        details,
+      });
+      let decision: GatewayExecApprovalDecision | undefined;
+      try {
+        const response = await this.connection.requestPermission(request);
+        decision = resolveGatewayDecisionFromPermissionOutcome(response, request.options);
+      } catch (err) {
+        this.log(`approval relay request failed for ${relay.approvalId}: ${String(err)}`);
+      }
+
+      const selectedDecision = this.isApprovalRelayActive(relay) && decision ? decision : "deny";
+      resolved = await this.resolveGatewayApproval(relay.approvalId, selectedDecision);
+    } finally {
+      const current = this.approvalRelays.get(relay.approvalId);
+      if (current === relay && current.state === "active") {
+        if (resolved) {
+          // Keep completed relays until prompt cleanup as replay/dedup sentinels.
+          current.state = "completed";
+        } else {
+          this.approvalRelays.delete(relay.approvalId);
+        }
+      }
+    }
+  }
+
+  private async getGatewayApprovalDetails(
+    approvalId: string,
+  ): Promise<GatewayExecApprovalDetails | null> {
+    try {
+      return await this.gateway.request<GatewayExecApprovalDetails>("exec.approval.get", {
+        id: approvalId,
+      });
+    } catch (err) {
+      this.log(`approval relay hydrate failed for ${approvalId}: ${String(err)}`);
+      return null;
+    }
+  }
+
+  private async resolveGatewayApproval(
+    approvalId: string,
+    decision: GatewayExecApprovalDecision,
+  ): Promise<boolean> {
+    try {
+      await this.gateway.request("exec.approval.resolve", {
+        id: approvalId,
+        decision,
+      });
+      return true;
+    } catch (err) {
+      this.log(`approval relay resolve failed for ${approvalId}: ${String(err)}`);
+      return false;
+    }
+  }
+
+  private isApprovalRelayActive(relay: PendingApprovalRelay): boolean {
+    return (
+      this.approvalRelays.get(relay.approvalId) === relay &&
+      relay.state === "active" &&
+      this.getPendingPrompt(relay.sessionId, relay.runId) !== undefined
+    );
+  }
+
+  private clearApprovalRelaysForPrompt(
+    sessionId: string,
+    runId?: string,
+    opts: { denyActive?: boolean } = {},
+  ): void {
+    for (const [approvalId, relay] of this.approvalRelays) {
+      if (relay.sessionId !== sessionId) {
+        continue;
+      }
+      if (runId && relay.runId !== runId) {
+        continue;
+      }
+      this.approvalRelays.delete(approvalId);
+      if (opts.denyActive && relay.state === "active") {
+        void this.resolveGatewayApproval(approvalId, "deny");
+      }
     }
   }
 
@@ -822,11 +1165,9 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     if (state === "error") {
-      // ACP has no explicit "server_error" stop reason.  Use "end_turn" so clients
-      // do not treat transient backend errors (timeouts, rate-limits) as deliberate
-      // refusals.  TODO: when ChatEventSchema gains a structured errorKind field
-      // (e.g. "refusal" | "timeout" | "rate_limit"), use it to distinguish here.
-      void this.finishPrompt(pending.sessionId, pending, "end_turn");
+      const errorKind = payload.errorKind as string | undefined;
+      const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
+      void this.finishPrompt(pending.sessionId, pending, stopReason);
     }
   }
 
@@ -834,24 +1175,54 @@ export class AcpGatewayAgent implements Agent {
     sessionId: string,
     messageData: Record<string, unknown>,
   ): Promise<void> {
-    const content = messageData.content as Array<{ type: string; text?: string }> | undefined;
-    const fullText = content?.find((c) => c.type === "text")?.text ?? "";
+    const content = messageData.content as GatewayChatContentBlock[] | undefined;
     const pending = this.pendingPrompts.get(sessionId);
     if (!pending) {
       return;
     }
 
+    const fullThought = content
+      ?.filter((block) => block?.type === "thinking")
+      .map((block) => block.thinking ?? "")
+      .join("\n")
+      .trimEnd();
+    const sentThoughtSoFar = pending.sentThoughtLength ?? 0;
+    if (fullThought && fullThought.length > sentThoughtSoFar) {
+      const newThought = fullThought.slice(sentThoughtSoFar);
+      pending.sentThoughtLength = fullThought.length;
+      pending.sentThought = fullThought;
+      await this.sessionUpdates.emit({
+        sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: newThought },
+        },
+      });
+    }
+
+    const fullText = content
+      ?.filter((block) => block?.type === "text")
+      .map((block) => block.text ?? "")
+      .join("\n")
+      .trimEnd();
     const sentSoFar = pending.sentTextLength ?? 0;
-    if (fullText.length <= sentSoFar) {
+    if (!fullText || fullText.length <= sentSoFar) {
       return;
     }
 
     const newText = fullText.slice(sentSoFar);
     pending.sentTextLength = fullText.length;
     pending.sentText = fullText;
-
-    await this.connection.sessionUpdate({
+    await this.sessionUpdates.emit({
       sessionId,
+      sessionKey: pending.sessionKey,
+      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+      runId: pending.idempotencyKey,
+      record: true,
       update: {
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: newText },
@@ -864,17 +1235,37 @@ export class AcpGatewayAgent implements Agent {
     pending: PendingPrompt,
     stopReason: StopReason,
   ): Promise<void> {
-    this.pendingPrompts.delete(sessionId);
-    this.sessionStore.clearActiveRun(sessionId);
-    const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
+    const promptKey = this.pendingPromptKey(sessionId, pending.idempotencyKey);
+    this.settlingPromptKeys.add(promptKey);
     try {
-      await this.sendSessionSnapshotUpdate(sessionId, sessionSnapshot, {
-        includeControls: false,
-      });
-    } catch (err) {
-      this.log(`session snapshot update failed for ${sessionId}: ${String(err)}`);
+      this.clearApprovalRelaysForPrompt(sessionId, pending.idempotencyKey, { denyActive: true });
+      this.pendingPrompts.delete(sessionId);
+      this.sessionStore.clearActiveRun(sessionId);
+      if (this.pendingPrompts.size === 0) {
+        this.clearDisconnectTimer();
+      }
+      const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
+      try {
+        await this.sendSessionSnapshotUpdate(
+          {
+            sessionId,
+            sessionKey: pending.sessionKey,
+            ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+          },
+          sessionSnapshot,
+          {
+            includeControls: false,
+            record: true,
+            runId: pending.idempotencyKey,
+          },
+        );
+      } catch (err) {
+        this.log(`session snapshot update failed for ${sessionId}: ${String(err)}`);
+      }
+      pending.resolve({ stopReason });
+    } finally {
+      this.settlingPromptKeys.delete(promptKey);
     }
-    pending.resolve({ stopReason });
   }
 
   private findPendingBySessionKey(sessionKey: string, runId?: string): PendingPrompt | undefined {
@@ -887,17 +1278,232 @@ export class AcpGatewayAgent implements Agent {
       }
       return pending;
     }
+    if (runId) {
+      for (const pending of this.pendingPrompts.values()) {
+        if (pending.idempotencyKey !== runId) {
+          continue;
+        }
+        this.reconcilePendingSessionKey(pending, sessionKey);
+        return pending;
+      }
+    }
     return undefined;
   }
 
-  private async sendAvailableCommands(sessionId: string): Promise<void> {
-    await this.connection.sessionUpdate({
-      sessionId,
-      update: {
-        sessionUpdate: "available_commands_update",
-        availableCommands: getAvailableCommands(),
-      },
+  private findUniquePendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
+    let match: PendingPrompt | undefined;
+    for (const pending of this.pendingPrompts.values()) {
+      if (pending.sessionKey !== sessionKey) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = pending;
+    }
+    return match;
+  }
+
+  private reconcilePendingSessionKey(pending: PendingPrompt, sessionKey: string): void {
+    if (pending.sessionKey === sessionKey) {
+      return;
+    }
+    this.log(`session key reconciled: ${pending.sessionKey} -> ${sessionKey}`);
+    pending.sessionKey = sessionKey;
+    const session = this.sessionStore.getSession(pending.sessionId);
+    if (session?.activeRunId === pending.idempotencyKey) {
+      session.sessionKey = sessionKey;
+    }
+  }
+
+  private clearDisconnectTimer(): void {
+    if (!this.disconnectTimer) {
+      return;
+    }
+    clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = null;
+  }
+
+  private armDisconnectTimer(disconnectContext: DisconnectContext): void {
+    this.clearDisconnectTimer();
+    this.disconnectTimer = setTimeout(() => {
+      this.disconnectTimer = null;
+      void this.reconcilePendingPrompts(disconnectContext.generation, true);
+    }, ACP_GATEWAY_DISCONNECT_GRACE_MS);
+    this.disconnectTimer.unref?.();
+  }
+
+  private async rejectPendingPrompt(
+    pending: PendingPrompt,
+    error: Error,
+    options: { recordDisconnectNotice?: boolean } = {},
+  ): Promise<void> {
+    const currentPending = this.getPendingPrompt(pending.sessionId, pending.idempotencyKey);
+    if (currentPending !== pending) {
+      return;
+    }
+
+    const promptKey = this.pendingPromptKey(pending.sessionId, pending.idempotencyKey);
+    // Claim before emitting so late Gateway events cannot settle this prompt twice.
+    this.settlingPromptKeys.add(promptKey);
+    this.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
+      denyActive: true,
     });
+    this.pendingPrompts.delete(pending.sessionId);
+    this.sessionStore.clearActiveRun(pending.sessionId);
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+    }
+
+    try {
+      if (options.recordDisconnectNotice) {
+        const text = pending.sendAccepted
+          ? "[OpenClaw interruption] The Gateway disconnected after accepting this message, so its final outcome is unknown. Check the session before retrying."
+          : "[OpenClaw interruption] The Gateway disconnected before OpenClaw could confirm whether this message was accepted, so its final outcome is unknown. Check the session before retrying.";
+        // Make replay durable before rejecting, but do not let ACP client backpressure
+        // extend the disconnect deadline indefinitely.
+        await this.sessionUpdates.emit({
+          sessionId: pending.sessionId,
+          sessionKey: pending.sessionKey,
+          ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+          runId: pending.idempotencyKey,
+          record: true,
+          waitForDelivery: false,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text },
+          },
+        });
+      }
+    } catch (noticeError) {
+      this.log(`disconnect notice failed for ${pending.idempotencyKey}: ${String(noticeError)}`);
+    } finally {
+      pending.reject(error);
+      this.settlingPromptKeys.delete(promptKey);
+    }
+  }
+
+  private clearPendingDisconnectState(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): void {
+    if (pending.disconnectContext !== disconnectContext) {
+      return;
+    }
+    pending.disconnectContext = undefined;
+  }
+
+  private shouldRejectPendingAtDisconnectDeadline(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): boolean {
+    return (
+      pending.disconnectContext === disconnectContext &&
+      (!pending.sendAccepted ||
+        this.activeDisconnectContext?.generation === disconnectContext.generation)
+    );
+  }
+
+  private async reconcilePendingPrompts(
+    observedDisconnectGeneration: number,
+    deadlineExpired: boolean,
+  ): Promise<void> {
+    if (this.pendingPrompts.size === 0) {
+      if (this.disconnectGeneration === observedDisconnectGeneration) {
+        this.clearDisconnectTimer();
+      }
+      return;
+    }
+
+    const pendingEntries = [...this.pendingPrompts.entries()];
+    let keepDisconnectTimer = false;
+    for (const [sessionId, pending] of pendingEntries) {
+      if (this.pendingPrompts.get(sessionId) !== pending) {
+        continue;
+      }
+      if (pending.disconnectContext?.generation !== observedDisconnectGeneration) {
+        continue;
+      }
+      const shouldKeepPending = await this.reconcilePendingPrompt(
+        sessionId,
+        pending,
+        deadlineExpired,
+      );
+      if (shouldKeepPending) {
+        keepDisconnectTimer = true;
+      }
+    }
+
+    if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
+      this.clearDisconnectTimer();
+    }
+  }
+
+  private async reconcilePendingPrompt(
+    sessionId: string,
+    pending: PendingPrompt,
+    deadlineExpired: boolean,
+  ): Promise<boolean> {
+    const disconnectContext = pending.disconnectContext;
+    if (!disconnectContext) {
+      return false;
+    }
+    let result: AgentWaitResult | undefined;
+    try {
+      result = await this.gateway.request(
+        "agent.wait",
+        {
+          runId: pending.idempotencyKey,
+          timeoutMs: 0,
+        },
+        { timeoutMs: null },
+      );
+    } catch (err) {
+      this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
+      if (deadlineExpired) {
+        if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
+          await this.rejectPendingPrompt(
+            pending,
+            new Error(`Gateway disconnected: ${disconnectContext.reason}`),
+            { recordDisconnectNotice: true },
+          );
+          return false;
+        }
+        this.clearPendingDisconnectState(pending, disconnectContext);
+        return false;
+      }
+      return true;
+    }
+
+    const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
+    if (!currentPending) {
+      return false;
+    }
+    if (result?.status === "ok") {
+      await this.finishPrompt(sessionId, currentPending, "end_turn");
+      return false;
+    }
+    if (result?.status === "error") {
+      void this.finishPrompt(sessionId, currentPending, "end_turn");
+      return false;
+    }
+    if (deadlineExpired) {
+      if (this.shouldRejectPendingAtDisconnectDeadline(currentPending, disconnectContext)) {
+        const currentDisconnectContext = currentPending.disconnectContext;
+        if (!currentDisconnectContext) {
+          return false;
+        }
+        await this.rejectPendingPrompt(
+          currentPending,
+          new Error(`Gateway disconnected: ${currentDisconnectContext.reason}`),
+          { recordDisconnectNotice: true },
+        );
+        return false;
+      }
+      this.clearPendingDisconnectState(currentPending, disconnectContext);
+      return false;
+    }
+    return true;
   }
 
   private async getSessionSnapshot(
@@ -920,6 +1526,70 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
+  private async getExistingSessionSnapshot(sessionKey: string): Promise<SessionSnapshot> {
+    const row = await this.getGatewaySessionRow(sessionKey);
+    if (!row) {
+      throw new Error(`Session ${sessionKey} not found`);
+    }
+    return {
+      ...buildSessionPresentation({ row }),
+      metadata: buildSessionMetadata({ row, sessionKey }),
+      usage: buildSessionUsageSnapshot(row),
+    };
+  }
+
+  private mapGatewaySessionToAcpSessionInfo(
+    session: GatewaySessionRow,
+    fallbackCwd: string,
+  ): SessionInfo {
+    const cwd =
+      normalizeOptionalString(session.spawnedCwd) ??
+      normalizeOptionalString(session.spawnedWorkspaceDir) ??
+      fallbackCwd;
+    return {
+      sessionId: session.key,
+      cwd,
+      title: session.derivedTitle ?? session.displayName ?? session.label ?? session.key,
+      updatedAt: timestampMsToIsoString(session.updatedAt),
+      _meta: toAcpSessionLineageMeta(session),
+    };
+  }
+
+  private async cancelSessionWork(session: {
+    sessionId: string;
+    sessionKey: string;
+    activeRunId: string | null;
+  }): Promise<void> {
+    // Capture runId before cancelActiveRun clears session.activeRunId.
+    const activeRunId = session.activeRunId;
+
+    this.sessionStore.cancelActiveRun(session.sessionId);
+    const pending = this.pendingPrompts.get(session.sessionId);
+    const scopedRunId = activeRunId ?? pending?.idempotencyKey;
+
+    if (scopedRunId) {
+      try {
+        await this.gateway.request("chat.abort", {
+          sessionKey: session.sessionKey,
+          runId: scopedRunId,
+        });
+      } catch (err) {
+        this.log(`cancel error: ${String(err)}`);
+      }
+    }
+
+    if (pending) {
+      this.clearApprovalRelaysForPrompt(session.sessionId, pending.idempotencyKey, {
+        denyActive: true,
+      });
+      this.pendingPrompts.delete(session.sessionId);
+      if (this.pendingPrompts.size === 0) {
+        this.clearDisconnectTimer();
+      }
+      pending.resolve({ stopReason: "cancelled" });
+    }
+  }
+
   private async getGatewaySessionRow(
     sessionKey: string,
   ): Promise<GatewaySessionPresentationRow | undefined> {
@@ -933,15 +1603,28 @@ export class AcpGatewayAgent implements Agent {
       return undefined;
     }
     return {
+      key: session.key,
+      kind: session.kind,
+      channel: session.channel,
+      parentSessionKey: session.parentSessionKey,
+      spawnedBy: session.spawnedBy,
+      spawnDepth: session.spawnDepth,
+      subagentRole: session.subagentRole,
+      subagentControlScope: session.subagentControlScope,
+      spawnedWorkspaceDir: session.spawnedWorkspaceDir,
+      spawnedCwd: session.spawnedCwd,
       displayName: session.displayName,
       label: session.label,
       derivedTitle: session.derivedTitle,
       updatedAt: session.updatedAt,
       thinkingLevel: session.thinkingLevel,
+      thinkingLevels: session.thinkingLevels,
       modelProvider: session.modelProvider,
       model: session.model,
       fastMode: session.fastMode,
+      effectiveFastMode: session.effectiveFastMode,
       verboseLevel: session.verboseLevel,
+      traceLevel: session.traceLevel,
       reasoningLevel: session.reasoningLevel,
       responseUsage: session.responseUsage,
       elevatedLevel: session.elevatedLevel,
@@ -956,7 +1639,7 @@ export class AcpGatewayAgent implements Agent {
     value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch: Record<string, string | boolean>;
+    patch?: Record<string, string | boolean | null>;
   } {
     if (typeof value !== "string") {
       throw new Error(
@@ -969,30 +1652,47 @@ export class AcpGatewayAgent implements Agent {
           patch: { thinkingLevel: value },
           overrides: { thinkingLevel: value },
         };
-      case ACP_FAST_MODE_CONFIG_ID:
+      case ACP_FAST_MODE_CONFIG_ID: {
+        const fastMode = normalizeFastMode(value);
+        if (fastMode === undefined) {
+          throw new Error(`Unsupported fast mode value: ${value}`);
+        }
         return {
-          patch: { fastMode: value === "on" },
-          overrides: { fastMode: value === "on" },
+          patch: { fastMode },
+          overrides: { fastMode },
         };
+      }
       case ACP_VERBOSE_LEVEL_CONFIG_ID:
         return {
           patch: { verboseLevel: value },
           overrides: { verboseLevel: value },
+        };
+      case ACP_TRACE_LEVEL_CONFIG_ID:
+        return {
+          patch: { traceLevel: value },
+          overrides: { traceLevel: value },
         };
       case ACP_REASONING_LEVEL_CONFIG_ID:
         return {
           patch: { reasoningLevel: value },
           overrides: { reasoningLevel: value },
         };
-      case ACP_RESPONSE_USAGE_CONFIG_ID:
+      case ACP_RESPONSE_USAGE_CONFIG_ID: {
+        const next = value === "inherit" ? null : value;
         return {
-          patch: { responseUsage: value },
-          overrides: { responseUsage: value as GatewaySessionPresentationRow["responseUsage"] },
+          patch: { responseUsage: next },
+          overrides: { responseUsage: next as GatewaySessionPresentationRow["responseUsage"] },
         };
+      }
       case ACP_ELEVATED_LEVEL_CONFIG_ID:
         return {
           patch: { elevatedLevel: value },
           overrides: { elevatedLevel: value },
+        };
+      case ACP_TIMEOUT_CONFIG_ID:
+      case ACP_TIMEOUT_SECONDS_CONFIG_ID:
+        return {
+          overrides: {},
         };
       default:
         throw new Error(`ACP bridge mode does not support session config option "${configId}".`);
@@ -1000,7 +1700,7 @@ export class AcpGatewayAgent implements Agent {
   }
 
   private async getSessionTranscript(sessionKey: string): Promise<GatewayTranscriptMessage[]> {
-    const result = await this.gateway.request<{ messages?: unknown[] }>("sessions.get", {
+    const result = await this.gateway.request("sessions.get", {
       key: sessionKey,
       limit: ACP_LOAD_SESSION_REPLAY_LIMIT,
     });
@@ -1015,39 +1715,55 @@ export class AcpGatewayAgent implements Agent {
     transcript: ReadonlyArray<GatewayTranscriptMessage>,
   ): Promise<void> {
     for (const message of transcript) {
-      const role = typeof message.role === "string" ? message.role : "";
-      if (role !== "user" && role !== "assistant") {
-        continue;
+      const replayChunks = extractReplayChunks(message);
+      for (const chunk of replayChunks) {
+        await this.sessionUpdates.emit({
+          sessionId,
+          update: {
+            sessionUpdate: chunk.sessionUpdate,
+            content: { type: "text", text: chunk.text },
+          },
+        });
       }
-      const text = extractReplayText(message.content);
-      if (!text) {
-        continue;
-      }
-      await this.connection.sessionUpdate({
+    }
+  }
+
+  private async replayLedgerSession(
+    sessionId: string,
+    ledgerReplay: AcpEventLedgerReplay,
+  ): Promise<void> {
+    for (const event of ledgerReplay.events) {
+      await this.sessionUpdates.emit({
         sessionId,
-        update: {
-          sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
-          content: { type: "text", text },
-        },
+        update: event.update,
+        record: false,
       });
     }
   }
 
   private async sendSessionSnapshotUpdate(
-    sessionId: string,
+    session: { sessionId: string; sessionKey: string; ledgerSessionId?: string },
     sessionSnapshot: SessionSnapshot,
-    options: { includeControls: boolean },
+    options: { includeControls: boolean; record: boolean; runId?: string },
   ): Promise<void> {
     if (options.includeControls) {
-      await this.connection.sessionUpdate({
-        sessionId,
+      await this.sessionUpdates.emit({
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+        runId: options.runId,
+        record: options.record,
         update: {
           sessionUpdate: "current_mode_update",
           currentModeId: sessionSnapshot.modes.currentModeId,
         },
       });
-      await this.connection.sessionUpdate({
-        sessionId,
+      await this.sessionUpdates.emit({
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+        runId: options.runId,
+        record: options.record,
         update: {
           sessionUpdate: "config_option_update",
           configOptions: sessionSnapshot.configOptions,
@@ -1055,8 +1771,12 @@ export class AcpGatewayAgent implements Agent {
       });
     }
     if (sessionSnapshot.metadata) {
-      await this.connection.sessionUpdate({
-        sessionId,
+      await this.sessionUpdates.emit({
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+        runId: options.runId,
+        record: options.record,
         update: {
           sessionUpdate: "session_info_update",
           ...sessionSnapshot.metadata,
@@ -1064,8 +1784,12 @@ export class AcpGatewayAgent implements Agent {
       });
     }
     if (sessionSnapshot.usage) {
-      await this.connection.sessionUpdate({
-        sessionId,
+      await this.sessionUpdates.emit({
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+        runId: options.runId,
+        record: options.record,
         update: {
           sessionUpdate: "usage_update",
           used: sessionSnapshot.usage.used,
@@ -1088,7 +1812,9 @@ export class AcpGatewayAgent implements Agent {
     );
   }
 
-  private enforceSessionCreateRateLimit(method: "newSession" | "loadSession"): void {
+  private enforceSessionCreateRateLimit(
+    method: "newSession" | "loadSession" | "resumeSession",
+  ): void {
     const budget = this.sessionCreateRateLimiter.consume();
     if (budget.allowed) {
       return;
@@ -1098,3 +1824,4 @@ export class AcpGatewayAgent implements Agent {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

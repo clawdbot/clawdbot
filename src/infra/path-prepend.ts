@@ -1,4 +1,9 @@
+// Prepends directories to PATH while preserving existing order.
 import path from "node:path";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 
 /**
  * Find the actual key used for PATH in the env object.
@@ -17,6 +22,7 @@ export function findPathKey(env: Record<string, string>): string {
   return "PATH";
 }
 
+/** Normalizes configured PATH prepends by trimming blanks and preserving first-seen order. */
 export function normalizePathPrepend(entries?: string[]) {
   if (!Array.isArray(entries)) {
     return [];
@@ -37,26 +43,35 @@ export function normalizePathPrepend(entries?: string[]) {
   return normalized;
 }
 
+/** Merges prepended PATH entries ahead of the existing PATH while deduping normalized parts. */
 export function mergePathPrepend(existing: string | undefined, prepend: string[]) {
   if (prepend.length === 0) {
     return existing;
   }
-  const partsExisting = (existing ?? "")
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const part of [...prepend, ...partsExisting]) {
-    if (seen.has(part)) {
-      continue;
-    }
-    seen.add(part);
-    merged.push(part);
-  }
-  return merged.join(path.delimiter);
+  return normalizeUniqueStringEntries([...prepend, ...(existing ?? "").split(path.delimiter)]).join(
+    path.delimiter,
+  );
 }
 
+/** Removes managed prepend entries from an existing PATH, including later duplicate copies. */
+export function removePathPrepend(
+  existing: string | undefined,
+  prepend: string[],
+): string | undefined {
+  if (!existing || prepend.length === 0) {
+    return existing;
+  }
+
+  const prependEntries = new Set<string>(normalizeStringEntries(prepend));
+
+  const remaining = normalizeStringEntries((existing ?? "").split(path.delimiter)).filter(
+    (part) => !prependEntries.has(part),
+  );
+
+  return remaining.join(path.delimiter);
+}
+
+/** Applies configured PATH prepends in-place, preserving Windows PATH key casing. */
 export function applyPathPrepend(
   env: Record<string, string>,
   prepend: string[] | undefined,

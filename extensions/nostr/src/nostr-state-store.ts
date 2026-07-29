@@ -1,19 +1,9 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+// Nostr plugin module implements nostr state store behavior.
 import { getNostrRuntime } from "./runtime.js";
+import { normalizeNostrStateAccountId } from "./state-account-id.js";
 
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
-
-type NostrBusStateV1 = {
-  version: 1;
-  /** Unix timestamp (seconds) of the last processed event */
-  lastProcessedAt: number | null;
-  /** Gateway startup timestamp (seconds) - events before this are old */
-  gatewayStartedAt: number | null;
-};
 
 type NostrBusState = {
   version: 2;
@@ -21,12 +11,12 @@ type NostrBusState = {
   lastProcessedAt: number | null;
   /** Gateway startup timestamp (seconds) - events before this are old */
   gatewayStartedAt: number | null;
-  /** Recent processed event IDs for overlap dedupe across restarts */
+  /** Retired replay-guard seed, cleared after durable ingress tombstone migration. */
   recentEventIds: string[];
 };
 
 /** Profile publish state (separate from bus state) */
-export type NostrProfileState = {
+type NostrProfileState = {
   version: 1;
   /** Unix timestamp (seconds) of last successful profile publish */
   lastPublishedAt: number | null;
@@ -36,77 +26,31 @@ export type NostrProfileState = {
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
 };
 
-function normalizeAccountId(accountId?: string): string {
-  const trimmed = accountId?.trim();
-  if (!trimmed) {
-    return "default";
-  }
-  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
+function openNostrBusStateStore(env?: NodeJS.ProcessEnv) {
+  return getNostrRuntime().state.openKeyedStore<NostrBusState>({
+    namespace: "bus-state",
+    maxEntries: 256,
+    ...(env ? { env } : {}),
+  });
 }
 
-function resolveNostrStatePath(accountId?: string, env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
-  const normalized = normalizeAccountId(accountId);
-  return path.join(stateDir, "nostr", `bus-state-${normalized}.json`);
-}
-
-function resolveNostrProfileStatePath(
-  accountId?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
-  const normalized = normalizeAccountId(accountId);
-  return path.join(stateDir, "nostr", `profile-state-${normalized}.json`);
-}
-
-function safeParseState(raw: string): NostrBusState | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<NostrBusState> & Partial<NostrBusStateV1>;
-
-    if (parsed?.version === 2) {
-      return {
-        version: 2,
-        lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt:
-          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
-        recentEventIds: Array.isArray(parsed.recentEventIds)
-          ? parsed.recentEventIds.filter((x): x is string => typeof x === "string")
-          : [],
-      };
-    }
-
-    // Back-compat: v1 state files
-    if (parsed?.version === 1) {
-      return {
-        version: 2,
-        lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt:
-          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
-        recentEventIds: [],
-      };
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
+function openNostrProfileStateStore(env?: NodeJS.ProcessEnv) {
+  return getNostrRuntime().state.openKeyedStore<NostrProfileState>({
+    namespace: "profile-state",
+    maxEntries: 256,
+    ...(env ? { env } : {}),
+  });
 }
 
 export async function readNostrBusState(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrBusState | null> {
-  const filePath = resolveNostrStatePath(params.accountId, params.env);
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    return safeParseState(raw);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return null;
-    }
-    return null;
-  }
+  return (
+    (await openNostrBusStateStore(params.env).lookup(
+      normalizeNostrStateAccountId(params.accountId),
+    )) ?? null
+  );
 }
 
 export async function writeNostrBusState(params: {
@@ -116,26 +60,21 @@ export async function writeNostrBusState(params: {
   recentEventIds?: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const filePath = resolveNostrStatePath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrBusState = {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
     gatewayStartedAt: params.gatewayStartedAt,
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
-  });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
+  await openNostrBusStateStore(params.env).register(
+    normalizeNostrStateAccountId(params.accountId),
+    payload,
+  );
 }
 
 /**
  * Determine the `since` timestamp for subscription.
- * Returns the later of: lastProcessedAt or gatewayStartedAt (both from disk),
+ * Returns the later of: lastProcessedAt or gatewayStartedAt (both from state),
  * falling back to `now` for fresh starts.
  */
 export function computeSinceTimestamp(
@@ -161,44 +100,15 @@ export function computeSinceTimestamp(
 // Profile State Management
 // ============================================================================
 
-function safeParseProfileState(raw: string): NostrProfileState | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<NostrProfileState>;
-
-    if (parsed?.version === 1) {
-      return {
-        version: 1,
-        lastPublishedAt: typeof parsed.lastPublishedAt === "number" ? parsed.lastPublishedAt : null,
-        lastPublishedEventId:
-          typeof parsed.lastPublishedEventId === "string" ? parsed.lastPublishedEventId : null,
-        lastPublishResults:
-          parsed.lastPublishResults && typeof parsed.lastPublishResults === "object"
-            ? parsed.lastPublishResults
-            : null,
-      };
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 export async function readNostrProfileState(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrProfileState | null> {
-  const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    return safeParseProfileState(raw);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return null;
-    }
-    return null;
-  }
+  return (
+    (await openNostrProfileStateStore(params.env).lookup(
+      normalizeNostrStateAccountId(params.accountId),
+    )) ?? null
+  );
 }
 
 export async function writeNostrProfileState(params: {
@@ -208,19 +118,14 @@ export async function writeNostrProfileState(params: {
   lastPublishResults: Record<string, "ok" | "failed" | "timeout">;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrProfileState = {
     version: PROFILE_STATE_VERSION,
     lastPublishedAt: params.lastPublishedAt,
     lastPublishedEventId: params.lastPublishedEventId,
     lastPublishResults: params.lastPublishResults,
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
-  });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
+  await openNostrProfileStateStore(params.env).register(
+    normalizeNostrStateAccountId(params.accountId),
+    payload,
+  );
 }

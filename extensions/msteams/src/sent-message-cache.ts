@@ -1,44 +1,57 @@
-const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Msteams plugin module implements sent message cache behavior.
+import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { getOptionalMSTeamsRuntime } from "./runtime.js";
 
-type CacheEntry = {
-  timestamps: Map<string, number>;
+const TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_ENTRIES = 20_000;
+const PERSISTENT_MAX_ENTRIES = 1000;
+const PERSISTENT_NAMESPACE = "msteams.sent-messages";
+const MSTEAMS_SENT_MESSAGES_KEY = Symbol.for("openclaw.msteamsSentMessages");
+
+type MSTeamsSentMessageRecord = {
+  sentAt: number;
 };
 
-const sentMessages = new Map<string, CacheEntry>();
+const sentMessages = createPersistentDedupeCache<MSTeamsSentMessageRecord>({
+  globalKey: MSTEAMS_SENT_MESSAGES_KEY,
+  ttlMs: TTL_MS,
+  maxSize: MAX_ENTRIES,
+  persistent: {
+    namespace: PERSISTENT_NAMESPACE,
+    maxEntries: PERSISTENT_MAX_ENTRIES,
+    openStore: (options) => getOptionalMSTeamsRuntime()?.state.openKeyedStore(options),
+    logError: (error) => {
+      try {
+        getOptionalMSTeamsRuntime()
+          ?.logging.getChildLogger({ plugin: "msteams", feature: "sent-message-state" })
+          .warn("Microsoft Teams persistent sent-message state failed", { error: String(error) });
+      } catch {
+        // Best effort only: persistent state must never break Teams routing.
+      }
+    },
+    // Re-prime with the original send time so restored entries keep their TTL window.
+    readTimestamp: (record) => record.sentAt,
+  },
+});
 
-function cleanupExpired(entry: CacheEntry): void {
-  const now = Date.now();
-  for (const [msgId, timestamp] of entry.timestamps) {
-    if (now - timestamp > TTL_MS) {
-      entry.timestamps.delete(msgId);
-    }
-  }
+function makeKey(conversationId: string, messageId: string): string {
+  return `${conversationId}:${messageId}`;
 }
 
 export function recordMSTeamsSentMessage(conversationId: string, messageId: string): void {
   if (!conversationId || !messageId) {
     return;
   }
-  let entry = sentMessages.get(conversationId);
-  if (!entry) {
-    entry = { timestamps: new Map() };
-    sentMessages.set(conversationId, entry);
-  }
-  entry.timestamps.set(messageId, Date.now());
-  if (entry.timestamps.size > 200) {
-    cleanupExpired(entry);
-  }
+  const sentAt = Date.now();
+  void sentMessages.register(makeKey(conversationId, messageId), { sentAt }, { at: sentAt });
 }
 
-export function wasMSTeamsMessageSent(conversationId: string, messageId: string): boolean {
-  const entry = sentMessages.get(conversationId);
-  if (!entry) {
+export async function wasMSTeamsMessageSentWithPersistence(params: {
+  conversationId: string;
+  messageId: string;
+}): Promise<boolean> {
+  if (!params.conversationId || !params.messageId) {
     return false;
   }
-  cleanupExpired(entry);
-  return entry.timestamps.has(messageId);
-}
-
-export function clearMSTeamsSentMessageCache(): void {
-  sentMessages.clear();
+  return await sentMessages.lookup(makeKey(params.conversationId, params.messageId));
 }

@@ -1,14 +1,28 @@
+// Mattermost tests cover send plugin behavior.
+import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  expectProvidedCfgSkipsRuntimeLoad,
-  expectRuntimeCfgFallback,
-} from "../../../../test/helpers/extensions/send-config.js";
-import { parseMattermostTarget, sendMessageMattermost } from "./send.js";
-import { resetMattermostOpaqueTargetCacheForTests } from "./target-resolution.js";
+
+let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
+let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
+
+type SendMessageMattermostOptions = NonNullable<
+  Parameters<typeof import("./send.js").sendMessageMattermost>[2]
+>;
+
+const TEST_CFG = {};
+const MATTERMOST_TABLE_GOLDEN = {
+  name: "keeps native Mattermost tables instead of downgrading them to code",
+  input: "| A | B |\n|---|---|\n| 1 | 2 |",
+  before: "```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```",
+  after: "| A | B |\n|---|---|\n| 1 | 2 |",
+};
+const MATTERMOST_MARKDOWN_GOLDENS = [MATTERMOST_TABLE_GOLDEN];
 
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
   loadOutboundMediaFromUrl: vi.fn(),
+  recordActivity: vi.fn(),
   resolveMattermostAccount: vi.fn(() => ({
     accountId: "default",
     botToken: "bot-token",
@@ -16,7 +30,6 @@ const mockState = vi.hoisted(() => ({
     config: {},
   })),
   createMattermostClient: vi.fn(),
-  createMattermostDirectChannel: vi.fn(),
   createMattermostDirectChannelWithRetry: vi.fn(),
   createMattermostPost: vi.fn(),
   fetchMattermostChannelByName: vi.fn(),
@@ -25,11 +38,123 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
   normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
+  resolveMarkdownTableMode: vi.fn(
+    (params: { cfg?: { channels?: { mattermost?: { markdown?: { tables?: string } } } } }) =>
+      params.cfg?.channels?.mattermost?.markdown?.tables ?? "off",
+  ),
   uploadMattermostFile: vi.fn(),
 }));
 
+type MattermostPostParams = {
+  channelId?: string;
+  message?: string;
+  props?: {
+    attachments?: Array<{
+      actions?: Array<{ id?: string; name?: string }>;
+    }>;
+  };
+};
+
+type MattermostUploadParams = {
+  channelId?: string;
+  fileName?: string;
+  contentType?: string;
+};
+
+type MattermostDirectRetryOptions = {
+  maxRetries?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  timeoutMs?: number;
+  onRetry?: () => void;
+};
+
+function mockCall(mock: unknown, label: string, index = 0): unknown[] {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  const call = calls?.at(index);
+  if (!call) {
+    throw new Error(`Expected ${label} call ${index + 1}`);
+  }
+  return call;
+}
+
+function uploadMattermostFileCall() {
+  return mockCall(mockState.uploadMattermostFile, "uploadMattermostFile") as [
+    unknown,
+    MattermostUploadParams?,
+  ];
+}
+
+function createMattermostPostParams() {
+  const params = mockCall(mockState.createMattermostPost, "createMattermostPost")[1] as
+    | MattermostPostParams
+    | undefined;
+  if (!params) {
+    throw new Error("Expected createMattermostPost params");
+  }
+  return params;
+}
+
+function createMattermostPostCall() {
+  return mockCall(mockState.createMattermostPost, "createMattermostPost") as [
+    unknown,
+    MattermostPostParams?,
+  ];
+}
+
+function directChannelRetryCall() {
+  return mockCall(
+    mockState.createMattermostDirectChannelWithRetry,
+    "createMattermostDirectChannelWithRetry",
+  ) as [unknown, unknown, MattermostDirectRetryOptions?];
+}
+
 vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
+}));
+
+vi.mock("./runtime-api.js", () => ({
+  loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
+  requireRuntimeConfig: (cfg: unknown) => {
+    if (cfg) {
+      return cfg;
+    }
+    throw new Error("Mattermost send requires a resolved runtime config");
+  },
+}));
+
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
+  resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
+}));
+
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
+  normalizeLowercaseStringOrEmpty: vi.fn((value: string | null | undefined) => {
+    if (typeof value !== "string") {
+      return "";
+    }
+    return value.trim().toLowerCase();
+  }),
+  normalizeOptionalString: vi.fn((value: string | null | undefined) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }),
+  normalizeStringifiedOptionalString: vi.fn((value: unknown) => {
+    if (typeof value === "string") {
+      const normalized = value.trim();
+      return normalized.length > 0 ? normalized : undefined;
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      const normalized = String(value).trim();
+      return normalized.length > 0 ? normalized : undefined;
+    }
+    return undefined;
+  }),
 }));
 
 vi.mock("./accounts.js", () => ({
@@ -38,7 +163,6 @@ vi.mock("./accounts.js", () => ({
 
 vi.mock("./client.js", () => ({
   createMattermostClient: mockState.createMattermostClient,
-  createMattermostDirectChannel: mockState.createMattermostDirectChannel,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
   fetchMattermostChannelByName: mockState.fetchMattermostChannelByName,
@@ -65,16 +189,18 @@ vi.mock("../runtime.js", () => ({
         convertMarkdownTables: (text: string) => text,
       },
       activity: {
-        record: vi.fn(),
+        record: mockState.recordActivity,
       },
     },
   }),
 }));
 
 describe("sendMessageMattermost", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mockState.loadConfig.mockReset();
     mockState.loadConfig.mockReturnValue({});
+    mockState.recordActivity.mockReset();
     mockState.resolveMattermostAccount.mockReset();
     mockState.resolveMattermostAccount.mockReturnValue({
       accountId: "default",
@@ -84,7 +210,6 @@ describe("sendMessageMattermost", () => {
     });
     mockState.loadOutboundMediaFromUrl.mockReset();
     mockState.createMattermostClient.mockReset();
-    mockState.createMattermostDirectChannel.mockReset();
     mockState.createMattermostDirectChannelWithRetry.mockReset();
     mockState.createMattermostPost.mockReset();
     mockState.fetchMattermostChannelByName.mockReset();
@@ -92,8 +217,8 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUser.mockReset();
     mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
+    mockState.resolveMarkdownTableMode.mockClear();
     mockState.uploadMattermostFile.mockReset();
-    resetMattermostOpaqueTargetCacheForTests();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-1" });
@@ -101,6 +226,8 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
+    ({ sendMessageMattermost } = await import("./send.js"));
+    ({ parseMattermostTarget } = await import("./target-resolution.js"));
   });
 
   it("uses provided cfg and skips runtime loadConfig", async () => {
@@ -118,9 +245,13 @@ describe("sendMessageMattermost", () => {
       config: {},
     });
 
-    await sendMessageMattermost("channel:town-square", "hello", {
-      cfg: providedCfg as any,
+    const options: SendMessageMattermostOptions = {
+      cfg: providedCfg,
       accountId: "work",
+    };
+
+    await sendMessageMattermost("channel:town-square", "hello", {
+      ...options,
     });
 
     expectProvidedCfgSkipsRuntimeLoad({
@@ -131,30 +262,64 @@ describe("sendMessageMattermost", () => {
     });
   });
 
-  it("falls back to runtime loadConfig when cfg is omitted", async () => {
-    const runtimeCfg = {
+  it.each(MATTERMOST_MARKDOWN_GOLDENS)("$name", async ({ input, before, after }) => {
+    expect(convertMarkdownTables(input, "code")).toBe(before);
+
+    await sendMessageMattermost("channel:town-square", input, { cfg: TEST_CFG });
+
+    expect(createMattermostPostParams().message).toBe(after);
+  });
+
+  it.each(["code", "block"] as const)(
+    "respects the explicit Mattermost %s table fallback mode",
+    async (tables) => {
+      await sendMessageMattermost("channel:town-square", MATTERMOST_TABLE_GOLDEN.input, {
+        cfg: { channels: { mattermost: { markdown: { tables } } } },
+      });
+
+      expect(createMattermostPostParams().message).toBe(MATTERMOST_TABLE_GOLDEN.before);
+    },
+  );
+
+  it("fails hard when cfg is omitted", async () => {
+    await expect(
+      sendMessageMattermost("channel:town-square", "hello", undefined as never),
+    ).rejects.toThrow("Mattermost send requires a resolved runtime config");
+    expect(mockState.loadConfig).not.toHaveBeenCalled();
+    expect(mockState.resolveMattermostAccount).not.toHaveBeenCalled();
+  });
+
+  it("sends with provided cfg even when the runtime store is not initialized", async () => {
+    const providedCfg = {
       channels: {
         mattermost: {
-          botToken: "runtime-token",
+          botToken: "provided-token",
         },
       },
     };
-    mockState.loadConfig.mockReturnValueOnce(runtimeCfg);
     mockState.resolveMattermostAccount.mockReturnValue({
-      accountId: "default",
-      botToken: "runtime-token",
+      accountId: "work",
+      botToken: "provided-token",
       baseUrl: "https://mattermost.example.com",
       config: {},
     });
-
-    await sendMessageMattermost("channel:town-square", "hello");
-
-    expectRuntimeCfgFallback({
-      loadConfig: mockState.loadConfig,
-      resolveAccount: mockState.resolveMattermostAccount,
-      cfg: runtimeCfg,
-      accountId: undefined,
+    mockState.recordActivity.mockImplementation(() => {
+      throw new Error("Mattermost runtime not initialized");
     });
+
+    const result = await sendMessageMattermost("channel:town-square", "hello", {
+      cfg: providedCfg,
+      accountId: "work",
+    });
+
+    expect(result.messageId).toBe("post-1");
+    expect(result.channelId).toBe("town-square");
+    expect(result.receipt.primaryPlatformMessageId).toBe("post-1");
+    expect(result.receipt.platformMessageIds).toEqual(["post-1"]);
+    expect(result.receipt.parts).toHaveLength(1);
+    expect(result.receipt.parts[0]?.platformMessageId).toBe("post-1");
+    expect(result.receipt.parts[0]?.kind).toBe("text");
+    expect(mockState.loadConfig).not.toHaveBeenCalled();
   });
 
   it("loads outbound media with trusted local roots before upload", async () => {
@@ -172,24 +337,45 @@ describe("sendMessageMattermost", () => {
     });
 
     await sendMessageMattermost("channel:town-square", "hello", {
+      cfg: TEST_CFG,
       mediaUrl: "file:///tmp/agent-workspace/photo.png",
       mediaLocalRoots: ["/tmp/agent-workspace"],
+      workspaceDir: "/tmp/agent-workspace",
     });
 
     expect(mockState.loadOutboundMediaFromUrl).toHaveBeenCalledWith(
       "file:///tmp/agent-workspace/photo.png",
       {
         mediaLocalRoots: ["/tmp/agent-workspace"],
+        workspaceDir: "/tmp/agent-workspace",
       },
     );
-    expect(mockState.uploadMattermostFile).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        channelId: "town-square",
-        fileName: "photo.png",
-        contentType: "image/png",
+    const uploadCall = uploadMattermostFileCall();
+    expect(uploadCall?.[0]).toEqual({});
+    expect(uploadCall?.[1]?.channelId).toBe("town-square");
+    expect(uploadCall?.[1]?.fileName).toBe("photo.png");
+    expect(uploadCall?.[1]?.contentType).toBe("image/png");
+  });
+
+  it("fails instead of posting text-only when required media cannot be loaded", async () => {
+    mockState.loadOutboundMediaFromUrl.mockRejectedValueOnce(new Error("local root denied"));
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+
+    await expect(
+      sendMessageMattermost("channel:town-square", "hello", {
+        cfg: TEST_CFG,
+        mediaUrl: "file:///tmp/agent-workspace/photo.png",
+        mediaLocalRoots: ["/tmp/agent-workspace"],
+        requireMediaUpload: true,
       }),
-    );
+    ).rejects.toThrow("Mattermost media upload failed: local root denied");
+
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
   });
 
   it("builds interactive button props when buttons are provided", async () => {
@@ -201,28 +387,20 @@ describe("sendMessageMattermost", () => {
     });
 
     await sendMessageMattermost("channel:town-square", "Pick a model", {
+      cfg: TEST_CFG,
       buttons: [[{ callback_data: "mdlprov", text: "Browse providers" }]],
     });
 
-    expect(mockState.createMattermostPost).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        channelId: "town-square",
-        message: "Pick a model",
-        props: expect.objectContaining({
-          attachments: expect.arrayContaining([
-            expect.objectContaining({
-              actions: expect.arrayContaining([
-                expect.objectContaining({
-                  id: "mdlprov",
-                  name: "Browse providers",
-                }),
-              ]),
-            }),
-          ]),
-        }),
-      }),
-    );
+    const postCall = createMattermostPostCall();
+    expect(postCall?.[0]).toEqual({});
+    expect(postCall?.[1]?.channelId).toBe("town-square");
+    expect(postCall?.[1]?.message).toBe("Pick a model");
+    const attachments = postCall?.[1]?.props?.attachments;
+    expect(Array.isArray(attachments)).toBe(true);
+    const actions = attachments?.[0]?.actions;
+    expect(Array.isArray(actions)).toBe(true);
+    expect(actions?.[0]?.id).toBe("mdlprov");
+    expect(actions?.[0]?.name).toBe("Browse providers");
   });
 
   it("resolves a bare Mattermost user id as a DM target before upload", async () => {
@@ -242,22 +420,20 @@ describe("sendMessageMattermost", () => {
     });
 
     const result = await sendMessageMattermost(userId, "hello", {
+      cfg: TEST_CFG,
       mediaUrl: "file:///tmp/agent-workspace/photo.png",
       mediaLocalRoots: ["/tmp/agent-workspace"],
     });
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, userId);
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledWith(
-      {},
-      ["bot-user", userId],
-      expect.any(Object),
-    );
-    expect(mockState.uploadMattermostFile).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        channelId: "dm-channel-1",
-      }),
-    );
+    const dmRetryCall = directChannelRetryCall();
+    expect(dmRetryCall?.[0]).toEqual({});
+    expect(dmRetryCall?.[1]).toEqual(["bot-user", userId]);
+    expect(Object.keys(dmRetryCall?.[2] ?? {})).toEqual(["onRetry"]);
+    expect(dmRetryCall?.[2]?.onRetry).toBeTypeOf("function");
+    const uploadCall = uploadMattermostFileCall();
+    expect(uploadCall?.[0]).toEqual({});
+    expect(uploadCall?.[1]?.channelId).toBe("dm-channel-1");
     expect(result.channelId).toBe("dm-channel-1");
   });
 
@@ -280,18 +456,16 @@ describe("sendMessageMattermost", () => {
     });
 
     const result = await sendMessageMattermost(channelId, "hello", {
+      cfg: TEST_CFG,
       mediaUrl: "file:///tmp/agent-workspace/photo.png",
       mediaLocalRoots: ["/tmp/agent-workspace"],
     });
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, channelId);
     expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
-    expect(mockState.uploadMattermostFile).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        channelId,
-      }),
-    );
+    const uploadCall = uploadMattermostFileCall();
+    expect(uploadCall?.[0]).toEqual({});
+    expect(uploadCall?.[1]?.channelId).toBe(channelId);
     expect(result.channelId).toBe(channelId);
   });
 });
@@ -396,7 +570,6 @@ describe("sendMessageMattermost user-first resolution", () => {
     vi.clearAllMocks();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
-    mockState.createMattermostDirectChannel.mockResolvedValue({ id: "dm-channel-id" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
   });
@@ -407,14 +580,16 @@ describe("sendMessageMattermost user-first resolution", () => {
     mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-user-dm-t1"));
     mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
 
-    const res = await sendMessageMattermost(userId, "hello");
+    const res = await sendMessageMattermost(userId, "hello", { cfg: TEST_CFG });
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
     expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
-    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    const params = createMattermostPostParams();
     expect(params.channelId).toBe("dm-channel-id");
     expect(res.channelId).toBe("dm-channel-id");
     expect(res.messageId).toBe("post-id");
+    expect(res.receipt.primaryPlatformMessageId).toBe("post-id");
+    expect(res.receipt.platformMessageIds).toEqual(["post-id"]);
   });
 
   it("falls back to channel id when user lookup returns 404", async () => {
@@ -424,11 +599,11 @@ describe("sendMessageMattermost user-first resolution", () => {
     const err = new Error("Mattermost API 404: user not found");
     mockState.fetchMattermostUser.mockRejectedValueOnce(err);
 
-    const res = await sendMessageMattermost(channelId, "hello");
+    const res = await sendMessageMattermost(channelId, "hello", { cfg: TEST_CFG });
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
     expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
-    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    const params = createMattermostPostParams();
     expect(params.channelId).toBe(channelId);
     expect(res.channelId).toBe(channelId);
   });
@@ -444,7 +619,7 @@ describe("sendMessageMattermost user-first resolution", () => {
     mockState.resolveMattermostAccount.mockReturnValue(makeAccount(tokenA));
     mockState.fetchMattermostUser.mockRejectedValueOnce(transientErr);
 
-    const res1 = await sendMessageMattermost(userId, "first");
+    const res1 = await sendMessageMattermost(userId, "first", { cfg: TEST_CFG });
     expect(res1.channelId).toBe(userId);
 
     // Second call with a different token (new cache key) → retries user lookup
@@ -456,7 +631,7 @@ describe("sendMessageMattermost user-first resolution", () => {
     mockState.resolveMattermostAccount.mockReturnValue(makeAccount(tokenB));
     mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
 
-    const res2 = await sendMessageMattermost(userId, "second");
+    const res2 = await sendMessageMattermost(userId, "second", { cfg: TEST_CFG });
     expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
     expect(res2.channelId).toBe("dm-channel-id");
   });
@@ -467,11 +642,30 @@ describe("sendMessageMattermost user-first resolution", () => {
     mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-explicit-user-t4"));
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
 
-    const res = await sendMessageMattermost(`user:${userId}`, "hello");
+    const res = await sendMessageMattermost(`user:${userId}`, "hello", { cfg: TEST_CFG });
 
     expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
     expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
     expect(res.channelId).toBe("dm-channel-id");
+  });
+
+  it("observes cache-miss DM resolution but not cached sends", async () => {
+    const userId = "iiiiii9999999999iiiiii9999"; // 26 chars
+    const onDmChannelResolution = vi.fn();
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-dm-observer-t9"));
+
+    await sendMessageMattermost(`user:${userId}`, "first", {
+      cfg: TEST_CFG,
+      onDmChannelResolution,
+    });
+    await sendMessageMattermost(`user:${userId}`, "second", {
+      cfg: TEST_CFG,
+      onDmChannelResolution,
+    });
+
+    expect(onDmChannelResolution).toHaveBeenCalledTimes(1);
+    expect(onDmChannelResolution).toHaveBeenCalledWith(expect.any(Promise));
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
   });
 
   it("does not apply user-first resolution for explicit channel: prefix", async () => {
@@ -479,11 +673,11 @@ describe("sendMessageMattermost user-first resolution", () => {
     const chanId = "eeeeee5555555555eeeeee5555"; // 26 chars
     mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-explicit-chan-t5"));
 
-    const res = await sendMessageMattermost(`channel:${chanId}`, "hello");
+    const res = await sendMessageMattermost(`channel:${chanId}`, "hello", { cfg: TEST_CFG });
 
     expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
     expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
-    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    const params = createMattermostPostParams();
     expect(params.channelId).toBe(chanId);
     expect(res.channelId).toBe(chanId);
   });
@@ -501,14 +695,17 @@ describe("sendMessageMattermost user-first resolution", () => {
     };
 
     await sendMessageMattermost(`user:${userId}`, "hello", {
+      cfg: TEST_CFG,
       dmRetryOptions: retryOptions,
     });
 
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledWith(
-      {},
-      ["bot-id", userId],
-      expect.objectContaining(retryOptions),
-    );
+    const retryCall = directChannelRetryCall();
+    expect(retryCall?.[0]).toEqual({});
+    expect(retryCall?.[1]).toEqual(["bot-id", userId]);
+    expect(retryCall?.[2]?.maxRetries).toBe(retryOptions.maxRetries);
+    expect(retryCall?.[2]?.initialDelayMs).toBe(retryOptions.initialDelayMs);
+    expect(retryCall?.[2]?.maxDelayMs).toBe(retryOptions.maxDelayMs);
+    expect(retryCall?.[2]?.timeoutMs).toBe(retryOptions.timeoutMs);
   });
 
   it("uses dmChannelRetry from account config when opts.dmRetryOptions not provided", async () => {
@@ -528,18 +725,15 @@ describe("sendMessageMattermost user-first resolution", () => {
     });
     mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
 
-    await sendMessageMattermost(`user:${userId}`, "hello");
+    await sendMessageMattermost(`user:${userId}`, "hello", { cfg: TEST_CFG });
 
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledWith(
-      {},
-      ["bot-id", userId],
-      expect.objectContaining({
-        maxRetries: 4,
-        initialDelayMs: 2000,
-        maxDelayMs: 8000,
-        timeoutMs: 15000,
-      }),
-    );
+    const retryCall = directChannelRetryCall();
+    expect(retryCall?.[0]).toEqual({});
+    expect(retryCall?.[1]).toEqual(["bot-id", userId]);
+    expect(retryCall?.[2]?.maxRetries).toBe(4);
+    expect(retryCall?.[2]?.initialDelayMs).toBe(2000);
+    expect(retryCall?.[2]?.maxDelayMs).toBe(8000);
+    expect(retryCall?.[2]?.timeoutMs).toBe(15000);
   });
 
   it("opts.dmRetryOptions overrides provided fields and preserves account defaults", async () => {
@@ -563,20 +757,105 @@ describe("sendMessageMattermost user-first resolution", () => {
     };
 
     await sendMessageMattermost(`user:${userId}`, "hello", {
+      cfg: TEST_CFG,
       dmRetryOptions: overrideOptions,
     });
 
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledWith(
-      {},
-      ["bot-id", userId],
-      expect.objectContaining(overrideOptions),
+    const retryCall = directChannelRetryCall();
+    expect(retryCall?.[0]).toEqual({});
+    expect(retryCall?.[1]).toEqual(["bot-id", userId]);
+    expect(retryCall?.[2]?.maxRetries).toBe(overrideOptions.maxRetries);
+    expect(retryCall?.[2]?.timeoutMs).toBe(overrideOptions.timeoutMs);
+    expect(retryCall?.[2]?.initialDelayMs).toBe(1000);
+  });
+});
+
+describe("sendMessageMattermost outbound cache bounds", () => {
+  const baseUrl = "https://mattermost.example.com";
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "default-token",
+      baseUrl,
+      config: {},
+    });
+    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
+    mockState.createMattermostDirectChannelWithRetry.mockImplementation(
+      async (_client, userIds: string[]) => ({ id: `dm-${userIds[1]}` }),
     );
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledWith(
-      {},
-      ["bot-id", userId],
-      expect.objectContaining({
-        initialDelayMs: 1000,
+    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
+    mockState.fetchMattermostUserByUsername.mockImplementation(
+      async (_client, username: string) => ({
+        id: `user-${username}`,
       }),
     );
+    mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-id" }]);
+    mockState.fetchMattermostChannelByName.mockImplementation(
+      async (_client, _teamId: string, name: string) => ({ id: `channel-${name}` }),
+    );
+    ({ sendMessageMattermost } = await import("./send.js"));
+  });
+
+  const send = async (to: string, token: string) =>
+    await sendMessageMattermost(to, "hello", {
+      cfg: TEST_CFG,
+      botToken: token,
+      baseUrl,
+    });
+
+  it("bounds DM channel entries without refreshing insertion order on reads", async () => {
+    const token = "dm-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`user:user-${index}`, token);
+    }
+    await send("user:user-0", token);
+    await send("user:user-1024", token);
+    await send("user:user-0", token);
+    await send("user:user-1024", token);
+
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds username entries and retains the newest resolved target", async () => {
+    const token = "username-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`@name-${index}`, token);
+    }
+    await send("@name-0", token);
+    await send("@name-1024", token);
+    await send("@name-0", token);
+    await send("@name-1024", token);
+
+    expect(mockState.fetchMattermostUserByUsername).toHaveBeenCalledTimes(1026);
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds channel-name entries and retains the newest resolved target", async () => {
+    const token = "channel-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`#channel-${index}`, token);
+    }
+    await send("#channel-0", token);
+    await send("#channel-1024", token);
+    await send("#channel-0", token);
+    await send("#channel-1024", token);
+
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds bot-user entries independently from DM channel entries", async () => {
+    for (let index = 0; index < 64; index += 1) {
+      await send(`user:user-${index}`, `bot-cache-token-${index}`);
+    }
+    await send("user:probe-before-overflow", "bot-cache-token-0");
+    await send("user:user-64", "bot-cache-token-64");
+    await send("user:probe-after-overflow", "bot-cache-token-0");
+    await send("user:newest-probe", "bot-cache-token-64");
+
+    expect(mockState.fetchMattermostMe).toHaveBeenCalledTimes(66);
   });
 });

@@ -1,14 +1,17 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Gateway credential planning helpers.
+// Classifies local/remote auth inputs before SecretRef resolution.
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 
-export type GatewayCredentialInputPath =
+type GatewayCredentialInputPath =
   | "gateway.auth.token"
   | "gateway.auth.password"
   | "gateway.remote.token"
   | "gateway.remote.password";
 
-export type GatewayConfiguredCredentialInput = {
+type GatewayConfiguredCredentialInput = {
   path: GatewayCredentialInputPath;
   configured: boolean;
   value?: string;
@@ -16,6 +19,7 @@ export type GatewayConfiguredCredentialInput = {
   hasSecretRef: boolean;
 };
 
+/** Precomputed Gateway credential surfaces used by startup, secret resolution, and clients. */
 export type GatewayCredentialPlan = {
   configuredMode: "local" | "remote";
   authMode?: string;
@@ -42,28 +46,8 @@ export type GatewayCredentialPlan = {
 
 type GatewaySecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
-function readGatewayEnv(
-  env: NodeJS.ProcessEnv,
-  names: readonly string[],
-  includeLegacyEnv: boolean,
-): string | undefined {
-  const keys = includeLegacyEnv ? names : names.slice(0, 1);
-  for (const name of keys) {
-    const value = trimToUndefined(env[name]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-export function trimToUndefined(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+/** Normalize optional Gateway credential strings to nonempty values. */
+export const trimToUndefined = normalizeOptionalString;
 
 /**
  * Like trimToUndefined but also rejects unresolved env var placeholders (e.g. `${VAR}`).
@@ -80,42 +64,7 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
   return trimmed;
 }
 
-export function readGatewayTokenEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  includeLegacyEnv = true,
-): string | undefined {
-  return readGatewayEnv(
-    env,
-    ["OPENCLAW_GATEWAY_TOKEN", "CLAWDBOT_GATEWAY_TOKEN"],
-    includeLegacyEnv,
-  );
-}
-
-export function readGatewayPasswordEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  includeLegacyEnv = true,
-): string | undefined {
-  return readGatewayEnv(
-    env,
-    ["OPENCLAW_GATEWAY_PASSWORD", "CLAWDBOT_GATEWAY_PASSWORD"],
-    includeLegacyEnv,
-  );
-}
-
-export function hasGatewayTokenEnvCandidate(
-  env: NodeJS.ProcessEnv = process.env,
-  includeLegacyEnv = true,
-): boolean {
-  return Boolean(readGatewayTokenEnv(env, includeLegacyEnv));
-}
-
-export function hasGatewayPasswordEnvCandidate(
-  env: NodeJS.ProcessEnv = process.env,
-  includeLegacyEnv = true,
-): boolean {
-  return Boolean(readGatewayPasswordEnv(env, includeLegacyEnv));
-}
-
+/** Classify one configured credential input without resolving secret refs. */
 function resolveConfiguredGatewayCredentialInput(params: {
   value: unknown;
   defaults?: GatewaySecretDefaults;
@@ -134,20 +83,19 @@ function resolveConfiguredGatewayCredentialInput(params: {
   };
 }
 
+/** Build the shared credential plan for Gateway startup, local auth, and remote client auth. */
 export function createGatewayCredentialPlan(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  includeLegacyEnv?: boolean;
   defaults?: GatewaySecretDefaults;
 }): GatewayCredentialPlan {
   const env = params.env ?? process.env;
-  const includeLegacyEnv = params.includeLegacyEnv ?? true;
   const gateway = params.config.gateway;
   const remote = gateway?.remote;
   const defaults = params.defaults ?? params.config.secrets?.defaults;
   const authMode = gateway?.auth?.mode;
-  const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
-  const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
+  const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
+  const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 
   const localToken = resolveConfiguredGatewayCredentialInput({
     value: gateway?.auth?.token,
@@ -170,15 +118,17 @@ export function createGatewayCredentialPlan(params: {
     path: "gateway.remote.password",
   });
 
+  // The local token surface is disabled by password/none/trusted-proxy modes so
+  // token refs do not get resolved for auth modes that cannot consume them.
   const localTokenCanWin =
     authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy";
   const tokenCanWin = Boolean(envToken || localToken.configured || remoteToken.configured);
   const passwordCanWin =
     authMode === "password" ||
-    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
+    authMode === "trusted-proxy" ||
+    (authMode !== "token" && authMode !== "none" && !tokenCanWin);
   const localTokenSurfaceActive =
     localTokenCanWin &&
-    !envToken &&
     (authMode === "token" ||
       (authMode === undefined && !(envPassword || localPassword.configured)));
 
@@ -186,9 +136,14 @@ export function createGatewayCredentialPlan(params: {
   const remoteUrlConfigured = Boolean(trimToUndefined(remote?.url));
   const tailscaleRemoteExposure =
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";
+  // Remote credential surfaces are considered active when the gateway is used
+  // remotely or when local auth may be borrowed for a published Tailscale URL.
   const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
+  // Remote credentials may borrow local auth credentials only when the remote
+  // surface exists but no explicit remote/env candidate can satisfy the mode.
   const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localToken.configured;
-  const remotePasswordFallbackActive = !envPassword && !localPassword.configured && passwordCanWin;
+  const remotePasswordFallbackActive =
+    authMode !== "trusted-proxy" && !envPassword && !localPassword.configured && passwordCanWin;
 
   return {
     configuredMode: gateway?.mode === "remote" ? "remote" : "local",

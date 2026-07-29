@@ -1,49 +1,49 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+/**
+ * Android bridge for applying gateway A2UI messages to the canvas WebView.
+ */
 class A2UIHandler(
   private val canvas: CanvasController,
   private val json: Json,
-  private val getNodeCanvasHostUrl: () -> String?,
-  private val getOperatorCanvasHostUrl: () -> String?,
 ) {
-  fun resolveA2uiHostUrl(): String? {
-    val nodeRaw = getNodeCanvasHostUrl()?.trim().orEmpty()
-    val operatorRaw = getOperatorCanvasHostUrl()?.trim().orEmpty()
-    val raw = if (nodeRaw.isNotBlank()) nodeRaw else operatorRaw
-    if (raw.isBlank()) return null
-    val base = raw.trimEnd('/')
-    return "${base}/__openclaw__/a2ui/?platform=android"
-  }
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = CanvasActionTrust.isTrustedCanvasActionUrl(rawUrl)
 
-  suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {
-    try {
-      val already = canvas.eval(a2uiReadyCheckJS)
-      if (already == "true") return true
-    } catch (_: Throwable) {
-      // ignore
+  suspend fun ensureA2uiReady(): Boolean {
+    val alreadyOnA2uiHost = canvas.currentUrl()?.trim() == CanvasActionTrust.localA2uiAssetUrl
+    if (!canvas.showAndAwaitHost()) return false
+    if (!alreadyOnA2uiHost) {
+      canvas.showLocalA2ui()
+    }
+    if (alreadyOnA2uiHost && isA2uiReady()) {
+      return true
     }
 
-    canvas.navigate(a2uiUrl)
+    // The bundled A2UI host bootstraps asynchronously after navigation; poll briefly before failing the command.
     repeat(50) {
-      try {
-        val ready = canvas.eval(a2uiReadyCheckJS)
-        if (ready == "true") return true
-      } catch (_: Throwable) {
-        // ignore
-      }
+      if (isA2uiReady()) return true
       delay(120)
     }
     return false
   }
 
-  fun decodeA2uiMessages(command: String, paramsJson: String?): String {
+  private suspend fun isA2uiReady(): Boolean =
+    try {
+      canvas.eval(a2uiReadyCheckJS) == "true"
+    } catch (_: Throwable) {
+      false
+    }
+
+  fun decodeA2uiMessages(
+    command: String,
+    paramsJson: String?,
+  ): String {
     val raw = paramsJson?.trim().orEmpty()
     if (raw.isBlank()) throw IllegalArgumentException("INVALID_REQUEST: paramsJSON required")
 
@@ -57,6 +57,7 @@ class A2UIHandler(
     if (command == "canvas.a2ui.pushJSONL" || (!hasMessagesArray && jsonlField.isNotBlank())) {
       val jsonl = jsonlField
       if (jsonl.isBlank()) throw IllegalArgumentException("INVALID_REQUEST: jsonl required")
+      // JSONL keeps large A2UI streams model-friendly while still validating each message.
       val messages =
         jsonl
           .lineSequence()
@@ -69,8 +70,7 @@ class A2UIHandler(
                 ?: throw IllegalArgumentException("A2UI JSONL line ${idx + 1}: expected a JSON object")
             validateA2uiV0_8(msg, idx + 1)
             msg
-          }
-          .toList()
+          }.toList()
       return JsonArray(messages).toString()
     }
 
@@ -79,15 +79,19 @@ class A2UIHandler(
       arr.mapIndexed { idx, el ->
         val msg =
           el as? JsonObject
-            ?: throw IllegalArgumentException("A2UI messages[${idx}]: expected a JSON object")
+            ?: throw IllegalArgumentException("A2UI messages[$idx]: expected a JSON object")
         validateA2uiV0_8(msg, idx + 1)
         msg
       }
     return JsonArray(out).toString()
   }
 
-  private fun validateA2uiV0_8(msg: JsonObject, lineNumber: Int) {
+  private fun validateA2uiV0_8(
+    msg: JsonObject,
+    lineNumber: Int,
+  ) {
     if (msg.containsKey("createSurface")) {
+      // Android scaffold currently implements A2UI v0.8, not the v0.9 createSurface shape.
       throw IllegalArgumentException(
         "A2UI JSONL line $lineNumber: looks like A2UI v0.9 (`createSurface`). Canvas supports v0.8 messages only.",
       )
@@ -128,19 +132,18 @@ class A2UIHandler(
       })()
       """
 
-    fun a2uiApplyMessagesJS(messagesJson: String): String {
-      return """
-        (() => {
-          try {
-            const host = globalThis.openclawA2UI;
-            if (!host) return { ok: false, error: "missing openclawA2UI" };
-            const messages = $messagesJson;
-            return host.applyMessages(messages);
-          } catch (e) {
-            return { ok: false, error: String(e?.message ?? e) };
-          }
-        })()
+    fun a2uiApplyMessagesJS(messagesJson: String): String =
+      """
+      (() => {
+        try {
+          const host = globalThis.openclawA2UI;
+          if (!host) return { ok: false, error: "missing openclawA2UI" };
+          const messages = $messagesJson;
+          return host.applyMessages(messages);
+        } catch (e) {
+          return { ok: false, error: String(e?.message ?? e) };
+        }
+      })()
       """.trimIndent()
-    }
   }
 }

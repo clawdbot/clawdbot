@@ -1,0 +1,181 @@
+// Plugin update selection tests cover CLI plugin update target selection.
+import { describe, expect, it } from "vitest";
+import type { HookInstallRecord } from "../config/types.hooks.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  resolveHookPackUpdateSelection,
+  resolvePluginUpdateSelection,
+} from "./plugins-update-selection.js";
+
+function createNpmInstall(params: {
+  spec: string;
+  installPath?: string;
+  resolvedName?: string;
+}): PluginInstallRecord {
+  return {
+    source: "npm",
+    spec: params.spec,
+    installPath: params.installPath ?? "/tmp/plugin",
+    ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+  };
+}
+
+function createNpmHookInstall(params: {
+  spec: string;
+  installPath?: string;
+  resolvedName?: string;
+}): HookInstallRecord {
+  return {
+    source: "npm",
+    spec: params.spec,
+    installPath: params.installPath ?? "/tmp/hook-pack",
+    ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+  };
+}
+
+describe("resolvePluginUpdateSelection", () => {
+  it("maps an explicit unscoped npm dist-tag update to the tracked plugin id", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "openclaw-codex-app-server": createNpmInstall({
+            spec: "openclaw-codex-app-server",
+            installPath: "/tmp/openclaw-codex-app-server",
+            resolvedName: "openclaw-codex-app-server",
+          }),
+        },
+        rawId: "openclaw-codex-app-server@beta",
+      }),
+    ).toEqual({
+      pluginIds: ["openclaw-codex-app-server"],
+      specOverrides: {
+        "openclaw-codex-app-server": "openclaw-codex-app-server@beta",
+      },
+    });
+  });
+
+  it("maps an explicit scoped npm dist-tag update to the tracked plugin id", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "voice-call": createNpmInstall({
+            spec: "@openclaw/voice-call",
+            installPath: "/tmp/voice-call",
+            resolvedName: "@openclaw/voice-call",
+          }),
+        },
+        rawId: "@openclaw/voice-call@beta",
+      }),
+    ).toEqual({
+      pluginIds: ["voice-call"],
+      specOverrides: {
+        "voice-call": "@openclaw/voice-call@beta",
+      },
+    });
+  });
+
+  it("maps an explicit npm version update to the tracked plugin id", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "openclaw-codex-app-server": createNpmInstall({
+            spec: "openclaw-codex-app-server",
+            installPath: "/tmp/openclaw-codex-app-server",
+            resolvedName: "openclaw-codex-app-server",
+          }),
+        },
+        rawId: "openclaw-codex-app-server@0.2.0-beta.4",
+      }),
+    ).toEqual({
+      pluginIds: ["openclaw-codex-app-server"],
+      specOverrides: {
+        "openclaw-codex-app-server": "openclaw-codex-app-server@0.2.0-beta.4",
+      },
+    });
+  });
+
+  it("keeps recorded npm tags when update is invoked by plugin id", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "openclaw-codex-app-server": createNpmInstall({
+            spec: "openclaw-codex-app-server@beta",
+            installPath: "/tmp/openclaw-codex-app-server",
+            resolvedName: "openclaw-codex-app-server",
+          }),
+        },
+        rawId: "openclaw-codex-app-server",
+      }),
+    ).toEqual({
+      pluginIds: ["openclaw-codex-app-server"],
+    });
+  });
+
+  it("maps a bare scoped npm package update to the tracked plugin id", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "lossless-claw": createNpmInstall({
+            spec: "@martian-engineering/lossless-claw@0.9.0",
+            installPath: "/tmp/lossless-claw",
+            resolvedName: "@martian-engineering/lossless-claw",
+          }),
+        },
+        rawId: "@martian-engineering/lossless-claw",
+      }),
+    ).toEqual({
+      pluginIds: ["lossless-claw"],
+      specOverrides: {
+        "lossless-claw": "@martian-engineering/lossless-claw",
+      },
+    });
+  });
+
+  it("maps prototype-named npm packages by own install records", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "tracked-constructor": createNpmInstall({
+            spec: "constructor",
+            resolvedName: "constructor",
+          }),
+        },
+        rawId: "constructor",
+      }),
+    ).toEqual({
+      pluginIds: ["tracked-constructor"],
+      specOverrides: {
+        "tracked-constructor": "constructor",
+      },
+    });
+  });
+});
+
+describe("resolveHookPackUpdateSelection", () => {
+  it("does not treat inherited prototype keys as installed hook ids", () => {
+    expect(
+      resolveHookPackUpdateSelection({
+        installs: {},
+        rawId: "constructor",
+      }),
+    ).toEqual({
+      hookIds: [],
+    });
+  });
+
+  it("keeps own prototype-named hook ids selectable", () => {
+    expect(
+      resolveHookPackUpdateSelection({
+        installs: {
+          constructor: createNpmHookInstall({
+            spec: "openclaw-hooks-constructor",
+            resolvedName: "openclaw-hooks-constructor",
+          }),
+        },
+        rawId: "constructor",
+      }),
+    ).toEqual({
+      hookIds: ["constructor"],
+    });
+  });
+});

@@ -1,170 +1,162 @@
+// Matrix tests cover handler.media failure plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
-import { setMatrixRuntime } from "../../runtime.js";
-import type { MatrixClient } from "../sdk.js";
-import type { MatrixRawEvent } from "./types.js";
-import { EventType } from "./types.js";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
+import {
+  createMatrixHandlerTestHarness,
+  createMatrixRoomMessageEvent,
+} from "./handler.test-helpers.js";
 
 const { downloadMatrixMediaMock } = vi.hoisted(() => ({
   downloadMatrixMediaMock: vi.fn(),
 }));
 
-vi.mock("./media.js", () => ({
-  downloadMatrixMedia: (...args: unknown[]) => downloadMatrixMediaMock(...args),
-}));
+vi.mock("./media.js", async () => {
+  const actual = await vi.importActual<typeof import("./media.js")>("./media.js");
+  return {
+    ...actual,
+    downloadMatrixMedia: (...args: unknown[]) => downloadMatrixMediaMock(...args),
+  };
+});
 
-import { createMatrixRoomMessageHandler } from "./handler.js";
-
-function createHandlerHarness() {
-  const recordInboundSession = vi.fn().mockResolvedValue(undefined);
+function createMediaFailureHarness() {
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
-  } as unknown as RuntimeLogger;
+  };
   const runtime = {
     error: vi.fn(),
-  } as unknown as RuntimeEnv;
-  const core = {
-    channel: {
-      pairing: {
-        readAllowFromStore: vi.fn().mockResolvedValue([]),
-        upsertPairingRequest: vi.fn().mockResolvedValue(undefined),
-        buildPairingReply: vi.fn().mockReturnValue("pairing"),
-      },
-      routing: {
-        resolveAgentRoute: vi.fn().mockReturnValue({
-          agentId: "main",
-          accountId: undefined,
-          sessionKey: "agent:main:matrix:channel:!room:example.org",
-          mainSessionKey: "agent:main:main",
-        }),
-      },
-      mentions: {
-        buildMentionRegexes: vi.fn().mockReturnValue([]),
-      },
-      session: {
-        resolveStorePath: vi.fn().mockReturnValue("/tmp/openclaw-test-session.json"),
-        readSessionUpdatedAt: vi.fn().mockReturnValue(123),
-        recordInboundSession,
-      },
-      reply: {
-        resolveEnvelopeFormatOptions: vi.fn().mockReturnValue({}),
-        formatAgentEnvelope: vi.fn().mockImplementation((params: { body: string }) => params.body),
-        finalizeInboundContext: vi.fn().mockImplementation((ctx: Record<string, unknown>) => ctx),
-        createReplyDispatcherWithTyping: vi.fn().mockReturnValue({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-          markRunComplete: vi.fn(),
-        }),
-        resolveHumanDelayConfig: vi.fn().mockReturnValue(undefined),
-        dispatchReplyFromConfig: vi
-          .fn()
-          .mockResolvedValue({ queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } }),
-        withReplyDispatcher: vi.fn().mockImplementation(async ({ run, onSettled }) => {
-          try {
-            return await run();
-          } finally {
-            await onSettled?.();
-          }
-        }),
-      },
-      commands: {
-        shouldHandleTextCommands: vi.fn().mockReturnValue(true),
-      },
-      text: {
-        hasControlCommand: vi.fn().mockReturnValue(false),
-        resolveMarkdownTableMode: vi.fn().mockReturnValue("code"),
-      },
-      reactions: {
-        shouldAckReaction: vi.fn().mockReturnValue(false),
-      },
-    },
-    system: {
-      enqueueSystemEvent: vi.fn(),
-    },
-  } as unknown as PluginRuntime;
-
-  const client = {
-    getUserId: vi.fn().mockResolvedValue("@bot:matrix.example.org"),
-  } as unknown as MatrixClient;
-
-  const handler = createMatrixRoomMessageHandler({
-    client,
-    core,
-    cfg: {},
-    accountId: "ops",
-    runtime,
-    logger,
-    logVerboseMessage: vi.fn(),
-    allowFrom: [],
-    groupAllowFrom: [],
-    roomsConfig: undefined,
-    mentionRegexes: [],
-    groupPolicy: "open",
-    replyToMode: "first",
-    threadReplies: "inbound",
-    dmEnabled: true,
-    dmPolicy: "open",
-    textLimit: 4000,
-    mediaMaxBytes: 5 * 1024 * 1024,
-    startupMs: Date.now() - 120_000,
-    startupGraceMs: 60_000,
-    directTracker: {
-      isDirectMessage: vi.fn().mockResolvedValue(true),
-    },
-    dropPreStartupMessages: true,
-    getRoomInfo: vi.fn().mockResolvedValue({
+  };
+  const harness = createMatrixHandlerTestHarness({
+    logger: logger as never,
+    runtime: runtime as never,
+    shouldHandleTextCommands: () => true,
+    resolveMarkdownTableMode: () => "code",
+    resolveAgentRoute: () => ({
+      agentId: "main",
+      accountId: "ops",
+      sessionKey: "agent:main:matrix:channel:!room:example.org",
+      mainSessionKey: "agent:main:main",
+      channel: "matrix",
+      matchedBy: "binding.account",
+    }),
+    resolveStorePath: () => "/tmp/openclaw-test-session.json",
+    getRoomInfo: async () => ({
       name: "Media Room",
       canonicalAlias: "#media:example.org",
       altAliases: [],
     }),
-    getMemberDisplayName: vi.fn().mockResolvedValue("Gum"),
-    needsRoomAliasesForConfig: false,
+    getMemberDisplayName: async () => "Gum",
+    startupMs: Date.now() - 120_000,
+    startupGraceMs: 60_000,
+    textLimit: 4000,
+    mediaMaxBytes: 5 * 1024 * 1024,
+    replyToMode: "first",
   });
 
-  return { handler, recordInboundSession, logger, runtime };
+  return {
+    ...harness,
+    logger,
+    runtime,
+  };
 }
 
-function createImageEvent(content: Record<string, unknown>): MatrixRawEvent {
-  return {
-    type: EventType.RoomMessage,
-    event_id: "$event1",
+function createImageEvent(content: Record<string, unknown>) {
+  return createMatrixRoomMessageEvent({
+    eventId: "$event1",
     sender: "@gum:matrix.example.org",
-    origin_server_ts: Date.now(),
     content: {
       ...content,
       "m.mentions": { user_ids: ["@bot:matrix.example.org"] },
-    },
-  } as MatrixRawEvent;
+    } as never,
+  });
+}
+
+type MockWithCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
+  const value = mock.mock.calls[0]?.[0];
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("expected first mock call object argument");
+  }
+  return value as Record<string, unknown>;
+}
+
+function objectArgAt(mock: MockWithCalls, index: number): Record<string, unknown> {
+  const value = mock.mock.calls[0]?.[index];
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected first mock call argument ${index} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function firstInboundContext(recordInboundSession: unknown): Record<string, unknown> {
+  const payload = firstObjectArg(recordInboundSession as MockWithCalls);
+  const ctx = payload.ctx;
+  if (ctx === undefined || ctx === null || typeof ctx !== "object" || Array.isArray(ctx)) {
+    throw new Error("expected inbound session ctx");
+  }
+  return ctx as Record<string, unknown>;
 }
 
 describe("createMatrixRoomMessageHandler media failures", () => {
   beforeEach(() => {
     downloadMatrixMediaMock.mockReset();
-    setMatrixRuntime({
-      channel: {
-        mentions: {
-          matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
-            patterns.some((pattern) => pattern.test(text)),
-        },
-        media: {
-          saveMediaBuffer: vi.fn(),
-        },
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-      state: {
-        resolveStateDir: () => "/tmp",
-      },
-    } as unknown as PluginRuntime);
+    installMatrixMonitorTestRuntime();
+  });
+
+  it("forwards the Matrix event body as originalFilename for media downloads", async () => {
+    downloadMatrixMediaMock.mockResolvedValue({
+      path: "/tmp/inbound/Screenshot-2026-03-27---uuid.png",
+      contentType: "image/png",
+      placeholder: "[matrix media]",
+    });
+    const { handler } = createMediaFailureHarness();
+
+    await handler(
+      "!room:example.org",
+      createImageEvent({
+        msgtype: "m.image",
+        body: " Screenshot 2026-03-27.png ",
+        url: "mxc://example/image",
+      }),
+    );
+
+    const downloadOptions = firstObjectArg(downloadMatrixMediaMock);
+    expect(downloadOptions.mxcUrl).toBe("mxc://example/image");
+    expect(downloadOptions.maxBytes).toBe(5 * 1024 * 1024);
+    expect(downloadOptions.originalFilename).toBe("Screenshot 2026-03-27.png");
+  });
+
+  it("prefers content.filename over body text when deriving originalFilename", async () => {
+    downloadMatrixMediaMock.mockResolvedValue({
+      path: "/tmp/inbound/Screenshot-2026-03-27---uuid.png",
+      contentType: "image/png",
+      placeholder: "[matrix media]",
+    });
+    const { handler } = createMediaFailureHarness();
+
+    await handler(
+      "!room:example.org",
+      createImageEvent({
+        msgtype: "m.image",
+        body: "can you review this screenshot?",
+        filename: "Screenshot 2026-03-27.png",
+        url: "mxc://example/image",
+      }),
+    );
+
+    expect(firstObjectArg(downloadMatrixMediaMock).originalFilename).toBe(
+      "Screenshot 2026-03-27.png",
+    );
   });
 
   it("replaces bare image filenames with an unavailable marker when unencrypted download fails", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("download failed"));
-    const { handler, recordInboundSession, logger, runtime } = createHandlerHarness();
+    const { handler, recordInboundSession, logger, runtime } = createMediaFailureHarness();
 
     await handler(
       "!room:example.org",
@@ -175,29 +167,21 @@ describe("createMatrixRoomMessageHandler media failures", () => {
       }),
     );
 
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          RawBody: "[matrix image attachment unavailable]",
-          CommandBody: "[matrix image attachment unavailable]",
-          MediaPath: undefined,
-        }),
-      }),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      "matrix media download failed",
-      expect.objectContaining({
-        eventId: "$event1",
-        msgtype: "m.image",
-        encrypted: false,
-      }),
-    );
+    const ctx = firstInboundContext(recordInboundSession);
+    expect(ctx.RawBody).toBe("[matrix image attachment unavailable]");
+    expect(ctx.CommandBody).toBe("[matrix image attachment unavailable]");
+    expect(ctx.MediaPath).toBeUndefined();
+    expect(logger.warn.mock.calls[0]?.[0]).toBe("matrix media download failed");
+    const warningMetadata = objectArgAt(logger.warn, 1);
+    expect(warningMetadata.eventId).toBe("$event1");
+    expect(warningMetadata.msgtype).toBe("m.image");
+    expect(warningMetadata.encrypted).toBe(false);
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("replaces bare image filenames with an unavailable marker when encrypted download fails", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("decrypt failed"));
-    const { handler, recordInboundSession } = createHandlerHarness();
+    const { handler, recordInboundSession } = createMediaFailureHarness();
 
     await handler(
       "!room:example.org",
@@ -214,20 +198,15 @@ describe("createMatrixRoomMessageHandler media failures", () => {
       }),
     );
 
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          RawBody: "[matrix image attachment unavailable]",
-          CommandBody: "[matrix image attachment unavailable]",
-          MediaPath: undefined,
-        }),
-      }),
-    );
+    const ctx = firstInboundContext(recordInboundSession);
+    expect(ctx.RawBody).toBe("[matrix image attachment unavailable]");
+    expect(ctx.CommandBody).toBe("[matrix image attachment unavailable]");
+    expect(ctx.MediaPath).toBeUndefined();
   });
 
   it("preserves a real caption while marking the attachment unavailable", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("download failed"));
-    const { handler, recordInboundSession } = createHandlerHarness();
+    const { handler, recordInboundSession } = createMediaFailureHarness();
 
     await handler(
       "!room:example.org",
@@ -239,13 +218,48 @@ describe("createMatrixRoomMessageHandler media failures", () => {
       }),
     );
 
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          RawBody: "can you see this image?\n\n[matrix image attachment unavailable]",
-          CommandBody: "can you see this image?\n\n[matrix image attachment unavailable]",
-        }),
+    const ctx = firstInboundContext(recordInboundSession);
+    expect(ctx.RawBody).toBe("can you see this image?\n\n[matrix image attachment unavailable]");
+    expect(ctx.CommandBody).toBe(
+      "can you see this image?\n\n[matrix image attachment unavailable]",
+    );
+  });
+
+  it("shows a too-large marker when the download is rejected due to size limit", async () => {
+    downloadMatrixMediaMock.mockRejectedValue(new MatrixMediaSizeLimitError());
+    const { handler, recordInboundSession } = createMediaFailureHarness();
+
+    await handler(
+      "!room:example.org",
+      createImageEvent({
+        msgtype: "m.image",
+        body: "big-photo.jpg",
+        url: "mxc://example/big-image",
       }),
     );
+
+    const ctx = firstInboundContext(recordInboundSession);
+    expect(ctx.RawBody).toBe("[matrix image attachment too large]");
+    expect(ctx.CommandBody).toBe("[matrix image attachment too large]");
+    expect(ctx.MediaPath).toBeUndefined();
+  });
+
+  it("preserves a real caption while marking the attachment too large on size limit error", async () => {
+    downloadMatrixMediaMock.mockRejectedValue(new MatrixMediaSizeLimitError());
+    const { handler, recordInboundSession } = createMediaFailureHarness();
+
+    await handler(
+      "!room:example.org",
+      createImageEvent({
+        msgtype: "m.image",
+        body: "check this out",
+        filename: "large-photo.jpg",
+        url: "mxc://example/big-image",
+      }),
+    );
+
+    const ctx = firstInboundContext(recordInboundSession);
+    expect(ctx.RawBody).toBe("check this out\n\n[matrix image attachment too large]");
+    expect(ctx.CommandBody).toBe("check this out\n\n[matrix image attachment too large]");
   });
 });

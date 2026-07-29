@@ -1,6 +1,10 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { signalSetupPlugin } from "./src/channel.setup.js";
+// Signal plugin module implements setup entry behavior.
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { signalSetupPlugin } from "./src/channel.setup.js";
-
-export default defineSetupPluginEntry(signalSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "signalSetupPlugin",
+  },
+});

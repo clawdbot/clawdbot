@@ -1,11 +1,14 @@
+/**
+ * Tests channel lifecycle hooks and SDK-visible lifecycle dispatch behavior.
+ */
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAccountStatusSink,
   keepHttpServerTaskAlive,
   runPassiveAccountLifecycle,
   waitUntilAbort,
-} from "./channel-lifecycle.js";
+} from "./channel-lifecycle.core.js";
 
 type FakeServer = EventEmitter & {
   close: (callback?: () => void) => void;
@@ -22,7 +25,25 @@ function createFakeServer(): FakeServer {
   return server;
 }
 
+async function expectTaskPending(task: Promise<unknown>) {
+  let settled = false;
+  void task.finally(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(settled).toBe(false);
+}
+
 describe("plugin-sdk channel lifecycle helpers", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("binds account id onto status patches", () => {
     const setStatus = vi.fn();
     const statusSink = createAccountStatusSink({
@@ -42,12 +63,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
   it("resolves waitUntilAbort when signal aborts", async () => {
     const abort = new AbortController();
     const task = waitUntilAbort(abort.signal);
-
-    const early = await Promise.race([
-      task.then(() => "resolved"),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
-    ]);
-    expect(early).toBe("pending");
+    await expectTaskPending(task);
 
     abort.abort();
     await expect(task).resolves.toBeUndefined();
@@ -75,11 +91,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
       },
     });
 
-    const early = await Promise.race([
-      task.then(() => "resolved"),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
-    ]);
-    expect(early).toBe("pending");
+    await expectTaskPending(task);
     expect(stop).not.toHaveBeenCalled();
 
     abort.abort();
@@ -90,12 +102,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
   it("keeps server task pending until close, then resolves", async () => {
     const server = createFakeServer();
     const task = keepHttpServerTaskAlive({ server });
-
-    const early = await Promise.race([
-      task.then(() => "resolved"),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
-    ]);
-    expect(early).toBe("pending");
+    await expectTaskPending(task);
 
     server.close();
     await expect(task).resolves.toBeUndefined();

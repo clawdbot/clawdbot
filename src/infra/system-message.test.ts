@@ -1,32 +1,56 @@
+// Covers system-message marking and prefix idempotence.
 import { describe, expect, it } from "vitest";
 import { SYSTEM_MARK, hasSystemMark, prefixSystemMessage } from "./system-message.js";
 
 describe("system-message", () => {
   it.each([
-    { input: "thread notice", expected: `${SYSTEM_MARK} thread notice` },
-    { input: `  thread notice  `, expected: `${SYSTEM_MARK} thread notice` },
-    { input: "   ", expected: "" },
-  ])("prefixes %j", ({ input, expected }) => {
-    expect(prefixSystemMessage(input)).toBe(expected);
-  });
-
-  it.each([
-    { input: `${SYSTEM_MARK} already prefixed`, expected: true },
-    { input: `  ${SYSTEM_MARK} hello`, expected: true },
-    { input: SYSTEM_MARK, expected: true },
-    { input: "", expected: false },
-    { input: "hello", expected: false },
-  ])("detects marks for %j", ({ input, expected }) => {
-    expect(hasSystemMark(input)).toBe(expected);
-  });
-
-  it("does not double-prefix messages that already have the mark", () => {
-    expect(prefixSystemMessage(`${SYSTEM_MARK} already prefixed`)).toBe(
-      `${SYSTEM_MARK} already prefixed`,
-    );
-  });
-
-  it("preserves mark-only messages after trimming", () => {
-    expect(prefixSystemMessage(`  ${SYSTEM_MARK}  `)).toBe(SYSTEM_MARK);
+    {
+      input: "thread notice",
+      prefixed: `${SYSTEM_MARK} thread notice`,
+      marked: false,
+    },
+    {
+      input: `  thread notice  `,
+      prefixed: `${SYSTEM_MARK} thread notice`,
+      marked: false,
+    },
+    {
+      input: "   ",
+      prefixed: "",
+      marked: false,
+    },
+    {
+      input: `${SYSTEM_MARK} already prefixed`,
+      prefixed: `${SYSTEM_MARK} already prefixed`,
+      marked: true,
+    },
+    {
+      input: `  ${SYSTEM_MARK} hello`,
+      prefixed: `${SYSTEM_MARK} hello`,
+      marked: true,
+    },
+    {
+      input: SYSTEM_MARK,
+      prefixed: SYSTEM_MARK,
+      marked: true,
+    },
+    {
+      input: `  ${SYSTEM_MARK}  `,
+      prefixed: SYSTEM_MARK,
+      marked: true,
+    },
+    {
+      input: "",
+      prefixed: "",
+      marked: false,
+    },
+    {
+      input: "hello",
+      prefixed: `${SYSTEM_MARK} hello`,
+      marked: false,
+    },
+  ])("handles %j", ({ input, prefixed, marked }) => {
+    expect(prefixSystemMessage(input)).toBe(prefixed);
+    expect(hasSystemMark(input)).toBe(marked);
   });
 });

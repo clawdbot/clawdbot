@@ -1,22 +1,22 @@
+// Covers executable config safety classification.
 import { describe, expect, it } from "vitest";
 import { isSafeExecutableValue } from "./exec-safety.js";
 
 describe("isSafeExecutableValue", () => {
-  it("accepts bare executable names and likely paths", () => {
-    expect(isSafeExecutableValue("node")).toBe(true);
-    expect(isSafeExecutableValue("/usr/bin/node")).toBe(true);
-    expect(isSafeExecutableValue("./bin/openclaw")).toBe(true);
-    expect(isSafeExecutableValue("C:\\Tools\\openclaw.exe")).toBe(true);
-    expect(isSafeExecutableValue(" tool ")).toBe(true);
-  });
-
-  it("rejects blanks, flags, shell metacharacters, quotes, and control chars", () => {
-    expect(isSafeExecutableValue(undefined)).toBe(false);
-    expect(isSafeExecutableValue("   ")).toBe(false);
-    expect(isSafeExecutableValue("-rf")).toBe(false);
-    expect(isSafeExecutableValue("node;rm -rf /")).toBe(false);
-    expect(isSafeExecutableValue('node "arg"')).toBe(false);
-    expect(isSafeExecutableValue("node\nnext")).toBe(false);
-    expect(isSafeExecutableValue("node\0")).toBe(false);
+  it.each([
+    ["node", true],
+    ["/usr/bin/node", true],
+    ["./bin/openclaw", true],
+    ["C:\\Tools\\openclaw.exe", true],
+    [" tool ", true],
+    [undefined, false],
+    ["   ", false],
+    ["-rf", false],
+    ["node;rm -rf /", false],
+    ['node "arg"', false],
+    ["node\nnext", false],
+    ["node\0", false],
+  ])("classifies executable value %j", (value, expected) => {
+    expect(isSafeExecutableValue(value)).toBe(expected);
   });
 });

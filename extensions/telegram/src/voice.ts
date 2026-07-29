@@ -1,6 +1,7 @@
-import { isTelegramVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+// Telegram plugin module implements voice behavior.
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 
-export function resolveTelegramVoiceDecision(opts: {
+function resolveTelegramVoiceDecision(opts: {
   wantsVoice: boolean;
   contentType?: string | null;
   fileName?: string | null;
@@ -8,7 +9,7 @@ export function resolveTelegramVoiceDecision(opts: {
   if (!opts.wantsVoice) {
     return { useVoice: false };
   }
-  if (isTelegramVoiceCompatibleAudio(opts)) {
+  if (isVoiceMessageCompatibleAudio(opts)) {
     return { useVoice: true };
   }
   const contentType = opts.contentType ?? "unknown";

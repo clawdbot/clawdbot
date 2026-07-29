@@ -1,19 +1,22 @@
-import {
-  SGLANG_DEFAULT_API_KEY_ENV_VAR,
-  SGLANG_DEFAULT_BASE_URL,
-  SGLANG_MODEL_PLACEHOLDER,
-  SGLANG_PROVIDER_LABEL,
-} from "openclaw/plugin-sdk/agent-runtime";
+// Sglang plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  SGLANG_DEFAULT_API_KEY_ENV_VAR,
+  SGLANG_DEFAULT_BASE_URL,
+  SGLANG_MODEL_PLACEHOLDER,
+  SGLANG_PROVIDER_LABEL,
+  buildSglangProvider,
+} from "./api.js";
 
 const PROVIDER_ID = "sglang";
 
 async function loadProviderSetup() {
-  return await import("openclaw/plugin-sdk/self-hosted-provider-setup");
+  return await import("openclaw/plugin-sdk/provider-setup");
 }
 
 export default definePluginEntry({
@@ -57,17 +60,21 @@ export default definePluginEntry({
           },
         },
       ],
-      discovery: {
+      catalog: {
         order: "late",
         run: async (ctx) => {
           const providerSetup = await loadProviderSetup();
           return await providerSetup.discoverOpenAICompatibleSelfHostedProvider({
             ctx,
             providerId: PROVIDER_ID,
-            buildProvider: providerSetup.buildSglangProvider,
+            buildProvider: buildSglangProvider,
           });
         },
       },
+      ...buildProviderReplayFamilyHooks({
+        family: "openai-compatible",
+        dropReasoningFromHistory: false,
+      }),
       wizard: {
         setup: {
           choiceId: "sglang",

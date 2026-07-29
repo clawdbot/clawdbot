@@ -1,3 +1,7 @@
+// File context helpers build user-visible context for media file references.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
+
 const XML_ESCAPE_MAP: Record<string, string> = {
   "<": "&lt;",
   ">": "&gt;",
@@ -15,10 +19,14 @@ function escapeFileBlockContent(value: string): string {
 }
 
 function sanitizeFileName(value: string | null | undefined, fallbackName: string): string {
-  const normalized = typeof value === "string" ? value.replace(/[\r\n\t]+/g, " ").trim() : "";
-  return normalized || fallbackName;
+  const normalized =
+    normalizeOptionalString(
+      typeof value === "string" ? value.replace(/[\r\n\t]+/g, " ") : undefined,
+    ) ?? "";
+  return sanitizeUntrustedFileName(normalized, fallbackName);
 }
 
+/** Renders sanitized attachment text as a model-visible file block without allowing file-tag injection. */
 export function renderFileContextBlock(params: {
   filename?: string | null;
   fallbackName?: string;
@@ -26,17 +34,13 @@ export function renderFileContextBlock(params: {
   content: string;
   surroundContentWithNewlines?: boolean;
 }): string {
-  const fallbackName =
-    typeof params.fallbackName === "string" && params.fallbackName.trim().length > 0
-      ? params.fallbackName.trim()
-      : "attachment";
+  const fallbackName = normalizeOptionalString(params.fallbackName) ?? "attachment";
   const safeName = sanitizeFileName(params.filename, fallbackName);
   const safeContent = escapeFileBlockContent(params.content);
+  const mimeType = normalizeOptionalString(params.mimeType);
   const attrs = [
     `name="${xmlEscapeAttr(safeName)}"`,
-    typeof params.mimeType === "string" && params.mimeType.trim()
-      ? `mime="${xmlEscapeAttr(params.mimeType.trim())}"`
-      : undefined,
+    mimeType ? `mime="${xmlEscapeAttr(mimeType)}"` : undefined,
   ]
     .filter(Boolean)
     .join(" ");

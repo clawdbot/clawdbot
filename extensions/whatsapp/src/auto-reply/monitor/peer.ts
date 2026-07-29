@@ -1,15 +1,21 @@
-import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
-import type { WebInboundMsg } from "../types.js";
+// Whatsapp plugin module implements peer behavior.
+import { getSenderIdentity } from "../../identity.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
+import { jidToE164, normalizeE164 } from "../../text-runtime.js";
 
-export function resolvePeerId(msg: WebInboundMsg) {
-  if (msg.chatType === "group") {
-    return msg.conversationId ?? msg.from;
+export function resolvePeerId(msg: AdmittedWebInboundMessage) {
+  const admission = requireWhatsAppInboundAdmission(msg);
+  if (admission.conversation.kind === "group") {
+    return admission.conversation.id;
   }
-  if (msg.senderE164) {
-    return normalizeE164(msg.senderE164) ?? msg.senderE164;
+  const sender = getSenderIdentity(msg);
+  if (sender.e164) {
+    return normalizeE164(sender.e164) ?? sender.e164;
   }
-  if (msg.from.includes("@")) {
-    return jidToE164(msg.from) ?? msg.from;
+  const conversationId = admission.conversation.id;
+  if (conversationId.includes("@")) {
+    return jidToE164(conversationId) ?? conversationId;
   }
-  return normalizeE164(msg.from) ?? msg.from;
+  return normalizeE164(conversationId) ?? conversationId;
 }

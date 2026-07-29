@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+
+// Probes gateway state for upgrade-survivor E2E scenarios.
+import fs from "node:fs";
+import path from "node:path";
+import { readBoundedResponseText } from "../../../lib/bounded-response.mjs";
+
+const args = process.argv.slice(2);
+
+function option(name, fallback) {
+  const index = args.indexOf(name);
+  if (index === -1) {
+    return fallback;
+  }
+  const value = args[index + 1];
+  if (!value) {
+    throw new Error(`missing value for ${name}`);
+  }
+  return value;
+}
+
+function optionValue(name, envName, fallback) {
+  const index = args.indexOf(name);
+  if (index !== -1) {
+    return {
+      label: name,
+      value: option(name),
+    };
+  }
+  return {
+    label: envName,
+    value: process.env[envName] ?? fallback,
+  };
+}
+
+function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function readStrictInteger({ allowZero = false, label, value }) {
+  const text = String(value ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${label}: ${text}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+    throw new Error(`invalid ${label}: ${text}`);
+  }
+  return parsed;
+}
+
+const baseUrl = option("--base-url");
+const probePath = option("--path");
+const expectKind = option("--expect");
+const out = option("--out");
+const allowFailing = new Set(
+  option("--allow-failing", "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean),
+);
+const allowDegradedReady =
+  args.includes("--allow-degraded-ready") ||
+  process.env.OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED === "1";
+const timeoutOption = optionValue(
+  "--timeout-ms",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS",
+  "60000",
+);
+const attemptTimeoutOption = optionValue(
+  "--attempt-timeout-ms",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS",
+  "5000",
+);
+const maxBodyOption = optionValue(
+  "--max-body-bytes",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES",
+  "1048576",
+);
+const timeoutMs = readStrictInteger({ ...timeoutOption, allowZero: true });
+const attemptTimeoutMs = readStrictInteger(attemptTimeoutOption);
+const maxBodyBytes = readStrictInteger(maxBodyOption);
+const url = new URL(probePath, baseUrl).toString();
+if (expectKind !== "live" && expectKind !== "ready") {
+  throw new Error(`unknown probe expectation: ${expectKind}`);
+}
+
+function matchesExpectation(body) {
+  if (expectKind === "live") {
+    return body?.ok === true && body?.status === "live";
+  }
+  return body?.ready === true;
+}
+
+function matchesDegradedReadyExpectation(body) {
+  if (expectKind !== "ready" || body?.ready !== false) {
+    return false;
+  }
+  const failing = Array.isArray(body?.failing) ? body.failing : [];
+  return (
+    failing.length > 0 &&
+    allowFailing.size > 0 &&
+    failing.every((entry) => allowFailing.has(String(entry)))
+  );
+}
+
+async function fetchProbeText() {
+  const elapsedMs = Date.now() - startedAt;
+  const remainingMs = timeoutMs - elapsedMs;
+  const controller = new AbortController();
+  const attemptDeadlineMs = Math.min(attemptTimeoutMs, remainingMs);
+  let timer;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${url} probe attempt timed out after ${attemptDeadlineMs}ms`));
+      controller.abort();
+    }, attemptDeadlineMs);
+  });
+  try {
+    const response = await Promise.race([
+      fetch(url, { method: "GET", signal: controller.signal }),
+      timeoutPromise,
+    ]);
+    return {
+      response,
+      text: await readBoundedResponseText(response, `${url} probe`, maxBodyBytes, {
+        formatTooLargeMessage: (_label, bytes) => `${url} probe body exceeded ${bytes} bytes`,
+        timeoutPromise,
+      }),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const startedAt = Date.now();
+let lastError;
+let lastResult;
+
+while (Date.now() - startedAt < timeoutMs) {
+  try {
+    const { response, text } = await fetchProbeText();
+    let body;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch (error) {
+      throw new Error(`${url} returned non-JSON probe body: ${String(error)}`, { cause: error });
+    }
+    lastResult = {
+      body,
+      status: response.status,
+      text,
+    };
+    const healthyExpectationMet = response.ok && matchesExpectation(body);
+    const degradedExpectationMet =
+      allowDegradedReady && response.status === 503 && matchesDegradedReadyExpectation(body);
+    if (healthyExpectationMet || degradedExpectationMet) {
+      writeJson(out, {
+        body,
+        elapsedMs: Date.now() - startedAt,
+        path: probePath,
+        status: response.status,
+        url,
+      });
+      process.exit(0);
+    }
+    lastError = response.ok
+      ? `${url} did not report ${expectKind} status: ${text}`
+      : `${url} probe failed with HTTP ${response.status}: ${text}`;
+  } catch (error) {
+    lastError = error instanceof Error ? error.message : String(error);
+  }
+  const remainingDelayMs = timeoutMs - (Date.now() - startedAt);
+  if (remainingDelayMs <= 0) {
+    break;
+  }
+  const delayMs = Math.min(500, remainingDelayMs);
+  await new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+  if (delayMs === remainingDelayMs) {
+    break;
+  }
+}
+
+const suffix = lastResult ? ` (last HTTP ${lastResult.status}: ${lastResult.text})` : "";
+throw new Error(
+  `${url} probe did not satisfy ${expectKind} within ${timeoutMs}ms: ${lastError ?? "no response"}${suffix}`,
+);

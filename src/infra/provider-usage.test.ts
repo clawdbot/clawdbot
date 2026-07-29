@@ -1,62 +1,26 @@
-import fs from "node:fs";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+// Tests provider usage aggregation and formatting.
+import { beforeEach, describe, expect, it } from "vitest";
+import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
+import {
+  getProviderUsageSnapshotWithPluginMock,
+  resetProviderUsageSnapshotWithPluginMock,
+} from "./provider-usage-plugin-runtime.test-mocks.js";
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,
   loadProviderUsageSummary,
   type UsageSummary,
 } from "./provider-usage.js";
-import { loadUsageWithAuth, usageNow } from "./provider-usage.test-support.js";
+import { loadUsageWithAuth } from "./provider-usage.test-support.js";
+import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
-const minimaxRemainsEndpoint = "api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
-
-function expectSingleAnthropicProvider(summary: UsageSummary) {
-  expect(summary.providers).toHaveLength(1);
-  const claude = summary.providers[0];
-  expect(claude?.provider).toBe("anthropic");
-  return claude;
-}
-
-function createMinimaxOnlyFetch(payload: unknown) {
-  return createProviderUsageFetch(async (url) => {
-    if (url.includes(minimaxRemainsEndpoint)) {
-      return makeResponse(200, payload);
-    }
-    return makeResponse(404, "not found");
-  });
-}
-
-async function expectMinimaxUsage(
-  payload: unknown,
-  expected: {
-    usedPercent: number;
-    plan?: string;
-    label?: string;
-  },
-) {
-  const mockFetch = createMinimaxOnlyFetch(payload);
-
-  const summary = await loadUsageWithAuth(
-    loadProviderUsageSummary,
-    [{ provider: "minimax", token: "token-1b" }],
-    mockFetch,
-  );
-
-  const minimax = summary.providers.find((p) => p.provider === "minimax");
-  expect(minimax?.windows[0]?.usedPercent).toBe(expected.usedPercent);
-  expect(minimax?.windows[0]?.label).toBe(expected.label ?? "5h");
-  if (expected.plan !== undefined) {
-    expect(minimax?.plan).toBe(expected.plan);
-  }
-  expect(mockFetch).toHaveBeenCalled();
-}
+const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 
 describe("provider usage formatting", () => {
+  beforeEach(() => {
+    resetProviderUsageSnapshotWithPluginMock();
+  });
+
   it("returns null when no usage is available", () => {
     const summary: UsageSummary = { updatedAt: 0, providers: [] };
     expect(formatUsageSummaryLine(summary)).toBeNull();
@@ -87,7 +51,7 @@ describe("provider usage formatting", () => {
       updatedAt: 0,
       providers: [
         {
-          provider: "openai-codex",
+          provider: "openai",
           displayName: "Codex",
           windows: [],
           error: "Token expired",
@@ -96,6 +60,23 @@ describe("provider usage formatting", () => {
     };
     const lines = formatUsageReportLines(summary);
     expect(lines.join("\n")).toContain("Codex: Token expired");
+  });
+
+  it("prints balance-only provider summary output", () => {
+    const summary: UsageSummary = {
+      updatedAt: 0,
+      providers: [
+        {
+          provider: "deepseek",
+          displayName: "DeepSeek",
+          windows: [],
+          summary: "Balance ¥42.50",
+        },
+      ],
+    };
+
+    expect(formatUsageSummaryLine(summary)).toBe("📊 Usage: DeepSeek Balance ¥42.50");
+    expect(formatUsageReportLines(summary).join("\n")).toContain("DeepSeek: Balance ¥42.50");
   });
 
   it("includes reset countdowns in report lines", () => {
@@ -117,233 +98,65 @@ describe("provider usage formatting", () => {
 
 describe("provider usage loading", () => {
   it("loads usage snapshots with injected auth", async () => {
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      if (url.includes("api.anthropic.com")) {
-        return makeResponse(200, {
-          five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
-        });
-      }
-      if (url.includes("api.z.ai")) {
-        return makeResponse(200, {
-          success: true,
-          code: 200,
-          data: {
-            planName: "Pro",
-            limits: [
-              {
-                type: "TOKENS_LIMIT",
-                percentage: 25,
-                unit: 3,
-                number: 6,
-                nextResetTime: "2026-01-07T06:00:00Z",
-              },
-            ],
-          },
-        });
-      }
-      if (url.includes(minimaxRemainsEndpoint)) {
-        return makeResponse(200, {
-          base_resp: { status_code: 0, status_msg: "ok" },
-          data: {
-            total: 200,
-            remain: 50,
-            reset_at: "2026-01-07T05:00:00Z",
-            plan_name: "Coding Plan",
-          },
-        });
-      }
-      return makeResponse(404, "not found");
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
+        switch (provider) {
+          case "anthropic":
+            return {
+              provider,
+              displayName: "Claude",
+              windows: [{ label: "5h", usedPercent: 20 }],
+            };
+          case "minimax":
+            return {
+              provider,
+              displayName: "MiniMax",
+              windows: [{ label: "5h", usedPercent: 75 }],
+              plan: "Coding Plan",
+            };
+          case "deepseek":
+            return {
+              provider,
+              displayName: "DeepSeek",
+              windows: [],
+              summary: "Balance ¥42.50",
+            };
+          case "zai":
+            return {
+              provider,
+              displayName: "Z.ai",
+              windows: [{ label: "3h", usedPercent: 25 }],
+              plan: "Pro",
+            };
+          default:
+            return null;
+        }
+      },
+    );
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
     });
 
     const summary = await loadUsageWithAuth(
       loadProviderUsageSummary,
       [
         { provider: "anthropic", token: "token-1" },
+        { provider: "deepseek", token: "token-1a" },
         { provider: "minimax", token: "token-1b" },
         { provider: "zai", token: "token-2" },
       ],
       mockFetch,
     );
 
-    expect(summary.providers).toHaveLength(3);
+    expect(summary.providers).toHaveLength(4);
     const claude = summary.providers.find((p) => p.provider === "anthropic");
+    const deepseek = summary.providers.find((p) => p.provider === "deepseek");
     const minimax = summary.providers.find((p) => p.provider === "minimax");
     const zai = summary.providers.find((p) => p.provider === "zai");
     expect(claude?.windows[0]?.label).toBe("5h");
+    expect(deepseek?.summary).toBe("Balance ¥42.50");
     expect(minimax?.windows[0]?.usedPercent).toBe(75);
     expect(zai?.plan).toBe("Pro");
-    expect(mockFetch).toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "handles nested MiniMax usage payloads",
-      payload: {
-        base_resp: { status_code: 0, status_msg: "ok" },
-        data: {
-          plan_name: "Coding Plan",
-          usage: {
-            prompt_limit: 200,
-            prompt_remain: 50,
-            next_reset_time: "2026-01-07T05:00:00Z",
-          },
-        },
-      },
-      expected: { usedPercent: 75, plan: "Coding Plan" },
-    },
-    {
-      name: "prefers MiniMax count-based usage when percent looks inverted",
-      payload: {
-        base_resp: { status_code: 0, status_msg: "ok" },
-        data: {
-          prompt_limit: 200,
-          prompt_remain: 150,
-          usage_percent: 75,
-          next_reset_time: "2026-01-07T05:00:00Z",
-        },
-      },
-      expected: { usedPercent: 25 },
-    },
-    {
-      name: "handles MiniMax model_remains usage payloads",
-      payload: {
-        base_resp: { status_code: 0, status_msg: "ok" },
-        model_remains: [
-          {
-            start_time: 1736217600,
-            end_time: 1736235600,
-            remains_time: 600,
-            current_interval_total_count: 120,
-            current_interval_usage_count: 30,
-            model_name: "MiniMax-M2.5",
-          },
-        ],
-      },
-      expected: { usedPercent: 25 },
-    },
-    {
-      name: "keeps payload-level MiniMax plan metadata when the usage candidate is nested",
-      payload: {
-        base_resp: { status_code: 0, status_msg: "ok" },
-        data: {
-          plan_name: "Payload Plan",
-          nested: {
-            usage_ratio: "0.4",
-            window_hours: 2,
-            next_reset_time: "2026-01-07T05:00:00Z",
-          },
-        },
-      },
-      expected: { usedPercent: 40, plan: "Payload Plan", label: "2h" },
-    },
-  ])("$name", async ({ payload, expected }) => {
-    await expectMinimaxUsage(payload, expected);
-  });
-
-  it("discovers Claude usage from token auth profiles", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const agentDir = path.join(
-          process.env.OPENCLAW_STATE_DIR ?? path.join(tempHome, ".openclaw"),
-          "agents",
-          "main",
-          "agent",
-        );
-        fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-        fs.writeFileSync(
-          path.join(agentDir, "auth-profiles.json"),
-          `${JSON.stringify(
-            {
-              version: 1,
-              order: { anthropic: ["anthropic:default"] },
-              profiles: {
-                "anthropic:default": {
-                  type: "token",
-                  provider: "anthropic",
-                  token: "token-1",
-                  expires: Date.UTC(2100, 0, 1, 0, 0, 0),
-                },
-              },
-            },
-            null,
-            2,
-          )}\n`,
-          "utf8",
-        );
-        const store = ensureAuthProfileStore(agentDir, {
-          allowKeychainPrompt: false,
-        });
-        expect(listProfilesForProvider(store, "anthropic")).toContain("anthropic:default");
-
-        const mockFetch = createProviderUsageFetch(async (url, init) => {
-          if (url.includes("api.anthropic.com/api/oauth/usage")) {
-            const headers = (init?.headers ?? {}) as Record<string, string>;
-            expect(headers.Authorization).toBe("Bearer token-1");
-            return makeResponse(200, {
-              five_hour: {
-                utilization: 20,
-                resets_at: "2026-01-07T01:00:00Z",
-              },
-            });
-          }
-          return makeResponse(404, "not found");
-        });
-
-        const summary = await loadProviderUsageSummary({
-          now: usageNow,
-          providers: ["anthropic"],
-          agentDir,
-          fetch: mockFetch as unknown as typeof fetch,
-          config: { plugins: { enabled: false } },
-        });
-
-        const claude = expectSingleAnthropicProvider(summary);
-        expect(claude?.windows[0]?.label).toBe("5h");
-        expect(mockFetch).toHaveBeenCalled();
-      },
-      {
-        env: {
-          OPENCLAW_STATE_DIR: (home) => path.join(home, ".openclaw"),
-        },
-        prefix: "openclaw-provider-usage-",
-      },
-    );
-  });
-
-  it("falls back to claude.ai web usage when OAuth scope is missing", async () => {
-    await withEnvAsync({ CLAUDE_AI_SESSION_KEY: "sk-ant-web-1" }, async () => {
-      const mockFetch = createProviderUsageFetch(async (url) => {
-        if (url.includes("api.anthropic.com/api/oauth/usage")) {
-          return makeResponse(403, {
-            type: "error",
-            error: {
-              type: "permission_error",
-              message: "OAuth token does not meet scope requirement user:profile",
-            },
-          });
-        }
-        if (url.includes("claude.ai/api/organizations/org-1/usage")) {
-          return makeResponse(200, {
-            five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
-            seven_day: { utilization: 40, resets_at: "2026-01-08T01:00:00Z" },
-            seven_day_opus: { utilization: 5 },
-          });
-        }
-        if (url.includes("claude.ai/api/organizations")) {
-          return makeResponse(200, [{ uuid: "org-1", name: "Test" }]);
-        }
-        return makeResponse(404, "not found");
-      });
-
-      const summary = await loadUsageWithAuth(
-        loadProviderUsageSummary,
-        [{ provider: "anthropic", token: "sk-ant-oauth-1" }],
-        mockFetch,
-      );
-
-      const claude = expectSingleAnthropicProvider(summary);
-      expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
-      expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
-    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });

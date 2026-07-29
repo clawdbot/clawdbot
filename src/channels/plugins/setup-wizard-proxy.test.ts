@@ -1,111 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+// Setup wizard proxy tests cover proxying setup wizard calls through channel plugin facades.
+import {
+  promptSetupWizardAllowFrom,
+  resolveSetupWizardAllowFromEntries,
+  resolveSetupWizardGroupAllowlist,
+  runSetupWizardFinalize,
+  runSetupWizardPrepare,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it } from "vitest";
 import {
   createAllowlistSetupWizardProxy,
-  createDelegatedFinalize,
-  createDelegatedPrepare,
-  createDelegatedResolveConfigured,
   createDelegatedSetupWizardProxy,
 } from "./setup-wizard-proxy.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
-
-describe("createDelegatedResolveConfigured", () => {
-  it("forwards configured resolution to the loaded wizard", async () => {
-    const loadWizard = vi.fn(
-      async (): Promise<ChannelSetupWizard> => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: async ({ cfg }) => Boolean(cfg.channels?.demo),
-        },
-        credentials: [],
-      }),
-    );
-
-    const resolveConfigured = createDelegatedResolveConfigured(loadWizard);
-
-    expect(await resolveConfigured({ cfg: {} })).toBe(false);
-    expect(await resolveConfigured({ cfg: { channels: { demo: {} } } })).toBe(true);
-  });
-});
-
-describe("createDelegatedPrepare", () => {
-  it("forwards prepare when the loaded wizard implements it", async () => {
-    const loadWizard = vi.fn(
-      async (): Promise<ChannelSetupWizard> => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: () => true,
-        },
-        credentials: [],
-        prepare: async ({ cfg }) => ({ cfg: { ...cfg, channels: { demo: { enabled: true } } } }),
-      }),
-    );
-
-    const prepare = createDelegatedPrepare(loadWizard);
-
-    expect(
-      await prepare({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
-        runtime: {} as never,
-        prompter: {} as never,
-      }),
-    ).toEqual({
-      cfg: {
-        channels: {
-          demo: { enabled: true },
-        },
-      },
-    });
-  });
-});
-
-describe("createDelegatedFinalize", () => {
-  it("forwards finalize when the loaded wizard implements it", async () => {
-    const loadWizard = vi.fn(
-      async (): Promise<ChannelSetupWizard> => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: () => true,
-        },
-        credentials: [],
-        finalize: async ({ cfg, forceAllowFrom }) => ({
-          cfg: {
-            ...cfg,
-            channels: {
-              demo: { forceAllowFrom },
-            },
-          },
-        }),
-      }),
-    );
-
-    const finalize = createDelegatedFinalize(loadWizard);
-
-    expect(
-      await finalize({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
-        runtime: {} as never,
-        prompter: {} as never,
-        forceAllowFrom: true,
-      }),
-    ).toEqual({
-      cfg: {
-        channels: {
-          demo: { forceAllowFrom: true },
-        },
-      },
-    });
-  });
-});
 
 describe("createAllowlistSetupWizardProxy", () => {
   it("falls back when delegated surfaces are absent", async () => {
@@ -159,27 +65,18 @@ describe("createAllowlistSetupWizardProxy", () => {
     });
 
     expect(
-      await wizard.dmPolicy?.promptAllowFrom?.({
-        cfg: {},
-        prompter: {} as never,
-        accountId: "default",
-      }),
-    ).toEqual({});
+      await promptSetupWizardAllowFrom({ promptAllowFrom: wizard.dmPolicy?.promptAllowFrom }),
+    ).toStrictEqual({});
     expect(
-      await wizard.allowFrom?.resolveEntries({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
+      await resolveSetupWizardAllowFromEntries({
+        resolveEntries: wizard.allowFrom?.resolveEntries,
         entries: ["alice"],
       }),
     ).toEqual([{ input: "alice", resolved: false, id: null }]);
     expect(
-      await wizard.groupAccess?.resolveAllowlist?.({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
+      await resolveSetupWizardGroupAllowlist({
+        resolveAllowlist: wizard.groupAccess?.resolveAllowlist,
         entries: ["general"],
-        prompter: {} as never,
       }),
     ).toEqual([{ input: "general" }]);
   });
@@ -231,31 +128,14 @@ describe("createDelegatedSetupWizardProxy", () => {
     expect(await wizard.status.resolveStatusLines?.({ cfg: {}, configured: false })).toEqual([
       "line",
     ]);
-    expect(
-      await wizard.prepare?.({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
-        runtime: {} as never,
-        prompter: {} as never,
-      }),
-    ).toEqual({
+    expect(await runSetupWizardPrepare({ prepare: wizard.prepare })).toEqual({
       cfg: {
         channels: {
           demo: { prepared: true },
         },
       },
     });
-    expect(
-      await wizard.finalize?.({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
-        runtime: {} as never,
-        prompter: {} as never,
-        forceAllowFrom: false,
-      }),
-    ).toEqual({
+    expect(await runSetupWizardFinalize({ finalize: wizard.finalize })).toEqual({
       cfg: {
         channels: {
           demo: { finalized: true },

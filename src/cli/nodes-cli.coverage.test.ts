@@ -1,11 +1,12 @@
+// Nodes CLI coverage tests cover node command branches and output formatting.
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
-import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerNodesCli } from "./nodes-cli.js";
+import { callGatewayCli } from "./nodes-cli/rpc.js";
 
 type NodeInvokeCall = {
   method?: string;
+  timeoutMs?: number | null;
   params?: {
     idempotencyKey?: string;
     command?: string;
@@ -15,19 +16,8 @@ type NodeInvokeCall = {
 };
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
-let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
-let localExecApprovalsFile: ExecApprovalsFile = { version: 1, agents: {} };
-let nodeExecApprovalsFile: ExecApprovalsFile = {
-  version: 1,
-  defaults: {
-    security: "allowlist",
-    ask: "on-miss",
-    askFallback: "deny",
-  },
-  agents: {},
-};
 
-const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
+const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   if (opts.method === "node.list") {
     return {
       nodes: [
@@ -44,16 +34,6 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   }
   if (opts.method === "node.invoke") {
     lastNodeInvokeCall = opts;
-    const command = opts.params?.command;
-    if (command === "system.run.prepare") {
-      const params = (opts.params?.params ?? {}) as {
-        command?: unknown[];
-        rawCommand?: unknown;
-        cwd?: unknown;
-        agentId?: unknown;
-      };
-      return buildSystemRunPreparePayload(params);
-    }
     return {
       payload: {
         stdout: "",
@@ -64,51 +44,41 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
       },
     };
   }
-  if (opts.method === "exec.approvals.node.get") {
-    return {
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      hash: "hash",
-      file: nodeExecApprovalsFile,
-    };
-  }
-  if (opts.method === "exec.approval.request") {
-    lastApprovalRequestCall = opts as { params?: Record<string, unknown> };
-    return { decision: "allow-once" };
-  }
   return { ok: true };
 });
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  return createCliRuntimeMock(vi);
+});
+
+const { runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+vi.mock("../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
+  defaultRuntime: mocks.defaultRuntime,
 }));
-
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
-}));
-
-vi.mock("../infra/exec-approvals.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
-    "../infra/exec-approvals.js",
-  );
-  return {
-    ...actual,
-    loadExecApprovals: () => localExecApprovalsFile,
-  };
-});
 
 describe("nodes-cli coverage", () => {
-  let registerNodesCli: (program: Command) => void;
-  let sharedProgram: Command;
+  const sharedProgram: Command = new Command();
+
+  const withSuppressedStderr = async <T>(run: () => Promise<T>) => {
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as typeof process.stderr.write);
+    try {
+      return await run();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  };
 
   const getNodeInvokeCall = () => {
     const last = lastNodeInvokeCall;
@@ -118,147 +88,154 @@ describe("nodes-cli coverage", () => {
     return last;
   };
 
-  const getApprovalRequestCall = () => lastApprovalRequestCall;
-
   const runNodesCommand = async (args: string[]) => {
     await sharedProgram.parseAsync(args, { from: "user" });
     return getNodeInvokeCall();
   };
 
   beforeAll(async () => {
-    ({ registerNodesCli } = await import("./nodes-cli.js"));
-    sharedProgram = new Command();
+    if (sharedProgram.commands.length > 0) {
+      return;
+    }
     sharedProgram.exitOverride();
-    registerNodesCli(sharedProgram);
+    await registerNodesCli(sharedProgram);
   });
 
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeErrors.length = 0;
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
     lastNodeInvokeCall = null;
-    lastApprovalRequestCall = null;
-    localExecApprovalsFile = { version: 1, agents: {} };
-    nodeExecApprovalsFile = {
-      version: 1,
-      defaults: {
-        security: "allowlist",
-        ask: "on-miss",
-        askFallback: "deny",
-      },
-      agents: {},
-    };
   });
 
-  it("invokes system.run with parsed params", async () => {
-    const invoke = await runNodesCommand([
-      "nodes",
-      "run",
-      "--node",
-      "mac-1",
-      "--cwd",
-      "/tmp",
-      "--env",
-      "FOO=bar",
-      "--command-timeout",
-      "1200",
-      "--needs-screen-recording",
-      "--invoke-timeout",
-      "5000",
-      "echo",
-      "hi",
+  it("does not register the removed run wrapper", async () => {
+    await withSuppressedStderr(async () => {
+      let error: { code?: unknown } | undefined;
+      try {
+        await sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" });
+      } catch (err) {
+        error = err as { code?: unknown };
+      }
+      expect(error?.code).toBe("commander.unknownCommand");
+    });
+  });
+
+  it("shows the registered pending command in node pairing help", () => {
+    const nodes = sharedProgram.commands.find((command) => command.name() === "nodes");
+    const output: string[] = [];
+
+    expect(nodes).toBeDefined();
+    nodes?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
+    });
+    nodes?.outputHelp();
+
+    expect(output.join("")).toContain("openclaw nodes pending");
+    expect(output.join("")).not.toContain("openclaw nodes pairing pending");
+  });
+
+  it("explains unknown nodes approve request ids with the current pending requests", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [{ requestId: "current-request", nodeId: "n1", ts: Date.now() }],
+      paired: [],
+    });
+
+    await expect(
+      sharedProgram.parseAsync(
+        [
+          "nodes",
+          "approve",
+          "stale-request",
+          "--url",
+          "wss://gateway.example.test",
+          "--token",
+          "secret-token",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: stale-request");
+    expect(output).toContain("Pending requestIds: current-request");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(output).not.toContain("gateway.example.test");
+    expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("nodes approve failed: Error:");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.list"]);
+  });
+
+  it("explains when a nodes approve request disappears after the preflight", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [{ requestId: "expired-request", nodeId: "n1", ts: Date.now() }],
+        paired: [],
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("unknown requestId"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      );
+
+    await expect(
+      sharedProgram.parseAsync(["nodes", "approve", "expired-request"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: expired-request");
+    expect(output).not.toContain("No pending node pairing requests are currently visible.");
+    expect(output).not.toContain("Pending requestIds:");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual([
+      "node.pair.list",
+      "node.pair.approve",
     ]);
-
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.idempotencyKey).toBe("rk_test");
-    expect(invoke?.params?.command).toBe("system.run");
-    expect(invoke?.params?.params).toEqual({
-      command: ["echo", "hi"],
-      rawCommand: "echo hi",
-      cwd: "/tmp",
-      env: { FOO: "bar" },
-      timeoutMs: 1200,
-      needsScreenRecording: true,
-      agentId: "main",
-      approved: true,
-      approvalDecision: "allow-once",
-      runId: expect.any(String),
-    });
-    expect(invoke?.params?.timeoutMs).toBe(5000);
-    const approval = getApprovalRequestCall();
-    expect(approval?.params?.["systemRunPlan"]).toEqual({
-      argv: ["echo", "hi"],
-      cwd: "/tmp",
-      commandText: "echo hi",
-      commandPreview: null,
-      agentId: "main",
-      sessionKey: null,
-    });
   });
 
-  it("invokes system.run with raw command", async () => {
-    const invoke = await runNodesCommand([
-      "nodes",
-      "run",
-      "--agent",
-      "main",
-      "--node",
-      "mac-1",
-      "--raw",
-      "echo hi",
+  it("still approves when the pairing preflight is unavailable", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("pairing list unavailable"))
+      .mockResolvedValueOnce({ approved: true });
+
+    await sharedProgram.parseAsync(["nodes", "approve", "request-1"], { from: "user" });
+
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual([
+      "node.pair.list",
+      "node.pair.approve",
     ]);
-
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.idempotencyKey).toBe("rk_test");
-    expect(invoke?.params?.command).toBe("system.run");
-    expect(invoke?.params?.params).toMatchObject({
-      command: ["/bin/sh", "-lc", "echo hi"],
-      rawCommand: '/bin/sh -lc "echo hi"',
-      agentId: "main",
-      approved: true,
-      approvalDecision: "allow-once",
-      runId: expect.any(String),
-    });
-    const approval = getApprovalRequestCall();
-    expect(approval?.params?.["systemRunPlan"]).toEqual({
-      argv: ["/bin/sh", "-lc", "echo hi"],
-      cwd: null,
-      commandText: '/bin/sh -lc "echo hi"',
-      commandPreview: "echo hi",
-      agentId: "main",
-      sessionKey: null,
-    });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ approved: true });
   });
 
-  it("inherits ask=off from local exec approvals when tools.exec.ask is unset", async () => {
-    localExecApprovalsFile = {
-      version: 1,
-      defaults: {
-        security: "allowlist",
-        ask: "off",
-        askFallback: "deny",
-      },
-      agents: {},
-    };
-    nodeExecApprovalsFile = {
-      version: 1,
-      defaults: {
-        security: "allowlist",
-        askFallback: "deny",
-      },
-      agents: {},
-    };
+  it("blocks system.run on nodes invoke", async () => {
+    await expect(
+      sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors.at(-1)).toContain('command "system.run" is reserved for shell execution');
+  });
 
-    const invoke = await runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]);
+  it("rejects malformed nodes invoke params before opening a gateway call", async () => {
+    await expect(
+      sharedProgram.parseAsync(
+        ["nodes", "invoke", "--node", "mac-1", "--command", "canvas.eval", "--params", "not-json"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("system.run");
-    expect(invoke?.params?.params).toMatchObject({
-      command: ["echo", "hi"],
-      approved: false,
-    });
-    expect(invoke?.params?.params).not.toHaveProperty("approvalDecision");
-    expect(getApprovalRequestCall()).toBeNull();
+    expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON.");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(lastNodeInvokeCall).toBeNull();
   });
 
   it("invokes system.notify with provided fields", async () => {
@@ -275,14 +252,158 @@ describe("nodes-cli coverage", () => {
       "overlay",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("system.notify");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected system.notify invocation");
+    }
+    expect(invoke.params?.command).toBe("system.notify");
+    expect(invoke.params?.params).toEqual({
       title: "Ping",
       body: "Gateway ready",
       sound: undefined,
       priority: undefined,
       delivery: "overlay",
+    });
+    expect(invoke.params?.timeoutMs).toBe(15_000);
+    expect(invoke.timeoutMs).toBe(25_000);
+    expect(
+      callGateway.mock.calls.find(([call]) => call.method === "node.list")?.[0].timeoutMs,
+    ).toBe(10_000);
+  });
+
+  it.each([
+    ["--priority", "urgent"],
+    ["--priority", "timesensitive"],
+    ["--delivery", "desktop"],
+  ])("rejects unsupported %s %s before calling the gateway", async (flag, value) => {
+    await withSuppressedStderr(async () => {
+      await expect(
+        sharedProgram.parseAsync(
+          ["nodes", "notify", "--node", "mac-1", "--title", "Ping", flag, value],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({ code: "commander.invalidArgument" });
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(lastNodeInvokeCall).toBeNull();
+  });
+
+  it.each(["passive", "active", "timeSensitive"])(
+    "forwards the supported %s notification priority",
+    async (priority) => {
+      const invoke = await runNodesCommand([
+        "nodes",
+        "notify",
+        "--node",
+        "mac-1",
+        "--title",
+        "Ping",
+        "--priority",
+        priority,
+      ]);
+
+      expect(invoke.params?.params).toMatchObject({ priority, delivery: "system" });
+    },
+  );
+
+  it.each(["system", "overlay", "auto"])(
+    "forwards the supported %s notification delivery mode",
+    async (delivery) => {
+      const invoke = await runNodesCommand([
+        "nodes",
+        "notify",
+        "--node",
+        "mac-1",
+        "--title",
+        "Ping",
+        "--delivery",
+        delivery,
+      ]);
+
+      expect(invoke.params?.params).toMatchObject({ delivery });
+    },
+  );
+
+  it.each([
+    {
+      label: "a custom node invoke timeout",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "120000",
+      ],
+      invokeTimeoutMs: 120_000,
+      transportTimeoutMs: 130_000,
+      lookupTimeoutMs: 30_000,
+    },
+    {
+      label: "a larger explicit gateway timeout",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "120000",
+        "--timeout",
+        "200000",
+      ],
+      invokeTimeoutMs: 120_000,
+      transportTimeoutMs: 200_000,
+      lookupTimeoutMs: 200_000,
+    },
+    {
+      label: "a shorter explicit gateway timeout",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "15000",
+        "--timeout",
+        "5000",
+      ],
+      invokeTimeoutMs: 15_000,
+      transportTimeoutMs: 25_000,
+      lookupTimeoutMs: 5_000,
+    },
+  ])(
+    "keeps the gateway transport alive for $label",
+    async ({ args, invokeTimeoutMs, transportTimeoutMs, lookupTimeoutMs }) => {
+      const invoke = await runNodesCommand(args);
+
+      expect(invoke.params?.timeoutMs).toBe(invokeTimeoutMs);
+      expect(invoke.timeoutMs).toBe(transportTimeoutMs);
+      expect(
+        callGateway.mock.calls.find(([call]) => call.method === "node.list")?.[0].timeoutMs,
+      ).toBe(lookupTimeoutMs);
+    },
+  );
+
+  it("disables the gateway request deadline for an unbounded node invocation", async () => {
+    const params = {
+      nodeId: "mac-1",
+      command: "canvas.eval",
+      timeoutMs: 0,
+      idempotencyKey: "rk_test",
+    };
+
+    await callGatewayCli("node.invoke", { timeout: "10000", json: true }, params);
+
+    expect(getNodeInvokeCall()).toMatchObject({
+      method: "node.invoke",
+      timeoutMs: null,
+      params,
     });
   });
 
@@ -303,13 +424,91 @@ describe("nodes-cli coverage", () => {
       "6000",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("location.get");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected location.get invocation");
+    }
+    expect(invoke.params?.command).toBe("location.get");
+    expect(invoke.params?.params).toEqual({
       maxAgeMs: 1000,
       desiredAccuracy: "precise",
       timeoutMs: 5000,
     });
-    expect(invoke?.params?.timeoutMs).toBe(6000);
+    expect(invoke.params?.timeoutMs).toBe(6000);
+  });
+
+  it.each([
+    {
+      args: ["nodes", "location", "get", "--node", "mac-1", "--max-age", "1000ms"],
+      flag: "--max-age",
+    },
+    {
+      args: ["nodes", "location", "get", "--node", "mac-1", "--location-timeout", "5s"],
+      flag: "--location-timeout",
+    },
+    {
+      args: ["nodes", "location", "get", "--node", "mac-1", "--invoke-timeout", "6s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--max-width", "1024px"],
+      flag: "--max-width",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--delay-ms", "20ms"],
+      flag: "--delay-ms",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--invoke-timeout", "20s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--quality", "0.8jpg"],
+      flag: "--quality",
+    },
+    {
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--quality", "1.1"],
+      flag: "--quality",
+    },
+    {
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--invoke-timeout", "90s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--screen", "1x"],
+      flag: "--screen",
+    },
+    {
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--invoke-timeout", "120s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--fps", "10fps"],
+      flag: "--fps",
+    },
+    {
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--fps", "0"],
+      flag: "--fps",
+    },
+    {
+      args: ["nodes", "notify", "--node", "mac-1", "--title", "Ping", "--invoke-timeout", "15s"],
+      flag: "--invoke-timeout",
+    },
+    {
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "15s",
+      ],
+      flag: "--invoke-timeout",
+    },
+  ])("rejects partial numeric option for $args", async ({ args, flag }) => {
+    await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
+    expect(lastNodeInvokeCall).toBeNull();
   });
 });

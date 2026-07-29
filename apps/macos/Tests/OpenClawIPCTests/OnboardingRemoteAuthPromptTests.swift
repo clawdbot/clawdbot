@@ -121,9 +121,12 @@ struct OnboardingRemoteAuthPromptTests {
         let noAuth = RemoteGatewayProbeSuccess(authSource: GatewayAuthSource.none)
 
         #expect(pairedDevice.title == "Connected via paired device")
-        #expect(pairedDevice.detail == "This Mac used a stored device token. New or unpaired devices may still need the gateway token.")
+        #expect(pairedDevice
+            .detail == "This Mac used a stored device token. New or unpaired devices may still need the gateway token.")
         #expect(bootstrap.title == "Connected with setup code")
-        #expect(bootstrap.detail == "This Mac is still using the temporary setup code. Approve pairing to finish provisioning device-scoped auth.")
+        #expect(bootstrap
+            .detail ==
+            "This Mac is still using the temporary setup code. Approve pairing to finish provisioning device-scoped auth.")
         #expect(sharedToken.title == "Connected with gateway token")
         #expect(sharedToken.detail == nil)
         #expect(noAuth.title == "Remote gateway ready")

@@ -1,3 +1,4 @@
+// Tests bundled binary discovery and version command helpers.
 import { describe, expect, it, vi } from "vitest";
 import type { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";

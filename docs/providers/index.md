@@ -3,10 +3,8 @@ summary: "Model providers (LLMs) supported by OpenClaw"
 read_when:
   - You want to choose a model provider
   - You need a quick overview of supported LLM backends
-title: "Provider Directory"
+title: "Provider directory"
 ---
-
-# Model Providers
 
 OpenClaw can use many LLM providers. Pick a provider, authenticate, then set the
 default model as `provider/model`.
@@ -26,40 +24,82 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Provider docs
 
+- [Alibaba Model Studio](/providers/alibaba)
 - [Amazon Bedrock](/providers/bedrock)
-- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [Amazon Bedrock Mantle](/providers/bedrock-mantle)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [Arcee AI (Trinity models)](/providers/arcee)
+- [Azure Speech](/providers/azure-speech)
+- [Baseten (Inkling + Model APIs)](/providers/baseten)
+- [BytePlus (International)](/concepts/model-providers#byteplus-international)
+- [Cerebras](/providers/cerebras)
+- [Chutes](/providers/chutes)
+- [ClawRouter (managed multi-provider routing)](/providers/clawrouter)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
-- [GLM models](/providers/glm)
+- [Cohere](/providers/cohere)
+- [ComfyUI](/providers/comfy)
+- [DeepSeek](/providers/deepseek)
+- [ds4 (local DeepSeek V4)](/providers/ds4)
+- [ElevenLabs](/providers/elevenlabs)
+- [fal](/providers/fal)
+- [Featherless AI](/providers/featherless)
+- [Fireworks](/providers/fireworks)
+- [GitHub Copilot](/providers/github-copilot)
+- [GMI Cloud](/providers/gmi)
 - [Google (Gemini)](/providers/google)
+- [Gradium](/providers/gradium)
 - [Groq (LPU inference)](/providers/groq)
 - [Hugging Face (Inference)](/providers/huggingface)
+- [inferrs (local models)](/providers/inferrs)
 - [Kilocode](/providers/kilocode)
 - [LiteLLM (unified gateway)](/providers/litellm)
+- [LM Studio (local models)](/providers/lmstudio)
+- [LongCat](/providers/longcat)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
-- [Model Studio (Alibaba Cloud)](/providers/modelstudio)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [NovitaAI](/providers/novita)
 - [NVIDIA](/providers/nvidia)
 - [Ollama (cloud + local models)](/providers/ollama)
+- [Ollama Cloud](/providers/ollama-cloud)
 - [OpenAI (API + Codex)](/providers/openai)
-- [OpenCode (Zen + Go)](/providers/opencode)
+- [OpenCode](/providers/opencode)
+- [OpenCode Go](/providers/opencode-go)
 - [OpenRouter](/providers/openrouter)
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
-- [Qwen (OAuth)](/providers/qwen)
+- [Qwen Cloud](/providers/qwen)
+- [Runway](/providers/runway)
+- [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
+- [StepFun](/providers/stepfun)
+- [Synthetic](/providers/synthetic)
+- [Tencent Cloud (TokenHub / TokenPlan)](/providers/tencent)
 - [Together AI](/providers/together)
-- [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [vLLM (local models)](/providers/vllm)
 - [Volcengine (Doubao)](/providers/volcengine)
+- [Vydra](/providers/vydra)
 - [xAI](/providers/xai)
 - [Xiaomi](/providers/xiaomi)
-- [Z.AI](/providers/zai)
+- [Z.AI (GLM)](/providers/zai)
+
+## Shared overview pages
+
+- [Additional provider variants](/providers/models#additional-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
+- [Image Generation](/tools/image-generation) - Shared `image_generate` tool, provider selection, and failover
+- [Music Generation](/tools/music-generation) - Shared `music_generate` tool, provider selection, and failover
+- [Video Generation](/tools/video-generation) - Shared `video_generate` tool, provider selection, and failover
 
 ## Transcription providers
 
 - [Deepgram (audio transcription)](/providers/deepgram)
+- [ElevenLabs](/providers/elevenlabs#speech-to-text)
+- [Mistral](/providers/mistral#audio-transcription-voxtral)
+- [OpenAI](/providers/openai)
+- [SenseAudio](/providers/senseaudio)
+- [xAI](/providers/xai)
 
 ## Community tools
 

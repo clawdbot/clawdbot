@@ -7,21 +7,15 @@
 
 import type {
   ChannelAccountSnapshot,
-  ChannelCapabilities,
-  ChannelGatewayContext,
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
-  ChannelMeta,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   ChannelPlugin,
   ChannelResolveKind,
   ChannelResolveResult,
-  ChannelStatusAdapter,
-  OpenClawConfig,
   OutboundDeliveryResult,
-  RuntimeEnv,
 } from "../runtime-api.js";
 
 // ============================================================================
@@ -66,16 +60,6 @@ export interface TwitchAccountConfig {
 }
 
 /**
- * Message target for Twitch
- */
-export interface TwitchTarget {
-  /** Account ID */
-  accountId: string;
-  /** Channel name (defaults to account's channel) */
-  channel?: string;
-}
-
-/**
  * Twitch message from chat
  */
 export interface TwitchChatMessage {
@@ -90,9 +74,9 @@ export interface TwitchChatMessage {
   /** Display name (may include special characters) */
   displayName?: string;
   /** Message ID */
-  id?: string;
-  /** Timestamp */
-  timestamp?: Date;
+  id: string;
+  /** Receive timestamp in milliseconds */
+  timestamp?: number;
   /** Whether the sender is a moderator */
   isMod?: boolean;
   /** Whether the sender is the channel owner/broadcaster */
@@ -105,37 +89,16 @@ export interface TwitchChatMessage {
   chatType?: "group";
 }
 
-/**
- * Send result from Twitch client
- */
-export interface SendResult {
-  ok: boolean;
-  error?: string;
-  messageId?: string;
-}
-
 // Re-export core types for convenience
 export type {
   ChannelAccountSnapshot,
-  ChannelGatewayContext,
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
-  ChannelMeta,
   ChannelOutboundAdapter,
-  ChannelStatusAdapter,
-  ChannelCapabilities,
   ChannelResolveKind,
   ChannelResolveResult,
   ChannelPlugin,
   ChannelOutboundContext,
   OutboundDeliveryResult,
 };
-
-import type { z } from "zod";
-// Import and re-export the schema type
-import type { TwitchConfigSchema } from "./config-schema.js";
-export type TwitchConfig = z.infer<typeof TwitchConfigSchema>;
-
-export type { OpenClawConfig };
-export type { RuntimeEnv };

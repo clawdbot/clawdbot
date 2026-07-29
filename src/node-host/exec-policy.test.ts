@@ -1,9 +1,6 @@
+/** Tests node-host exec policy evaluation and approval decisions. */
 import { describe, expect, it } from "vitest";
-import {
-  evaluateSystemRunPolicy,
-  formatSystemRunAllowlistMissMessage,
-  resolveExecApprovalDecision,
-} from "./exec-policy.js";
+import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 
 type EvaluatePolicyParams = Parameters<typeof evaluateSystemRunPolicy>[0];
 type EvaluatePolicyDecision = ReturnType<typeof evaluateSystemRunPolicy>;
@@ -51,29 +48,6 @@ describe("resolveExecApprovalDecision", () => {
   });
 });
 
-describe("formatSystemRunAllowlistMissMessage", () => {
-  it("returns legacy allowlist miss message by default", () => {
-    expect(formatSystemRunAllowlistMissMessage()).toBe("SYSTEM_RUN_DENIED: allowlist miss");
-  });
-
-  it("adds shell-wrapper guidance when wrappers are blocked", () => {
-    expect(
-      formatSystemRunAllowlistMissMessage({
-        shellWrapperBlocked: true,
-      }),
-    ).toContain("shell wrappers like sh/bash/zsh -c require approval");
-  });
-
-  it("adds Windows shell-wrapper guidance when blocked by cmd.exe policy", () => {
-    expect(
-      formatSystemRunAllowlistMissMessage({
-        shellWrapperBlocked: true,
-        windowsShellWrapperBlocked: true,
-      }),
-    ).toContain("Windows shell wrappers like cmd.exe /c require approval");
-  });
-});
-
 describe("evaluateSystemRunPolicy", () => {
   it("denies when security mode is deny", () => {
     const denied = expectDeniedDecision(
@@ -86,6 +60,20 @@ describe("evaluateSystemRunPolicy", () => {
   it("requires approval when ask policy requires it", () => {
     const denied = expectDeniedDecision(
       evaluateSystemRunPolicy(buildPolicyParams({ ask: "always" })),
+    );
+    expect(denied.eventReason).toBe("approval-required");
+    expect(denied.requiresAsk).toBe(true);
+  });
+
+  it("still requires approval when ask=always even with durable trust", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "always",
+          durableApprovalSatisfied: true,
+        }),
+      ),
     );
     expect(denied.eventReason).toBe("approval-required");
     expect(denied.requiresAsk).toBe(true);
@@ -113,12 +101,13 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.errorMessage).toBe("SYSTEM_RUN_DENIED: allowlist miss");
   });
 
-  it("treats shell wrappers as allowlist misses", () => {
-    const denied = expectDeniedDecision(
+  it("keeps POSIX shell wrapper decisions tied to allowlist analysis", () => {
+    const allowed = expectAllowedDecision(
       evaluateSystemRunPolicy(buildPolicyParams({ shellWrapperInvocation: true })),
     );
-    expect(denied.shellWrapperBlocked).toBe(true);
-    expect(denied.errorMessage).toContain("shell wrappers like sh/bash/zsh -c");
+    expect(allowed.shellWrapperBlocked).toBe(false);
+    expect(allowed.analysisOk).toBe(true);
+    expect(allowed.allowlistSatisfied).toBe(true);
   });
 
   it("keeps Windows-specific guidance for cmd.exe wrappers", () => {
@@ -130,6 +119,16 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.shellWrapperBlocked).toBe(true);
     expect(denied.windowsShellWrapperBlocked).toBe(true);
     expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
+  });
+
+  it("does not block Windows cmd.exe invocations without inline shell-wrapper transport", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ isWindows: true, cmdInvocation: true, shellWrapperInvocation: false }),
+      ),
+    );
+    expect(allowed.shellWrapperBlocked).toBe(false);
+    expect(allowed.windowsShellWrapperBlocked).toBe(false);
   });
 
   it("allows execution when policy checks pass", () => {

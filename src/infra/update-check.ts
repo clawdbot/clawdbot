@@ -1,13 +1,24 @@
+// Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { fetchWithTimeout } from "../utils/fetch-timeout.js";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import {
+  detectPackageManager as detectPackageManagerImpl,
+  isBunOwnedPackageRoot,
+  isPnpmOwnedPackageRoot,
+  resolvePnpmNodeModulesRoot,
+} from "./detect-package-manager.js";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
+import {
+  fetchNpmPackageTargetStatus,
+  type NpmMetadataCommandRunner,
+} from "./update-check-package-target.js";
 
-export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
+type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
-export type GitUpdateStatus = {
+type GitUpdateStatus = {
   root: string;
   sha: string | null;
   tag: string | null;
@@ -20,7 +31,7 @@ export type GitUpdateStatus = {
   error?: string;
 };
 
-export type DepsStatus = {
+type DepsStatus = {
   manager: PackageManager;
   status: "ok" | "missing" | "stale" | "unknown";
   lockfilePath: string | null;
@@ -28,12 +39,32 @@ export type DepsStatus = {
   reason?: string;
 };
 
-export type RegistryStatus = {
+type RegistryStatus = {
   latestVersion: string | null;
+  tag?: string;
   error?: string;
+  reason?: ExtendedStableFailureReason;
 };
 
-export type NpmTagStatus = {
+export type ExtendedStableFailureReason =
+  | "selector_missing"
+  | "selector_query_failed"
+  | "exact_package_mismatch"
+  | "unsupported_git_channel";
+
+type ExtendedStableResolutionResult =
+  | {
+      status: "resolved";
+      selector: "extended-stable";
+      version: string;
+      packageSpec: string;
+    }
+  | {
+      status: "failed";
+      reason: ExtendedStableFailureReason;
+    };
+
+type NpmTagStatus = {
   tag: string;
   version: string | null;
   error?: string;
@@ -47,6 +78,83 @@ export type UpdateCheckResult = {
   deps?: DepsStatus;
   registry?: RegistryStatus;
 };
+
+const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
+const PUBLIC_NPM_PACKAGE_NAME = "openclaw";
+
+function isLoopbackNpmRegistry(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function resolveExtendedStableRegistryTarget(params: {
+  packageName?: string;
+  env?: NodeJS.ProcessEnv;
+}): { registryUrl: string; packageName: string } {
+  const env = params.env ?? process.env;
+  const packageName = params.packageName?.trim() || PUBLIC_NPM_PACKAGE_NAME;
+  const packageSpecOverride = env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
+  const registryOverride = env.NPM_CONFIG_REGISTRY?.trim() || env.npm_config_registry?.trim() || "";
+
+  // A matching package override plus a loopback registry is the explicit local
+  // integration-test seam. Production resolution remains pinned to public npm.
+  if (packageSpecOverride === packageName && isLoopbackNpmRegistry(registryOverride)) {
+    return { registryUrl: registryOverride, packageName };
+  }
+  return {
+    registryUrl: PUBLIC_NPM_REGISTRY_URL,
+    packageName: PUBLIC_NPM_PACKAGE_NAME,
+  };
+}
+
+/** Resolves the extended-stable selector and verifies its exact package manifest. */
+export async function resolveExtendedStablePackage(params: {
+  installKind: "git" | "package" | "unknown";
+  timeoutMs?: number;
+  packageName?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ExtendedStableResolutionResult> {
+  if (params.installKind === "git") {
+    return { status: "failed", reason: "unsupported_git_channel" };
+  }
+
+  const timeoutMs = params.timeoutMs ?? 3500;
+  const registryTarget = resolveExtendedStableRegistryTarget(params);
+  const selector = await fetchNpmPackageTargetStatus({
+    target: "extended-stable",
+    timeoutMs,
+    ...registryTarget,
+  });
+  if (!selector.version) {
+    return {
+      status: "failed",
+      reason: selector.error === "HTTP 404" ? "selector_missing" : "selector_query_failed",
+    };
+  }
+
+  const exact = await fetchNpmPackageTargetStatus({
+    target: selector.version,
+    timeoutMs,
+    ...registryTarget,
+  });
+  if (exact.version !== selector.version) {
+    return { status: "failed", reason: "exact_package_mismatch" };
+  }
+
+  return {
+    status: "resolved",
+    selector: "extended-stable",
+    version: selector.version,
+    packageSpec: `${registryTarget.packageName}@${selector.version}`,
+  };
+}
 
 export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
   if (update.installKind !== "git") {
@@ -76,6 +184,33 @@ async function detectPackageManager(root: string): Promise<PackageManager> {
   return (await detectPackageManagerImpl(root)) ?? "unknown";
 }
 
+// Packed manifests advertise the workspace pnpm packageManager, so installed roots need
+// topology proof (pnpm virtual store, Bun global root, or otherwise npm); mistakes break self-update.
+async function isLocklessOpenClawNpmInstall(params: {
+  root: string;
+  manager: PackageManager;
+}): Promise<boolean> {
+  if (params.manager !== "pnpm" || (await exists(path.join(params.root, "pnpm-lock.yaml")))) {
+    return false;
+  }
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(params.root, "package.json"), "utf8"));
+    if (manifest?.name !== "openclaw") {
+      return false;
+    }
+    if (
+      !resolvePnpmNodeModulesRoot(params.root) ||
+      (await isPnpmOwnedPackageRoot(params.root)) ||
+      (await isBunOwnedPackageRoot(params.root))
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function detectGitRoot(root: string): Promise<string | null> {
   const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     timeoutMs: 4000,
@@ -87,7 +222,7 @@ async function detectGitRoot(root: string): Promise<string | null> {
   return top ? path.resolve(top) : null;
 }
 
-export async function checkGitUpdateStatus(params: {
+async function checkGitUpdateStatus(params: {
   root: string;
   timeoutMs?: number;
   fetch?: boolean;
@@ -146,10 +281,28 @@ export async function checkGitUpdateStatus(params: {
         .catch(() => false)
     : null;
 
-  const counts =
-    upstream && upstream.length > 0
+  // Freeze the post-fetch upstream for both graph queries. Resolve via @{upstream} rather than
+  // its display name so dashed remotes stay operands on older Git versions. Three-dot rev-list
+  // still counts disconnected or truncated histories, so require a visible common ancestor.
+  const upstreamCommitRes =
+    upstream && sha
       ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-list", "--left-right", "--count", `HEAD...${upstream}`],
+          ["git", "-C", root, "rev-parse", "--verify", "@{upstream}^{commit}"],
+          { timeoutMs },
+        ).catch(() => null)
+      : null;
+  const upstreamCommit =
+    upstreamCommitRes?.code === 0 ? upstreamCommitRes.stdout.trim() || null : null;
+  const mergeBase =
+    sha && upstreamCommit
+      ? await runCommandWithTimeout(["git", "-C", root, "merge-base", sha, upstreamCommit], {
+          timeoutMs,
+        }).catch(() => null)
+      : null;
+  const counts =
+    sha && upstreamCommit && mergeBase?.code === 0 && mergeBase.stdout.trim().length > 0
+      ? await runCommandWithTimeout(
+          ["git", "-C", root, "rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`],
           { timeoutMs },
         ).catch(() => null)
       : null;
@@ -190,10 +343,10 @@ async function statMtimeMs(p: string): Promise<number | null> {
   }
 }
 
-function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
+async function resolveDepsMarker(params: { root: string; manager: PackageManager }): Promise<{
   lockfilePath: string | null;
   markerPath: string | null;
-} {
+}> {
   const root = params.root;
   if (params.manager === "pnpm") {
     return {
@@ -202,8 +355,11 @@ function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
     };
   }
   if (params.manager === "bun") {
+    const textLockfilePath = path.join(root, "bun.lock");
     return {
-      lockfilePath: path.join(root, "bun.lockb"),
+      lockfilePath: (await exists(textLockfilePath))
+        ? textLockfilePath
+        : path.join(root, "bun.lockb"),
       markerPath: path.join(root, "node_modules"),
     };
   }
@@ -216,12 +372,12 @@ function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
   return { lockfilePath: null, markerPath: null };
 }
 
-export async function checkDepsStatus(params: {
+async function checkDepsStatus(params: {
   root: string;
   manager: PackageManager;
 }): Promise<DepsStatus> {
   const root = path.resolve(params.root);
-  const { lockfilePath, markerPath } = resolveDepsMarker({
+  const { lockfilePath, markerPath } = await resolveDepsMarker({
     root,
     manager: params.manager,
   });
@@ -284,50 +440,113 @@ export async function checkDepsStatus(params: {
   };
 }
 
-export async function fetchNpmLatestVersion(params?: {
+async function fetchNpmLatestVersion(params?: {
   timeoutMs?: number;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  runCommand?: NpmMetadataCommandRunner;
 }): Promise<RegistryStatus> {
-  const res = await fetchNpmTagVersion({ tag: "latest", timeoutMs: params?.timeoutMs });
+  const res = await fetchNpmTagVersion({
+    tag: "latest",
+    timeoutMs: params?.timeoutMs,
+    cwd: params?.cwd,
+    env: params?.env,
+    runCommand: params?.runCommand,
+  });
   return {
     latestVersion: res.version,
     error: res.error,
   };
 }
 
+async function fetchNpmRegistryVersionForChannel(params: {
+  channel: UpdateChannel;
+  timeoutMs?: number;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  runCommand?: NpmMetadataCommandRunner;
+}): Promise<RegistryStatus> {
+  const res = await resolveNpmChannelTag({
+    channel: params.channel,
+    timeoutMs: params.timeoutMs,
+    cwd: params.cwd,
+    env: params.env,
+    runCommand: params.runCommand,
+  });
+  return {
+    latestVersion: res.version,
+    tag: res.tag,
+    ...(res.reason ? { error: res.reason, reason: res.reason } : {}),
+  };
+}
+
 export async function fetchNpmTagVersion(params: {
   tag: string;
   timeoutMs?: number;
+  spec?: string;
+  command?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  runCommand?: NpmMetadataCommandRunner;
 }): Promise<NpmTagStatus> {
-  const timeoutMs = params?.timeoutMs ?? 3500;
-  const tag = params.tag;
-  try {
-    const res = await fetchWithTimeout(
-      `https://registry.npmjs.org/openclaw/${encodeURIComponent(tag)}`,
-      {},
-      Math.max(250, timeoutMs),
-    );
-    if (!res.ok) {
-      return { tag, version: null, error: `HTTP ${res.status}` };
-    }
-    const json = (await res.json()) as { version?: unknown };
-    const version = typeof json?.version === "string" ? json.version : null;
-    return { tag, version };
-  } catch (err) {
-    return { tag, version: null, error: String(err) };
-  }
+  const res = await fetchNpmPackageTargetStatus({
+    target: params.tag,
+    timeoutMs: params.timeoutMs,
+    spec: params.spec,
+    command: params.command,
+    cwd: params.cwd,
+    env: params.env,
+    runCommand: params.runCommand,
+  });
+  return {
+    tag: params.tag,
+    version: res.version,
+    error: res.error,
+  };
 }
 
 export async function resolveNpmChannelTag(params: {
   channel: UpdateChannel;
   timeoutMs?: number;
-}): Promise<{ tag: string; version: string | null }> {
+  command?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  runCommand?: NpmMetadataCommandRunner;
+}): Promise<{
+  tag: string;
+  version: string | null;
+  reason?: ExtendedStableFailureReason;
+}> {
   const channelTag = channelToNpmTag(params.channel);
-  const channelStatus = await fetchNpmTagVersion({ tag: channelTag, timeoutMs: params.timeoutMs });
+  if (params.channel === "extended-stable") {
+    const resolved = await resolveExtendedStablePackage({
+      installKind: "package",
+      timeoutMs: params.timeoutMs,
+    });
+    return resolved.status === "resolved"
+      ? { tag: resolved.selector, version: resolved.version }
+      : { tag: channelTag, version: null, reason: resolved.reason };
+  }
+  const channelStatus = await fetchNpmTagVersion({
+    tag: channelTag,
+    timeoutMs: params.timeoutMs,
+    command: params.command,
+    cwd: params.cwd,
+    env: params.env,
+    runCommand: params.runCommand,
+  });
   if (params.channel !== "beta") {
     return { tag: channelTag, version: channelStatus.version };
   }
 
-  const latestStatus = await fetchNpmTagVersion({ tag: "latest", timeoutMs: params.timeoutMs });
+  const latestStatus = await fetchNpmTagVersion({
+    tag: "latest",
+    timeoutMs: params.timeoutMs,
+    command: params.command,
+    cwd: params.cwd,
+    env: params.env,
+    runCommand: params.runCommand,
+  });
   if (!latestStatus.version) {
     return { tag: channelTag, version: channelStatus.version };
   }
@@ -342,109 +561,15 @@ export async function resolveNpmChannelTag(params: {
 }
 
 export function compareSemverStrings(a: string | null, b: string | null): number | null {
-  const pa = parseComparableSemver(a);
-  const pb = parseComparableSemver(b);
-  if (!pa || !pb) {
-    return null;
-  }
-  if (pa.major !== pb.major) {
-    return pa.major < pb.major ? -1 : 1;
-  }
-  if (pa.minor !== pb.minor) {
-    return pa.minor < pb.minor ? -1 : 1;
-  }
-  if (pa.patch !== pb.patch) {
-    return pa.patch < pb.patch ? -1 : 1;
-  }
-  return comparePrerelease(pa.prerelease, pb.prerelease);
-}
-
-type ComparableSemver = {
-  major: number;
-  minor: number;
-  patch: number;
-  prerelease: string[] | null;
-};
-
-function parseComparableSemver(version: string | null): ComparableSemver | null {
-  if (!version) {
-    return null;
-  }
-  const normalized = normalizeLegacyDotBetaVersion(version.trim());
-  const match = /^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
-    normalized,
-  );
-  if (!match) {
-    return null;
-  }
-  const [, major, minor, patch, prereleaseRaw] = match;
-  if (!major || !minor || !patch) {
-    return null;
-  }
-  return {
-    major: Number.parseInt(major, 10),
-    minor: Number.parseInt(minor, 10),
-    patch: Number.parseInt(patch, 10),
-    prerelease: prereleaseRaw ? prereleaseRaw.split(".").filter(Boolean) : null,
-  };
-}
-
-function normalizeLegacyDotBetaVersion(version: string): string {
-  const trimmed = version.trim();
-  const dotBetaMatch = /^([vV]?[0-9]+\.[0-9]+\.[0-9]+)\.beta(?:\.([0-9A-Za-z.-]+))?$/.exec(trimmed);
-  if (!dotBetaMatch) {
-    return trimmed;
-  }
-  const base = dotBetaMatch[1];
-  const suffix = dotBetaMatch[2];
-  return suffix ? `${base}-beta.${suffix}` : `${base}-beta`;
-}
-
-function comparePrerelease(a: string[] | null, b: string[] | null): number {
-  if (!a?.length && !b?.length) {
-    return 0;
-  }
-  if (!a?.length) {
-    return 1;
-  }
-  if (!b?.length) {
-    return -1;
-  }
-
-  const max = Math.max(a.length, b.length);
-  for (let i = 0; i < max; i += 1) {
-    const ai = a[i];
-    const bi = b[i];
-    if (ai == null && bi == null) {
-      return 0;
+  if (a && b) {
+    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
+    if (openClawReleaseCmp != null) {
+      return openClawReleaseCmp;
     }
-    if (ai == null) {
-      return -1;
-    }
-    if (bi == null) {
-      return 1;
-    }
-    if (ai === bi) {
-      continue;
-    }
-
-    const aiNumeric = /^[0-9]+$/.test(ai);
-    const biNumeric = /^[0-9]+$/.test(bi);
-    if (aiNumeric && biNumeric) {
-      const aiNum = Number.parseInt(ai, 10);
-      const biNum = Number.parseInt(bi, 10);
-      return aiNum < biNum ? -1 : 1;
-    }
-    if (aiNumeric && !biNumeric) {
-      return -1;
-    }
-    if (!aiNumeric && biNumeric) {
-      return 1;
-    }
-    return ai < bi ? -1 : 1;
   }
-
-  return 0;
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 export async function checkUpdateStatus(params: {
@@ -452,24 +577,51 @@ export async function checkUpdateStatus(params: {
   timeoutMs?: number;
   fetchGit?: boolean;
   includeRegistry?: boolean;
+  registryChannel?: UpdateChannel;
 }): Promise<UpdateCheckResult> {
   const timeoutMs = params.timeoutMs ?? 6000;
+  const fetchRegistry = () =>
+    params.registryChannel
+      ? fetchNpmRegistryVersionForChannel({
+          channel: params.registryChannel,
+          timeoutMs,
+        })
+      : fetchNpmLatestVersion({ timeoutMs });
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
     return {
       root: null,
       installKind: "unknown",
       packageManager: "unknown",
-      registry: params.includeRegistry ? await fetchNpmLatestVersion({ timeoutMs }) : undefined,
+      registry: params.includeRegistry ? await fetchRegistry() : undefined,
     };
   }
 
-  const [pm, gitRoot, registry] = await Promise.all([
+  const rootRealpath = await fs.realpath(root).catch(() => root);
+  const [detectedPackageManager, gitRoot] = await Promise.all([
     detectPackageManager(root),
     detectGitRoot(root),
-    params.includeRegistry ? fetchNpmLatestVersion({ timeoutMs }) : Promise.resolve(undefined),
   ]);
-  const isGit = gitRoot && path.resolve(gitRoot) === root;
+  const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
+  const packageManager =
+    !isGit &&
+    (await isLocklessOpenClawNpmInstall({
+      root,
+      manager: detectedPackageManager,
+    }))
+      ? "npm"
+      : detectedPackageManager;
+
+  const registry = params.includeRegistry
+    ? params.registryChannel === "extended-stable" && isGit
+      ? {
+          latestVersion: null,
+          tag: "extended-stable",
+          error: "unsupported_git_channel",
+          reason: "unsupported_git_channel" as const,
+        }
+      : await fetchRegistry()
+    : undefined;
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([
@@ -480,13 +632,13 @@ export async function checkUpdateStatus(params: {
           fetch: Boolean(params.fetchGit),
         })
       : Promise.resolve(undefined),
-    checkDepsStatus({ root, manager: pm }),
+    checkDepsStatus({ root, manager: packageManager }),
   ]);
 
   return {
     root,
     installKind,
-    packageManager: pm,
+    packageManager,
     git,
     deps,
     registry,

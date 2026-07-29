@@ -1,3 +1,4 @@
+// Twitch tests cover probe plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeTwitch } from "./probe.js";
 import type { TwitchAccountConfig } from "./types.js";
@@ -47,7 +48,7 @@ vi.mock("@twurple/chat", () => ({
 }));
 
 vi.mock("@twurple/auth", () => ({
-  StaticAuthProvider: class {},
+  StaticAuthProvider: function StaticAuthProvider() {},
 }));
 
 describe("probeTwitch", () => {

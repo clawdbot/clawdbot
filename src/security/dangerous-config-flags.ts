@@ -1,28 +1,87 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Collects dangerous config flag findings across agents and runtime config.
+import {
+  listAgentEntries,
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  tryResolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { collectPluginConfigContractMatches } from "../plugins/config-contract-matches.js";
+import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
+import { isRecord, resolveUserPath } from "../utils.js";
+import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
+import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "./dangerous-config-flags-current.js";
 
-export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
-  const enabledFlags: string[] = [];
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
-    enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
+/**
+ * Collect enabled insecure/dangerous config flags for audit and startup warnings.
+ * Plugin flags use current metadata when requested, then fall back to resolving manifest contracts.
+ */
+export function collectEnabledInsecureOrDangerousFlags(
+  cfg: OpenClawConfig,
+  options: { preferCurrentPluginMetadataSnapshot?: boolean } = {},
+): string[] {
+  const pluginEntries = cfg.plugins?.entries;
+  if (!isRecord(pluginEntries)) {
+    return collectEnabledInsecureOrDangerousFlagsFromContracts(cfg);
   }
-  if (cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
-    enabledFlags.push("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true");
+  const pluginIds = Object.keys(pluginEntries);
+
+  if (options.preferCurrentPluginMetadataSnapshot) {
+    const currentSnapshotFlags = collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(cfg);
+    if (currentSnapshotFlags) {
+      return currentSnapshotFlags;
+    }
   }
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
-  }
-  if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
-    enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");
-  }
-  if (Array.isArray(cfg.hooks?.mappings)) {
-    for (const [index, mapping] of cfg.hooks.mappings.entries()) {
-      if (mapping?.allowUnsafeExternalContent === true) {
-        enabledFlags.push(`hooks.mappings[${index}].allowUnsafeExternalContent=true`);
+
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceDirs = new Set<string | undefined>();
+  if (defaultAgentId) {
+    workspaceDirs.add(resolveAgentWorkspaceDir(cfg, defaultAgentId));
+  } else {
+    const roster = listAgentEntries(cfg);
+    if (roster.length === 0) {
+      const configuredWorkspace = cfg.agents?.defaults?.workspace?.trim();
+      workspaceDirs.add(
+        configuredWorkspace
+          ? resolveUserPath(configuredWorkspace, process.env)
+          : resolveDefaultAgentWorkspaceDir(process.env),
+      );
+    } else {
+      let hasInheritedWorkspace = false;
+      for (const entry of roster) {
+        const workspace = resolveAgentConfig(cfg, entry.id)?.workspace?.trim();
+        if (workspace) {
+          workspaceDirs.add(resolveUserPath(workspace, process.env));
+        } else {
+          hasInheritedWorkspace = true;
+        }
+      }
+      if (hasInheritedWorkspace) {
+        const inheritedWorkspace = cfg.agents?.defaults?.workspace?.trim();
+        workspaceDirs.add(
+          inheritedWorkspace
+            ? resolveUserPath(inheritedWorkspace, process.env)
+            : resolveDefaultAgentWorkspaceDir(process.env),
+        );
       }
     }
   }
-  if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
-    enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
+
+  const flags = new Set<string>();
+  for (const workspaceDir of workspaceDirs) {
+    const configContracts = resolvePluginConfigContractsById({
+      config: cfg,
+      ...(workspaceDir ? { workspaceDir } : {}),
+      env: process.env,
+      pluginIds,
+    });
+    for (const flag of collectEnabledInsecureOrDangerousFlagsFromContracts(cfg, {
+      collectPluginConfigContractMatches,
+      configContractsById: configContracts,
+    })) {
+      flags.add(flag);
+    }
   }
-  return enabledFlags;
+  return [...flags];
 }

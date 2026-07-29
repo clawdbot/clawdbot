@@ -1,3 +1,4 @@
+// Channel plugin helper tests cover shared plugin helper behavior and edge cases.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -15,86 +16,148 @@ function cfgWithChannel(channelKey: string, accounts?: Record<string, unknown>):
 }
 
 describe("buildAccountScopedDmSecurityPolicy", () => {
-  it("builds top-level dm policy paths when no account config exists", () => {
-    expect(
-      buildAccountScopedDmSecurityPolicy({
-        cfg: cfgWithChannel("telegram"),
-        channelKey: "telegram",
+  it.each([
+    {
+      name: "builds top-level dm policy paths when no account config exists",
+      input: {
+        cfg: cfgWithChannel("demo-root"),
+        channelKey: "demo-root",
         fallbackAccountId: "default",
         policy: "pairing",
         allowFrom: ["123"],
         policyPathSuffix: "dmPolicy",
-      }),
-    ).toEqual({
-      policy: "pairing",
-      allowFrom: ["123"],
-      policyPath: "channels.telegram.dmPolicy",
-      allowFromPath: "channels.telegram.",
-      approveHint: formatPairingApproveHint("telegram"),
-      normalizeEntry: undefined,
-    });
-  });
-
-  it("uses account-scoped paths when account config exists", () => {
-    expect(
-      buildAccountScopedDmSecurityPolicy({
-        cfg: cfgWithChannel("signal", { work: {} }),
-        channelKey: "signal",
+      },
+      expected: {
+        policy: "pairing",
+        allowFrom: ["123"],
+        policyPath: "channels.demo-root.dmPolicy",
+        allowFromPath: "channels.demo-root.",
+        approveHint: formatPairingApproveHint("demo-root"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "uses account-scoped paths when account config exists",
+      input: {
+        cfg: cfgWithChannel("demo-account", { work: {} }),
+        channelKey: "demo-account",
         accountId: "work",
         fallbackAccountId: "default",
         policy: "allowlist",
         allowFrom: ["+12125551212"],
         policyPathSuffix: "dmPolicy",
-      }),
-    ).toEqual({
-      policy: "allowlist",
-      allowFrom: ["+12125551212"],
-      policyPath: "channels.signal.accounts.work.dmPolicy",
-      allowFromPath: "channels.signal.accounts.work.",
-      approveHint: formatPairingApproveHint("signal"),
-      normalizeEntry: undefined,
-    });
-  });
-
-  it("supports nested dm paths without explicit policyPath", () => {
-    expect(
-      buildAccountScopedDmSecurityPolicy({
-        cfg: cfgWithChannel("discord", { work: {} }),
-        channelKey: "discord",
+      },
+      expected: {
+        policy: "allowlist",
+        allowFrom: ["+12125551212"],
+        policyPath: "channels.demo-account.accounts.work.dmPolicy",
+        allowFromPath: "channels.demo-account.accounts.work.",
+        approveHint: formatPairingApproveHint("demo-account"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "supports nested dm paths without explicit policyPath",
+      input: {
+        cfg: cfgWithChannel("demo-nested", { work: {} }),
+        channelKey: "demo-nested",
         accountId: "work",
         policy: "pairing",
         allowFrom: [],
         allowFromPathSuffix: "dm.",
-      }),
-    ).toEqual({
-      policy: "pairing",
-      allowFrom: [],
-      policyPath: undefined,
-      allowFromPath: "channels.discord.accounts.work.dm.",
-      approveHint: formatPairingApproveHint("discord"),
-      normalizeEntry: undefined,
-    });
-  });
-
-  it("supports custom defaults and approve hints", () => {
-    expect(
-      buildAccountScopedDmSecurityPolicy({
-        cfg: cfgWithChannel("synology-chat"),
-        channelKey: "synology-chat",
+      },
+      expected: {
+        policy: "pairing",
+        allowFrom: [],
+        policyPath: undefined,
+        allowFromPath: "channels.demo-nested.accounts.work.dm.",
+        approveHint: formatPairingApproveHint("demo-nested"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "uses accounts.default paths when shared defaults are inherited",
+      input: {
+        cfg: cfgWithChannel("demo-default-account", {
+          default: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+          },
+          work: {},
+        }),
+        channelKey: "demo-default-account",
+        accountId: "work",
+        fallbackAccountId: "default",
+        policy: "allowlist",
+        allowFrom: ["+15550001111"],
+        policyPathSuffix: "dmPolicy",
+        inheritSharedDefaultsFromDefaultAccount: true,
+      },
+      expected: {
+        policy: "allowlist",
+        allowFrom: ["+15550001111"],
+        policyPath: "channels.demo-default-account.accounts.default.dmPolicy",
+        allowFromPath: "channels.demo-default-account.accounts.default.",
+        approveHint: formatPairingApproveHint("demo-default-account"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "ignores accounts.default paths unless the channel opts into shared default-account inheritance",
+      input: {
+        cfg: {
+          channels: {
+            "demo-root": {
+              dmPolicy: "pairing",
+              allowFrom: ["*"],
+              accounts: {
+                default: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["+15550001111"],
+                },
+                work: {},
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        channelKey: "demo-root",
+        accountId: "work",
+        fallbackAccountId: "default",
+        policy: "pairing",
+        allowFrom: ["*"],
+        policyPathSuffix: "dmPolicy",
+      },
+      expected: {
+        policy: "pairing",
+        allowFrom: ["*"],
+        policyPath: "channels.demo-root.dmPolicy",
+        allowFromPath: "channels.demo-root.",
+        approveHint: formatPairingApproveHint("demo-root"),
+        normalizeEntry: undefined,
+      },
+    },
+    {
+      name: "supports custom defaults and approve hints",
+      input: {
+        cfg: cfgWithChannel("demo-default"),
+        channelKey: "demo-default",
         fallbackAccountId: "default",
         allowFrom: ["user-1"],
         defaultPolicy: "allowlist",
         policyPathSuffix: "dmPolicy",
-        approveHint: "openclaw pairing approve synology-chat <code>",
-      }),
-    ).toEqual({
-      policy: "allowlist",
-      allowFrom: ["user-1"],
-      policyPath: "channels.synology-chat.dmPolicy",
-      allowFromPath: "channels.synology-chat.",
-      approveHint: "openclaw pairing approve synology-chat <code>",
-      normalizeEntry: undefined,
-    });
+        approveHint: "openclaw pairing approve demo-default <code>",
+      },
+      expected: {
+        policy: "allowlist",
+        allowFrom: ["user-1"],
+        policyPath: "channels.demo-default.dmPolicy",
+        allowFromPath: "channels.demo-default.",
+        approveHint: "openclaw pairing approve demo-default <code>",
+        normalizeEntry: undefined,
+      },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(buildAccountScopedDmSecurityPolicy(input)).toEqual(expected);
   });
 });
 

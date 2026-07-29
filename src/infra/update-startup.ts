@@ -1,15 +1,51 @@
+// Runs startup update checks and optional auto-update handoff.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { loadConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  refreshRemoteModelCatalog,
+  REMOTE_MODEL_CATALOG_TTL_MS,
+} from "../model-catalog/remote-refresh.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
-import { writeJsonAtomic } from "./json-files.js";
+import { isTruthyEnvValue } from "./env.js";
+import {
+  EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+  isGatewayExternallySupervised,
+} from "./gateway-supervision.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
-import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
+import {
+  resolveGatewayRestartDeferralTimeoutMs,
+  scheduleGatewaySigusr1Restart,
+} from "./restart.js";
+import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
+import {
+  channelToNpmTag,
+  normalizeUpdateChannel,
+  DEFAULT_PACKAGE_CHANNEL,
+  type UpdateChannel,
+} from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
+import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "./update-control-plane-sentinel.js";
+import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -40,6 +76,8 @@ type AutoUpdateRunResult = {
   stdout?: string;
   stderr?: string;
   reason?: string;
+  command?: string;
+  logPath?: string;
 };
 
 export type UpdateAvailable = {
@@ -58,13 +96,16 @@ export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
 }
 
-const UPDATE_CHECK_FILENAME = "update-check.json";
+const UPDATE_CHECK_STATE_KEY = "default";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
 const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
+const MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS = 2000;
+
+type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
@@ -76,30 +117,17 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
   return false;
 }
 
-function resolveAutoUpdatePolicy(cfg: ReturnType<typeof loadConfig>): AutoUpdatePolicy {
+function resolveAutoUpdatePolicy(cfg: OpenClawConfig): AutoUpdatePolicy {
   const auto = cfg.update?.auto;
-  const stableDelayHours =
-    typeof auto?.stableDelayHours === "number" && Number.isFinite(auto.stableDelayHours)
-      ? Math.max(0, auto.stableDelayHours)
-      : AUTO_STABLE_DELAY_HOURS_DEFAULT;
-  const stableJitterHours =
-    typeof auto?.stableJitterHours === "number" && Number.isFinite(auto.stableJitterHours)
-      ? Math.max(0, auto.stableJitterHours)
-      : AUTO_STABLE_JITTER_HOURS_DEFAULT;
-  const betaCheckIntervalHours =
-    typeof auto?.betaCheckIntervalHours === "number" && Number.isFinite(auto.betaCheckIntervalHours)
-      ? Math.max(0.25, auto.betaCheckIntervalHours)
-      : AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT;
-
   return {
     enabled: Boolean(auto?.enabled),
-    stableDelayHours,
-    stableJitterHours,
-    betaCheckIntervalHours,
+    stableDelayHours: AUTO_STABLE_DELAY_HOURS_DEFAULT,
+    stableJitterHours: AUTO_STABLE_JITTER_HOURS_DEFAULT,
+    betaCheckIntervalHours: AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT,
   };
 }
 
-function resolveCheckIntervalMs(cfg: ReturnType<typeof loadConfig>): number {
+function resolveCheckIntervalMs(cfg: OpenClawConfig): number {
   const channel = normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   const auto = resolveAutoUpdatePolicy(cfg);
   if (!auto.enabled) {
@@ -114,18 +142,69 @@ function resolveCheckIntervalMs(cfg: ReturnType<typeof loadConfig>): number {
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
-async function readState(statePath: string): Promise<UpdateCheckState> {
-  try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as UpdateCheckState;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+function presentString(value: string | null): string | undefined {
+  return value ?? undefined;
 }
 
-async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
-  await writeJsonAtomic(statePath, state);
+async function readState(): Promise<UpdateCheckState> {
+  const database = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    stateDb
+      .selectFrom("update_check_state")
+      .selectAll()
+      .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+  );
+  if (!row) {
+    return {};
+  }
+  return {
+    lastCheckedAt: presentString(row.last_checked_at),
+    lastNotifiedVersion: presentString(row.last_notified_version),
+    lastNotifiedTag: presentString(row.last_notified_tag),
+    lastAvailableVersion: presentString(row.last_available_version),
+    lastAvailableTag: presentString(row.last_available_tag),
+    autoInstallId: presentString(row.auto_install_id),
+    autoFirstSeenVersion: presentString(row.auto_first_seen_version),
+    autoFirstSeenTag: presentString(row.auto_first_seen_tag),
+    autoFirstSeenAt: presentString(row.auto_first_seen_at),
+    autoLastAttemptVersion: presentString(row.auto_last_attempt_version),
+    autoLastAttemptAt: presentString(row.auto_last_attempt_at),
+    autoLastSuccessVersion: presentString(row.auto_last_success_version),
+    autoLastSuccessAt: presentString(row.auto_last_success_at),
+  };
+}
+
+async function writeState(state: UpdateCheckState): Promise<void> {
+  const updatedAtMs = Date.now();
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      stateDb.deleteFrom("update_check_state").where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+    );
+    executeSqliteQuerySync(
+      db,
+      stateDb.insertInto("update_check_state").values({
+        state_key: UPDATE_CHECK_STATE_KEY,
+        last_checked_at: state.lastCheckedAt ?? null,
+        last_notified_version: state.lastNotifiedVersion ?? null,
+        last_notified_tag: state.lastNotifiedTag ?? null,
+        last_available_version: state.lastAvailableVersion ?? null,
+        last_available_tag: state.lastAvailableTag ?? null,
+        auto_install_id: state.autoInstallId ?? null,
+        auto_first_seen_version: state.autoFirstSeenVersion ?? null,
+        auto_first_seen_tag: state.autoFirstSeenTag ?? null,
+        auto_first_seen_at: state.autoFirstSeenAt ?? null,
+        auto_last_attempt_version: state.autoLastAttemptVersion ?? null,
+        auto_last_attempt_at: state.autoLastAttemptAt ?? null,
+        auto_last_success_version: state.autoLastSuccessVersion ?? null,
+        auto_last_success_at: state.autoLastSuccessAt ?? null,
+        updated_at_ms: updatedAtMs,
+      }),
+    );
+  });
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -153,21 +232,49 @@ function setUpdateAvailableCache(params: {
   params.onUpdateAvailableChange?.(params.next);
 }
 
-function resolvePersistedUpdateAvailable(state: UpdateCheckState): UpdateAvailable | null {
+function isPersistedAvailabilityForChannel(params: {
+  state: UpdateCheckState;
+  channel: UpdateChannel;
+}): boolean {
+  const tag = params.state.lastAvailableTag?.trim();
+  if (params.channel === "stable") {
+    return !tag || tag === "latest";
+  }
+  if (params.channel === "beta") {
+    return tag === "beta" || tag === "latest";
+  }
+  return tag === params.channel;
+}
+
+function resolvePersistedUpdateAvailable(
+  state: UpdateCheckState,
+  channel: UpdateChannel,
+): UpdateAvailable | null {
   const latestVersion = state.lastAvailableVersion?.trim();
-  if (!latestVersion) {
+  if (!latestVersion || !isPersistedAvailabilityForChannel({ state, channel })) {
     return null;
   }
   const cmp = compareSemverStrings(VERSION, latestVersion);
   if (cmp == null || cmp >= 0) {
     return null;
   }
-  const channel = state.lastAvailableTag?.trim() || DEFAULT_PACKAGE_CHANNEL;
+  const persistedTag = state.lastAvailableTag?.trim() || channelToNpmTag(channel);
   return {
     currentVersion: VERSION,
     latestVersion,
-    channel,
+    channel: persistedTag,
   };
+}
+
+function clearPersistedAvailabilityForChannel(
+  nextState: UpdateCheckState,
+  channel: UpdateChannel,
+): void {
+  if (!isPersistedAvailabilityForChannel({ state: nextState, channel })) {
+    return;
+  }
+  delete nextState.lastAvailableVersion;
+  delete nextState.lastAvailableTag;
 }
 
 function resolveStableJitterMs(params: {
@@ -184,6 +291,18 @@ function resolveStableJitterMs(params: {
     .digest();
   const bucket = hash.readUInt32BE(0);
   return bucket % (Math.floor(params.jitterWindowMs) + 1);
+}
+
+function resolveUpdateCheckNowMs(valueMs: unknown): number {
+  return asDateTimestampMs(valueMs) ?? asDateTimestampMs(Date.now()) ?? 0;
+}
+
+function resolveUpdateCheckTimestamp(valueMs: unknown): string {
+  return (
+    timestampMsToIsoString(valueMs) ??
+    timestampMsToIsoString(resolveUpdateCheckNowMs(Date.now())) ??
+    new Date().toISOString()
+  );
 }
 
 function resolveStableAutoApplyAtMs(params: {
@@ -206,16 +325,17 @@ function resolveStableAutoApplyAtMs(params: {
   if (!matchesExisting) {
     params.nextState.autoFirstSeenVersion = params.version;
     params.nextState.autoFirstSeenTag = params.tag;
-    params.nextState.autoFirstSeenAt = new Date(params.nowMs).toISOString();
+    params.nextState.autoFirstSeenAt = resolveUpdateCheckTimestamp(params.nowMs);
   } else {
     params.nextState.autoFirstSeenVersion = params.state.autoFirstSeenVersion;
     params.nextState.autoFirstSeenTag = params.state.autoFirstSeenTag;
     params.nextState.autoFirstSeenAt = params.state.autoFirstSeenAt;
   }
 
-  const firstSeenMs = params.nextState.autoFirstSeenAt
+  const parsedFirstSeenMs = params.nextState.autoFirstSeenAt
     ? Date.parse(params.nextState.autoFirstSeenAt)
     : params.nowMs;
+  const firstSeenMs = Number.isFinite(parsedFirstSeenMs) ? parsedFirstSeenMs : params.nowMs;
   const baseDelayMs = Math.max(0, params.stableDelayHours) * ONE_HOUR_MS;
   const jitterWindowMs = Math.max(0, params.stableJitterHours) * ONE_HOUR_MS;
   const jitterMs = resolveStableJitterMs({
@@ -228,15 +348,100 @@ function resolveStableAutoApplyAtMs(params: {
   return firstSeenMs + baseDelayMs + jitterMs;
 }
 
+function resolveAutoUpdateHandoffRoot(root: string | undefined): string {
+  if (root?.trim()) {
+    return root;
+  }
+  try {
+    return process.cwd();
+  } catch {
+    return os.homedir();
+  }
+}
+
+function resolveManagedAutoUpdateRestartDelayMs(supervisor: RespawnSupervisor): number {
+  return supervisor === "systemd" ? MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS : 0;
+}
+
+async function startManagedServiceAutoUpdateHandoff(params: {
+  channel: "stable" | "beta";
+  timeoutMs: number;
+  restartDrainTimeoutMs: number | undefined;
+  root?: string;
+  supervisor: RespawnSupervisor;
+}): Promise<AutoUpdateRunResult> {
+  const restartDelayMs = resolveManagedAutoUpdateRestartDelayMs(params.supervisor);
+  const handoffId = randomUUID();
+  try {
+    const started = await startManagedServiceUpdateHandoff({
+      root: resolveAutoUpdateHandoffRoot(params.root),
+      timeoutMs: params.timeoutMs,
+      restartDrainTimeoutMs: params.restartDrainTimeoutMs,
+      channel: params.channel,
+      restartDelayMs,
+      supervisor: params.supervisor,
+      handoffId,
+      meta: {
+        handoffId,
+        note: "background auto-update",
+      },
+    });
+    // Pair helper creation with restart scheduling before any state persistence
+    // can fail and leave an indefinite handoff waiting on a live parent.
+    if (started.status === "started") {
+      scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "update.auto",
+        skipCooldown: true,
+        skipDeferral: true,
+      });
+    }
+    return {
+      ok: true,
+      code: 0,
+      reason: CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+      command: started.command,
+      logPath: started.logPath,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: null,
+      reason: String(err),
+    };
+  }
+}
+
 async function runAutoUpdateCommand(params: {
   channel: "stable" | "beta";
   timeoutMs: number;
+  restartDrainTimeoutMs: number | undefined;
   root?: string;
 }): Promise<AutoUpdateRunResult> {
+  if (isGatewayExternallySupervised()) {
+    return {
+      ok: false,
+      code: null,
+      reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+    };
+  }
+  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+    includeLinuxOpenClawGatewayServiceMarker: true,
+  });
+  if (supervisor) {
+    return await startManagedServiceAutoUpdateHandoff({
+      channel: params.channel,
+      timeoutMs: params.timeoutMs,
+      restartDrainTimeoutMs: params.restartDrainTimeoutMs,
+      root: params.root,
+      supervisor,
+    });
+  }
+
   const baseArgs = ["update", "--yes", "--channel", params.channel, "--json"];
   const execPath = process.execPath?.trim();
   const argv1 = process.argv[1]?.trim();
-  const lowerExecBase = execPath ? path.basename(execPath).toLowerCase() : "";
+  const lowerExecBase = execPath ? normalizeLowercaseStringOrEmpty(path.basename(execPath)) : "";
   const runtimeIsNodeOrBun =
     lowerExecBase === "node" ||
     lowerExecBase === "node.exe" ||
@@ -271,9 +476,6 @@ async function runAutoUpdateCommand(params: {
   try {
     const res = await runCommandWithTimeout(argv, {
       timeoutMs: params.timeoutMs,
-      env: {
-        OPENCLAW_AUTO_UPDATE: "1",
-      },
     });
     return {
       ok: res.code === 0,
@@ -297,53 +499,7 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-export async function runGatewayUpdateCheck(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
-  isNixMode: boolean;
-  allowInTests?: boolean;
-  onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
-  runAutoUpdate?: (params: {
-    channel: "stable" | "beta";
-    timeoutMs: number;
-    root?: string;
-  }) => Promise<AutoUpdateRunResult>;
-}): Promise<void> {
-  if (shouldSkipCheck(Boolean(params.allowInTests))) {
-    return;
-  }
-  if (params.isNixMode) {
-    return;
-  }
-  const auto = resolveAutoUpdatePolicy(params.cfg);
-  const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
-  if (!shouldRunUpdateHints && !auto.enabled) {
-    return;
-  }
-
-  const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
-  const state = await readState(statePath);
-  const now = Date.now();
-  const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
-  if (shouldRunUpdateHints) {
-    const persistedAvailable = resolvePersistedUpdateAvailable(state);
-    setUpdateAvailableCache({
-      next: persistedAvailable,
-      onUpdateAvailableChange: params.onUpdateAvailableChange,
-    });
-  } else {
-    setUpdateAvailableCache({
-      next: null,
-      onUpdateAvailableChange: params.onUpdateAvailableChange,
-    });
-  }
-  const checkIntervalMs = resolveCheckIntervalMs(params.cfg);
-  if (lastCheckedAt && Number.isFinite(lastCheckedAt)) {
-    if (now - lastCheckedAt < checkIntervalMs) {
-      return;
-    }
-  }
-
+async function resolveStartupInstallStatus() {
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
@@ -355,12 +511,102 @@ export async function runGatewayUpdateCheck(params: {
     fetchGit: false,
     includeRegistry: false,
   });
+  return { root, status };
+}
+
+export async function runGatewayUpdateCheck(params: {
+  cfg: OpenClawConfig;
+  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
+  isNixMode: boolean;
+  allowInTests?: boolean;
+  onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
+  runAutoUpdate?: (params: {
+    channel: "stable" | "beta";
+    timeoutMs: number;
+    restartDrainTimeoutMs: number | undefined;
+    root?: string;
+  }) => Promise<AutoUpdateRunResult>;
+}): Promise<void> {
+  if (shouldSkipCheck(Boolean(params.allowInTests))) {
+    return;
+  }
+  if (params.isNixMode) {
+    return;
+  }
+  const configuredChannel =
+    normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const auto = resolveAutoUpdatePolicy(params.cfg);
+  const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
+  const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
+  const isAutoUpdateChannel = configuredChannel === "stable" || configuredChannel === "beta";
+  const shouldRunAutoUpdate =
+    isAutoUpdateChannel && auto.enabled && !autoDisabledByEnv && !autoDisabledByExternalSupervisor;
+  const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
+  if (!shouldRunUpdateHints && !shouldRunAutoUpdate) {
+    if (configuredChannel === "extended-stable") {
+      setUpdateAvailableCache({
+        next: null,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+    }
+    return;
+  }
+
+  let installStatus: Awaited<ReturnType<typeof resolveStartupInstallStatus>> | undefined;
+  if (configuredChannel === "extended-stable") {
+    installStatus = await resolveStartupInstallStatus();
+    if (installStatus.status.installKind !== "package") {
+      setUpdateAvailableCache({
+        next: null,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+      return;
+    }
+  }
+
+  const state = await readState();
+  const rawNow = Date.now();
+  const now = resolveUpdateCheckNowMs(rawNow);
+  const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
+  const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
+  const persistedAvailable = shouldRunUpdateHints
+    ? resolvePersistedUpdateAvailable(state, configuredChannel)
+    : null;
+  const hasExtendedStableCheckMarker = state.lastAvailableTag?.trim() === "extended-stable";
+  const shouldBypassSharedThrottle =
+    configuredChannel === "extended-stable" && !hasExtendedStableCheckMarker;
+  if (shouldRunUpdateHints) {
+    setUpdateAvailableCache({
+      next: persistedAvailable,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+  } else {
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+  }
+  const checkIntervalMs = shouldRunAutoUpdate
+    ? resolveCheckIntervalMs(params.cfg)
+    : UPDATE_CHECK_INTERVAL_MS;
+  if (
+    !shouldBypassSharedThrottle &&
+    rawNowIsValid &&
+    lastCheckedAt &&
+    Number.isFinite(lastCheckedAt)
+  ) {
+    if (now - lastCheckedAt < checkIntervalMs) {
+      return;
+    }
+  }
+
+  installStatus ??= await resolveStartupInstallStatus();
+  const { root, status } = installStatus;
 
   const nextState: UpdateCheckState = {
     ...state,
-    lastCheckedAt: new Date(now).toISOString(),
+    lastCheckedAt: resolveUpdateCheckTimestamp(now),
   };
-
   if (status.installKind !== "package") {
     delete nextState.lastAvailableVersion;
     delete nextState.lastAvailableTag;
@@ -369,15 +615,25 @@ export async function runGatewayUpdateCheck(params: {
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
-    await writeState(statePath, nextState);
+    await writeState(nextState);
     return;
   }
 
-  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const channel = configuredChannel;
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
-    await writeState(statePath, nextState);
+    if (channel === "extended-stable") {
+      clearPersistedAvailabilityForChannel(nextState, channel);
+      if (!nextState.lastAvailableVersion) {
+        nextState.lastAvailableTag = channel;
+      }
+      setUpdateAvailableCache({
+        next: null,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+    }
+    await writeState(nextState);
     return;
   }
 
@@ -406,7 +662,21 @@ export async function runGatewayUpdateCheck(params: {
       nextState.lastNotifiedTag = tag;
     }
 
-    if (auto.enabled && (channel === "stable" || channel === "beta")) {
+    if (channel !== "extended-stable" && auto.enabled && autoDisabledByEnv) {
+      params.log.info("auto-update disabled by OPENCLAW_NO_AUTO_UPDATE", {
+        version: resolved.version,
+        tag,
+      });
+    }
+    if (channel !== "extended-stable" && auto.enabled && autoDisabledByExternalSupervisor) {
+      params.log.info("auto-update delegated to external supervisor", {
+        version: resolved.version,
+        tag,
+        reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+      });
+    }
+
+    if (shouldRunAutoUpdate && (channel === "stable" || channel === "beta")) {
       const runAuto = params.runAutoUpdate ?? runAutoUpdateCommand;
       const attemptIntervalMs =
         channel === "beta"
@@ -438,7 +708,7 @@ export async function runGatewayUpdateCheck(params: {
         params.log.info("auto-update deferred (stable rollout window active)", {
           version: resolved.version,
           tag,
-          applyAfter: applyAfterMs ? new Date(applyAfterMs).toISOString() : undefined,
+          applyAfter: applyAfterMs ? resolveUpdateCheckTimestamp(applyAfterMs) : undefined,
         });
       } else if (recentAttemptForSameVersion) {
         params.log.info("auto-update deferred (recent attempt exists)", {
@@ -447,15 +717,24 @@ export async function runGatewayUpdateCheck(params: {
         });
       } else {
         nextState.autoLastAttemptVersion = resolved.version;
-        nextState.autoLastAttemptAt = new Date(now).toISOString();
+        nextState.autoLastAttemptAt = resolveUpdateCheckTimestamp(now);
         const outcome = await runAuto({
           channel,
           timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
-          root: root ?? undefined,
+          restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
+          root: root ?? status.root ?? undefined,
         });
-        if (outcome.ok) {
+        if (outcome.ok && outcome.reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
+          params.log.info("auto-update handoff started", {
+            channel,
+            version: resolved.version,
+            tag,
+            ...(outcome.command ? { command: outcome.command } : {}),
+            ...(outcome.logPath ? { logPath: outcome.logPath } : {}),
+          });
+        } else if (outcome.ok) {
           nextState.autoLastSuccessVersion = resolved.version;
-          nextState.autoLastSuccessAt = new Date(now).toISOString();
+          nextState.autoLastSuccessAt = resolveUpdateCheckTimestamp(now);
           params.log.info("auto-update applied", {
             channel,
             version: resolved.version,
@@ -472,24 +751,36 @@ export async function runGatewayUpdateCheck(params: {
       }
     }
   } else {
-    delete nextState.lastAvailableVersion;
-    delete nextState.lastAvailableTag;
-    clearAutoState(nextState);
+    if (channel === "extended-stable") {
+      clearPersistedAvailabilityForChannel(nextState, channel);
+      if (!nextState.lastAvailableVersion) {
+        nextState.lastAvailableTag = channel;
+      }
+    } else {
+      delete nextState.lastAvailableVersion;
+      delete nextState.lastAvailableTag;
+      clearAutoState(nextState);
+    }
     setUpdateAvailableCache({
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
   }
 
-  await writeState(statePath, nextState);
+  await writeState(nextState);
 }
 
 export function scheduleGatewayUpdateCheck(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
 }): () => void {
+  const stopRemoteCatalogRefresh = scheduleRemoteModelCatalogRefresh(params);
+  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  if (channel === "extended-stable" && params.cfg.update?.checkOnStart === false) {
+    return stopRemoteCatalogRefresh;
+  }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
@@ -517,6 +808,7 @@ export function scheduleGatewayUpdateCheck(params: {
 
   void tick();
   return () => {
+    stopRemoteCatalogRefresh();
     stopped = true;
     if (timer) {
       clearTimeout(timer);
@@ -524,3 +816,56 @@ export function scheduleGatewayUpdateCheck(params: {
     }
   };
 }
+
+function scheduleRemoteModelCatalogRefresh(params: {
+  cfg: OpenClawConfig;
+  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
+}): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let activeAbortController: AbortController | null = null;
+  const tick = async () => {
+    if (stopped || running) {
+      return;
+    }
+    running = true;
+    const abortController = new AbortController();
+    activeAbortController = abortController;
+    const result = await refreshRemoteModelCatalog({
+      config: params.cfg,
+      signal: abortController.signal,
+    });
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
+    running = false;
+    if (stopped) {
+      return;
+    }
+    if (result.status === "error") {
+      params.log.info("remote model catalog refresh failed", { error: result.error });
+    } else if (result.status === "updated") {
+      params.log.info("remote model catalog updated; restart the Gateway to apply it", {
+        providers: result.providers,
+        models: result.models,
+        generatedAt: result.generatedAt,
+      });
+    }
+    const nextCheckInMs =
+      result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
+    timer = setTimeout(() => void tick(), nextCheckInMs);
+    timer.unref?.();
+  };
+  void tick();
+  return () => {
+    stopped = true;
+    activeAbortController?.abort();
+    activeAbortController = null;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

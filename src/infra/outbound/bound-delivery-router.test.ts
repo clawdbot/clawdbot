@@ -1,14 +1,16 @@
+// Covers bound delivery routing for active bindings, requester matching,
+// ambiguous bindings, and fail-closed fallback reasons.
 import { beforeEach, describe, expect, it } from "vitest";
 import { createBoundDeliveryRouter } from "./bound-delivery-router.js";
 import {
-  __testing,
+  testing,
   registerSessionBindingAdapter,
   type SessionBindingRecord,
 } from "./session-binding-service.js";
 
 const TARGET_SESSION_KEY = "agent:main:subagent:child";
 
-function createDiscordBinding(
+function createRuntimeBinding(
   targetSessionKey: string,
   conversationId: string,
   boundAt: number,
@@ -19,7 +21,7 @@ function createDiscordBinding(
     targetSessionKey,
     targetKind: "subagent",
     conversation: {
-      channel: "discord",
+      channel: "richchat",
       accountId: "runtime",
       conversationId,
       parentConversationId,
@@ -29,12 +31,12 @@ function createDiscordBinding(
   };
 }
 
-function registerDiscordSessionBindings(
+function registerRuntimeSessionBindings(
   targetSessionKey: string,
   bindings: SessionBindingRecord[],
 ): void {
   registerSessionBindingAdapter({
-    channel: "discord",
+    channel: "richchat",
     accountId: "runtime",
     listBySession: (requestedSessionKey) =>
       requestedSessionKey === targetSessionKey ? bindings : [],
@@ -44,109 +46,156 @@ function registerDiscordSessionBindings(
 
 describe("bound delivery router", () => {
   beforeEach(() => {
-    __testing.resetSessionBindingAdaptersForTests();
+    testing.resetSessionBindingAdaptersForTests();
   });
 
-  it("resolves to a bound destination when a single active binding exists", () => {
-    registerDiscordSessionBindings(TARGET_SESSION_KEY, [
-      createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1, "parent-1"),
-    ]);
-
-    const route = createBoundDeliveryRouter().resolveDestination({
+  const resolveDestination = (params: {
+    targetSessionKey?: string;
+    bindings?: SessionBindingRecord[];
+    requesterConversationId?: string;
+    failClosed?: boolean;
+  }) => {
+    if (params.bindings) {
+      registerRuntimeSessionBindings(
+        params.targetSessionKey ?? TARGET_SESSION_KEY,
+        params.bindings,
+      );
+    }
+    return createBoundDeliveryRouter().resolveDestination({
       eventKind: "task_completion",
-      targetSessionKey: TARGET_SESSION_KEY,
-      requester: {
-        channel: "discord",
-        accountId: "runtime",
-        conversationId: "parent-1",
-      },
-      failClosed: false,
+      targetSessionKey: params.targetSessionKey ?? TARGET_SESSION_KEY,
+      ...(params.requesterConversationId !== undefined
+        ? {
+            requester: {
+              channel: "richchat",
+              accountId: "runtime",
+              conversationId: params.requesterConversationId,
+            },
+          }
+        : {}),
+      failClosed: params.failClosed ?? false,
     });
+  };
 
-    expect(route.mode).toBe("bound");
-    expect(route.binding?.conversation.conversationId).toBe("thread-1");
-  });
-
-  it("falls back when no active binding exists", () => {
-    const route = createBoundDeliveryRouter().resolveDestination({
-      eventKind: "task_completion",
+  it.each([
+    {
+      name: "resolves to a bound destination when a single active binding exists",
+      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1, "parent-1")],
+      requesterConversationId: "parent-1",
+      expected: {
+        mode: "bound",
+      },
+      expectedConversationId: "thread-1",
+    },
+    {
+      name: "falls back when no active binding exists",
       targetSessionKey: "agent:main:subagent:missing",
-      requester: {
-        channel: "discord",
-        accountId: "runtime",
-        conversationId: "parent-1",
+      requesterConversationId: "parent-1",
+      expected: {
+        binding: null,
+        mode: "fallback",
+        reason: "no-active-binding",
       },
-      failClosed: false,
-    });
-
-    expect(route).toEqual({
-      binding: null,
-      mode: "fallback",
-      reason: "no-active-binding",
-    });
-  });
-
-  it("fails closed when multiple bindings exist without requester signal", () => {
-    registerDiscordSessionBindings(TARGET_SESSION_KEY, [
-      createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
-      createDiscordBinding(TARGET_SESSION_KEY, "thread-2", 2),
-    ]);
-
-    const route = createBoundDeliveryRouter().resolveDestination({
-      eventKind: "task_completion",
-      targetSessionKey: TARGET_SESSION_KEY,
+    },
+    {
+      name: "fails closed when multiple bindings exist without requester signal",
+      bindings: [
+        createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
+        createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
+      ],
       failClosed: true,
-    });
-
-    expect(route).toEqual({
-      binding: null,
-      mode: "fallback",
-      reason: "ambiguous-without-requester",
-    });
-  });
-
-  it("selects requester-matching conversation when multiple bindings exist", () => {
-    registerDiscordSessionBindings(TARGET_SESSION_KEY, [
-      createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
-      createDiscordBinding(TARGET_SESSION_KEY, "thread-2", 2),
-    ]);
-
-    const route = createBoundDeliveryRouter().resolveDestination({
-      eventKind: "task_completion",
-      targetSessionKey: TARGET_SESSION_KEY,
-      requester: {
-        channel: "discord",
-        accountId: "runtime",
-        conversationId: "thread-2",
+      expected: {
+        binding: null,
+        mode: "fallback",
+        reason: "missing-requester",
       },
+    },
+    {
+      name: "fails closed when requester signal is missing even with a single binding",
+      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
       failClosed: true,
-    });
-
-    expect(route.mode).toBe("bound");
-    expect(route.reason).toBe("requester-match");
-    expect(route.binding?.conversation.conversationId).toBe("thread-2");
-  });
-
-  it("falls back for invalid requester conversation values", () => {
-    registerDiscordSessionBindings(TARGET_SESSION_KEY, [
-      createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
-    ]);
-
-    const route = createBoundDeliveryRouter().resolveDestination({
-      eventKind: "task_completion",
-      targetSessionKey: TARGET_SESSION_KEY,
-      requester: {
-        channel: "discord",
-        accountId: "runtime",
-        conversationId: " ",
+      expected: {
+        binding: null,
+        mode: "fallback",
+        reason: "missing-requester",
       },
+    },
+    {
+      name: "selects requester-matching conversation when multiple bindings exist",
+      bindings: [
+        createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
+        createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
+      ],
+      requesterConversationId: "thread-2",
       failClosed: true,
-    });
+      expected: {
+        mode: "bound",
+        reason: "requester-match",
+      },
+      expectedConversationId: "thread-2",
+    },
+    {
+      name: "normalizes adapter binding conversations before requester matching",
+      bindings: [
+        {
+          ...createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
+          conversation: {
+            channel: " richchat ",
+            accountId: " runtime ",
+            conversationId: " thread-1 ",
+          },
+        },
+        {
+          ...createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
+          conversation: {
+            channel: " RICHCHAT ",
+            accountId: " Runtime ",
+            conversationId: " thread-2 ",
+          },
+        },
+      ],
+      requesterConversationId: "thread-2",
+      failClosed: true,
+      expected: {
+        mode: "bound",
+        reason: "requester-match",
+      },
+      expectedConversationId: " thread-2 ",
+    },
+    {
+      name: "falls back for invalid requester conversation values",
+      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
+      requesterConversationId: " ",
+      failClosed: true,
+      expected: {
+        binding: null,
+        mode: "fallback",
+        reason: "invalid-requester",
+      },
+    },
+  ])(
+    "$name",
+    ({
+      targetSessionKey,
+      bindings,
+      requesterConversationId,
+      failClosed,
+      expected,
+      expectedConversationId,
+    }) => {
+      const route = resolveDestination({
+        targetSessionKey,
+        bindings,
+        requesterConversationId,
+        failClosed,
+      });
 
-    expect(route).toEqual({
-      binding: null,
-      mode: "fallback",
-      reason: "invalid-requester",
-    });
-  });
+      for (const [key, value] of Object.entries(expected)) {
+        expect((route as Record<string, unknown>)[key]).toEqual(value);
+      }
+      if (expectedConversationId !== undefined) {
+        expect(route.binding?.conversation.conversationId).toBe(expectedConversationId);
+      }
+    },
+  );
 });

@@ -1,5 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
+/**
+ * Resolves image sanitization limits for historical session messages.
+ */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Image sanitization limits shared by tools and provider payload builders.
 export type ImageSanitizationLimits = {
   maxDimensionPx?: number;
   maxBytes?: number;
@@ -8,6 +12,7 @@ export type ImageSanitizationLimits = {
 export const DEFAULT_IMAGE_MAX_DIMENSION_PX = 1200;
 export const DEFAULT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
+/** Resolve configured image sanitization limits for agent payloads. */
 export function resolveImageSanitizationLimits(cfg?: OpenClawConfig): ImageSanitizationLimits {
   const configured = cfg?.agents?.defaults?.imageMaxDimensionPx;
   if (typeof configured !== "number" || !Number.isFinite(configured)) {

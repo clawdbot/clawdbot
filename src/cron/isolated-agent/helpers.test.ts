@@ -1,88 +1,47 @@
+// Isolated agent helper tests cover low-level cron agent utilities.
 import { describe, expect, it } from "vitest";
-import {
-  isHeartbeatOnlyResponse,
-  pickLastDeliverablePayload,
-  pickLastNonEmptyTextFromPayloads,
-  pickSummaryFromPayloads,
-} from "./helpers.js";
+import { isHeartbeatOnlyResponse, pickLastNonEmptyTextFromPayloads } from "./helpers.js";
 
-describe("pickSummaryFromPayloads", () => {
-  it("picks real text over error payload", () => {
-    const payloads = [
-      { text: "Here is your summary" },
-      { text: "Tool error: rate limited", isError: true },
-    ];
-    expect(pickSummaryFromPayloads(payloads)).toBe("Here is your summary");
-  });
+type TextPayload = { text?: string | undefined; isError?: boolean | undefined };
 
-  it("falls back to error payload when no real text exists", () => {
-    const payloads = [{ text: "Tool error: rate limited", isError: true }];
-    expect(pickSummaryFromPayloads(payloads)).toBe("Tool error: rate limited");
-  });
-
-  it("returns undefined for empty payloads", () => {
-    expect(pickSummaryFromPayloads([])).toBeUndefined();
-  });
-
-  it("treats isError: undefined as non-error", () => {
-    const payloads = [
-      { text: "normal text", isError: undefined },
-      { text: "error text", isError: true },
-    ];
-    expect(pickSummaryFromPayloads(payloads)).toBe("normal text");
-  });
-});
-
-describe("pickLastNonEmptyTextFromPayloads", () => {
-  it("picks real text over error payload", () => {
-    const payloads = [{ text: "Real output" }, { text: "Service error", isError: true }];
-    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("Real output");
-  });
-
-  it("falls back to error payload when no real text exists", () => {
-    const payloads = [{ text: "Service error", isError: true }];
-    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("Service error");
-  });
-
-  it("returns undefined for empty payloads", () => {
-    expect(pickLastNonEmptyTextFromPayloads([])).toBeUndefined();
-  });
-
-  it("treats isError: undefined as non-error", () => {
-    const payloads = [
+const textPayloadPickerCases: Array<{
+  name: string;
+  pick: (payloads: TextPayload[]) => string | undefined;
+  payloads: TextPayload[];
+  expected: string | undefined;
+}> = [
+  {
+    name: "last non-empty text picks real text over error payload",
+    pick: pickLastNonEmptyTextFromPayloads,
+    payloads: [{ text: "Real output" }, { text: "Service error", isError: true }],
+    expected: "Real output",
+  },
+  {
+    name: "last non-empty text falls back to error payload when no real text exists",
+    pick: pickLastNonEmptyTextFromPayloads,
+    payloads: [{ text: "Service error", isError: true }],
+    expected: "Service error",
+  },
+  {
+    name: "last non-empty text returns undefined for empty payloads",
+    pick: pickLastNonEmptyTextFromPayloads,
+    payloads: [],
+    expected: undefined,
+  },
+  {
+    name: "last non-empty text treats isError: undefined as non-error",
+    pick: pickLastNonEmptyTextFromPayloads,
+    payloads: [
       { text: "good", isError: undefined },
       { text: "bad", isError: true },
-    ];
-    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("good");
-  });
-});
+    ],
+    expected: "good",
+  },
+];
 
-describe("pickLastDeliverablePayload", () => {
-  it("picks real payload over error payload", () => {
-    const real = { text: "Delivered content" };
-    const error = { text: "Error warning", isError: true as const };
-    expect(pickLastDeliverablePayload([real, error])).toBe(real);
-  });
-
-  it("falls back to error payload when no real payload exists", () => {
-    const error = { text: "Error warning", isError: true as const };
-    expect(pickLastDeliverablePayload([error])).toBe(error);
-  });
-
-  it("returns undefined for empty payloads", () => {
-    expect(pickLastDeliverablePayload([])).toBeUndefined();
-  });
-
-  it("picks media payload over error text payload", () => {
-    const media = { mediaUrl: "https://example.com/img.png" };
-    const error = { text: "Error warning", isError: true as const };
-    expect(pickLastDeliverablePayload([media, error])).toBe(media);
-  });
-
-  it("treats isError: undefined as non-error", () => {
-    const normal = { text: "ok", isError: undefined };
-    const error = { text: "bad", isError: true as const };
-    expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
+describe("text payload pickers", () => {
+  it.each(textPayloadPickerCases)("$name", ({ pick, payloads, expected }) => {
+    expect(pick(payloads)).toBe(expected);
   });
 });
 
@@ -121,6 +80,22 @@ describe("isHeartbeatOnlyResponse", () => {
     expect(
       isHeartbeatOnlyResponse(
         [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
+        ACK_MAX,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false when rich content is present even with HEARTBEAT_OK text", () => {
+    expect(
+      isHeartbeatOnlyResponse(
+        [
+          {
+            text: "HEARTBEAT_OK",
+            presentation: {
+              blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+            },
+          },
+        ],
         ACK_MAX,
       ),
     ).toBe(false);

@@ -1,5 +1,8 @@
 {
   "id": "thread-ownership",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Thread Ownership",
   "description": "Prevents multiple agents from responding in the same Slack thread. Uses HTTP calls to the slack-forwarder ownership API.",
   "configSchema": {

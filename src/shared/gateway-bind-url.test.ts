@@ -1,3 +1,4 @@
+// Gateway bind URL tests cover host and port normalization for gateway listeners.
 import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayBindUrl } from "./gateway-bind-url.js";
 

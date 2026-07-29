@@ -1,227 +1,152 @@
-import { Type } from "@sinclair/typebox";
-import { isRestartEnabled } from "../../config/commands.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveConfigSnapshotHash } from "../../config/io.js";
-import { extractDeliveryInfo } from "../../config/sessions.js";
-import {
-  formatDoctorNonInteractiveHint,
-  type RestartSentinelPayload,
-  writeRestartSentinel,
-} from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+/** Read-only Gateway config tool for regular agents. */
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { Type } from "typebox";
+import { GatewayClientRequestError } from "../../gateway/client.js";
+import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
 import { stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readStringParam,
+  textResult,
+  ToolInputError,
+} from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 
-const log = createSubsystemLogger("gateway-tool");
+// Keep complete JSON below the smallest default tool-result presentation budget.
+const MAX_GATEWAY_CONFIG_GET_TEXT_CHARS = 12_000;
+const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
 
-const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
-
-function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
+function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
   if (!snapshot || typeof snapshot !== "object") {
-    return undefined;
+    throw new Error("config.get response is not an object.");
   }
-  const hashValue = (snapshot as { hash?: unknown }).hash;
-  const rawValue = (snapshot as { raw?: unknown }).raw;
-  const hash = resolveConfigSnapshotHash({
-    hash: typeof hashValue === "string" ? hashValue : undefined,
-    raw: typeof rawValue === "string" ? rawValue : undefined,
-  });
-  return hash ?? undefined;
+  const config = (snapshot as { config?: unknown }).config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("config.get response is missing a config object.");
+  }
+  return config as Record<string, unknown>;
 }
 
-const GATEWAY_ACTIONS = [
-  "restart",
-  "config.get",
-  "config.schema.lookup",
-  "config.apply",
-  "config.patch",
-  "update.run",
-] as const;
+function splitGatewayConfigGetPath(path: string): string[] {
+  return path
+    .trim()
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .filter(Boolean);
+}
 
-// NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
-// because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
-// The discriminator (action) determines which properties are relevant; runtime validates.
+function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: string): unknown {
+  const parts = splitGatewayConfigGetPath(path);
+  if (parts.length === 0) {
+    return undefined;
+  }
+  let current: unknown = config;
+  for (const part of parts) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    if (Array.isArray(current)) {
+      const index = parseConfigPathArrayIndex(part);
+      if (index === undefined || index >= current.length) {
+        return undefined;
+      }
+      current = current[index];
+      continue;
+    }
+    if (!Object.hasOwn(current, part)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function selectGatewayConfigGetResult(snapshot: unknown, path: string | undefined): unknown {
+  if (!path) {
+    return snapshot;
+  }
+  const value = resolveGatewayConfigGetPath(getSnapshotConfig(snapshot), path);
+  if (value === undefined) {
+    throw new ToolInputError(`config path not found: ${path}`);
+  }
+  const hash = readStringValue((snapshot as { hash?: unknown }).hash);
+  return {
+    ...(hash ? { hash } : {}),
+    path,
+    config: value,
+  };
+}
+
+function createGatewayConfigGetToolResult(result: unknown) {
+  const text = JSON.stringify({ ok: true, result }, null, 2);
+  if (text.length > MAX_GATEWAY_CONFIG_GET_TEXT_CHARS) {
+    throw new ToolInputError(
+      "config.get response is too large; use path to request a narrower config subtree",
+    );
+  }
+  return textResult(text, { ok: true });
+}
+
+function isConfigSchemaPathNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes(CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE)
+  );
+}
+
+const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup"] as const;
+
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
-  // restart
-  delayMs: Type.Optional(Type.Number()),
-  reason: Type.Optional(Type.String()),
-  // config.get, config.schema.lookup, config.apply, update.run
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  // config.schema.lookup
+  ...gatewayCallOptionSchemaProperties(),
   path: Type.Optional(Type.String()),
-  // config.apply, config.patch
-  raw: Type.Optional(Type.String()),
-  baseHash: Type.Optional(Type.String()),
-  // config.apply, config.patch, update.run
-  sessionKey: Type.Optional(Type.String()),
-  note: Type.Optional(Type.String()),
-  restartDelayMs: Type.Optional(Type.Number()),
 });
-// NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
-// - OpenAI rejects tool schemas that include these keywords at the *top-level*.
-// - Claude/Vertex has other JSON Schema quirks.
-// Conditional requirements (like `raw` for config.apply) are enforced at runtime.
 
-export function createGatewayTool(opts?: {
-  agentSessionKey?: string;
-  config?: OpenClawConfig;
-}): AnyAgentTool {
+export function createGatewayTool(): AnyAgentTool {
   return {
     label: "Gateway",
     name: "gateway",
-    ownerOnly: true,
-    description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+    description: "Read gateway config + schema. Writes/restart: use openclaw tool.",
     parameters: GatewayToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      if (action === "restart") {
-        if (!isRestartEnabled(opts?.config)) {
-          throw new Error("Gateway restart is disabled (commands.restart=false).");
-        }
-        const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
-        const delayMs =
-          typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
-            ? Math.floor(params.delayMs)
-            : undefined;
-        const reason =
-          typeof params.reason === "string" && params.reason.trim()
-            ? params.reason.trim().slice(0, 200)
-            : undefined;
-        const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
-        // Extract channel + threadId for routing after restart
-        // Supports both :thread: (most channels) and :topic: (Telegram)
-        const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
-        const payload: RestartSentinelPayload = {
-          kind: "restart",
-          status: "ok",
-          ts: Date.now(),
-          sessionKey,
-          deliveryContext,
-          threadId,
-          message: note ?? reason ?? null,
-          doctorHint: formatDoctorNonInteractiveHint(),
-          stats: {
-            mode: "gateway.restart",
-            reason,
-          },
-        };
-        try {
-          await writeRestartSentinel(payload);
-        } catch {
-          // ignore: sentinel is best-effort
-        }
-        log.info(
-          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
-        );
-        const scheduled = scheduleGatewaySigusr1Restart({
-          delayMs,
-          reason,
-        });
-        return jsonResult(scheduled);
-      }
-
       const gatewayOpts = readGatewayCallOptions(params);
 
-      const resolveGatewayWriteMeta = (): {
-        sessionKey: string | undefined;
-        note: string | undefined;
-        restartDelayMs: number | undefined;
-      } => {
-        const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
-        const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
-        const restartDelayMs =
-          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
-            ? Math.floor(params.restartDelayMs)
-            : undefined;
-        return { sessionKey, note, restartDelayMs };
-      };
-
-      const resolveConfigWriteParams = async (): Promise<{
-        raw: string;
-        baseHash: string;
-        sessionKey: string | undefined;
-        note: string | undefined;
-        restartDelayMs: number | undefined;
-      }> => {
-        const raw = readStringParam(params, "raw", { required: true });
-        let baseHash = readStringParam(params, "baseHash");
-        if (!baseHash) {
-          const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
-          baseHash = resolveBaseHashFromSnapshot(snapshot);
-        }
-        if (!baseHash) {
-          throw new Error("Missing baseHash from config snapshot.");
-        }
-        return { raw, baseHash, ...resolveGatewayWriteMeta() };
-      };
-
       if (action === "config.get") {
-        const result = await callGatewayTool("config.get", gatewayOpts, {});
-        return jsonResult({ ok: true, result });
+        const path = readStringParam(params, "path");
+        const snapshot = await callGatewayTool("config.get", gatewayOpts, {}, { signal });
+        const result = selectGatewayConfigGetResult(snapshot, path);
+        return createGatewayConfigGetToolResult(result);
       }
       if (action === "config.schema.lookup") {
         const path = readStringParam(params, "path", {
           required: true,
           label: "path",
         });
-        const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
-        return jsonResult({ ok: true, result });
+        try {
+          const result = await callGatewayTool(
+            "config.schema.lookup",
+            gatewayOpts,
+            { path },
+            { signal },
+          );
+          return jsonResult({ ok: true, result });
+        } catch (error) {
+          if (isConfigSchemaPathNotFoundError(error)) {
+            return jsonResult({
+              ok: false,
+              code: "schema_path_not_found",
+              path,
+              message: CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE,
+            });
+          }
+          throw error;
+        }
       }
-      if (action === "config.apply") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
-          await resolveConfigWriteParams();
-        const result = await callGatewayTool("config.apply", gatewayOpts, {
-          raw,
-          baseHash,
-          sessionKey,
-          note,
-          restartDelayMs,
-        });
-        return jsonResult({ ok: true, result });
-      }
-      if (action === "config.patch") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
-          await resolveConfigWriteParams();
-        const result = await callGatewayTool("config.patch", gatewayOpts, {
-          raw,
-          baseHash,
-          sessionKey,
-          note,
-          restartDelayMs,
-        });
-        return jsonResult({ ok: true, result });
-      }
-      if (action === "update.run") {
-        const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
-        const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
-        const updateGatewayOpts = {
-          ...gatewayOpts,
-          timeoutMs: updateTimeoutMs,
-        };
-        const result = await callGatewayTool("update.run", updateGatewayOpts, {
-          sessionKey,
-          note,
-          restartDelayMs,
-          timeoutMs: updateTimeoutMs,
-        });
-        return jsonResult({ ok: true, result });
-      }
-
       throw new Error(`Unknown action: ${action}`);
     },
   };

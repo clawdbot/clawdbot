@@ -1,5 +1,10 @@
 {
   "id": "imessage",
+  "icon": "https://cdn.simpleicons.org/imessage",
+  "activation": {
+    "onStartup": false
+  },
+  "skills": ["./skills"],
   "channels": ["imessage"],
   "configSchema": {
     "type": "object",

@@ -1,8 +1,10 @@
+// Tlon helper module supports settings helpers behavior.
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PendingApproval, TlonSettingsStore } from "../settings.js";
 import { normalizeShip } from "../targets.js";
 import type { TlonResolvedAccount } from "../types.js";
 
-export type TlonMonitorSettingsState = {
+type TlonMonitorSettingsState = {
   effectiveDmAllowlist: string[];
   effectiveShowModelSig: boolean;
   effectiveAutoAcceptDmInvites: boolean;
@@ -60,6 +62,12 @@ export function buildTlonSettingsMigrations(
       settingsValue: currentSettings.showModelSig,
     },
   ];
+}
+
+export function shouldMigrateTlonSetting(fileValue: unknown, settingsValue: unknown): boolean {
+  const hasFileValue = Array.isArray(fileValue) ? fileValue.length > 0 : fileValue != null;
+  const hasSettingsValue = settingsValue != null;
+  return hasFileValue && !hasSettingsValue;
 }
 
 export function applyTlonSettingsOverrides(params: {
@@ -139,14 +147,5 @@ export function applyTlonSettingsOverrides(params: {
 }
 
 export function mergeUniqueStrings(base: string[], next?: string[]): string[] {
-  if (!next?.length) {
-    return [...base];
-  }
-  const merged = [...base];
-  for (const value of next) {
-    if (!merged.includes(value)) {
-      merged.push(value);
-    }
-  }
-  return merged;
+  return uniqueStrings([...base, ...(next ?? [])]);
 }

@@ -1,87 +1,78 @@
-import { mkdtempSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
+// Verifies Vercel AI Gateway auth marker resolution from env and profiles.
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
+let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
+
+async function loadModules() {
+  // This file needs the real auth resolver after other provider tests install mocks.
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
+  vi.resetModules();
+  const [markersModule, secretsModule] = await Promise.all([
+    import("./model-auth-markers.js"),
+    import("./models-config.providers.secrets.js"),
+  ]);
+  NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
+  createProviderAuthResolver = secretsModule.createProviderAuthResolver;
+}
+
+beforeAll(loadModules);
 
 describe("vercel-ai-gateway provider resolution", () => {
-  it("adds the provider with GPT-5.4 models when AI_GATEWAY_API_KEY is present", async () => {
-    const envSnapshot = captureEnv(["AI_GATEWAY_API_KEY"]);
-    process.env.AI_GATEWAY_API_KEY = "vercel-gateway-test-key"; // pragma: allowlist secret
-    try {
-      const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      const provider = providers?.["vercel-ai-gateway"];
-      expect(provider?.apiKey).toBe("AI_GATEWAY_API_KEY");
-      expect(provider?.api).toBe("anthropic-messages");
-      expect(provider?.baseUrl).toBe(VERCEL_AI_GATEWAY_BASE_URL);
-      expect(provider?.models?.some((model) => model.id === "openai/gpt-5.4")).toBe(true);
-      expect(provider?.models?.some((model) => model.id === "openai/gpt-5.4-pro")).toBe(true);
-    } finally {
-      envSnapshot.restore();
-    }
-  });
-
-  it("prefers env keyRef marker over runtime plaintext for persistence", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const envSnapshot = captureEnv(["AI_GATEWAY_API_KEY"]);
-    delete process.env.AI_GATEWAY_API_KEY;
-
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "vercel-ai-gateway:default": {
-              type: "api_key",
-              provider: "vercel-ai-gateway",
-              key: "sk-runtime-vercel",
-              keyRef: { source: "env", provider: "default", id: "AI_GATEWAY_API_KEY" },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
+  it("resolves AI_GATEWAY_API_KEY through provider auth lookup", () => {
+    const resolveAuth = createProviderAuthResolver(
+      {
+        AI_GATEWAY_API_KEY: "vercel-gateway-test-key", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+      { version: 1, profiles: {} },
     );
 
-    try {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.["vercel-ai-gateway"]?.apiKey).toBe("AI_GATEWAY_API_KEY");
-    } finally {
-      envSnapshot.restore();
-    }
+    const auth = resolveAuth("vercel-ai-gateway");
+    expect(auth.apiKey).toBe("AI_GATEWAY_API_KEY");
+    expect(auth.mode).toBe("api_key");
+    expect(auth.source).toBe("env");
   });
 
-  it("uses non-env marker for non-env keyRef vercel profiles", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "vercel-ai-gateway:default": {
-              type: "api_key",
-              provider: "vercel-ai-gateway",
-              key: "sk-runtime-vercel",
-              keyRef: { source: "file", provider: "vault", id: "/vercel/ai-gateway/api-key" },
-            },
-          },
+  it("prefers env keyRef markers over runtime plaintext in auth profiles", () => {
+    const resolveAuth = createProviderAuthResolver({} as NodeJS.ProcessEnv, {
+      version: 1,
+      profiles: {
+        "vercel-ai-gateway:default": {
+          type: "api_key",
+          provider: "vercel-ai-gateway",
+          key: "sk-runtime-vercel",
+          keyRef: { source: "env", provider: "default", id: "AI_GATEWAY_API_KEY" },
         },
-        null,
-        2,
-      ),
-      "utf8",
-    );
+      },
+    });
 
-    const providers = await resolveImplicitProvidersForTest({ agentDir });
-    expect(providers?.["vercel-ai-gateway"]?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    const auth = resolveAuth("vercel-ai-gateway");
+    // Persist the env marker, not the resolved plaintext profile key.
+    expect(auth.apiKey).toBe("AI_GATEWAY_API_KEY");
+    expect(auth.mode).toBe("api_key");
+    expect(auth.source).toBe("profile");
+    expect(auth.profileId).toBe("vercel-ai-gateway:default");
+  });
+
+  it("uses non-env markers for non-env keyRef vercel profiles", () => {
+    const resolveAuth = createProviderAuthResolver({} as NodeJS.ProcessEnv, {
+      version: 1,
+      profiles: {
+        "vercel-ai-gateway:default": {
+          type: "api_key",
+          provider: "vercel-ai-gateway",
+          key: "sk-runtime-vercel",
+          keyRef: { source: "file", provider: "vault", id: "/vercel/ai-gateway/api-key" },
+        },
+      },
+    });
+
+    const auth = resolveAuth("vercel-ai-gateway");
+    expect(auth.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(auth.mode).toBe("api_key");
+    expect(auth.source).toBe("profile");
+    expect(auth.profileId).toBe("vercel-ai-gateway:default");
   });
 });

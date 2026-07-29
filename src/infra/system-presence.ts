@@ -1,7 +1,16 @@
+// Detects system command availability for setup and diagnostics.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
-import { pickPrimaryLanIPv4 } from "../gateway/net.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
+import { DARWIN_SYSTEM_PROBE_TIMEOUT_MS, resolveDarwinProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
   host?: string;
@@ -17,11 +26,18 @@ export type SystemPresence = {
   roles?: string[];
   scopes?: string[];
   instanceId?: string;
+  user?: {
+    id: string;
+    email?: string;
+    name?: string;
+    avatarUrl?: string;
+  };
+  watchedSessions?: string[];
   text: string;
   ts: number;
 };
 
-export type SystemPresenceUpdate = {
+type SystemPresenceUpdate = {
   key: string;
   previous?: SystemPresence;
   next: SystemPresence;
@@ -32,20 +48,14 @@ export type SystemPresenceUpdate = {
 const entries = new Map<string, SystemPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
+const SELF_INSTANCE_ID = randomUUID();
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
-  if (!key) {
-    return undefined;
-  }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.toLowerCase();
+  return normalizeOptionalLowercaseString(key);
 }
 
 function resolvePrimaryIPv4(): string | undefined {
-  return pickPrimaryLanIPv4() ?? os.hostname();
+  return pickBestEffortPrimaryLanIPv4() ?? os.hostname();
 }
 
 function initSelfPresence() {
@@ -57,24 +67,19 @@ function initSelfPresence() {
     if (p === "darwin") {
       const res = spawnSync("sysctl", ["-n", "hw.model"], {
         encoding: "utf-8",
+        timeout: DARWIN_SYSTEM_PROBE_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       });
-      const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
+      const out = normalizeOptionalString(res.stdout) ?? "";
       return out.length > 0 ? out : undefined;
     }
     return os.arch();
   })();
-  const macOSVersion = () => {
-    const res = spawnSync("sw_vers", ["-productVersion"], {
-      encoding: "utf-8",
-    });
-    const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
-    return out.length > 0 ? out : os.release();
-  };
   const platform = (() => {
     const p = os.platform();
     const rel = os.release();
     if (p === "darwin") {
-      return `macos ${macOSVersion()}`;
+      return `macos ${resolveDarwinProductVersion()}`;
     }
     if (p === "win32") {
       return `windows ${rel}`;
@@ -104,10 +109,11 @@ function initSelfPresence() {
     modelIdentifier,
     mode: "gateway",
     reason: "self",
+    instanceId: SELF_INSTANCE_ID,
     text,
     ts: Date.now(),
   };
-  const key = host.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(host);
   entries.set(key, selfEntry);
 }
 
@@ -122,7 +128,7 @@ function ensureSelfPresence() {
 
 function touchSelfPresence() {
   const host = os.hostname();
-  const key = host.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(host);
   const existing = entries.get(key);
   if (existing) {
     entries.set(key, { ...existing, ts: Date.now() });
@@ -142,6 +148,16 @@ function parsePresence(text: string): SystemPresence {
     return { text: trimmed, ts: Date.now() };
   }
   const [, host, ip, version, lastInputStr, mode, reasonRaw] = match;
+  if (
+    host === undefined ||
+    ip === undefined ||
+    version === undefined ||
+    lastInputStr === undefined ||
+    mode === undefined ||
+    reasonRaw === undefined
+  ) {
+    return { text: trimmed, ts: Date.now() };
+  }
   const lastInputSeconds = Number.parseInt(lastInputStr, 10);
   const reason = reasonRaw.trim();
   return {
@@ -166,7 +182,7 @@ type SystemPresencePayload = {
   platform?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
-  lastInputSeconds?: number;
+  lastInputSeconds?: number | null;
   mode?: string;
   reason?: string;
   roles?: string[];
@@ -181,7 +197,7 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
       continue;
     }
     for (const item of list) {
-      const trimmed = String(item).trim();
+      const trimmed = normalizeOptionalString(item) ?? "";
       if (trimmed) {
         out.add(trimmed);
       }
@@ -199,8 +215,8 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     normalizePresenceKey(parsed.instanceId) ||
     normalizePresenceKey(parsed.host) ||
     parsed.ip ||
-    parsed.text.slice(0, 64) ||
-    os.hostname().toLowerCase();
+    truncateUtf16Safe(parsed.text, 64) ||
+    normalizeLowercaseStringOrEmpty(os.hostname());
   const hadExisting = entries.has(key);
   const existing = entries.get(key) ?? ({} as SystemPresence);
   const merged: SystemPresence = {
@@ -214,7 +230,9 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     modelIdentifier: payload.modelIdentifier ?? existing.modelIdentifier,
     mode: payload.mode ?? parsed.mode ?? existing.mode,
     lastInputSeconds:
-      payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds,
+      payload.lastInputSeconds === null
+        ? undefined
+        : (payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds),
     reason: payload.reason ?? parsed.reason ?? existing.reason,
     deviceId: payload.deviceId ?? existing.deviceId,
     roles: mergeStringList(existing.roles, payload.roles),
@@ -247,7 +265,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   ensureSelfPresence();
-  const normalizedKey = normalizePresenceKey(key) ?? os.hostname().toLowerCase();
+  const normalizedKey = normalizePresenceKey(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
   const existing = entries.get(normalizedKey) ?? ({} as SystemPresence);
   const roles = mergeStringList(existing.roles, presence.roles);
   const scopes = mergeStringList(existing.scopes, presence.scopes);
@@ -267,6 +285,20 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   entries.set(normalizedKey, merged);
 }
 
+/** Renews an existing connection-owned presence row without recreating expired metadata. */
+export function touchPresence(key: string): boolean {
+  const normalizedKey = normalizePresenceKey(key);
+  if (!normalizedKey) {
+    return false;
+  }
+  const existing = entries.get(normalizedKey);
+  if (!existing) {
+    return false;
+  }
+  entries.set(normalizedKey, { ...existing, ts: Date.now() });
+  return true;
+}
+
 export function listSystemPresence(): SystemPresence[] {
   ensureSelfPresence();
   // prune expired
@@ -280,8 +312,8 @@ export function listSystemPresence(): SystemPresence[] {
   if (entries.size > MAX_ENTRIES) {
     const sorted = [...entries.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
     const toDrop = entries.size - MAX_ENTRIES;
-    for (let i = 0; i < toDrop; i++) {
-      entries.delete(sorted[i][0]);
+    for (const [key] of sorted.slice(0, toDrop)) {
+      entries.delete(key);
     }
   }
   touchSelfPresence();

@@ -1,0 +1,38 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "ignoreDeprecations": "6.0",
+    "incremental": true,
+    "noEmit": false,
+    "noEmitOnError": false,
+    "outDir": "dist",
+    "rootDir": "../..",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": [
+    "../../packages/ai/src/**/*.ts",
+    "../../packages/markdown-core/src/**/*.ts",
+    "../../packages/media-core/src/**/*.ts",
+    "../../packages/media-generation-core/src/**/*.ts",
+    "../../packages/model-catalog-core/src/**/*.ts",
+    "../../packages/normalization-core/src/**/*.ts",
+    "../../packages/retry/src/**/*.ts",
+    "../../packages/acp-core/src/**/*.ts",
+    "../../packages/terminal-core/src/**/*.ts",
+    "../../src/plugin-sdk/**/*.ts",
+    "../../src/video-generation/dashscope-compatible.ts",
+    "../../src/video-generation/types.ts",
+    "../../src/types/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "../../packages/**/*.test.ts",
+    "../../src/**/*.test.ts",
+    "../../src/plugin-sdk/AGENTS.md",
+    "../../src/plugin-sdk/CLAUDE.md"
+  ]
+}

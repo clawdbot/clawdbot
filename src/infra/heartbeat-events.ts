@@ -1,4 +1,6 @@
+// Stores and broadcasts heartbeat status events for UI surfaces.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type HeartbeatIndicatorType = "ok" | "alert" | "error";
 
@@ -33,6 +35,7 @@ export function resolveIndicatorType(
     case "skipped":
       return undefined;
   }
+  throw new Error("Unsupported heartbeat status");
 }
 
 type HeartbeatEventState = {
@@ -50,18 +53,11 @@ const state = resolveGlobalSingleton<HeartbeatEventState>(HEARTBEAT_EVENT_STATE_
 export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   const enriched: HeartbeatEventPayload = { ts: Date.now(), ...evt };
   state.lastHeartbeat = enriched;
-  for (const listener of state.listeners) {
-    try {
-      listener(enriched);
-    } catch {
-      /* ignore */
-    }
-  }
+  notifyListeners(state.listeners, enriched);
 }
 
 export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void): () => void {
-  state.listeners.add(listener);
-  return () => state.listeners.delete(listener);
+  return registerListener(state.listeners, listener);
 }
 
 export function getLastHeartbeatEvent(): HeartbeatEventPayload | null {

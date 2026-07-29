@@ -1,10 +1,15 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * Channel group-policy warning collectors.
+ *
+ * Composes warning helpers for default, allowlist, and open-provider group policy states.
+ */
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "../../config/runtime-group-policy.js";
 import type { GroupPolicy } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type GroupPolicyWarningCollector = (groupPolicy: GroupPolicy) => string[];
 type AccountGroupPolicyWarningCollector<ResolvedAccount> = (params: {
@@ -29,6 +34,44 @@ export function projectWarningCollector<Params, Projected>(
   return (params) => collector(project(params));
 }
 
+export function projectConfigWarningCollector<Params extends { cfg: OpenClawConfig }>(
+  collector: WarningCollector<{ cfg: OpenClawConfig }>,
+): WarningCollector<Params> {
+  return projectWarningCollector((params) => ({ cfg: params.cfg }), collector);
+}
+
+export function projectConfigAccountIdWarningCollector<
+  Params extends { cfg: OpenClawConfig; accountId?: string | null },
+>(
+  collector: WarningCollector<{ cfg: OpenClawConfig; accountId?: string | null }>,
+): WarningCollector<Params> {
+  return projectWarningCollector(
+    (params) => ({ cfg: params.cfg, accountId: params.accountId }),
+    collector,
+  );
+}
+
+export function projectAccountWarningCollector<
+  ResolvedAccount,
+  Params extends { account: ResolvedAccount },
+>(collector: WarningCollector<ResolvedAccount>): WarningCollector<Params> {
+  return projectWarningCollector((params) => params.account, collector);
+}
+
+export function projectAccountConfigWarningCollector<
+  ResolvedAccount,
+  ProjectedCfg,
+  Params extends { account: ResolvedAccount; cfg: OpenClawConfig },
+>(
+  projectCfg: (cfg: OpenClawConfig) => ProjectedCfg,
+  collector: WarningCollector<{ account: ResolvedAccount; cfg: ProjectedCfg }>,
+): WarningCollector<Params> {
+  return projectWarningCollector(
+    (params) => ({ account: params.account, cfg: projectCfg(params.cfg) }),
+    collector,
+  );
+}
+
 export function createConditionalWarningCollector<Params>(
   ...collectors: Array<(params: Params) => string | string[] | null | undefined | false>
 ): WarningCollector<Params> {
@@ -40,6 +83,25 @@ export function createConditionalWarningCollector<Params>(
       }
       return Array.isArray(next) ? next : [next];
     });
+}
+
+export function composeAccountWarningCollectors<
+  ResolvedAccount,
+  Params extends { account: ResolvedAccount },
+>(
+  baseCollector: WarningCollector<Params>,
+  ...collectors: Array<(account: ResolvedAccount) => string | string[] | null | undefined | false>
+): WarningCollector<Params> {
+  return composeWarningCollectors(
+    baseCollector,
+    createConditionalWarningCollector<Params>(
+      ...collectors.map(
+        (collector) =>
+          ({ account }: Params) =>
+            collector(account),
+      ),
+    ),
+  );
 }
 
 export function buildOpenGroupPolicyWarning(params: {
@@ -65,7 +127,7 @@ export function buildOpenGroupPolicyRestrictSendersWarning(params: {
   });
 }
 
-export function buildOpenGroupPolicyNoRouteAllowlistWarning(params: {
+function buildOpenGroupPolicyNoRouteAllowlistWarning(params: {
   surface: string;
   routeAllowlistPath: string;
   routeScope: string;

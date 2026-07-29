@@ -1,9 +1,11 @@
-import { parseExecArgvToken } from "./exec-approvals-analysis.js";
+// Validates safe-bin policy profiles against command argv semantics.
+import { parseExecArgvToken } from "./exec-command-resolution.js";
 import {
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
   type SafeBinProfile,
 } from "./exec-safe-bin-policy-profiles.js";
+import { validateSafeBinSemantics } from "./exec-safe-bin-semantics.js";
 
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
@@ -28,13 +30,17 @@ function hasGlobToken(value: string): boolean {
   return /[*?[\]]/.test(value);
 }
 
+function hasShellExpansionToken(value: string): boolean {
+  return /\$(?:[A-Za-z0-9_@*?!$#-]|\{|\(|\[)/.test(value);
+}
+
 const NO_FLAGS: ReadonlySet<string> = new Set();
 
 function isSafeLiteralToken(value: string): boolean {
   if (!value || value === "-") {
     return true;
   }
-  return !hasGlobToken(value) && !isPathLikeToken(value);
+  return !hasGlobToken(value) && !hasShellExpansionToken(value) && !isPathLikeToken(value);
 }
 
 function isInvalidValueToken(value: string | undefined): boolean {
@@ -95,23 +101,26 @@ function consumeShortOptionClusterToken(params: {
   cluster: string;
   flags: string[];
   allowedValueFlags: ReadonlySet<string>;
+  allowedBooleanFlags: ReadonlySet<string>;
   deniedFlags: ReadonlySet<string>;
 }): number {
-  for (let j = 0; j < params.flags.length; j += 1) {
-    const flag = params.flags[j];
+  for (const [j, flag] of params.flags.entries()) {
     if (params.deniedFlags.has(flag)) {
       return -1;
     }
-    if (!params.allowedValueFlags.has(flag)) {
+    if (params.allowedValueFlags.has(flag)) {
+      const inlineValue = params.cluster.slice(j + 1);
+      if (inlineValue) {
+        return isSafeLiteralToken(inlineValue) ? params.index + 1 : -1;
+      }
+      return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
+    }
+    if (params.allowedBooleanFlags.has(flag)) {
       continue;
     }
-    const inlineValue = params.cluster.slice(j + 1);
-    if (inlineValue) {
-      return isSafeLiteralToken(inlineValue) ? params.index + 1 : -1;
-    }
-    return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
+    return -1;
   }
-  return -1;
+  return params.index + 1;
 }
 
 function consumePositionalToken(token: string, positional: string[]): boolean {
@@ -127,14 +136,19 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
   if (positional.length < minPositional) {
     return false;
   }
-  return typeof profile.maxPositional !== "number" || positional.length <= profile.maxPositional;
+  if (typeof profile.maxPositional === "number" && positional.length > profile.maxPositional) {
+    return false;
+  }
+  return true;
 }
 
-export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
+function collectPositionalTokens(args: string[], profile: SafeBinProfile): string[] | null {
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
+  const allowedBooleanFlags = profile.allowedBooleanFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
   const knownLongFlags =
-    profile.knownLongFlags ?? collectKnownLongFlags(allowedValueFlags, deniedFlags);
+    profile.knownLongFlags ??
+    collectKnownLongFlags(allowedValueFlags, deniedFlags, allowedBooleanFlags);
   const knownLongFlagsSet = profile.knownLongFlagsSet ?? new Set(knownLongFlags);
   const longFlagPrefixMap = profile.longFlagPrefixMap ?? buildLongFlagPrefixMap(knownLongFlags);
 
@@ -156,7 +170,7 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
           continue;
         }
         if (!consumePositionalToken(rest, positional)) {
-          return false;
+          return null;
         }
       }
       break;
@@ -164,7 +178,7 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
 
     if (token.kind === "positional") {
       if (!consumePositionalToken(token.raw, positional)) {
-        return false;
+        return null;
       }
       i += 1;
       continue;
@@ -182,7 +196,7 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
         longFlagPrefixMap,
       });
       if (nextIndex < 0) {
-        return false;
+        return null;
       }
       i = nextIndex;
       continue;
@@ -194,13 +208,32 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
       cluster: token.cluster,
       flags: token.flags,
       allowedValueFlags,
+      allowedBooleanFlags,
       deniedFlags,
     });
     if (nextIndex < 0) {
-      return false;
+      return null;
     }
     i = nextIndex;
   }
 
-  return validatePositionalCount(positional, profile);
+  return positional;
+}
+
+export function validateSafeBinArgv(
+  args: string[],
+  profile: SafeBinProfile,
+  options?: { binName?: string },
+): boolean {
+  const positional = collectPositionalTokens(args, profile);
+  if (!positional) {
+    return false;
+  }
+  if (!validatePositionalCount(positional, profile)) {
+    return false;
+  }
+  return validateSafeBinSemantics({
+    binName: options?.binName,
+    positional,
+  });
 }

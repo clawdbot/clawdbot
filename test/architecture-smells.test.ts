@@ -1,19 +1,16 @@
-import { execFileSync } from "node:child_process";
-import path from "node:path";
+// Architecture smell tests flag unwanted dependency and layout patterns.
 import { describe, expect, it } from "vitest";
-import { collectArchitectureSmells } from "../scripts/check-architecture-smells.mjs";
+import { collectArchitectureSmells, main } from "../scripts/check-architecture-smells.mjs";
+import { createCapturedIo } from "./helpers/captured-io.js";
 
-const repoRoot = process.cwd();
-const scriptPath = path.join(repoRoot, "scripts", "check-architecture-smells.mjs");
+const smellsPromise = collectArchitectureSmells();
 
 describe("architecture smell inventory", () => {
   it("produces stable sorted output", async () => {
-    const first = await collectArchitectureSmells();
-    const second = await collectArchitectureSmells();
+    const smells = await smellsPromise;
 
-    expect(second).toEqual(first);
     expect(
-      [...first].toSorted(
+      [...smells].toSorted(
         (left, right) =>
           left.category.localeCompare(right.category) ||
           left.file.localeCompare(right.file) ||
@@ -22,15 +19,15 @@ describe("architecture smell inventory", () => {
           left.specifier.localeCompare(right.specifier) ||
           left.reason.localeCompare(right.reason),
       ),
-    ).toEqual(first);
+    ).toEqual(smells);
   });
 
   it("script json output matches the collector", async () => {
-    const stdout = execFileSync(process.execPath, [scriptPath, "--json"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    });
+    const captured = createCapturedIo();
+    const exitCode = await main(["--json"], captured.io);
 
-    expect(JSON.parse(stdout)).toEqual(await collectArchitectureSmells());
+    expect(exitCode).toBe(0);
+    expect(captured.readStderr()).toBe("");
+    expect(JSON.parse(captured.readStdout())).toEqual(await smellsPromise);
   });
 });

@@ -1,11 +1,9 @@
+// Covers heartbeat sender selection when delivery target differs.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
-
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 
@@ -47,6 +45,7 @@ describe("runHeartbeatOnce", () => {
         await runHeartbeatOnce({
           cfg,
           deps: {
+            getReplyFromConfig: replySpy,
             slack: sendSlack,
             getQueueSize: () => 0,
             nowMs: () => 0,

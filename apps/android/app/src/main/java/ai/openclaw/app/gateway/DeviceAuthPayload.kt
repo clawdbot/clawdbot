@@ -1,6 +1,10 @@
 package ai.openclaw.app.gateway
 
+/**
+ * Canonical device-auth payload builder shared with gateway verification rules.
+ */
 internal object DeviceAuthPayload {
+  /** Builds the canonical v3 auth string signed by device registration flows. */
   fun buildV3(
     deviceId: String,
     clientId: String,
@@ -32,6 +36,7 @@ internal object DeviceAuthPayload {
     ).joinToString("|")
   }
 
+  /** Normalizes signed metadata fields without locale-sensitive lowercasing. */
   internal fun normalizeMetadataField(value: String?): String {
     val trimmed = value?.trim().orEmpty()
     if (trimmed.isEmpty()) {

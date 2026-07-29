@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DirectoryConfigParams } from "../../../src/plugin-sdk/directory-runtime.js";
+// Discord tests cover directory live plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS } from "./api.js";
 import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
 
 function makeParams(overrides: Partial<DirectoryConfigParams> = {}): DirectoryConfigParams {
@@ -24,9 +26,36 @@ function jsonResponse(value: unknown): Response {
   });
 }
 
+function resolveFetchUrl(input: string | URL | Request): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
+
+function hangingBodyResponse(signal?: AbortSignal): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("["));
+      if (signal?.aborted) {
+        controller.error(signal.reason);
+        return;
+      }
+      signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 describe("discord directory live lookups", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("returns empty group directory when token is missing", async () => {
@@ -36,7 +65,7 @@ describe("discord directory live lookups", () => {
       query: "general",
     });
 
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
   });
 
   it("returns empty peer directory without query and skips guild listing", async () => {
@@ -44,13 +73,27 @@ describe("discord directory live lookups", () => {
 
     const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "  " }));
 
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("aborts hanging group directory response bodies after the lookup timeout", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      return hangingBodyResponse(init?.signal ?? undefined);
+    });
+
+    const rows = listDiscordDirectoryGroupsLive(makeParams({ query: "general" }));
+    const rejection = expect(rows).rejects.toThrow(/abort/i);
+
+    await vi.advanceTimersByTimeAsync(DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS);
+    await rejection;
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("filters group channels by query and respects limit", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = String(input);
+      const url = resolveFetchUrl(input);
       if (url.endsWith("/users/@me/guilds")) {
         return jsonResponse([
           { id: "g1", name: "Guild 1" },
@@ -72,14 +115,26 @@ describe("discord directory live lookups", () => {
     const rows = await listDiscordDirectoryGroupsLive(makeParams({ query: "an", limit: 2 }));
 
     expect(rows).toEqual([
-      expect.objectContaining({ kind: "group", id: "channel:c2", name: "random" }),
-      expect.objectContaining({ kind: "group", id: "channel:c3", name: "announcements" }),
+      {
+        kind: "group",
+        id: "channel:c2",
+        name: "random",
+        handle: "#random",
+        raw: { id: "c2", name: "random" },
+      },
+      {
+        kind: "group",
+        id: "channel:c3",
+        name: "announcements",
+        handle: "#announcements",
+        raw: { id: "c3", name: "announcements" },
+      },
     ]);
   });
 
   it("returns ranked peer results and caps member search by limit", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = String(input);
+      const url = resolveFetchUrl(input);
       if (url.endsWith("/users/@me/guilds")) {
         return jsonResponse([{ id: "g1", name: "Guild 1" }]);
       }
@@ -99,19 +154,22 @@ describe("discord directory live lookups", () => {
     const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "alice", limit: 2 }));
 
     expect(rows).toEqual([
-      expect.objectContaining({
+      {
         kind: "user",
         id: "user:u1",
         name: "Ali",
         handle: "@alice",
         rank: 1,
-      }),
-      expect.objectContaining({
+        raw: { user: { id: "u1", username: "alice", bot: false }, nick: "Ali" },
+      },
+      {
         kind: "user",
         id: "user:u2",
+        name: "alice-bot",
         handle: "@alice-bot",
         rank: 0,
-      }),
+        raw: { user: { id: "u2", username: "alice-bot", bot: true }, nick: null },
+      },
     ]);
   });
 });

@@ -1,12 +1,16 @@
+// Evaluates heartbeat active-hours windows.
 import { resolveUserTimezone } from "../agents/date-time.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Heartbeat active-hours helpers interpret user/local/IANA timezones and treat
+// invalid config as permissive so bad schedules do not disable heartbeats.
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
 const ACTIVE_HOURS_TIME_PATTERN = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/;
 
-function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
+/** Resolve the timezone used to evaluate heartbeat active hours. */
+export function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "user") {
     return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
@@ -42,14 +46,9 @@ function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number 
   return hour * 60 + minute;
 }
 
-function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
+function resolveMinutesInTimeZone(nowMs: number, formatter: Intl.DateTimeFormat): number | null {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(nowMs));
+    const parts = formatter.formatToParts(new Date(nowMs));
     const map: Record<string, string> = {};
     for (const part of parts) {
       if (part.type !== "literal") {
@@ -67,33 +66,57 @@ function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | nul
   }
 }
 
-export function isWithinActiveHours(
+/** Prepare one active-hours predicate for repeated schedule probes. */
+export function createActiveHoursPredicate(
   cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
-  nowMs?: number,
-): boolean {
+): (nowMs: number) => boolean {
   const active = heartbeat?.activeHours;
   if (!active) {
-    return true;
+    return () => true;
   }
 
   const startMin = parseActiveHoursTime({ allow24: false }, active.start);
   const endMin = parseActiveHoursTime({ allow24: true }, active.end);
   if (startMin === null || endMin === null) {
-    return true;
+    return () => true;
   }
   if (startMin === endMin) {
-    return false;
+    return () => false;
   }
 
   const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
-  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
-  if (currentMin === null) {
-    return true;
+  let formatter: Intl.DateTimeFormat;
+  try {
+    // Schedule seeking can call this predicate thousands of times. Reusing the
+    // formatter avoids blocking the event loop on repeated Intl construction.
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+  } catch {
+    return () => true;
   }
 
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
-  }
-  return currentMin >= startMin || currentMin < endMin;
+  return (nowMs: number) => {
+    const currentMin = resolveMinutesInTimeZone(nowMs, formatter);
+    if (currentMin === null) {
+      return true;
+    }
+    if (endMin > startMin) {
+      return currentMin >= startMin && currentMin < endMin;
+    }
+    return currentMin >= startMin || currentMin < endMin;
+  };
+}
+
+/** Return true when the current time is inside the configured heartbeat window. */
+export function isWithinActiveHours(
+  cfg: OpenClawConfig,
+  heartbeat?: HeartbeatConfig,
+  nowMs?: number,
+): boolean {
+  return createActiveHoursPredicate(cfg, heartbeat)(nowMs ?? Date.now());
 }

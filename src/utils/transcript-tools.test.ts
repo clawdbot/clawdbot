@@ -1,3 +1,4 @@
+// Transcript tool tests cover transcript utility parsing and formatting.
 import { describe, expect, it } from "vitest";
 import { countToolResults, extractToolCallNames, hasToolCall } from "./transcript-tools.js";
 

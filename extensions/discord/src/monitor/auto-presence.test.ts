@@ -1,9 +1,7 @@
+// Discord tests cover auto presence plugin behavior.
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../../../../src/agents/auth-profiles.js";
-import {
-  createDiscordAutoPresenceController,
-  resolveDiscordAutoPresenceDecision,
-} from "./auto-presence.js";
+import { createDiscordAutoPresenceController } from "./auto-presence.js";
 
 function createStore(params?: {
   cooldownUntil?: number;
@@ -31,22 +29,28 @@ function createStore(params?: {
 
 function expectExhaustedDecision(params: { failureCounts: Record<string, number> }) {
   const now = Date.now();
-  const decision = resolveDiscordAutoPresenceDecision({
+  const updatePresence = vi.fn();
+  const controller = createDiscordAutoPresenceController({
+    accountId: "default",
     discordConfig: {
       autoPresence: {
         enabled: true,
         exhaustedText: "token exhausted",
       },
     },
-    authStore: createStore({ cooldownUntil: now + 60_000, failureCounts: params.failureCounts }),
-    gatewayConnected: true,
-    now,
+    gateway: { isConnected: true, updatePresence },
+    loadAuthStore: () =>
+      createStore({ cooldownUntil: now + 60_000, failureCounts: params.failureCounts }),
+    now: () => now,
   });
+  controller.runNow();
 
-  expect(decision).toBeTruthy();
-  expect(decision?.state).toBe("exhausted");
-  expect(decision?.presence.status).toBe("dnd");
-  expect(decision?.presence.activities[0]?.state).toBe("token exhausted");
+  expect(updatePresence).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "dnd",
+      activities: [expect.objectContaining({ state: "token exhausted" })],
+    }),
+  );
 }
 
 describe("discord auto presence", () => {
@@ -87,8 +91,24 @@ describe("discord auto presence", () => {
     controller.runNow();
 
     expect(updatePresence).toHaveBeenCalledTimes(2);
-    expect(updatePresence.mock.calls[0]?.[0]?.status).toBe("dnd");
-    expect(updatePresence.mock.calls[1]?.[0]?.status).toBe("online");
+    expect(updatePresence.mock.calls).toEqual([
+      [
+        {
+          since: null,
+          activities: [{ name: "Custom Status", type: 4, state: "token exhausted" }],
+          status: "dnd",
+          afk: false,
+        },
+      ],
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
+    ]);
   });
 
   it("re-applies presence on refresh even when signature is unchanged", () => {
@@ -119,8 +139,24 @@ describe("discord auto presence", () => {
     controller.refresh();
 
     expect(updatePresence).toHaveBeenCalledTimes(2);
-    expect(updatePresence.mock.calls[0]?.[0]?.status).toBe("online");
-    expect(updatePresence.mock.calls[1]?.[0]?.status).toBe("online");
+    expect(updatePresence.mock.calls).toEqual([
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
+    ]);
   });
 
   it("does nothing when auto presence is disabled", () => {

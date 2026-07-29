@@ -1,11 +1,18 @@
+// Slack plugin module implements thread resolution behavior.
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/infra-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  asDateTimestampMs,
+  parseFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 
 type ThreadTsCacheEntry = {
   threadTs: string | null;
-  updatedAt: number;
+  expiresAt: number;
 };
 
 const DEFAULT_THREAD_TS_CACHE_TTL_MS = 60_000;
@@ -15,6 +22,11 @@ const normalizeThreadTs = (threadTs?: string | null) => {
   const trimmed = threadTs?.trim();
   return trimmed ? trimmed : undefined;
 };
+
+const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent => ({
+  ...message,
+  _ambiguousThreadReply: true,
+});
 
 async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
@@ -35,7 +47,7 @@ async function resolveThreadTsFromHistory(params: {
   } catch (err) {
     if (shouldLogVerbose()) {
       logVerbose(
-        `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${String(err)}`,
+        `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${formatSlackError(err)}`,
       );
     }
     return undefined;
@@ -47,8 +59,8 @@ export function createSlackThreadTsResolver(params: {
   cacheTtlMs?: number;
   maxSize?: number;
 }) {
-  const ttlMs = Math.max(0, params.cacheTtlMs ?? DEFAULT_THREAD_TS_CACHE_TTL_MS);
-  const maxSize = Math.max(0, params.maxSize ?? DEFAULT_THREAD_TS_CACHE_MAX);
+  const ttlMs = Math.max(0, parseFiniteNumber(params.cacheTtlMs) ?? DEFAULT_THREAD_TS_CACHE_TTL_MS);
+  const maxSize = Math.max(0, parseFiniteNumber(params.maxSize) ?? DEFAULT_THREAD_TS_CACHE_MAX);
   const cache = new Map<string, ThreadTsCacheEntry>();
   const inflight = new Map<string, Promise<string | undefined>>();
 
@@ -57,18 +69,33 @@ export function createSlackThreadTsResolver(params: {
     if (!entry) {
       return undefined;
     }
-    if (ttlMs > 0 && now - entry.updatedAt > ttlMs) {
+    if (entry.expiresAt === 0) {
+      cache.delete(key);
+      cache.set(key, entry);
+      return entry.threadTs;
+    }
+    const normalizedNow = asDateTimestampMs(now);
+    if (
+      normalizedNow === undefined ||
+      asDateTimestampMs(entry.expiresAt) === undefined ||
+      entry.expiresAt <= normalizedNow
+    ) {
       cache.delete(key);
       return undefined;
     }
     cache.delete(key);
-    cache.set(key, { ...entry, updatedAt: now });
+    cache.set(key, entry);
     return entry.threadTs;
   };
 
   const setCached = (key: string, threadTs: string | null, now: number) => {
+    const expiresAt = ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) : 0;
+    if (expiresAt === undefined) {
+      cache.delete(key);
+      return;
+    }
     cache.delete(key);
-    cache.set(key, { threadTs, updatedAt: now });
+    cache.set(key, { threadTs, expiresAt });
     pruneMapToMaxSize(cache, maxSize);
   };
 
@@ -86,7 +113,7 @@ export function createSlackThreadTsResolver(params: {
       const now = Date.now();
       const cached = getCached(cacheKey, now);
       if (cached !== undefined) {
-        return cached ? { ...message, thread_ts: cached } : message;
+        return cached ? { ...message, thread_ts: cached } : markAmbiguousThreadReply(message);
       }
 
       if (shouldLogVerbose()) {
@@ -125,10 +152,10 @@ export function createSlackThreadTsResolver(params: {
 
       if (shouldLogVerbose()) {
         logVerbose(
-          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}`,
+          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}; marking reply ambiguous`,
         );
       }
-      return message;
+      return markAmbiguousThreadReply(message);
     },
   };
 }

@@ -1,17 +1,32 @@
-import { resolveManifestProviderApiKeyChoice } from "../plugins/provider-auth-choices.js";
-import {
-  createAuthChoiceDefaultModelApplierForMutableState,
-  normalizeSecretInputModeInput,
-  normalizeTokenProviderInput,
-} from "./auth-choice.apply-helpers.js";
-import { applyLiteLlmApiKeyProvider } from "./auth-choice.apply.api-key-providers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+// Token-provider normalization hooks for provider-backed auth choices.
+import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
+import { resolvePluginProviders } from "../plugins/provider-auth-choice.runtime.js";
+import type { ProviderAuthKind } from "../plugins/types.js";
+import { normalizeTokenProviderInput } from "./auth-choice.apply-helpers.js";
+import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 import type { AuthChoice } from "./onboard-types.js";
 
-const CORE_API_KEY_TOKEN_PROVIDER_AUTH_CHOICES: Partial<Record<string, AuthChoice>> = {
-  litellm: "litellm-api-key",
-};
+function resolveProviderAuthChoiceByKind(params: {
+  providerId: string;
+  kind: ProviderAuthKind;
+  config?: ApplyAuthChoiceParams["config"];
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): AuthChoice | undefined {
+  const provider = resolveProviderMatch(
+    resolvePluginProviders({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      mode: "setup",
+    }),
+    params.providerId,
+  );
+  const choiceId = provider?.auth.find((method) => method.kind === params.kind)?.wizard?.choiceId;
+  return choiceId as AuthChoice | undefined;
+}
 
+/** Translate generic api-key/token choices to provider-specific auth choices when possible. */
 export function normalizeApiKeyTokenProviderAuthChoice(params: {
   authChoice: AuthChoice;
   tokenProvider?: string;
@@ -19,61 +34,34 @@ export function normalizeApiKeyTokenProviderAuthChoice(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoice {
-  if (params.authChoice !== "apiKey" || !params.tokenProvider) {
+  if (!params.tokenProvider) {
     return params.authChoice;
   }
   const normalizedTokenProvider = normalizeTokenProviderInput(params.tokenProvider);
   if (!normalizedTokenProvider) {
     return params.authChoice;
   }
+  if (params.authChoice === "token" || params.authChoice === "setup-token") {
+    return (
+      resolveProviderAuthChoiceByKind({
+        providerId: normalizedTokenProvider,
+        kind: "token",
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }) ?? params.authChoice
+    );
+  }
+  if (params.authChoice !== "apiKey") {
+    return params.authChoice;
+  }
   return (
-    (resolveManifestProviderApiKeyChoice({
+    resolveProviderAuthChoiceByKind({
       providerId: normalizedTokenProvider,
+      kind: "api_key",
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
-    })?.choiceId as AuthChoice | undefined) ??
-    CORE_API_KEY_TOKEN_PROVIDER_AUTH_CHOICES[normalizedTokenProvider] ??
-    params.authChoice
+    }) ?? params.authChoice
   );
-}
-
-export async function applyAuthChoiceApiProviders(
-  params: ApplyAuthChoiceParams,
-): Promise<ApplyAuthChoiceResult | null> {
-  let nextConfig = params.config;
-  let agentModelOverride: string | undefined;
-  const applyProviderDefaultModel = createAuthChoiceDefaultModelApplierForMutableState(
-    params,
-    () => nextConfig,
-    (config) => (nextConfig = config),
-    () => agentModelOverride,
-    (model) => (agentModelOverride = model),
-  );
-
-  const authChoice = normalizeApiKeyTokenProviderAuthChoice({
-    authChoice: params.authChoice,
-    tokenProvider: params.opts?.tokenProvider,
-    config: params.config,
-    env: process.env,
-  });
-  const normalizedTokenProvider = normalizeTokenProviderInput(params.opts?.tokenProvider);
-  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
-
-  const litellmResult = await applyLiteLlmApiKeyProvider({
-    params,
-    authChoice,
-    config: nextConfig,
-    setConfig: (config) => (nextConfig = config),
-    getConfig: () => nextConfig,
-    normalizedTokenProvider,
-    requestedSecretInputMode,
-    applyProviderDefaultModel,
-    getAgentModelOverride: () => agentModelOverride,
-  });
-  if (litellmResult) {
-    return litellmResult;
-  }
-
-  return null;
 }

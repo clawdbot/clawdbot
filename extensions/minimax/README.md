@@ -3,7 +3,7 @@
 Bundled MiniMax plugin for both:
 
 - API-key provider setup (`minimax`)
-- Coding Plan OAuth setup (`minimax-portal`)
+- Token Plan OAuth setup (`minimax-portal`)
 
 ## Enable
 
@@ -34,4 +34,4 @@ openclaw setup --wizard --auth-choice minimax-global-api
 ## Notes
 
 - MiniMax OAuth uses a user-code login flow.
-- OAuth currently targets the Coding Plan path.
+- OAuth currently targets the Token Plan path.

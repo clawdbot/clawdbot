@@ -2,63 +2,48 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import * as crypto from "node:crypto";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
 
-export type DmAuthorizationResult =
-  | { allowed: true }
-  | { allowed: false; reason: "disabled" | "allowlist-empty" | "not-allowlisted" };
-
 /**
  * Validate webhook token using constant-time comparison.
- * Prevents timing attacks that could leak token bytes.
+ * Reject empty tokens explicitly; use shared constant-time comparison otherwise.
  */
 export function validateToken(received: string, expected: string): boolean {
-  if (!received || !expected) return false;
-
-  // Use HMAC to normalize lengths before comparison,
-  // preventing timing side-channel on token length.
-  const key = "openclaw-token-cmp";
-  const a = crypto.createHmac("sha256", key).update(received).digest();
-  const b = crypto.createHmac("sha256", key).update(expected).digest();
-
-  return crypto.timingSafeEqual(a, b);
+  if (!received || !expected) {
+    return false;
+  }
+  return safeEqualSecret(received, expected);
 }
 
-/**
- * Check if a user ID is in the allowed list.
- * Allowlist mode must be explicit; empty lists should not match any user.
- */
-export function checkUserAllowed(userId: string, allowedUserIds: string[]): boolean {
-  if (allowedUserIds.length === 0) return false;
-  return allowedUserIds.includes(userId);
-}
-
-/**
- * Resolve DM authorization for a sender across all DM policy modes.
- * Keeps policy semantics in one place so webhook/startup behavior stays consistent.
- */
-export function authorizeUserForDm(
-  userId: string,
-  dmPolicy: "open" | "allowlist" | "disabled",
-  allowedUserIds: string[],
-): DmAuthorizationResult {
-  if (dmPolicy === "disabled") {
-    return { allowed: false, reason: "disabled" };
-  }
-  if (dmPolicy === "open") {
-    return { allowed: true };
-  }
-  if (allowedUserIds.length === 0) {
-    return { allowed: false, reason: "allowlist-empty" };
-  }
-  if (!checkUserAllowed(userId, allowedUserIds)) {
-    return { allowed: false, reason: "not-allowlisted" };
-  }
-  return { allowed: true };
+export async function authorizeUserForDmWithIngress(params: {
+  accountId: string;
+  userId: string;
+  dmPolicy: "open" | "allowlist" | "disabled";
+  allowedUserIds: string[];
+}) {
+  return await resolveStableChannelMessageIngress({
+    channelId: "synology-chat",
+    accountId: params.accountId,
+    identity: {
+      key: "sender-id",
+      entryIdPrefix: "synology-chat-entry",
+    },
+    subject: { stableId: params.userId },
+    conversation: {
+      kind: "direct",
+      id: "direct",
+    },
+    event: { mayPair: false },
+    dmPolicy: params.dmPolicy,
+    allowFrom: params.allowedUserIds,
+  });
 }
 
 /**
@@ -80,7 +65,7 @@ export function sanitizeInput(text: string): string {
 
   const maxLength = 4000;
   if (sanitized.length > maxLength) {
-    sanitized = sanitized.slice(0, maxLength) + "... [truncated]";
+    sanitized = truncateUtf16Safe(sanitized, maxLength) + "... [truncated]";
   }
 
   return sanitized;
@@ -95,8 +80,9 @@ export class RateLimiter {
 
   constructor(limit = 30, windowSeconds = 60, maxTrackedUsers = 5_000) {
     this.limit = limit;
+    const windowMs = finiteSecondsToTimerSafeMilliseconds(windowSeconds) ?? 1;
     this.limiter = createFixedWindowRateLimiter({
-      windowMs: Math.max(1, Math.floor(windowSeconds * 1000)),
+      windowMs,
       maxRequests: Math.max(1, Math.floor(limit)),
       maxTrackedKeys: Math.max(1, Math.floor(maxTrackedUsers)),
     });

@@ -1,8 +1,20 @@
+// Config set input tests cover config value parsing from CLI input and files.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseBatchSource } from "./config-set-input.js";
+
+function withBatchFile<T>(prefix: string, contents: string, run: (batchPath: string) => T): T {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const batchPath = path.join(tempDir, "batch.json");
+  fs.writeFileSync(batchPath, contents, "utf8");
+  try {
+    return run(batchPath);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
 
 describe("config set input parsing", () => {
   it("returns null when no batch options are provided", () => {
@@ -45,69 +57,80 @@ describe("config set input parsing", () => {
     ]);
   });
 
-  it("rejects malformed --batch-json payloads", () => {
-    expect(() =>
-      parseBatchSource({
-        batchJson: "{",
-      }),
-    ).toThrow("Failed to parse --batch-json:");
-  });
-
-  it("rejects --batch-json payloads that are not arrays", () => {
-    expect(() =>
-      parseBatchSource({
-        batchJson: '{"path":"gateway.auth.mode","value":"token"}',
-      }),
-    ).toThrow("--batch-json must be a JSON array.");
-  });
-
-  it("rejects batch entries without path", () => {
-    expect(() =>
-      parseBatchSource({
-        batchJson: '[{"value":"token"}]',
-      }),
-    ).toThrow("--batch-json[0].path is required.");
-  });
-
-  it("rejects batch entries that do not contain exactly one mode key", () => {
-    expect(() =>
-      parseBatchSource({
-        batchJson: '[{"path":"gateway.auth.mode","value":"token","provider":{"source":"env"}}]',
-      }),
-    ).toThrow("--batch-json[0] must include exactly one of: value, ref, provider.");
+  it.each([
+    { name: "malformed payload", batchJson: "{", message: "Failed to parse --batch-json:" },
+    {
+      name: "non-array payload",
+      batchJson: '{"path":"gateway.auth.mode","value":"token"}',
+      message: "--batch-json must be a JSON array.",
+    },
+    {
+      name: "entry without path",
+      batchJson: '[{"value":"token"}]',
+      message: "--batch-json[0].path is required.",
+    },
+    {
+      name: "entry with multiple mode keys",
+      batchJson: '[{"path":"gateway.auth.mode","value":"token","provider":{"source":"env"}}]',
+      message: "--batch-json[0] must include exactly one of: value, ref, provider.",
+    },
+  ] as const)("rejects $name", ({ batchJson, message }) => {
+    expect(() => parseBatchSource({ batchJson })).toThrow(message);
   });
 
   it("parses valid --batch-file payloads", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-set-input-"));
-    const batchPath = path.join(tempDir, "batch.json");
-    fs.writeFileSync(batchPath, '[{"path":"gateway.auth.mode","value":"token"}]', "utf8");
-    try {
-      const parsed = parseBatchSource({
-        batchFile: batchPath,
-      });
-      expect(parsed).toEqual([
-        {
-          path: "gateway.auth.mode",
-          value: "token",
-        },
-      ]);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    withBatchFile(
+      "openclaw-config-set-input-",
+      '[{"path":"gateway.auth.mode","value":"token"}]',
+      (batchPath) => {
+        const parsed = parseBatchSource({
+          batchFile: batchPath,
+        });
+        expect(parsed).toEqual([
+          {
+            path: "gateway.auth.mode",
+            value: "token",
+          },
+        ]);
+      },
+    );
+  });
+
+  it("rejects --batch-file when the file does not exist", () => {
+    expect(() =>
+      parseBatchSource({
+        batchFile: "/nonexistent/path/batch.json5",
+      }),
+    ).toThrow("--batch-file not found: /nonexistent/path/batch.json5");
   });
 
   it("rejects malformed --batch-file payloads", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-set-input-invalid-"));
-    const batchPath = path.join(tempDir, "batch.json");
-    fs.writeFileSync(batchPath, "{}", "utf8");
-    try {
+    withBatchFile("openclaw-config-set-input-invalid-", "{}", (batchPath) => {
       expect(() =>
         parseBatchSource({
           batchFile: batchPath,
         }),
       ).toThrow("--batch-file must be a JSON array.");
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    });
+  });
+
+  it("rejects --batch-file payloads above the config mutation limit", () => {
+    withBatchFile(
+      "openclaw-config-set-input-oversized-",
+      " ".repeat(8 * 1024 * 1024 + 1),
+      (batchPath) => {
+        expect(() => parseBatchSource({ batchFile: batchPath })).toThrow(
+          "--batch-file exceeds the 8 MiB supported maximum (8388608 bytes)",
+        );
+      },
+    );
+  });
+
+  it("accepts --batch-file at exactly the size limit", () => {
+    const content = "[]".padEnd(8 * 1024 * 1024, " ");
+    withBatchFile("openclaw-config-set-input-boundary-", content, (batchPath) => {
+      const parsed = parseBatchSource({ batchFile: batchPath });
+      expect(parsed).toEqual([]);
+    });
   });
 });

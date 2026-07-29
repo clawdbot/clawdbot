@@ -1,3 +1,4 @@
+// Twitch plugin module implements test fixtures behavior.
 import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 

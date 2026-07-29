@@ -1,19 +1,11 @@
+// Re-exports global CLI flag state used across command modules.
+export { isVerbose, isYes, setVerbose, setYes } from "./global-state.js";
+import { theme } from "../packages/terminal-core/src/theme.js";
+import { isVerbose } from "./global-state.js";
 import { getLogger, isFileLogLevelEnabled } from "./logging/logger.js";
-import { theme } from "./terminal/theme.js";
-
-let globalVerbose = false;
-let globalYes = false;
-
-export function setVerbose(v: boolean) {
-  globalVerbose = v;
-}
-
-export function isVerbose() {
-  return globalVerbose;
-}
 
 export function shouldLogVerbose() {
-  return globalVerbose || isFileLogLevelEnabled("debug");
+  return isVerbose() || isFileLogLevelEnabled("debug");
 }
 
 export function logVerbose(message: string) {
@@ -25,28 +17,22 @@ export function logVerbose(message: string) {
   } catch {
     // ignore logger failures to avoid breaking verbose printing
   }
-  if (!globalVerbose) {
+  if (!isVerbose()) {
     return;
   }
   console.log(theme.muted(message));
 }
 
 export function logVerboseConsole(message: string) {
-  if (!globalVerbose) {
+  if (!isVerbose()) {
     return;
   }
   console.log(theme.muted(message));
 }
 
-export function setYes(v: boolean) {
-  globalYes = v;
-}
+type ThemeFormatter = (value: string) => string;
 
-export function isYes() {
-  return globalYes;
-}
-
-export const success = theme.success;
-export const warn = theme.warn;
-export const info = theme.info;
-export const danger = theme.error;
+export const success: ThemeFormatter = theme.success;
+export const warn: ThemeFormatter = theme.warn;
+export const info: ThemeFormatter = theme.info;
+export const danger: ThemeFormatter = theme.error;

@@ -1,22 +1,26 @@
 #!/usr/bin/env node
 
+// Finds core/plugin architecture boundary smells in TypeScript sources.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import pMap from "p-map";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import {
+  collectModuleReferencesFromSource,
+  normalizeRepoPath,
+  resolveRepoSpecifier,
+  writeLine,
+} from "./lib/guard-inventory-utils.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveSourceRoots,
   runAsScript,
-  toLine,
 } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = resolveSourceRoots(repoRoot, ["src/plugin-sdk", "src/plugins/runtime"]);
-
-function normalizePath(filePath) {
-  return path.relative(repoRoot, filePath).split(path.sep).join("/");
-}
+let architectureSmellsPromise;
 
 function compareEntries(left, right) {
   return (
@@ -29,98 +33,74 @@ function compareEntries(left, right) {
   );
 }
 
-function resolveSpecifier(specifier, importerFile) {
-  if (specifier.startsWith(".")) {
-    return normalizePath(path.resolve(path.dirname(importerFile), specifier));
-  }
-  if (specifier.startsWith("/")) {
-    return normalizePath(specifier);
-  }
-  return null;
-}
-
 function pushEntry(entries, entry) {
   entries.push(entry);
 }
 
-function scanPluginSdkExtensionFacadeSmells(sourceFile, filePath) {
-  const relativeFile = normalizePath(filePath);
+function scanPluginSdkExtensionFacadeSmells(source, filePath) {
+  const relativeFile = normalizeRepoPath(repoRoot, filePath);
   if (!relativeFile.startsWith("src/plugin-sdk/")) {
     return [];
   }
 
   const entries = [];
 
-  function visit(node) {
-    if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      const specifier = node.moduleSpecifier.text;
-      const resolvedPath = resolveSpecifier(specifier, filePath);
-      if (resolvedPath?.startsWith("extensions/")) {
-        pushEntry(entries, {
-          category: "plugin-sdk-extension-facade",
-          file: relativeFile,
-          line: toLine(sourceFile, node.moduleSpecifier),
-          kind: "export",
-          specifier,
-          resolvedPath,
-          reason: "plugin-sdk public surface re-exports extension-owned implementation",
-        });
-      }
+  for (const { kind, line, specifier } of collectModuleReferencesFromSource(source)) {
+    if (kind !== "export") {
+      continue;
     }
-
-    ts.forEachChild(node, visit);
+    const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+    if (!resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+      continue;
+    }
+    pushEntry(entries, {
+      category: "plugin-sdk-extension-facade",
+      file: relativeFile,
+      line,
+      kind,
+      specifier,
+      resolvedPath,
+      reason: "plugin-sdk public surface re-exports extension-owned implementation",
+    });
   }
-
-  visit(sourceFile);
   return entries;
 }
 
-function scanRuntimeTypeImplementationSmells(sourceFile, filePath) {
-  const relativeFile = normalizePath(filePath);
+function scanRuntimeTypeImplementationSmells(source, filePath) {
+  const relativeFile = normalizeRepoPath(repoRoot, filePath);
   if (!/^src\/plugins\/runtime\/types(?:-[^/]+)?\.ts$/.test(relativeFile)) {
     return [];
   }
 
   const entries = [];
 
-  function visit(node) {
-    if (
-      ts.isImportTypeNode(node) &&
-      ts.isLiteralTypeNode(node.argument) &&
-      ts.isStringLiteral(node.argument.literal)
-    ) {
-      const specifier = node.argument.literal.text;
-      const resolvedPath = resolveSpecifier(specifier, filePath);
-      if (
-        resolvedPath &&
-        (/^src\/plugins\/runtime\/runtime-[^/]+\.ts$/.test(resolvedPath) ||
-          /^extensions\/[^/]+\/runtime-api\.[^/]+$/.test(resolvedPath))
-      ) {
-        pushEntry(entries, {
-          category: "runtime-type-implementation-edge",
-          file: relativeFile,
-          line: toLine(sourceFile, node.argument.literal),
-          kind: "import-type",
-          specifier,
-          resolvedPath,
-          reason: "runtime type file references implementation shim directly",
-        });
-      }
+  for (const { kind, line, specifier } of collectModuleReferencesFromSource(source)) {
+    if (kind !== "dynamic-import") {
+      continue;
     }
-
-    ts.forEachChild(node, visit);
+    const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+    if (
+      resolvedPath &&
+      (/^src\/plugins\/runtime\/runtime-[^/]+\.ts$/.test(resolvedPath) ||
+        /^extensions\/[^/]+\/runtime-api\.[^/]+$/.test(resolvedPath))
+    ) {
+      pushEntry(entries, {
+        category: "runtime-type-implementation-edge",
+        file: relativeFile,
+        line,
+        kind: "import-type",
+        specifier,
+        resolvedPath,
+        reason: "runtime type file references implementation shim directly",
+      });
+    }
   }
 
-  visit(sourceFile);
   return entries;
 }
 
-function scanRuntimeServiceLocatorSmells(sourceFile, filePath) {
-  const relativeFile = normalizePath(filePath);
+function scanRuntimeServiceLocatorSmells(source, filePath) {
+  const relativeFile = normalizeRepoPath(repoRoot, filePath);
   if (
     !relativeFile.startsWith("src/plugin-sdk/") &&
     !relativeFile.startsWith("src/plugins/runtime/")
@@ -133,46 +113,24 @@ function scanRuntimeServiceLocatorSmells(sourceFile, filePath) {
   const runtimeStoreCalls = [];
   const mutableStateNodes = [];
 
-  for (const statement of sourceFile.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name) {
-      const isExported = statement.modifiers?.some(
-        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-      );
-      if (isExported) {
-        exportedNames.add(statement.name.text);
-      }
-    } else if (ts.isVariableStatement(statement)) {
-      const isExported = statement.modifiers?.some(
-        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-      );
-      for (const declaration of statement.declarationList.declarations) {
-        if (ts.isIdentifier(declaration.name) && isExported) {
-          exportedNames.add(declaration.name.text);
-        }
-        if (
-          !isExported &&
-          (statement.declarationList.flags & ts.NodeFlags.Let) !== 0 &&
-          ts.isIdentifier(declaration.name)
-        ) {
-          mutableStateNodes.push(declaration.name);
-        }
-      }
+  const lines = source.split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    const lineNumber = index + 1;
+    const exportedFunction = line.match(/^\s*export\s+function\s+([A-Za-z_$][\w$]*)/);
+    if (exportedFunction) {
+      exportedNames.add(exportedFunction[1]);
+    }
+    const exportedVariable = line.match(/^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/);
+    if (exportedVariable) {
+      exportedNames.add(exportedVariable[1]);
+    }
+    for (const mutableMatch of line.matchAll(/^\s*let\s+([A-Za-z_$][\w$]*)/g)) {
+      mutableStateNodes.push({ line: lineNumber, text: mutableMatch[1] });
+    }
+    if (line.includes("createPluginRuntimeStore")) {
+      runtimeStoreCalls.push({ line: lineNumber });
     }
   }
-
-  function visit(node) {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "createPluginRuntimeStore"
-    ) {
-      runtimeStoreCalls.push(node.expression);
-    }
-
-    ts.forEachChild(node, visit);
-  }
-
-  visit(sourceFile);
 
   const getterNames = [...exportedNames].filter((name) => /^get[A-Z]/.test(name));
   const setterNames = [...exportedNames].filter((name) => /^set[A-Z]/.test(name));
@@ -182,7 +140,7 @@ function scanRuntimeServiceLocatorSmells(sourceFile, filePath) {
       pushEntry(entries, {
         category: "runtime-service-locator",
         file: relativeFile,
-        line: toLine(sourceFile, callNode),
+        line: callNode.line,
         kind: "runtime-store",
         specifier: "createPluginRuntimeStore",
         resolvedPath: relativeFile,
@@ -196,7 +154,7 @@ function scanRuntimeServiceLocatorSmells(sourceFile, filePath) {
       pushEntry(entries, {
         category: "runtime-service-locator",
         file: relativeFile,
-        line: toLine(sourceFile, identifier),
+        line: identifier.line,
         kind: "mutable-state",
         specifier: identifier.text,
         resolvedPath: relativeFile,
@@ -208,27 +166,36 @@ function scanRuntimeServiceLocatorSmells(sourceFile, filePath) {
   return entries;
 }
 
+/**
+ * Collects architecture smell findings from the configured source roots.
+ */
 export async function collectArchitectureSmells() {
-  const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
-    normalizePath(left).localeCompare(normalizePath(right)),
-  );
-
-  const inventory = [];
-  for (const filePath of files) {
-    const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TS,
-    );
-    inventory.push(...scanPluginSdkExtensionFacadeSmells(sourceFile, filePath));
-    inventory.push(...scanRuntimeTypeImplementationSmells(sourceFile, filePath));
-    inventory.push(...scanRuntimeServiceLocatorSmells(sourceFile, filePath));
+  if (!architectureSmellsPromise) {
+    architectureSmellsPromise = (async () => {
+      const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
+        normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+      );
+      const entriesByFile = await pMap(
+        files,
+        async (filePath) => {
+          const source = await fs.readFile(filePath, "utf8");
+          const entries = scanPluginSdkExtensionFacadeSmells(source, filePath);
+          entries.push(...scanRuntimeTypeImplementationSmells(source, filePath));
+          entries.push(...scanRuntimeServiceLocatorSmells(source, filePath));
+          return entries;
+        },
+        { concurrency: 32, stopOnError: true },
+      );
+      return entriesByFile.flat().toSorted(compareEntries);
+    })();
+    try {
+      return await architectureSmellsPromise;
+    } catch (error) {
+      architectureSmellsPromise = undefined;
+      throw error;
+    }
   }
-
-  return inventory.toSorted(compareEntries);
+  return await architectureSmellsPromise;
 }
 
 function formatInventoryHuman(inventory) {
@@ -256,17 +223,27 @@ function formatInventoryHuman(inventory) {
   return lines.join("\n");
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const json = argv.includes("--json");
+async function runArchitectureSmellsCheck(argv, io) {
+  const args = argv ?? process.argv.slice(2);
+  const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
+  const json = args.includes("--json");
   const inventory = await collectArchitectureSmells();
 
   if (json) {
-    process.stdout.write(`${JSON.stringify(inventory, null, 2)}\n`);
-    return;
+    writeLine(streams.stdout, JSON.stringify(inventory, null, 2));
+    return 0;
   }
 
-  console.log(formatInventoryHuman(inventory));
-  console.log(`${inventory.length} smell${inventory.length === 1 ? "" : "s"} found.`);
+  writeLine(streams.stdout, formatInventoryHuman(inventory));
+  writeLine(streams.stdout, `${inventory.length} smell${inventory.length === 1 ? "" : "s"} found.`);
+  return 0;
+}
+
+/**
+ * Runs the architecture smell check and writes human/JSON output.
+ */
+export async function main(argv, io) {
+  return await runArchitectureSmellsCheck(argv, io);
 }
 
 runAsScript(import.meta.url, main);

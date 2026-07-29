@@ -1,7 +1,11 @@
-import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
-import { loadConfig } from "../../config/config.js";
+/**
+ * CLI-facing sandbox management helpers.
+ *
+ * Lists and removes registered runtime and browser containers using backend manager status.
+ */
+import { getRuntimeConfig } from "../../config/config.js";
 import { getSandboxBackendManager } from "./backend.js";
-import { BROWSER_BRIDGES } from "./browser-bridges.js";
+import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
   readBrowserRegistry,
@@ -23,8 +27,18 @@ export type SandboxBrowserInfo = SandboxBrowserRegistryEntry & {
   imageMatch: boolean;
 };
 
+function toBrowserDockerRuntimeEntry(entry: SandboxBrowserRegistryEntry): SandboxRegistryEntry {
+  return {
+    ...entry,
+    backendId: "docker",
+    runtimeLabel: entry.containerName,
+    configLabelKind: "BrowserImage",
+  };
+}
+
+/** Lists registered sandbox containers with live backend status and config-label match state. */
 export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = await readRegistry();
   const results: SandboxContainerInfo[] = [];
 
@@ -56,20 +70,16 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
   return results;
 }
 
+/** Lists registered browser sandbox containers with live Docker status. */
 export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const results: SandboxBrowserInfo[] = [];
 
   for (const entry of registry.entries) {
     const agentId = resolveSandboxAgentId(entry.sessionKey);
     const runtime = await dockerSandboxBackendManager.describeRuntime({
-      entry: {
-        ...entry,
-        backendId: "docker",
-        runtimeLabel: entry.containerName,
-        configLabelKind: "Image",
-      },
+      entry: toBrowserDockerRuntimeEntry(entry),
       config,
       agentId,
     });
@@ -84,8 +94,9 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
   return results;
 }
 
+/** Removes one sandbox container from its backend and registry. */
 export async function removeSandboxContainer(containerName: string): Promise<void> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = await readRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
   if (entry) {
@@ -99,27 +110,17 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
   await removeRegistryEntry(containerName);
 }
 
+/** Removes one browser sandbox container, registry entry, and any in-process bridge server. */
 export async function removeSandboxBrowserContainer(containerName: string): Promise<void> {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
+  await stopCachedBrowserBridgesForContainer(containerName);
   if (entry) {
     await dockerSandboxBackendManager.removeRuntime({
-      entry: {
-        ...entry,
-        backendId: "docker",
-        runtimeLabel: entry.containerName,
-        configLabelKind: "Image",
-      },
+      entry: toBrowserDockerRuntimeEntry(entry),
       config,
     });
   }
   await removeBrowserRegistryEntry(containerName);
-
-  for (const [sessionKey, bridge] of BROWSER_BRIDGES.entries()) {
-    if (bridge.containerName === containerName) {
-      await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
-      BROWSER_BRIDGES.delete(sessionKey);
-    }
-  }
 }

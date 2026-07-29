@@ -1,3 +1,10 @@
+// Msteams plugin module implements errors behavior.
+import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
+
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -27,36 +34,61 @@ export function formatUnknownError(err: unknown): string {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function extractStatusCode(err: unknown): number | null {
   if (!isRecord(err)) {
     return null;
   }
-  const direct = err.statusCode ?? err.status;
-  if (typeof direct === "number" && Number.isFinite(direct)) {
-    return direct;
-  }
-  if (typeof direct === "string") {
-    const parsed = Number.parseInt(direct, 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
+  const parseStatusCode = (value: unknown): number | null => {
+    if (typeof value === "number") {
+      return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
     }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!/^\d{3}$/.test(trimmed)) {
+        return null;
+      }
+      const parsed = Number(trimmed);
+      return parsed >= 100 && parsed <= 599 ? parsed : null;
+    }
+    return null;
+  };
+  const direct = err.statusCode ?? err.status;
+  const directStatus = parseStatusCode(direct);
+  if (directStatus !== null) {
+    return directStatus;
   }
 
   const response = err.response;
   if (isRecord(response)) {
-    const status = response.status;
-    if (typeof status === "number" && Number.isFinite(status)) {
-      return status;
+    const responseStatus = parseStatusCode(response.status);
+    if (responseStatus !== null) {
+      return responseStatus;
     }
-    if (typeof status === "string") {
-      const parsed = Number.parseInt(status, 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
+  }
+
+  return null;
+}
+
+function extractErrorCode(err: unknown): string | null {
+  if (!isRecord(err)) {
+    return null;
+  }
+
+  const direct = err.code;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct;
+  }
+
+  const response = err.response;
+  if (!isRecord(response)) {
+    return null;
+  }
+
+  const body = response.body;
+  if (isRecord(body)) {
+    const error = body.error;
+    if (isRecord(error) && typeof error.code === "string" && error.code.trim()) {
+      return error.code;
     }
   }
 
@@ -69,17 +101,25 @@ function extractRetryAfterMs(err: unknown): number | null {
   }
 
   const direct = err.retryAfterMs ?? err.retry_after_ms;
-  if (typeof direct === "number" && Number.isFinite(direct) && direct >= 0) {
-    return direct;
+  const directMs = asFiniteNumberInRange(direct, {
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (directMs !== undefined) {
+    return directMs;
   }
 
   const retryAfter = err.retryAfter ?? err.retry_after;
-  if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
-    return retryAfter >= 0 ? retryAfter * 1000 : null;
+  const retryAfterSeconds = asFiniteNumberInRange(retryAfter, {
+    min: 0,
+    max: MAX_SAFE_RETRY_AFTER_SECONDS,
+  });
+  if (retryAfterSeconds !== undefined) {
+    return retryAfterSeconds * 1000;
   }
   if (typeof retryAfter === "string") {
-    const parsed = Number.parseFloat(retryAfter);
-    if (Number.isFinite(parsed) && parsed >= 0) {
+    const parsed = parseNonNegativeRetryAfterSeconds(retryAfter);
+    if (parsed !== undefined) {
       return parsed * 1000;
     }
   }
@@ -97,8 +137,8 @@ function extractRetryAfterMs(err: unknown): number | null {
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
-      const parsed = Number.parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) {
+      const parsed = parseRetryAfterHeaderSeconds(raw);
+      if (parsed !== undefined) {
         return parsed * 1000;
       }
     }
@@ -113,8 +153,8 @@ function extractRetryAfterMs(err: unknown): number | null {
   ) {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
-      const parsed = Number.parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) {
+      const parsed = parseRetryAfterHeaderSeconds(raw);
+      if (parsed !== undefined) {
         return parsed * 1000;
       }
     }
@@ -123,12 +163,30 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-export type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
+function parseNonNegativeRetryAfterSeconds(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return undefined;
+  }
+  return asFiniteNumberInRange(parseStrictFiniteNumber(trimmed), {
+    min: 0,
+    max: MAX_SAFE_RETRY_AFTER_SECONDS,
+  });
+}
 
-export type MSTeamsSendErrorClassification = {
+type MSTeamsSendErrorKind =
+  | "auth"
+  | "throttled"
+  | "transient"
+  | "permanent"
+  | "network"
+  | "unknown";
+
+type MSTeamsSendErrorClassification = {
   kind: MSTeamsSendErrorKind;
   statusCode?: number;
   retryAfterMs?: number;
+  errorCode?: string;
 };
 
 /**
@@ -142,9 +200,17 @@ export type MSTeamsSendErrorClassification = {
 export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassification {
   const statusCode = extractStatusCode(err);
   const retryAfterMs = extractRetryAfterMs(err);
+  const errorCode = extractErrorCode(err) ?? undefined;
 
-  if (statusCode === 401 || statusCode === 403) {
-    return { kind: "auth", statusCode };
+  if (statusCode === 401) {
+    return { kind: "auth", statusCode, errorCode };
+  }
+
+  if (statusCode === 403) {
+    if (errorCode === "ContentStreamNotAllowed") {
+      return { kind: "permanent", statusCode, errorCode };
+    }
+    return { kind: "auth", statusCode, errorCode };
   }
 
   if (statusCode === 429) {
@@ -152,6 +218,7 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
       kind: "throttled",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
+      errorCode,
     };
   }
 
@@ -160,17 +227,34 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
       kind: "transient",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
+      errorCode,
     };
   }
 
   if (statusCode != null && statusCode >= 400) {
-    return { kind: "permanent", statusCode };
+    return { kind: "permanent", statusCode, errorCode };
+  }
+
+  // Transport-level errors (no HTTP status code) — check for well-known
+  // network error codes that indicate egress is blocked (#77674).
+  if (statusCode == null) {
+    const networkCode = isRecord(err) && typeof err.code === "string" ? err.code : null;
+    if (
+      networkCode === "ECONNREFUSED" ||
+      networkCode === "ENOTFOUND" ||
+      networkCode === "EHOSTUNREACH" ||
+      networkCode === "ETIMEDOUT" ||
+      networkCode === "ECONNRESET"
+    ) {
+      return { kind: "network", errorCode: networkCode };
+    }
   }
 
   return {
     kind: "unknown",
     statusCode: statusCode ?? undefined,
     retryAfterMs: retryAfterMs ?? undefined,
+    errorCode,
   };
 }
 
@@ -195,11 +279,17 @@ export function formatMSTeamsSendErrorHint(
   if (classification.kind === "auth") {
     return "check msteams appId/appPassword/tenantId (or env vars MSTEAMS_APP_ID/MSTEAMS_APP_PASSWORD/MSTEAMS_TENANT_ID)";
   }
+  if (classification.errorCode === "ContentStreamNotAllowed") {
+    return "Teams expired the content stream; stop streaming earlier and fall back to normal message delivery";
+  }
   if (classification.kind === "throttled") {
     return "Teams throttled the bot; backing off may help";
   }
   if (classification.kind === "transient") {
     return "transient Teams/Bot Framework error; retry may succeed";
+  }
+  if (classification.kind === "network") {
+    return "transport-level failure sending reply to Teams Bot Connector (smba.trafficmanager.net) — check egress firewall rules allow outbound HTTPS to smba.trafficmanager.net";
   }
   return undefined;
 }

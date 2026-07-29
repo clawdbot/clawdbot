@@ -1,5 +1,6 @@
+// Covers pairing token generation and verification.
 import { Buffer } from "node:buffer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const randomBytesMock = vi.hoisted(() => vi.fn());
 
@@ -14,21 +15,22 @@ vi.mock("node:crypto", async () => {
 type PairingTokenModule = typeof import("./pairing-token.js");
 
 let generatePairingToken: PairingTokenModule["generatePairingToken"];
-let PAIRING_TOKEN_BYTES: PairingTokenModule["PAIRING_TOKEN_BYTES"];
 let verifyPairingToken: PairingTokenModule["verifyPairingToken"];
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ generatePairingToken, PAIRING_TOKEN_BYTES, verifyPairingToken } =
-    await import("./pairing-token.js"));
+beforeAll(async () => {
+  ({ generatePairingToken, verifyPairingToken } = await import("./pairing-token.js"));
+});
+
+beforeEach(() => {
+  randomBytesMock.mockReset();
 });
 
 describe("generatePairingToken", () => {
-  it("uses the configured byte count and returns a base64url token", () => {
+  it("uses 32 random bytes and returns a base64url token", () => {
     randomBytesMock.mockReturnValueOnce(Buffer.from([0xfb, 0xff, 0x00]));
 
     expect(generatePairingToken()).toBe("-_8A");
-    expect(randomBytesMock).toHaveBeenCalledWith(PAIRING_TOKEN_BYTES);
+    expect(randomBytesMock).toHaveBeenCalledWith(32);
   });
 });
 

@@ -1,356 +1,639 @@
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import {
-  installModelCatalogTestHooks,
-  mockCatalogImportFailThenRecover,
-  type PiSdkModule,
-} from "./model-catalog.test-harness.js";
+  buildPreparedModelCatalogSnapshot,
+  findModelCatalogEntry,
+  loadManifestModelCatalog,
+  modelSupportsDocument,
+  modelSupportsVision,
+} from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelRegistry } from "./sessions/index.js";
 
-function mockPiDiscoveryModels(models: unknown[]) {
-  __setModelCatalogImportForTest(
-    async () =>
-      ({
-        discoverAuthStorage: () => ({}),
-        AuthStorage: class {},
-        ModelRegistry: class {
-          getAll() {
-            return models;
-          }
+type AugmentModelCatalogWithProviderPlugins =
+  typeof import("../plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+
+const mocks = vi.hoisted(() => ({
+  augmentModelCatalogWithProviderPlugins: vi.fn<AugmentModelCatalogWithProviderPlugins>(
+    async () => [],
+  ),
+}));
+
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  augmentModelCatalogWithProviderPlugins: (
+    ...args: Parameters<AugmentModelCatalogWithProviderPlugins>
+  ) => mocks.augmentModelCatalogWithProviderPlugins(...args),
+}));
+
+const metadataSnapshot = {
+  plugins: [],
+  manifestRegistry: { plugins: [] },
+} as unknown as PluginMetadataSnapshot;
+
+function providerManifestSnapshot(params: {
+  provider: string;
+  discovery: "static" | "refreshable" | "runtime";
+  modelIds: string[];
+  aliases?: string[];
+}): PluginMetadataSnapshot {
+  const plugin = {
+    id: params.provider,
+    origin: "bundled",
+    providers: [params.provider],
+    modelCatalog: {
+      aliases: Object.fromEntries(
+        (params.aliases ?? []).map((alias) => [alias, { provider: params.provider }]),
+      ),
+      providers: {
+        [params.provider]: {
+          api: "openai-responses",
+          models: params.modelIds.map((id) => ({ id, name: id })),
         },
-      }) as unknown as PiSdkModule,
-  );
+      },
+      discovery: { [params.provider]: params.discovery },
+    },
+  };
+  return {
+    plugins: [plugin],
+    manifestRegistry: { plugins: [plugin] },
+  } as unknown as PluginMetadataSnapshot;
 }
 
-function mockSingleOpenAiCatalogModel() {
-  mockPiDiscoveryModels([{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }]);
+function registry(entries: ModelCatalogEntry[]): ModelRegistry {
+  return { getAll: () => entries } as unknown as ModelRegistry;
 }
 
-describe("loadModelCatalog", () => {
-  installModelCatalogTestHooks();
+async function build(params: {
+  config?: OpenClawConfig;
+  entries?: ModelCatalogEntry[];
+  metadataSnapshot?: PluginMetadataSnapshot;
+  readOnly?: boolean;
+  includeProviderPluginAugmentation?: boolean;
+}) {
+  return await buildPreparedModelCatalogSnapshot({
+    agentDir: "/tmp/model-catalog-test",
+    authCredentials: {},
+    config: params.config ?? { plugins: { enabled: false } },
+    metadataSnapshot: params.metadataSnapshot ?? metadataSnapshot,
+    modelRegistry: registry(params.entries ?? []),
+    readOnly: params.readOnly ?? true,
+    ...(params.includeProviderPluginAugmentation !== undefined
+      ? { includeProviderPluginAugmentation: params.includeProviderPluginAugmentation }
+      : {}),
+  });
+}
 
-  it("retries after import failure without poisoning the cache", async () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const getCallCount = mockCatalogImportFailThenRecover();
-
-      const cfg = {} as OpenClawConfig;
-      const first = await loadModelCatalog({ config: cfg });
-      expect(first).toEqual([]);
-
-      const second = await loadModelCatalog({ config: cfg });
-      expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
-      expect(getCallCount()).toBe(2);
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      setLoggerOverride(null);
-      resetLogger();
-    }
+describe("prepared model catalog builder", () => {
+  beforeEach(() => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockReset();
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
   });
 
-  it("returns partial results on discovery errors", async () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      __setModelCatalogImportForTest(
-        async () =>
-          ({
-            discoverAuthStorage: () => ({}),
-            AuthStorage: class {},
-            ModelRegistry: class {
-              getAll() {
-                return [
-                  { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
-                  {
-                    get id() {
-                      throw new Error("boom");
-                    },
-                    provider: "openai",
-                    name: "bad",
-                  },
-                ];
-              }
-            },
-          }) as unknown as PiSdkModule,
-      );
-
-      const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-      expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      setLoggerOverride(null);
-      resetLogger();
-    }
-  });
-
-  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
-    mockPiDiscoveryModels([
-      {
-        id: "gpt-5.3-codex",
-        provider: "openai-codex",
-        name: "GPT-5.3 Codex",
-        reasoning: true,
-        contextWindow: 200000,
-        input: ["text"],
-      },
-      {
-        id: "gpt-5.2-codex",
-        provider: "openai-codex",
-        name: "GPT-5.2 Codex",
-      },
-    ]);
-
-    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai-codex",
-        id: "gpt-5.3-codex-spark",
-      }),
-    );
-    const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
-    expect(spark?.name).toBe("gpt-5.3-codex-spark");
-    expect(spark?.reasoning).toBe(true);
-  });
-
-  it("filters stale openai gpt-5.3-codex-spark built-ins from the catalog", async () => {
-    mockPiDiscoveryModels([
-      {
-        id: "gpt-5.3-codex-spark",
-        provider: "openai",
-        name: "GPT-5.3 Codex Spark",
-        reasoning: true,
-        contextWindow: 128000,
-        input: ["text", "image"],
-      },
-      {
-        id: "gpt-5.3-codex-spark",
-        provider: "azure-openai-responses",
-        name: "GPT-5.3 Codex Spark",
-        reasoning: true,
-        contextWindow: 128000,
-        input: ["text", "image"],
-      },
-      {
-        id: "gpt-5.3-codex-spark",
-        provider: "openai-codex",
-        name: "GPT-5.3 Codex Spark",
-        reasoning: true,
-        contextWindow: 128000,
-        input: ["text"],
-      },
-    ]);
-
-    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expect(result).not.toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.3-codex-spark",
-      }),
-    );
-    expect(result).not.toContainEqual(
-      expect.objectContaining({
-        provider: "azure-openai-responses",
-        id: "gpt-5.3-codex-spark",
-      }),
-    );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai-codex",
-        id: "gpt-5.3-codex-spark",
-      }),
-    );
-  });
-
-  it("adds gpt-5.4 forward-compat catalog entries when template models exist", async () => {
-    mockPiDiscoveryModels([
-      {
-        id: "gpt-5.2",
-        provider: "openai",
-        name: "GPT-5.2",
-        reasoning: true,
-        contextWindow: 1_050_000,
-        input: ["text", "image"],
-      },
-      {
-        id: "gpt-5.2-pro",
-        provider: "openai",
-        name: "GPT-5.2 Pro",
-        reasoning: true,
-        contextWindow: 1_050_000,
-        input: ["text", "image"],
-      },
-      {
-        id: "gpt-5-mini",
-        provider: "openai",
-        name: "GPT-5 mini",
-        reasoning: true,
-        contextWindow: 400_000,
-        input: ["text", "image"],
-      },
-      {
-        id: "gpt-5-nano",
-        provider: "openai",
-        name: "GPT-5 nano",
-        reasoning: true,
-        contextWindow: 400_000,
-        input: ["text", "image"],
-      },
-      {
-        id: "gpt-5.3-codex",
-        provider: "openai-codex",
-        name: "GPT-5.3 Codex",
-        reasoning: true,
-        contextWindow: 272000,
-        input: ["text", "image"],
-      },
-    ]);
-
-    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-      }),
-    );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-pro",
-        name: "gpt-5.4-pro",
-      }),
-    );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-mini",
-        name: "gpt-5.4-mini",
-      }),
-    );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-nano",
-        name: "gpt-5.4-nano",
-      }),
-    );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai-codex",
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-      }),
-    );
-  });
-
-  it("merges configured models for opted-in non-pi-native providers", async () => {
-    mockSingleOpenAiCatalogModel();
-
-    const result = await loadModelCatalog({
-      config: {
-        models: {
-          providers: {
-            kilocode: {
-              baseUrl: "https://api.kilo.ai/api/gateway/",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "google/gemini-3-pro-preview",
-                  name: "Gemini 3 Pro Preview",
-                  input: ["text", "image"],
-                  reasoning: true,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1048576,
-                  maxTokens: 65536,
-                },
-              ],
-            },
-          },
+  it("projects and sorts one lifecycle registry generation", async () => {
+    const snapshot = await build({
+      entries: [
+        { id: "z", name: "Zulu", provider: "beta", input: ["text"] },
+        {
+          id: "a",
+          name: "Alpha",
+          provider: "alpha",
+          contextWindow: 64_000,
+          input: ["text", "image"],
         },
-      } as OpenClawConfig,
+      ],
     });
 
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "kilocode",
-        id: "google/gemini-3-pro-preview",
-        name: "Gemini 3 Pro Preview",
-      }),
+    expect(snapshot.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "alpha/a",
+      "beta/z",
+    ]);
+    expect(snapshot.routeVariants).toEqual(snapshot.entries);
+  });
+
+  it("keeps unranked registry rows in deterministic model-id order", async () => {
+    const snapshot = await build({
+      entries: [
+        { id: "model-b", name: "Model B", provider: "demo" },
+        { id: "model-a", name: "Model A", provider: "demo" },
+      ],
+    });
+
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual(["model-a", "model-b"]);
+    expect(snapshot.entries.every((entry) => entry.providerOrder === undefined)).toBe(true);
+  });
+
+  it("keeps account-denied runtime models out of the prepared catalog", async () => {
+    const config: OpenClawConfig = { plugins: { enabled: false } };
+    const runtimeManifest = providerManifestSnapshot({
+      provider: "openai",
+      discovery: "runtime",
+      modelIds: ["gpt-5.5", "gpt-5.6"],
+    });
+
+    const declaredManifestModels = loadManifestModelCatalog({
+      config,
+      metadataSnapshot: runtimeManifest,
+    });
+    expect(declaredManifestModels.map((entry) => entry.id)).toEqual(["gpt-5.5", "gpt-5.6"]);
+
+    const snapshot = await build({ config, metadataSnapshot: runtimeManifest });
+
+    expect(snapshot.entries).toEqual([]);
+    expect(snapshot.routeVariants).toEqual([]);
+    expect(loadManifestModelCatalog({ config, metadataSnapshot: runtimeManifest })).toBe(
+      declaredManifestModels,
     );
   });
 
-  it("does not merge configured models for providers that are not opted in", async () => {
-    mockSingleOpenAiCatalogModel();
+  it("keeps an account's runtime-discovered model list authoritative", async () => {
+    const snapshot = await build({
+      entries: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "openai",
+        discovery: "runtime",
+        modelIds: ["gpt-5.5", "gpt-5.6"],
+      }),
+    });
 
-    const result = await loadModelCatalog({
+    expect(snapshot.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "openai/gpt-5.5",
+    ]);
+    expect(snapshot.routeVariants.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "openai/gpt-5.5",
+    ]);
+  });
+
+  it("ranks runtime registry rows from the manifest without augmentation", async () => {
+    const snapshot = await build({
+      entries: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+        { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+      ],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "openai",
+        discovery: "runtime",
+        modelIds: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4"],
+      }),
+      includeProviderPluginAugmentation: false,
+    });
+
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4",
+    ]);
+  });
+
+  it("canonicalizes manifest-owned provider aliases in registry rows", async () => {
+    const snapshot = await build({
+      entries: [
+        { id: "kimi-k3", name: "Kimi K3", provider: "moonshotai" },
+        { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", provider: "moonshot-ai" },
+      ],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "moonshot",
+        aliases: ["moonshotai", "moonshot-ai"],
+        discovery: "static",
+        modelIds: ["kimi-k3", "kimi-k2.7-code"],
+      }),
+    });
+
+    expect(snapshot.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "moonshot/kimi-k3",
+      "moonshot/kimi-k2.7-code",
+    ]);
+  });
+
+  it("does not augment an account with undiscovered runtime-provider models", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", contextWindow: 128_000 },
+    ]);
+
+    const snapshot = await build({
+      entries: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "openai",
+        discovery: "runtime",
+        modelIds: ["gpt-5.5", "gpt-5.6"],
+      }),
+      readOnly: false,
+    });
+
+    expect(mocks.augmentModelCatalogWithProviderPlugins).toHaveBeenCalledOnce();
+    expect(snapshot.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "openai/gpt-5.5",
+    ]);
+    expect(snapshot.entries[0]?.contextWindow).toBe(128_000);
+    expect(snapshot.routeVariants.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "openai/gpt-5.5",
+    ]);
+  });
+
+  it("keeps provider-owned strongest-first order after runtime augmentation", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+      { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+    ]);
+
+    const snapshot = await build({
+      entries: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+        { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+      ],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "openai",
+        discovery: "runtime",
+        modelIds: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4"],
+      }),
+      readOnly: false,
+    });
+
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4",
+    ]);
+  });
+
+  it("keeps manifest rank for configured runtime models absent from the registry", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+    ]);
+
+    const snapshot = await build({
       config: {
+        plugins: { enabled: false },
         models: {
           providers: {
-            qianfan: {
-              baseUrl: "https://qianfan.baidubce.com/v2",
-              api: "openai-completions",
+            openai: {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
               models: [
                 {
-                  id: "deepseek-v3.2",
-                  name: "DEEPSEEK V3.2",
+                  id: "gpt-5.6-sol",
+                  name: "Configured GPT-5.6 Sol",
+                  contextWindow: 1_050_000,
+                  maxTokens: 128_000,
                   reasoning: true,
-                  input: ["text"],
+                  input: ["text", "image"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 98304,
-                  maxTokens: 32768,
                 },
               ],
             },
           },
         },
-      } as OpenClawConfig,
+      },
+      entries: [{ id: "gpt-5.4", name: "GPT-5.4", provider: "openai" }],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "openai",
+        discovery: "runtime",
+        modelIds: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4"],
+      }),
+      readOnly: false,
+    });
+
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual(["gpt-5.6-sol", "gpt-5.4"]);
+  });
+
+  it("preserves explicitly configured runtime-provider models", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://catalog.openai.example.test/v1",
+        contextWindow: 256_000,
+        compat: { supportsTools: false },
+      },
+    ]);
+
+    const snapshot = await build({
+      config: {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "Configured GPT-5.4",
+                  contextWindow: 128_000,
+                  maxTokens: 4_096,
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      entries: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "openai",
+        discovery: "runtime",
+        modelIds: ["gpt-5.5", "gpt-5.6"],
+      }),
+      readOnly: false,
+    });
+
+    expect(snapshot.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "openai/gpt-5.5",
+      "openai/gpt-5.4",
+    ]);
+    expect(snapshot.routeVariants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "openai",
+          id: "gpt-5.4",
+          api: "openai-responses",
+          baseUrl: "https://catalog.openai.example.test/v1",
+          contextWindow: 256_000,
+          compat: { supportsTools: false },
+        }),
+        expect.objectContaining({
+          provider: "openai",
+          id: "gpt-5.4",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        }),
+      ]),
+    );
+  });
+
+  it.each(["static", "refreshable"] as const)(
+    "keeps %s manifest models available without runtime account discovery",
+    async (discovery) => {
+      const snapshot = await build({
+        metadataSnapshot: providerManifestSnapshot({
+          provider: "manifest-provider",
+          discovery,
+          modelIds: ["manifest-model"],
+        }),
+      });
+
+      expect(snapshot.entries).toMatchObject([
+        { provider: "manifest-provider", id: "manifest-model" },
+      ]);
+    },
+  );
+
+  it("preserves augmentation for providers without runtime account discovery", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { id: "synthetic-model", name: "Synthetic model", provider: "manifest-provider" },
+    ]);
+
+    const snapshot = await build({
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "manifest-provider",
+        discovery: "static",
+        modelIds: ["manifest-model"],
+      }),
+      readOnly: false,
+    });
+
+    expect(snapshot.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "manifest-provider/manifest-model",
+      "manifest-provider/synthetic-model",
+    ]);
+  });
+
+  it("overlays configured metadata onto discovered rows", async () => {
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.test/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "demo",
+                name: "Configured Demo",
+                contextWindow: 32_000,
+                maxTokens: 4_096,
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const snapshot = await build({
+      config,
+      entries: [
+        {
+          id: "demo",
+          name: "Discovered Demo",
+          provider: "custom",
+          input: ["text"],
+        },
+      ],
     });
 
     expect(
-      result.some((entry) => entry.provider === "qianfan" && entry.id === "deepseek-v3.2"),
-    ).toBe(false);
+      findModelCatalogEntry(snapshot.entries, { provider: "custom", modelId: "demo" }),
+    ).toMatchObject({
+      name: "Discovered Demo",
+      api: "openai-completions",
+      contextWindow: 32_000,
+      reasoning: true,
+      input: ["text", "image"],
+    });
+    expect(snapshot.routeVariants).toHaveLength(2);
   });
 
-  it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
-    mockPiDiscoveryModels([
+  it("keeps compat from the catalog route selected by config", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
       {
-        id: "kilo/auto",
-        provider: "kilocode",
-        name: "Kilo Auto",
+        id: "demo",
+        name: "Route B",
+        provider: "custom",
+        api: "openai-completions",
+        baseUrl: "https://route-b.example.test/v1",
+        compat: { supportsTools: false },
       },
     ]);
-
-    const result = await loadModelCatalog({
+    const snapshot = await build({
       config: {
+        plugins: { enabled: false },
         models: {
           providers: {
-            kilocode: {
-              baseUrl: "https://api.kilo.ai/api/gateway/",
-              api: "openai-completions",
+            custom: {
+              api: "openai-responses",
+              baseUrl: "https://route-a.example.test/v1",
               models: [
                 {
-                  id: "kilo/auto",
-                  name: "Configured Kilo Auto",
+                  id: "demo",
+                  name: "Configured Demo",
+                  contextWindow: 32_000,
+                  maxTokens: 4_096,
                   reasoning: true,
-                  input: ["text", "image"],
+                  input: ["text"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1000000,
-                  maxTokens: 128000,
                 },
               ],
             },
           },
         },
-      } as OpenClawConfig,
+      },
+      entries: [
+        {
+          id: "demo",
+          name: "Route A",
+          provider: "custom",
+          api: "openai-responses",
+          baseUrl: "https://route-a.example.test/v1",
+          compat: { supportsTools: true },
+        },
+      ],
+      readOnly: false,
     });
 
-    const matches = result.filter(
-      (entry) => entry.provider === "kilocode" && entry.id === "kilo/auto",
+    expect(
+      findModelCatalogEntry(snapshot.entries, { provider: "custom", modelId: "demo" }),
+    ).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://route-a.example.test/v1",
+      compat: { supportsTools: true },
+    });
+  });
+
+  it("keeps configured models absent from registry discovery", async () => {
+    const snapshot = await build({
+      config: {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.test/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "configured-only",
+                  name: "Configured Only",
+                  contextWindow: 8_192,
+                  maxTokens: 1_024,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual(["configured-only"]);
+  });
+
+  it("rejects the whole generation when catalog projection fails after a valid row", async () => {
+    const projectionError = new Error("catalog projection failed");
+    const brokenEntry = {
+      id: "broken",
+      get provider() {
+        throw projectionError;
+      },
+    } as unknown as ModelCatalogEntry;
+
+    await expect(
+      buildPreparedModelCatalogSnapshot({
+        agentDir: "/tmp/model-catalog-test",
+        authCredentials: {},
+        config: { plugins: { enabled: false } },
+        metadataSnapshot,
+        modelRegistry: registry([{ id: "valid", name: "Valid", provider: "test" }, brokenEntry]),
+        readOnly: true,
+      }),
+    ).rejects.toBe(projectionError);
+  });
+
+  it("keeps static publication off provider runtime catalog augmentation", async () => {
+    const snapshot = await build({
+      config: {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      },
+      entries: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      readOnly: false,
+      includeProviderPluginAugmentation: false,
+    });
+
+    expect(snapshot.entries).toEqual([
+      expect.objectContaining({ id: "gpt-5.5", provider: "openai" }),
+    ]);
+    expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+  });
+
+  it("uses the lifecycle auth snapshot for provider catalog augmentation", async () => {
+    let resolvedKey: string | undefined;
+    let resolvedOAuth: string | undefined;
+    mocks.augmentModelCatalogWithProviderPlugins.mockImplementationOnce(async ({ context }) => {
+      if (!context.resolveProviderApiKey) {
+        throw new Error("expected lifecycle auth resolver");
+      }
+      resolvedKey = context.resolveProviderApiKey("inherited").apiKey;
+      resolvedOAuth = context.resolveProviderApiKey("subscription").apiKey;
+      return [];
+    });
+
+    await buildPreparedModelCatalogSnapshot({
+      agentDir: "/tmp/model-catalog-test",
+      authCredentials: {
+        inherited: { type: "api_key", key: "test-api-key" },
+        subscription: {
+          type: "oauth",
+          access: "test-access",
+          refresh: "test-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+      config: { plugins: { enabled: false } },
+      metadataSnapshot,
+      modelRegistry: registry([]),
+    });
+
+    expect(resolvedKey).toBe("test-api-key");
+    expect(resolvedOAuth).toBe(resolveOAuthApiKeyMarker("subscription"));
+    expect(mocks.augmentModelCatalogWithProviderPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ metadataSnapshot }),
     );
-    expect(matches).toHaveLength(1);
-    expect(matches[0]?.name).toBe("Kilo Auto");
+  });
+
+  it("reports media capabilities from the prepared row", () => {
+    const entry: ModelCatalogEntry = {
+      id: "media",
+      name: "Media",
+      provider: "test",
+      input: ["text", "image", "document"],
+    };
+    expect(modelSupportsVision(entry)).toBe(true);
+    expect(modelSupportsDocument(entry)).toBe(true);
   });
 });

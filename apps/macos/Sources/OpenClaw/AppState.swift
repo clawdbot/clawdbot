@@ -1,34 +1,64 @@
 import AppKit
 import Foundation
 import Observation
+import OpenClawKit
 import ServiceManagement
 import SwiftUI
+
+private enum RemoteTLSFingerprintUpdate {
+    case preserve
+    case replace(String?)
+}
+
+enum ExecApprovalsPolicyLoadState: Equatable {
+    case loading
+    case available
+    case unavailable(String)
+
+    var isAvailable: Bool {
+        self == .available
+    }
+
+    var errorMessage: String? {
+        guard case let .unavailable(message) = self else { return nil }
+        return message
+    }
+}
 
 @MainActor
 @Observable
 final class AppState {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
+    private static let execApprovalsReadRetryAttempts = 5
+
     private let isPreview: Bool
+    @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
+        @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
+    @ObservationIgnored private let execApprovalsReadRetryDelay: Duration
+    @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
+    @ObservationIgnored private var execApprovalsReadRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var execApprovalsReadGeneration = 0
+    @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
+    private enum GatewayConfigSyncState: Equatable {
+        case current
+        case pending
+        case failed
+    }
+
+    @ObservationIgnored private var gatewayConfigSyncState = GatewayConfigSyncState.current
+    @ObservationIgnored private var gatewayConfigSyncTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var gatewayRoutingGeneration: UInt64 = 0
+    #if DEBUG
+    @ObservationIgnored private var gatewayConfigSyncEnabledForTesting = false
+    #endif
     private var configWatcher: ConfigFileWatcher?
+    private var lastConfigFingerprint: Data?
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
-
-    private func ifNotPreview(_ action: () -> Void) {
-        guard !self.isPreview else { return }
-        action()
-    }
-
-    enum ConnectionMode: String {
-        case unconfigured
-        case local
-        case remote
-    }
-
-    enum RemoteTransport: String {
-        case ssh
-        case direct
-    }
+    @ObservationIgnored private var activeComputerPresenceTask: Task<Void, Never>?
+    @ObservationIgnored private var activeComputerPresenceUpdateGeneration: UInt64 = 0
 
     var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
@@ -36,7 +66,12 @@ final class AppState {
 
     var launchAtLogin: Bool {
         didSet {
-            guard !self.isInitializing else { return }
+            guard Self.shouldPersistLaunchAtLoginChange(
+                isInitializing: self.isInitializing,
+                isHydrating: self.isHydratingLaunchAtLogin,
+                isEnabling: self.launchAtLogin,
+                bundleLocationAllowsPersistentIntegration: self.bundleLocationAllowsPersistentIntegration)
+            else { return }
             self.ifNotPreview { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } }
         }
     }
@@ -102,8 +137,11 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
-                if self.swabbleEnabled {
+                if self.swabbleEnabled, !self.talkEnabled {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+                if self.talkEnabled {
+                    Task { await TalkModeRuntime.shared.inputDeviceSelectionDidChange() }
                 }
             }
         }
@@ -136,11 +174,41 @@ final class AppState {
             forKey: voicePushToTalkEnabledKey) } }
     }
 
+    var voiceWakeTriggersTalkMode: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.voiceWakeTriggersTalkMode, forKey: voiceWakeTriggersTalkModeKey)
+                if self.swabbleEnabled {
+                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+            }
+        }
+    }
+
+    var voiceWakeMeterActive = false
+
     var talkEnabled: Bool {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.talkEnabled, forKey: talkEnabledKey)
                 Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
+            }
+        }
+    }
+
+    var talkPhaseSoundsEnabled: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.talkPhaseSoundsEnabled, forKey: talkPhaseSoundsEnabledKey)
+            }
+        }
+    }
+
+    var talkShiftToStopEnabled: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.talkShiftToStopEnabled, forKey: talkShiftToStopEnabledKey)
+                Task { TalkSpeechInterruptMonitor.shared.setEnabled(self.talkShiftToStopEnabled && self.talkEnabled) }
             }
         }
     }
@@ -168,28 +236,29 @@ final class AppState {
     var connectionMode: ConnectionMode {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
-            self.syncGatewayConfigIfNeeded()
+            syncGatewayConfigIfNeeded()
         }
     }
 
     var remoteTransport: RemoteTransport {
-        didSet { self.syncGatewayConfigIfNeeded() }
+        didSet { syncGatewayConfigIfNeeded() }
     }
 
     var canvasEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
 
-    var execApprovalMode: ExecApprovalQuickMode {
-        didSet {
-            self.ifNotPreview {
-                ExecApprovalsStore.updateDefaults { defaults in
-                    defaults.security = self.execApprovalMode.security
-                    defaults.ask = self.execApprovalMode.ask
-                }
-            }
-        }
+    var quickChatEnabled: Bool {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
     }
+
+    var activeComputerPresenceEnabled: Bool {
+        didSet { self.scheduleActiveComputerPresenceUpdate() }
+    }
+
+    var execApprovalMode: ExecApprovalQuickMode
+    var execApprovalPolicyLoadState: ExecApprovalsPolicyLoadState
+    var execApprovalMutationError: String?
 
     /// Tracks whether the Canvas panel is currently visible (not persisted).
     var canvasPanelVisible: Bool = false
@@ -198,20 +267,31 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
-                Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(self.peekabooBridgeEnabled) }
             }
+            self.applyPeekabooBridgeHostState()
+        }
+    }
+
+    /// PeekabooBridge shares Computer Control's local UI-automation surface, so the host only
+    /// runs while Computer Control is enabled. With Computer Control off, users drive Peekaboo
+    /// via its own Mac app instead of a second, separately toggled bridge here.
+    func applyPeekabooBridgeHostState() {
+        self.ifNotPreview {
+            let computerControlEnabled = isComputerControlEnabled()
+            let shouldRun = self.peekabooBridgeEnabled && computerControlEnabled
+            Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(shouldRun) }
         }
     }
 
     var remoteTarget: String {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
-            self.syncGatewayConfigIfNeeded()
+            syncGatewayConfigIfNeeded()
         }
     }
 
     var remoteUrl: String {
-        didSet { self.syncGatewayConfigIfNeeded() }
+        didSet { syncGatewayConfigIfNeeded() }
     }
 
     var remoteToken: String {
@@ -219,7 +299,7 @@ final class AppState {
             guard !self.isApplyingRemoteTokenConfig else { return }
             self.remoteTokenDirty = true
             self.remoteTokenUnsupported = false
-            self.syncGatewayConfigIfNeeded()
+            syncGatewayConfigIfNeeded()
         }
     }
 
@@ -227,7 +307,10 @@ final class AppState {
     private(set) var remoteTokenUnsupported = false
 
     var remoteIdentity: String {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) } }
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) }
+            syncGatewayConfigIfNeeded()
+        }
     }
 
     var remoteProjectRoot: String {
@@ -240,12 +323,22 @@ final class AppState {
 
     private var earBoostTask: Task<Void, Never>?
 
-    init(preview: Bool = false) {
+    init(
+        preview: Bool = false,
+        execApprovalsDefaultsAsyncResolver: @escaping @MainActor () async -> Result<
+            ExecApprovalsResolvedDefaults,
+            ExecApprovalsReadError,
+        > = {
+            await ExecApprovalsStore.resolveDefaultsAsyncResult()
+        },
+        execApprovalsReadRetryDelay: Duration = .milliseconds(250))
+    {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
-        if !isPreview {
-            migrateLegacyDefaults()
-        }
+        self.bundleLocationAllowsPersistentIntegration =
+            isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration()
+        self.execApprovalsDefaultsAsyncResolver = execApprovalsDefaultsAsyncResolver
+        self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
         let onboardingSeen = UserDefaults.standard.bool(forKey: onboardingSeenKey)
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
         self.launchAtLogin = false
@@ -267,7 +360,12 @@ final class AppState {
             self.iconAnimationsEnabled = true
             UserDefaults.standard.set(true, forKey: iconAnimationsEnabledKey)
         }
-        self.showDockIcon = UserDefaults.standard.bool(forKey: showDockIconKey)
+        if let storedShowDockIcon = UserDefaults.standard.object(forKey: showDockIconKey) as? Bool {
+            self.showDockIcon = storedShowDockIcon
+        } else {
+            self.showDockIcon = true
+            UserDefaults.standard.set(true, forKey: showDockIconKey)
+        }
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeMicName = UserDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
@@ -275,7 +373,21 @@ final class AppState {
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
         self.voicePushToTalkEnabled = UserDefaults.standard
             .object(forKey: voicePushToTalkEnabledKey) as? Bool ?? false
+        self.voiceWakeTriggersTalkMode = UserDefaults.standard
+            .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)
+        if let storedPhaseSounds = UserDefaults.standard.object(forKey: talkPhaseSoundsEnabledKey) as? Bool {
+            self.talkPhaseSoundsEnabled = storedPhaseSounds
+        } else {
+            self.talkPhaseSoundsEnabled = true
+            UserDefaults.standard.set(true, forKey: talkPhaseSoundsEnabledKey)
+        }
+        if let storedShiftToStop = UserDefaults.standard.object(forKey: talkShiftToStopEnabledKey) as? Bool {
+            self.talkShiftToStopEnabled = storedShiftToStop
+        } else {
+            self.talkShiftToStopEnabled = true
+            UserDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
+        }
         self.seamColorHex = nil
         if let storedHeartbeats = UserDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
             self.heartbeatsEnabled = storedHeartbeats
@@ -293,18 +405,30 @@ final class AppState {
         }
 
         let configRoot = OpenClawConfigFile.loadDict()
-        let configRemoteUrl = GatewayRemoteConfig.resolveUrlString(root: configRoot)
+        self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
-        let configRemoteTransport = GatewayRemoteConfig.resolveTransport(root: configRoot)
+        let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
+        let configRemoteTransport = configRemoteResolution.transport
+        let configRemoteUrl = configRemoteResolution.directURL?.absoluteString
+            ?? GatewayRemoteConfig.resolveUrlString(root: configRoot)
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
 
+        let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
+        let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         if resolvedConnectionMode == .remote,
-           configRemoteTransport != .direct,
-           storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let host = AppState.remoteHost(from: configRemoteUrl)
+           hasConfigRemoteTarget
+        {
+            self.remoteTarget = configRemoteTarget
+        } else if resolvedConnectionMode == .remote,
+                  configRemoteTransport != .direct,
+                  storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let host = AppState.remoteHost(from: configRemoteUrl),
+                  !LoopbackHost.isLoopbackHost(host)
         {
             self.remoteTarget = "\(NSUserName())@\(host)"
         } else {
@@ -314,18 +438,25 @@ final class AppState {
         self.remoteToken = configRemoteToken.textFieldValue
         self.remoteTokenDirty = false
         self.remoteTokenUnsupported = configRemoteToken.isUnsupportedNonString
-        self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
-        self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
-        self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
+        let hasConfigRemoteIdentity = configRemote?.keys.contains("sshIdentity") == true
+        let configRemoteIdentity = (configRemote?["sshIdentity"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.remoteIdentity = hasConfigRemoteIdentity
+            ? configRemoteIdentity
+            : UserDefaults.standard.string(forKey: remoteIdentityKey)?.nonEmpty ?? ""
+        self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
+        self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
-        let execDefaults = ExecApprovalsStore.resolveDefaults()
-        self.execApprovalMode = ExecApprovalQuickMode.from(security: execDefaults.security, ask: execDefaults.ask)
+        self.quickChatEnabled = UserDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
+        self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
+        self.execApprovalMode = .deny
+        self.execApprovalPolicyLoadState = .loading
         self.peekabooBridgeEnabled = UserDefaults.standard
             .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
         if !self.isPreview {
             Task.detached(priority: .utility) { [weak self] in
                 let current = await LaunchAgentManager.status()
-                await MainActor.run { [weak self] in self?.launchAtLogin = current }
+                await MainActor.run { [weak self] in self?.hydrateLaunchAtLogin(current) }
             }
         }
 
@@ -341,14 +472,29 @@ final class AppState {
             Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
         }
 
+        if !self.isPreview {
+            self.reconcilePreferredGatewayRouteBinding()
+        }
         self.isInitializing = false
+        if !self.isPreview {
+            scheduleExecApprovalModeReadRetry()
+        }
         if !self.isPreview {
             self.startConfigWatcher()
         }
     }
 
+    private func hydrateLaunchAtLogin(_ enabled: Bool) {
+        // Reading launchd state must not rewrite a valid plist with this process's transient bundle path.
+        self.isHydratingLaunchAtLogin = true
+        self.launchAtLogin = enabled
+        self.isHydratingLaunchAtLogin = false
+    }
+
     @MainActor
     deinit {
+        self.execApprovalsReadRetryTask?.cancel()
+        self.gatewayConfigSyncTask?.cancel()
         self.configWatcher?.stop()
     }
 
@@ -371,6 +517,30 @@ final class AppState {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return trimmed
+    }
+
+    private static func sshTunnelGatewayUrl(existingUrl: String?, expectedRemoteHost: String?) -> String {
+        let fallback = "ws://127.0.0.1:18789"
+        let trimmed = existingUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty
+        else {
+            return fallback
+        }
+
+        let preservePort: Bool = if LoopbackHost.isLoopbackHost(host) {
+            true
+        } else if let expectedRemoteHost {
+            OpenClawConfigFile.canonicalHostForComparison(host) ==
+                OpenClawConfigFile.canonicalHostForComparison(expectedRemoteHost)
+        } else {
+            false
+        }
+        guard preservePort else { return fallback }
+
+        return "ws://127.0.0.1:\(url.port ?? 18789)"
     }
 
     private static func updateGatewayString(
@@ -407,25 +577,19 @@ final class AppState {
 
     private static func updatedRemoteGatewayConfig(
         current: [String: Any],
-        transport: RemoteTransport,
-        remoteUrl: String,
-        remoteHost: String?,
-        remoteTarget: String,
-        remoteIdentity: String,
-        remoteToken: String,
-        remoteTokenDirty: Bool) -> (remote: [String: Any], changed: Bool)
+        draft: RemoteGatewayConfigDraft) -> (remote: [String: Any], changed: Bool)
     {
         var remote = current
         var changed = false
 
-        switch transport {
+        switch draft.transport {
         case .direct:
             changed = Self.updateGatewayString(
                 &remote,
                 key: "transport",
                 value: RemoteTransport.direct.rawValue) || changed
 
-            let trimmedUrl = remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedUrl = draft.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmedUrl.isEmpty {
                 changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
             } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
@@ -433,25 +597,32 @@ final class AppState {
             }
 
         case .ssh:
-            changed = Self.updateGatewayString(&remote, key: "transport", value: nil) || changed
+            changed = Self.updateGatewayString(
+                &remote,
+                key: "transport",
+                value: RemoteTransport.ssh.rawValue) || changed
 
-            if let host = remoteHost {
-                let existingUrl = (remote["url"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
-                let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
-                let port = parsedExisting?.port ?? 18789
-                let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
-                changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
-            }
-
-            let sanitizedTarget = Self.sanitizeSSHTarget(remoteTarget)
+            let existingTarget = Self.sanitizeSSHTarget(remote["sshTarget"] as? String ?? "")
+            let sanitizedTarget = Self.sanitizeSSHTarget(draft.remoteTarget)
+            let expectedRemoteHost = CommandResolver.parseSSHTarget(sanitizedTarget)?.host ?? draft.remoteHost
+            let existingUrl = (remote["url"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let desiredUrl = Self.sshTunnelGatewayUrl(
+                existingUrl: existingUrl,
+                expectedRemoteHost: expectedRemoteHost)
+            changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
             changed = Self.updateGatewayString(&remote, key: "sshTarget", value: sanitizedTarget) || changed
-            changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: remoteIdentity) || changed
+            changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: draft.remoteIdentity) || changed
+            if existingTarget != sanitizedTarget {
+                changed = Self.updateGatewayString(
+                    &remote,
+                    key: "sshHostKeyPolicy",
+                    value: "strict") || changed
+            }
         }
 
-        if remoteTokenDirty {
-            changed = Self.updateGatewayString(&remote, key: "token", value: remoteToken) || changed
+        if draft.remoteTokenDirty {
+            changed = Self.updateGatewayString(&remote, key: "token", value: draft.remoteToken) || changed
         }
 
         return (remote, changed)
@@ -469,18 +640,43 @@ final class AppState {
 
     private func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
+        let fingerprint = Self.configFingerprint(root)
+        guard fingerprint != self.lastConfigFingerprint else { return }
+        self.lastConfigFingerprint = fingerprint
         self.applyConfigOverrides(root)
+        MacNodeModeCoordinator.shared.refresh()
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+    }
+
+    private static func configFingerprint(_ root: [String: Any]) -> Data? {
+        var comparableRoot = root
+        if var meta = comparableRoot["meta"] as? [String: Any] {
+            // Writers refresh these bookkeeping fields without changing runtime configuration.
+            // Ignoring them prevents metadata churn from restarting gateway and node routing.
+            meta.removeValue(forKey: "lastTouchedAt")
+            meta.removeValue(forKey: "lastTouchedVersion")
+            if meta.isEmpty {
+                comparableRoot.removeValue(forKey: "meta")
+            } else {
+                comparableRoot["meta"] = meta
+            }
+        }
+        return try? JSONSerialization.data(withJSONObject: comparableRoot, options: [.sortedKeys])
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {
+        advanceGatewayRoutingGeneration()
+        let previousSelection = self.gatewaySelectionSnapshot()
         let gateway = root["gateway"] as? [String: Any]
+        let remote = gateway?["remote"] as? [String: Any]
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteUrl = GatewayRemoteConfig.resolveUrlString(root: root)
         let remoteToken = GatewayRemoteConfig.resolveTokenValue(root: root)
         let hasRemoteUrl = !(remoteUrl?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty ?? true)
-        let remoteTransport = GatewayRemoteConfig.resolveTransport(root: root)
+        let remoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        let remoteTransport = remoteResolution.transport
 
         let desiredMode: ConnectionMode? = switch modeRaw {
         case "local":
@@ -504,19 +700,59 @@ final class AppState {
         if remoteTransport != self.remoteTransport {
             self.remoteTransport = remoteTransport
         }
-        let remoteUrlText = remoteUrl ?? ""
+        let remoteUrlText = remoteResolution.directURL?.absoluteString ?? remoteUrl ?? ""
         if remoteUrlText != self.remoteUrl {
             self.remoteUrl = remoteUrlText
         }
         self.applyRemoteTokenState(remoteToken)
 
         let targetMode = desiredMode ?? self.connectionMode
-        if targetMode == .remote,
-           remoteTransport != .direct,
-           let host = AppState.remoteHost(from: remoteUrl)
-        {
-            self.updateRemoteTarget(host: host)
+        if targetMode == .remote, remoteTransport != .direct {
+            let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
+            let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
+            if hasConfiguredTarget, configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
+                self.remoteTarget = configuredTarget
+            } else if !hasConfiguredTarget,
+                      let host = AppState.remoteHost(from: remoteUrl),
+                      !LoopbackHost.isLoopbackHost(host)
+            {
+                self.updateRemoteTarget(host: host)
+            }
         }
+        if remote?.keys.contains("sshIdentity") == true {
+            let configuredIdentity = (remote?["sshIdentity"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if configuredIdentity != self.remoteIdentity {
+                self.remoteIdentity = configuredIdentity
+            }
+        }
+        if self.gatewaySelectionSnapshot() != previousSelection {
+            // Discovery ids describe one concrete endpoint. An external config
+            // edit has no discovery selection event to update that ownership,
+            // so retaining the old id would apply its activation lease to the
+            // replacement Gateway.
+            GatewayDiscoveryPreferences.setPreferredStableID(nil)
+        }
+    }
+
+    private func gatewaySelectionSnapshot() -> GatewaySelectionSnapshot {
+        let remoteUrl = GatewayRemoteConfig.normalizeGatewayUrlString(self.remoteUrl) ??
+            self.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GatewaySelectionSnapshot(
+            connectionMode: self.connectionMode,
+            remoteTransport: self.remoteTransport,
+            remoteUrl: remoteUrl,
+            remoteTarget: Self.sanitizeSSHTarget(self.remoteTarget))
+    }
+
+    @discardableResult
+    private func reconcilePreferredGatewayRouteBinding() -> Bool {
+        let binding = GatewayDiscoveryPreferences.routeBinding(
+            connectionMode: self.connectionMode,
+            remoteTransport: self.remoteTransport,
+            remoteURL: self.remoteUrl,
+            remoteTarget: self.remoteTarget)
+        return GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(binding)
     }
 
     private func updateRemoteTarget(host: String) {
@@ -533,94 +769,6 @@ final class AppState {
         if assembled != self.remoteTarget {
             self.remoteTarget = assembled
         }
-    }
-
-    private static func syncedGatewayRoot(
-        currentRoot: [String: Any],
-        connectionMode: ConnectionMode,
-        remoteTransport: RemoteTransport,
-        remoteTarget: String,
-        remoteIdentity: String,
-        remoteUrl: String,
-        remoteToken: String,
-        remoteTokenDirty: Bool) -> (root: [String: Any], changed: Bool)
-    {
-        var root = currentRoot
-        var gateway = root["gateway"] as? [String: Any] ?? [:]
-        var changed = false
-
-        let desiredMode: String? = switch connectionMode {
-        case .local:
-            "local"
-        case .remote:
-            "remote"
-        case .unconfigured:
-            nil
-        }
-
-        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let desiredMode {
-            if currentMode != desiredMode {
-                gateway["mode"] = desiredMode
-                changed = true
-            }
-        } else if currentMode != nil {
-            gateway.removeValue(forKey: "mode")
-            changed = true
-        }
-
-        if connectionMode == .remote {
-            let remoteHost = CommandResolver.parseSSHTarget(remoteTarget)?.host
-            let currentRemote = gateway["remote"] as? [String: Any] ?? [:]
-            let updated = Self.updatedRemoteGatewayConfig(
-                current: currentRemote,
-                transport: remoteTransport,
-                remoteUrl: remoteUrl,
-                remoteHost: remoteHost,
-                remoteTarget: remoteTarget,
-                remoteIdentity: remoteIdentity,
-                remoteToken: remoteToken,
-                remoteTokenDirty: remoteTokenDirty)
-            if updated.changed {
-                gateway["remote"] = updated.remote
-                changed = true
-            }
-        }
-
-        guard changed else { return (currentRoot, false) }
-
-        if gateway.isEmpty {
-            root.removeValue(forKey: "gateway")
-        } else {
-            root["gateway"] = gateway
-        }
-        return (root, true)
-    }
-
-    private func syncGatewayConfigIfNeeded() {
-        guard !self.isPreview, !self.isInitializing else { return }
-
-        Task { @MainActor in
-            self.syncGatewayConfigNow()
-        }
-    }
-
-    @MainActor
-    func syncGatewayConfigNow() {
-        guard !self.isPreview, !self.isInitializing else { return }
-
-        // Keep app-only connection settings local to avoid overwriting remote gateway config.
-        let synced = Self.syncedGatewayRoot(
-            currentRoot: OpenClawConfigFile.loadDict(),
-            connectionMode: self.connectionMode,
-            remoteTransport: self.remoteTransport,
-            remoteTarget: self.remoteTarget,
-            remoteIdentity: self.remoteIdentity,
-            remoteUrl: self.remoteUrl,
-            remoteToken: self.remoteToken,
-            remoteTokenDirty: self.remoteTokenDirty)
-        guard synced.changed else { return }
-        OpenClawConfigFile.saveDict(synced.root)
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
@@ -651,6 +799,12 @@ final class AppState {
 
     func setVoiceWakeEnabled(_ enabled: Bool) async {
         guard voiceWakeSupported else {
+            self.swabbleEnabled = false
+            return
+        }
+        guard !enabled || SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
+            localeID: self.voiceWakeLocaleID)
+        else {
             self.swabbleEnabled = false
             return
         }
@@ -708,16 +862,12 @@ final class AppState {
 
     private func scheduleVoiceWakeGlobalSyncIfNeeded() {
         guard !self.suppressVoiceWakeGlobalSync else { return }
-        let sanitized = sanitizeVoiceWakeTriggers(self.swabbleTriggerWords)
+        let sanitized = sanitizeVoiceWakeTriggers(swabbleTriggerWords)
         self.voiceWakeGlobalSyncTask?.cancel()
         self.voiceWakeGlobalSyncTask = Task { [sanitized] in
             try? await Task.sleep(nanoseconds: 650_000_000)
             await GatewayConnection.shared.voiceWakeSetTriggers(sanitized)
         }
-    }
-
-    func setWorking(_ working: Bool) {
-        self.isWorking = working
     }
 
     // MARK: - Chime persistence
@@ -733,6 +883,303 @@ final class AppState {
     private func storeChime(_ chime: VoiceWakeChime, key: String) {
         guard let data = try? JSONEncoder().encode(chime) else { return }
         UserDefaults.standard.set(data, forKey: key)
+    }
+}
+
+// MARK: - Exec approval settings
+
+extension AppState {
+    private func ifNotPreview(_ action: () -> Void) {
+        guard !self.isPreview else { return }
+        action()
+    }
+
+    static func shouldPersistLaunchAtLoginChange(
+        isInitializing: Bool,
+        isHydrating: Bool,
+        isEnabling: Bool,
+        bundleLocationAllowsPersistentIntegration: Bool) -> Bool
+    {
+        !isInitializing && !isHydrating && (!isEnabling || bundleLocationAllowsPersistentIntegration)
+    }
+
+    var execApprovalPolicyAvailable: Bool {
+        self.execApprovalPolicyLoadState.isAvailable
+    }
+
+    var execApprovalLoadError: String? {
+        self.execApprovalPolicyLoadState.errorMessage
+    }
+
+    func updateExecApprovalMode(_ mode: ExecApprovalQuickMode) {
+        guard !self.isPreview else {
+            self.syncExecApprovalMode(mode)
+            return
+        }
+        let result = ExecApprovalsStore.updateDefaults { defaults in
+            defaults.security = mode.security
+            defaults.ask = mode.ask
+        }
+        self.applyExecApprovalModeMutation(mode, result: result)
+    }
+
+    func applyExecApprovalModeMutation(
+        _ mode: ExecApprovalQuickMode,
+        result: Result<Void, ExecApprovalsMutationError>)
+    {
+        switch result {
+        case .success:
+            self.syncExecApprovalMode(mode)
+        case let .failure(error):
+            self.execApprovalMutationError = error.message
+        }
+    }
+
+    func syncExecApprovalMode(_ mode: ExecApprovalQuickMode) {
+        self.execApprovalsReadGeneration += 1
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalsReadRetryTask = nil
+        self.execApprovalMode = mode
+        self.execApprovalPolicyLoadState = .available
+        self.execApprovalMutationError = nil
+    }
+
+    func retryExecApprovalModeRead() {
+        self.scheduleExecApprovalModeReadRetry()
+    }
+
+    func waitForExecApprovalModeRead() async {
+        await self.execApprovalsReadRetryTask?.value
+    }
+
+    func recoverExecApprovalModeRead(maxAttempts: Int) async {
+        self.execApprovalsReadGeneration += 1
+        let generation = self.execApprovalsReadGeneration
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalsReadRetryTask = nil
+        await self.performExecApprovalModeReadAttempts(
+            maxAttempts: maxAttempts,
+            generation: generation)
+    }
+
+    private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
+        guard self.execApprovalsReadGeneration == generation else { return }
+        guard maxAttempts > 0 else {
+            self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
+            return
+        }
+        self.execApprovalPolicyLoadState = .loading
+        for attempt in 0..<maxAttempts {
+            if attempt > 0 {
+                do {
+                    try await Task.sleep(for: self.execApprovalsReadRetryDelay)
+                } catch {
+                    return
+                }
+            }
+            guard self.execApprovalsReadGeneration == generation else { return }
+            let result = await execApprovalsDefaultsAsyncResolver()
+            guard self.execApprovalsReadGeneration == generation else { return }
+            switch result {
+            case let .success(defaults):
+                self.syncExecApprovalMode(
+                    ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
+                return
+            case let .failure(.migrationRequired(error)):
+                self.execApprovalPolicyLoadState = .unavailable(
+                    ExecApprovalsReadError.migrationRequired(error).message)
+                return
+            case .failure(.unavailable):
+                continue
+            }
+        }
+        guard self.execApprovalsReadGeneration == generation else { return }
+        self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
+    }
+
+    private func scheduleExecApprovalModeReadRetry() {
+        self.execApprovalsReadGeneration += 1
+        let generation = self.execApprovalsReadGeneration
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalPolicyLoadState = .loading
+        self.execApprovalsReadRetryTask = Task { [weak self] in
+            await self?.performExecApprovalModeReadAttempts(
+                maxAttempts: Self.execApprovalsReadRetryAttempts,
+                generation: generation)
+        }
+    }
+}
+
+extension AppState {
+    private static func syncedGatewayRoot(
+        currentRoot: [String: Any],
+        draft: GatewayConfigSyncDraft,
+        remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate = .preserve)
+        -> (root: [String: Any], changed: Bool)
+    {
+        var root = currentRoot
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var changed = false
+
+        let desiredMode: String? = switch draft.connectionMode {
+        case .local:
+            "local"
+        case .remote:
+            "remote"
+        case .unconfigured:
+            nil
+        }
+
+        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let desiredMode {
+            if currentMode != desiredMode {
+                gateway["mode"] = desiredMode
+                changed = true
+            }
+        } else if currentMode != nil {
+            gateway.removeValue(forKey: "mode")
+            changed = true
+        }
+
+        var remote = gateway["remote"] as? [String: Any] ?? [:]
+        var remoteChanged = false
+        if draft.connectionMode == .remote {
+            let remoteHost = CommandResolver.parseSSHTarget(draft.remoteTarget)?.host
+            let updated = Self.updatedRemoteGatewayConfig(
+                current: remote,
+                draft: .init(
+                    transport: draft.remoteTransport,
+                    remoteUrl: draft.remoteUrl,
+                    remoteHost: remoteHost,
+                    remoteTarget: draft.remoteTarget,
+                    remoteIdentity: draft.remoteIdentity,
+                    remoteToken: draft.remoteToken,
+                    remoteTokenDirty: draft.remoteTokenDirty))
+            remote = updated.remote
+            remoteChanged = updated.changed
+        }
+        if case let .replace(fingerprint) = remoteTLSFingerprintUpdate {
+            remoteChanged = Self.updateGatewayString(
+                &remote,
+                key: "tlsFingerprint",
+                value: fingerprint) || remoteChanged
+        }
+        if remoteChanged {
+            if remote.isEmpty {
+                gateway.removeValue(forKey: "remote")
+            } else {
+                gateway["remote"] = remote
+            }
+            changed = true
+        }
+
+        guard changed else { return (currentRoot, false) }
+
+        if gateway.isEmpty {
+            root.removeValue(forKey: "gateway")
+        } else {
+            root["gateway"] = gateway
+        }
+        return (root, true)
+    }
+
+    private func syncGatewayConfigIfNeeded() {
+        self.advanceGatewayRoutingGeneration()
+        guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return }
+        self.setGatewayConfigSyncState(.pending)
+
+        self.gatewayConfigSyncTask?.cancel()
+        self.gatewayConfigSyncTask = Task { @MainActor in
+            guard !Task.isCancelled else { return }
+            self.syncGatewayConfigNow()
+        }
+    }
+
+    private var gatewayConfigSyncIsEnabled: Bool {
+        #if DEBUG
+        if self.gatewayConfigSyncEnabledForTesting {
+            return true
+        }
+        #endif
+        return !self.isPreview
+    }
+
+    var gatewayConfigIsCurrentForRouting: Bool {
+        self.gatewayConfigSyncState == .current
+    }
+
+    private func setGatewayConfigSyncState(_ state: GatewayConfigSyncState) {
+        guard self.gatewayConfigSyncState != state else { return }
+        self.gatewayConfigSyncState = state
+        self.advanceGatewayRoutingGeneration()
+        guard !self.isPreview, state != .pending else { return }
+        // Failed persistence must retire the old endpoint; recovery must publish
+        // the newly canonical route. Requests also re-check this state directly.
+        Task { await GatewayEndpointStore.shared.refresh() }
+    }
+
+    private func advanceGatewayRoutingGeneration() {
+        self.gatewayRoutingGeneration &+= 1
+    }
+
+    private static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
+        guard draft.connectionMode == .remote else { return true }
+        switch draft.remoteTransport {
+        case .direct:
+            return GatewayRemoteConfig.normalizeGatewayUrl(draft.remoteUrl) != nil
+        case .ssh:
+            let target = Self.sanitizeSSHTarget(draft.remoteTarget)
+            return !target.isEmpty &&
+                CommandResolver.sshTargetValidationMessage(target) == nil &&
+                CommandResolver.parseSSHTarget(target) != nil
+        }
+    }
+
+    @discardableResult
+    func syncGatewayConfigNow() -> Bool {
+        self.syncGatewayConfigNow(remoteTLSFingerprintUpdate: .preserve)
+    }
+
+    @discardableResult
+    func syncGatewayConfigNow(remoteTLSFingerprint: String?) -> Bool {
+        self.syncGatewayConfigNow(remoteTLSFingerprintUpdate: .replace(remoteTLSFingerprint))
+    }
+
+    private func syncGatewayConfigNow(remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate) -> Bool {
+        guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return true }
+        self.setGatewayConfigSyncState(.pending)
+
+        let draft = GatewayConfigSyncDraft(
+            connectionMode: connectionMode,
+            remoteTransport: remoteTransport,
+            remoteTarget: remoteTarget,
+            remoteIdentity: remoteIdentity,
+            remoteUrl: remoteUrl,
+            remoteToken: remoteToken,
+            remoteTokenDirty: remoteTokenDirty)
+        guard Self.gatewayDraftCanPersist(draft) else {
+            self.setGatewayConfigSyncState(.failed)
+            return false
+        }
+
+        // Keep app-only connection settings local to avoid overwriting remote gateway config.
+        let synced = Self.syncedGatewayRoot(
+            currentRoot: OpenClawConfigFile.loadDict(),
+            draft: draft,
+            remoteTLSFingerprintUpdate: remoteTLSFingerprintUpdate)
+        guard synced.changed else {
+            self.setGatewayConfigSyncState(.current)
+            return true
+        }
+        guard OpenClawConfigFile.saveDict(synced.root) else {
+            self.setGatewayConfigSyncState(.failed)
+            Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
+            return false
+        }
+        self.lastConfigFingerprint = Self.configFingerprint(synced.root)
+        self.setGatewayConfigSyncState(.current)
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        return true
     }
 }
 
@@ -755,11 +1202,14 @@ extension AppState {
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false
+        state.talkPhaseSoundsEnabled = true
+        state.talkShiftToStopEnabled = true
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local
         state.remoteTransport = .ssh
         state.canvasEnabled = true
+        state.quickChatEnabled = true
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"
         state.remoteToken = "example-token"
@@ -770,49 +1220,134 @@ extension AppState {
     }
 }
 
+extension AppState {
+    static func resolveActiveComputerPresenceEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: activeComputerPresenceEnabledKey)
+    }
+
+    static func activeComputerPresenceUpdateIsCurrent(
+        capturedGeneration: UInt64,
+        currentGeneration: UInt64,
+        capturedEnabled: Bool,
+        currentEnabled: Bool,
+        isCancelled: Bool) -> Bool
+    {
+        !isCancelled &&
+            capturedGeneration == currentGeneration &&
+            capturedEnabled == currentEnabled
+    }
+
+    private func scheduleActiveComputerPresenceUpdate() {
+        self.ifNotPreview {
+            let enabled = self.activeComputerPresenceEnabled
+            UserDefaults.standard.set(enabled, forKey: activeComputerPresenceEnabledKey)
+            PresenceReporter.shared.sendImmediate(reason: "activity-sharing-changed")
+            self.activeComputerPresenceUpdateGeneration &+= 1
+            let generation = self.activeComputerPresenceUpdateGeneration
+            self.activeComputerPresenceTask?.cancel()
+            // Apply the newest privacy choice immediately. An older network-bound
+            // enable may resume later, but the reporter's generation guard contains it.
+            self.activeComputerPresenceTask = Task { @MainActor [weak self] in
+                guard let self,
+                      Self.activeComputerPresenceUpdateIsCurrent(
+                          capturedGeneration: generation,
+                          currentGeneration: self.activeComputerPresenceUpdateGeneration,
+                          capturedEnabled: enabled,
+                          currentEnabled: self.activeComputerPresenceEnabled,
+                          isCancelled: Task.isCancelled)
+                else { return }
+                await MacNodeModeCoordinator.shared.setPresenceActivityReportingEnabled(enabled)
+            }
+        }
+    }
+
+    enum ConnectionMode: String {
+        case unconfigured
+        case local
+        case remote
+    }
+
+    enum RemoteTransport: String {
+        case ssh
+        case direct
+    }
+
+    struct RemoteGatewayConfigDraft {
+        var transport: RemoteTransport
+        var remoteUrl: String
+        var remoteHost: String?
+        var remoteTarget: String
+        var remoteIdentity: String
+        var remoteToken: String
+        var remoteTokenDirty: Bool
+    }
+
+    struct GatewayConfigSyncDraft {
+        var connectionMode: ConnectionMode
+        var remoteTransport: RemoteTransport
+        var remoteTarget: String
+        var remoteIdentity: String
+        var remoteUrl: String
+        var remoteToken: String
+        var remoteTokenDirty: Bool
+    }
+
+    private struct GatewaySelectionSnapshot: Equatable {
+        let connectionMode: ConnectionMode
+        let remoteTransport: RemoteTransport
+        let remoteUrl: String
+        let remoteTarget: String
+    }
+}
+
 #if DEBUG
 @MainActor
 extension AppState {
+    static func _testConfigFingerprint(_ root: [String: Any]) -> Data? {
+        self.configFingerprint(root)
+    }
+
     static func _testUpdatedRemoteGatewayConfig(
         current: [String: Any],
-        transport: RemoteTransport,
-        remoteUrl: String,
-        remoteHost: String?,
-        remoteTarget: String,
-        remoteIdentity: String,
-        remoteToken: String,
-        remoteTokenDirty: Bool) -> [String: Any]
+        draft: RemoteGatewayConfigDraft) -> [String: Any]
     {
-        Self.updatedRemoteGatewayConfig(
+        self.updatedRemoteGatewayConfig(
             current: current,
-            transport: transport,
-            remoteUrl: remoteUrl,
-            remoteHost: remoteHost,
-            remoteTarget: remoteTarget,
-            remoteIdentity: remoteIdentity,
-            remoteToken: remoteToken,
-            remoteTokenDirty: remoteTokenDirty).remote
+            draft: draft).remote
     }
 
     static func _testSyncedGatewayRoot(
         currentRoot: [String: Any],
-        connectionMode: ConnectionMode,
-        remoteTransport: RemoteTransport,
-        remoteTarget: String,
-        remoteIdentity: String,
-        remoteUrl: String,
-        remoteToken: String,
-        remoteTokenDirty: Bool) -> [String: Any]
+        draft: GatewayConfigSyncDraft) -> [String: Any]
     {
-        Self.syncedGatewayRoot(
+        self.syncedGatewayRoot(
             currentRoot: currentRoot,
-            connectionMode: connectionMode,
-            remoteTransport: remoteTransport,
-            remoteTarget: remoteTarget,
-            remoteIdentity: remoteIdentity,
-            remoteUrl: remoteUrl,
-            remoteToken: remoteToken,
-            remoteTokenDirty: remoteTokenDirty).root
+            draft: draft).root
+    }
+
+    static func _testGatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
+        self.gatewayDraftCanPersist(draft)
+    }
+
+    func _testApplyConfigOverrides(_ root: [String: Any]) {
+        self.applyConfigOverrides(root)
+    }
+
+    func _testEnableGatewayConfigSync() {
+        self.gatewayConfigSyncEnabledForTesting = true
+    }
+
+    func _testAwaitGatewayConfigSync() async {
+        await self.gatewayConfigSyncTask?.value
+    }
+
+    var _testGatewayConfigIsCurrentForRouting: Bool {
+        self.gatewayConfigIsCurrentForRouting
+    }
+
+    @discardableResult
+    func _testReconcilePreferredGatewayRouteBinding() -> Bool {
+        self.reconcilePreferredGatewayRouteBinding()
     }
 }
 #endif
@@ -820,18 +1355,11 @@ extension AppState {
 @MainActor
 enum AppStateStore {
     static let shared = AppState()
-    static var isPausedFlag: Bool {
-        UserDefaults.standard.bool(forKey: pauseDefaultsKey)
-    }
 
     static func updateLaunchAtLogin(enabled: Bool) {
         Task.detached(priority: .utility) {
             await LaunchAgentManager.set(enabled: enabled, bundlePath: Bundle.main.bundlePath)
         }
-    }
-
-    static var canvasEnabled: Bool {
-        UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
     }
 }
 

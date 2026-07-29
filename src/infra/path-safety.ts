@@ -1,11 +1,12 @@
-import path from "node:path";
-import { isPathInside } from "./path-guards.js";
+// Exposes path-safety helpers backed by fs-safe defaults.
+import "./fs-safe-defaults.js";
 
-export function resolveSafeBaseDir(rootDir: string): string {
-  const resolved = path.resolve(rootDir);
-  return resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
-}
-
-export function isWithinDir(rootDir: string, targetPath: string): boolean {
-  return isPathInside(rootDir, targetPath);
-}
+// Back-compat import path for path guard helpers used across core surfaces.
+export {
+  isPathInside,
+  isPathInsideWithRealpath,
+  isWithinDir,
+  safeRealpathSync,
+  safeStatSync,
+} from "@openclaw/fs-safe/path";
+export { formatPosixMode } from "@openclaw/fs-safe/advanced";

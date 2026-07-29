@@ -1,15 +1,28 @@
+/**
+ * Shared subagent registry mocks.
+ *
+ * Tests import this module to hoist gateway/event mocks consistently before
+ * registry modules resolve their runtime dependencies.
+ */
 import { vi } from "vitest";
 
 const noop = () => {};
-
-vi.mock("../gateway/call.js", () => ({
+const sharedMocks = vi.hoisted(() => ({
   callGateway: vi.fn(async () => ({
-    status: "ok",
+    status: "ok" as const,
     startedAt: 111,
     endedAt: 222,
   })),
+  onAgentEvent: vi.fn(() => noop),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: sharedMocks.callGateway,
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
-  onAgentEvent: vi.fn(() => noop),
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  onAgentEvent: sharedMocks.onAgentEvent,
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));

@@ -1,4 +1,9 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * Model fallback config fixture.
+ *
+ * Builds a minimal config with primary and fallback models for model-selection tests.
+ */
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export function makeModelFallbackCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   return {

@@ -1,20 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
-import { registerSlackPinEvents } from "./pins.js";
-import {
-  createSlackSystemEventTestHarness as buildPinHarness,
-  type SlackSystemEventTestOverrides as PinOverrides,
-} from "./system-event-test-harness.js";
+// Slack tests cover pins plugin behavior.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pinEnqueueMock = vi.hoisted(() => vi.fn());
-const pinAllowMock = vi.hoisted(() => vi.fn());
+let registerSlackPinEvents: typeof import("./pins.js").registerSlackPinEvents;
+let buildPinHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
+type PinOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-vi.mock("../../../../../src/infra/system-events.js", () => {
-  return { enqueueSystemEvent: pinEnqueueMock };
-});
-vi.mock("../../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: pinAllowMock,
+vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => pinEnqueueMock(...args),
 }));
-
+vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => pinEnqueueMock(...args),
+}));
 type PinHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 type PinCase = {
@@ -57,7 +54,6 @@ function installPinHandlers(args: {
 
 async function runPinCase(input: PinCase = {}): Promise<void> {
   pinEnqueueMock.mockClear();
-  pinAllowMock.mockReset().mockResolvedValue([]);
   const { added, removed } = installPinHandlers({
     overrides: input.overrides,
     trackEvent: input.trackEvent,
@@ -65,16 +61,28 @@ async function runPinCase(input: PinCase = {}): Promise<void> {
   });
   const handlerKey = input.handler ?? "added";
   const handler = handlerKey === "removed" ? removed : added;
-  expect(handler).toBeTruthy();
+  if (!handler) {
+    throw new Error(`expected Slack pin ${handlerKey} handler`);
+  }
   const event = (input.event ?? makePinEvent()) as Record<string, unknown>;
   const body = input.body ?? {};
-  await handler!({
+  await handler({
     body,
     event,
   });
 }
 
 describe("registerSlackPinEvents", () => {
+  beforeAll(async () => {
+    ({ registerSlackPinEvents } = await import("./pins.js"));
+    ({ createSlackSystemEventTestHarness: buildPinHarness } =
+      await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    pinEnqueueMock.mockClear();
+  });
+
   const cases: Array<{ name: string; args: PinCase; expectedCalls: number }> = [
     {
       name: "enqueues DM pin system events when dmPolicy is open",

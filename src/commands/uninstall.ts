@@ -1,17 +1,29 @@
+// Implements `openclaw uninstall`.
+// Handles interactive scope selection, service removal, state/workspace cleanup, and macOS app cleanup.
+
 import path from "node:path";
 import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
+import {
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../packages/terminal-core/src/prompt-style.js";
+import {
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../agents/workspace-legacy-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-import { resolveHomeDir } from "../utils.js";
+import { resolveHomeDir, shortenHomeInString } from "../utils.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
 import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
-export type UninstallOptions = {
+type UninstallOptions = {
   service?: boolean;
   state?: boolean;
   workspace?: boolean;
@@ -23,13 +35,7 @@ export type UninstallOptions = {
 };
 
 const multiselectStyled = <T>(params: Parameters<typeof multiselect<T>>[0]) =>
-  multiselect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+  multiselect(styleSelectParams(params));
 
 function buildScopeSelection(opts: UninstallOptions): {
   scopes: Set<UninstallScope>;
@@ -54,15 +60,20 @@ function buildScopeSelection(opts: UninstallOptions): {
 
 async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   if (isNixMode) {
-    runtime.error("Nix mode detected; service uninstall is disabled.");
+    // Nix owns service lifecycle in Nix mode; uninstalling via launchd/systemd would fight the profile.
+    runtime.error(
+      `Nix mode detected; service uninstall is disabled. Manage the service through your Nix profile instead, then run ${formatCliCommand("openclaw status")} to verify.`,
+    );
     return false;
   }
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    runtime.error(`Gateway service check failed: ${String(err)}`);
+    runtime.error(
+      `Gateway service check failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for service diagnostics.`,
+    );
     return false;
   }
   if (!loaded) {
@@ -72,13 +83,17 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   try {
     await service.stop({ env: process.env, stdout: process.stdout });
   } catch (err) {
-    runtime.error(`Gateway stop failed: ${String(err)}`);
+    runtime.error(
+      `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
+    );
   }
   try {
     await service.uninstall({ env: process.env, stdout: process.stdout });
     return true;
   } catch (err) {
-    runtime.error(`Gateway uninstall failed: ${String(err)}`);
+    runtime.error(
+      `Gateway uninstall failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for the service state.`,
+    );
     return false;
   }
 }
@@ -97,18 +112,23 @@ function logBackupRecommendation(runtime: RuntimeEnv) {
   runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
 }
 
+/** Runs the uninstall flow for selected service/state/workspace/app scopes. */
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
   const { scopes, hadExplicit } = buildScopeSelection(opts);
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
-    runtime.error("Non-interactive mode requires --yes.");
+    runtime.error(
+      `Non-interactive uninstall requires --yes. Preview first with ${formatCliCommand("openclaw uninstall --dry-run --all")}.`,
+    );
     runtime.exit(1);
     return;
   }
 
   if (!hadExplicit) {
     if (!interactive) {
-      runtime.error("Non-interactive mode requires explicit scopes (use --all).");
+      runtime.error(
+        `Non-interactive uninstall requires explicit scopes. Use --all, or choose scopes such as --service --state.`,
+      );
       runtime.exit(1);
       return;
     }
@@ -157,6 +177,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   const dryRun = Boolean(opts.dryRun);
+  let stateRemoved = false;
   const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
     resolveCleanupPlanFromDisk();
 
@@ -173,15 +194,33 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (scopes.has("state")) {
-    await removeStateAndLinkedPaths(
+    if (!scopes.has("workspace")) {
+      for (const workspaceDir of workspaceDirs) {
+        const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
+        const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan, { dryRun });
+        for (const removedPath of legacyCleanup.removedPaths) {
+          if (dryRun) {
+            runtime.log(`[dry-run] remove ${shortenHomeInString(removedPath)}`);
+          }
+        }
+        for (const warning of legacyCleanup.warnings) {
+          runtime.error(warning);
+        }
+      }
+    }
+    // Preserve workspaces when state-only uninstall is requested; workspace scope removes them explicitly.
+    stateRemoved = await removeStateAndLinkedPaths(
       { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
       runtime,
-      { dryRun },
+      { dryRun, preservePaths: scopes.has("workspace") ? [] : workspaceDirs },
     );
   }
 
   if (scopes.has("workspace")) {
-    await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
+    await removeWorkspaceDirs(workspaceDirs, runtime, {
+      dryRun,
+      removeStateRows: !scopes.has("state") || !stateRemoved,
+    });
   }
 
   if (scopes.has("app")) {

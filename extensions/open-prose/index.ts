@@ -1,3 +1,4 @@
+// Open Prose plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry, type OpenClawPluginApi } from "./runtime-api.js";
 
 export default definePluginEntry({

@@ -1,0 +1,35 @@
+export type VitestHostInfo = {
+  cpuCount?: number;
+  loadAverage1m?: number;
+  totalMemoryBytes?: number;
+  freeMemoryBytes?: number;
+};
+
+export type LocalVitestScheduling = {
+  maxWorkers: number;
+  fileParallelism: boolean;
+  throttledBySystem: boolean;
+};
+
+export function isCiLikeEnv(env?: Record<string, string | undefined>): boolean;
+export function resolveLocalVitestEnv(
+  env?: Record<string, string | undefined>,
+): Record<string, string | undefined>;
+export function detectVitestHostInfo(): Required<VitestHostInfo>;
+export function resolveLocalVitestMaxWorkers(
+  env?: Record<string, string | undefined>,
+  system?: VitestHostInfo,
+  pool?: "forks" | "threads",
+): number;
+export function resolveLocalVitestScheduling(
+  env?: Record<string, string | undefined>,
+  system?: VitestHostInfo,
+  pool?: "forks" | "threads",
+): LocalVitestScheduling;
+export function resolveLocalFullSuiteProfile(
+  env?: Record<string, string | undefined>,
+  system?: VitestHostInfo,
+): {
+  shardParallelism: number;
+  vitestMaxWorkers: number;
+};

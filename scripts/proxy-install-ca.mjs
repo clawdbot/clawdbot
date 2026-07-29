@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+// Creates the debug proxy CA and, on macOS, trusts it in the system keychain.
+import { spawnSync } from "node:child_process";
+import process from "node:process";
+import { resolveSystemBin } from "../src/infra/resolve-system-bin.js";
+import { ensureDebugProxyCa } from "../src/proxy-capture/ca.js";
+import { resolveDebugProxySettings } from "../src/proxy-capture/env.js";
+
+const parsedArgs = parseArgs(process.argv.slice(2));
+const printOnly = parsedArgs.printOnly;
+
+async function installCa() {
+  const settings = resolveDebugProxySettings();
+  const ca = await ensureDebugProxyCa(settings.certDir);
+  process.stdout.write(`Debug proxy CA: ${ca.certPath}\n`);
+  if (printOnly) {
+    process.stdout.write("Created or reused the debug proxy CA without changing system trust.\n");
+    return;
+  }
+
+  if (process.platform !== "darwin") {
+    process.stdout.write(
+      "Automatic CA trust is only implemented for macOS. Use the printed CA path to trust it manually on this platform.\n",
+    );
+    return;
+  }
+
+  const security = resolveSystemBin("security");
+  if (!security) {
+    throw new Error("security CLI is required on macOS to trust the debug proxy CA");
+  }
+
+  const result = spawnSync(
+    security,
+    [
+      "add-trusted-cert",
+      "-d",
+      "-r",
+      "trustRoot",
+      "-k",
+      "/Library/Keychains/System.keychain",
+      ca.certPath,
+    ],
+    {
+      stdio: "inherit",
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(`security add-trusted-cert failed with exit code ${result.status ?? 1}`);
+  }
+  process.stdout.write("Trusted the OpenClaw debug proxy CA in System.keychain.\n");
+}
+
+void installCa().catch(
+  /** @param {unknown} error */ (error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  },
+);
+
+function parseArgs(argv) {
+  let wantsPrintOnly = false;
+  for (const arg of argv) {
+    if (arg === "--help") {
+      printUsage(console.log);
+      process.exit(0);
+    }
+    if (arg === "--print-only") {
+      wantsPrintOnly = true;
+      continue;
+    }
+    console.error(`Unknown proxy install CA argument: ${arg}`);
+    printUsage(console.error);
+    process.exit(1);
+  }
+  return { printOnly: wantsPrintOnly };
+}
+
+function printUsage(writeLine) {
+  writeLine("Usage: node --import tsx scripts/proxy-install-ca.mjs [--print-only]");
+  writeLine("");
+  writeLine("  --print-only  create or reuse the debug proxy CA without changing system trust");
+}

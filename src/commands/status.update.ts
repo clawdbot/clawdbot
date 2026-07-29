@@ -1,5 +1,9 @@
+// Update status helpers for `openclaw status`.
+// Wraps registry/git update checks and formats compact update rows/hints.
+
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
@@ -7,11 +11,14 @@ import {
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
 
+/** Runs the update check using the configured update channel and current install root. */
 export async function getUpdateCheckResult(params: {
   timeoutMs: number;
   fetchGit: boolean;
   includeRegistry: boolean;
+  updateConfigChannel?: string | null;
 }): Promise<UpdateCheckResult> {
+  const configChannel = normalizeUpdateChannel(params.updateConfigChannel);
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
@@ -22,10 +29,14 @@ export async function getUpdateCheckResult(params: {
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
     includeRegistry: params.includeRegistry,
+    registryChannel: resolveRegistryUpdateChannel({
+      configChannel,
+      currentVersion: VERSION,
+    }),
   });
 }
 
-export type UpdateAvailability = {
+type UpdateAvailability = {
   available: boolean;
   hasGitUpdate: boolean;
   hasRegistryUpdate: boolean;
@@ -33,6 +44,7 @@ export type UpdateAvailability = {
   gitBehind: number | null;
 };
 
+/** Determines whether git and/or registry data indicate an available update. */
 export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
@@ -52,6 +64,7 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
   };
 }
 
+/** Formats the actionable update hint shown in status footers. */
 export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
   const availability = resolveUpdateAvailability(update);
   if (!availability.available) {
@@ -69,26 +82,56 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
   return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
 }
 
+/** Formats a compact one-line update summary for overview rows. */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   const parts: string[] = [];
 
   const appendRegistryUpdateSummary = () => {
+    const registryLabel =
+      update.registry?.tag && update.registry.tag !== "latest"
+        ? `npm ${update.registry.tag}`
+        : "npm latest";
     if (update.registry?.latestVersion) {
       const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
       if (cmp === 0) {
         if (update.installKind !== "git") {
           parts.push("up to date");
         }
-        parts.push(`npm latest ${update.registry.latestVersion}`);
+        // Git installs still show registry latest, but git ahead/behind remains the primary state.
+        parts.push(`${registryLabel} ${update.registry.latestVersion}`);
       } else if (cmp != null && cmp < 0) {
-        parts.push(`npm update ${update.registry.latestVersion}`);
+        parts.push(
+          update.registry.tag && update.registry.tag !== "latest"
+            ? `${registryLabel} update ${update.registry.latestVersion}`
+            : `npm update ${update.registry.latestVersion}`,
+        );
       } else {
-        parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
+        parts.push(
+          update.registry.tag === "extended-stable"
+            ? `ahead of extended-stable (${update.registry.latestVersion})`
+            : `${registryLabel} ${update.registry.latestVersion} (local newer)`,
+        );
       }
       return;
     }
     if (update.registry?.error) {
-      parts.push("npm latest unknown");
+      if (update.registry.reason === "unsupported_git_channel") {
+        parts.push("extended-stable requires a package install");
+        return;
+      }
+      if (update.registry.reason === "selector_missing") {
+        parts.push("npm extended-stable selector missing");
+        return;
+      }
+      if (update.registry.reason === "selector_query_failed") {
+        parts.push("npm extended-stable query failed");
+        return;
+      }
+      if (update.registry.reason === "exact_package_mismatch") {
+        parts.push("npm extended-stable exact package verification failed");
+        return;
+      }
+      parts.push(`${registryLabel} unknown`);
     }
   };
 

@@ -1,8 +1,13 @@
+// Cron protocol conformance tests cover schema compatibility for cron messages.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
-import { CronDeliverySchema, CronJobStateSchema } from "../gateway/protocol/schema.js";
+import {
+  CronDeliverySchema,
+  CronJobStateSchema,
+  CronRunLogEntrySchema,
+} from "../../packages/gateway-protocol/src/schema.js";
 
 type SchemaLike = {
   anyOf?: Array<SchemaLike>;
@@ -30,17 +35,14 @@ function extractDeliveryModes(schema: SchemaLike): string[] {
 }
 
 function extractConstUnionValues(schema: SchemaLike): string[] {
-  return Array.from(
-    new Set(
-      (schema.anyOf ?? [])
-        .map((entry) => entry?.const)
-        .filter((value): value is string => typeof value === "string"),
-    ),
-  );
+  return (schema.anyOf ?? [])
+    .map((entry) => entry?.const)
+    .filter((value): value is string => typeof value === "string");
 }
 
-const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];
+const UI_FILES = ["ui/src/api/types.ts", "ui/src/lib/cron/index.ts", "ui/src/pages/cron/view.ts"];
 
+const MACOS_APP_SOURCES_DIR = "apps/macos/Sources/OpenClaw";
 const SWIFT_MODEL_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/CronModels.swift`];
 const SWIFT_STATUS_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`];
 
@@ -69,9 +71,7 @@ describe("cron protocol conformance", () => {
     for (const relPath of UI_FILES) {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
-        expect(content.includes(`"${mode}"`), `${relPath} missing delivery mode ${mode}`).toBe(
-          true,
-        );
+        expect(content, `${relPath} missing delivery mode ${mode}`).toContain(`"${mode}"`);
       }
     }
 
@@ -80,37 +80,52 @@ describe("cron protocol conformance", () => {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
         const pattern = new RegExp(`\\bcase\\s+${mode}\\b`);
-        expect(pattern.test(content), `${relPath} missing case ${mode}`).toBe(true);
+        expect(content, `${relPath} missing case ${mode}`).toMatch(pattern);
       }
     }
   });
 
   it("cron status shape matches gateway fields in UI + Swift", async () => {
     const cwd = process.cwd();
-    const uiTypes = await fs.readFile(path.join(cwd, "ui/src/ui/types.ts"), "utf-8");
-    expect(uiTypes.includes("export type CronStatus")).toBe(true);
-    expect(uiTypes.includes("jobs:")).toBe(true);
-    expect(uiTypes.includes("jobCount")).toBe(false);
+    const uiTypes = await fs.readFile(path.join(cwd, "ui/src/api/types.ts"), "utf-8");
+    expect(uiTypes).toContain("export type CronStatus");
+    expect(uiTypes).toContain("jobs:");
+    expect(uiTypes).not.toContain("jobCount");
 
     const [swiftRelPath] = await resolveSwiftFiles(cwd, SWIFT_STATUS_CANDIDATES);
-    const swiftPath = path.join(cwd, swiftRelPath);
+    const swiftPath = path.join(cwd, expectDefined(swiftRelPath, "swiftRelPath test invariant"));
     const swift = await fs.readFile(swiftPath, "utf-8");
-    expect(swift.includes("struct CronSchedulerStatus")).toBe(true);
-    expect(swift.includes("let jobs:")).toBe(true);
+    expect(swift).toContain("struct CronSchedulerStatus");
+    expect(swift).toContain("let jobs:");
   });
 
-  it("cron job state schema keeps the full failover reason set", () => {
-    const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
-    const lastErrorReason = properties.lastErrorReason as SchemaLike | undefined;
-    expect(lastErrorReason).toBeDefined();
-    expect(extractConstUnionValues(lastErrorReason ?? {})).toEqual([
+  it("cron public schemas keep the full failover reason set", () => {
+    const expectedReasons = [
       "auth",
+      "auth_permanent",
       "format",
       "rate_limit",
+      "overloaded",
       "billing",
+      "server_error",
       "timeout",
+      "context_overflow",
       "model_not_found",
+      "session_expired",
+      "empty_response",
+      "no_error_details",
+      "unclassified",
       "unknown",
-    ]);
+    ];
+
+    const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    const lastErrorReason = stateProperties.lastErrorReason as SchemaLike | undefined;
+    expect(lastErrorReason).toBeDefined();
+    expect(extractConstUnionValues(lastErrorReason ?? {})).toEqual(expectedReasons);
+
+    const runLogProperties = (CronRunLogEntrySchema as SchemaLike).properties ?? {};
+    const errorReason = runLogProperties.errorReason as SchemaLike | undefined;
+    expect(errorReason).toBeDefined();
+    expect(extractConstUnionValues(errorReason ?? {})).toEqual(expectedReasons);
   });
 });

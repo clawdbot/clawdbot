@@ -1,3 +1,6 @@
+/**
+ * Tests webhook request guard body parsing and rejection behavior.
+ */
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
@@ -10,6 +13,7 @@ import {
   isJsonContentType,
   readWebhookBodyOrReject,
   readJsonWebhookBodyOrReject,
+  runDetachedWebhookWork,
 } from "./webhook-request-guards.js";
 
 type MockIncomingMessage = IncomingMessage & {
@@ -46,15 +50,45 @@ function createMockRequest(params: {
   return req;
 }
 
-describe("isJsonContentType", () => {
-  it("accepts application/json and +json suffixes", () => {
-    expect(isJsonContentType("application/json")).toBe(true);
-    expect(isJsonContentType("application/cloudevents+json; charset=utf-8")).toBe(true);
-  });
+async function readJsonBody(chunks: string[], emptyObjectOnEmpty = false) {
+  const req = createMockRequest({ chunks });
+  const res = createMockServerResponse();
+  return {
+    result: await readJsonWebhookBodyOrReject({
+      req,
+      res,
+      maxBytes: 1024,
+      emptyObjectOnEmpty,
+    }),
+    res,
+  };
+}
 
-  it("rejects non-json media types", () => {
-    expect(isJsonContentType("text/plain")).toBe(false);
-    expect(isJsonContentType(undefined)).toBe(false);
+async function readRawBody(params: Parameters<typeof createMockRequest>[0], profile?: "pre-auth") {
+  const req = createMockRequest(params);
+  const res = createMockServerResponse();
+  return {
+    result: await readWebhookBodyOrReject({
+      req,
+      res,
+      profile,
+    }),
+    res,
+  };
+}
+
+describe("isJsonContentType", () => {
+  it.each([
+    { name: "accepts application/json", input: "application/json", expected: true },
+    {
+      name: "accepts +json suffixes",
+      input: "application/cloudevents+json; charset=utf-8",
+      expected: true,
+    },
+    { name: "rejects non-json media types", input: "text/plain", expected: false },
+    { name: "rejects missing media types", input: undefined, expected: false },
+  ])("$name", ({ input, expected }) => {
+    expect(isJsonContentType(input)).toBe(expected);
   });
 });
 
@@ -103,94 +137,126 @@ describe("applyBasicWebhookRequestGuards", () => {
     expect(res2.statusCode).toBe(429);
   });
 
-  it("rejects non-json requests when required", () => {
-    const req = createMockRequest({
-      method: "POST",
-      headers: { "content-type": "text/plain" },
-    });
+  it.each([
+    {
+      name: "allows matching JSON requests",
+      req: createMockRequest({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      }),
+      expectedOk: true,
+      expectedStatusCode: 200,
+    },
+    {
+      name: "rejects non-json requests when required",
+      req: createMockRequest({
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+      }),
+      expectedOk: false,
+      expectedStatusCode: 415,
+    },
+  ])("$name", ({ req, expectedOk, expectedStatusCode }) => {
     const res = createMockServerResponse();
     const ok = applyBasicWebhookRequestGuards({
       req,
       res,
       requireJsonContentType: true,
     });
-    expect(ok).toBe(false);
-    expect(res.statusCode).toBe(415);
+    expect(ok).toBe(expectedOk);
+    expect(res.statusCode).toBe(expectedStatusCode);
   });
 });
 
 describe("readJsonWebhookBodyOrReject", () => {
-  it("returns parsed JSON body", async () => {
-    const req = createMockRequest({ chunks: ['{"ok":true}'] });
-    const res = createMockServerResponse();
-    await expect(
-      readJsonWebhookBodyOrReject({
-        req,
-        res,
-        maxBytes: 1024,
-        emptyObjectOnEmpty: false,
-      }),
-    ).resolves.toEqual({ ok: true, value: { ok: true } });
-  });
-
-  it("preserves valid JSON null payload", async () => {
-    const req = createMockRequest({ chunks: ["null"] });
-    const res = createMockServerResponse();
-    await expect(
-      readJsonWebhookBodyOrReject({
-        req,
-        res,
-        maxBytes: 1024,
-        emptyObjectOnEmpty: false,
-      }),
-    ).resolves.toEqual({ ok: true, value: null });
-  });
-
-  it("writes 400 on invalid JSON payload", async () => {
-    const req = createMockRequest({ chunks: ["{bad json"] });
-    const res = createMockServerResponse();
-    await expect(
-      readJsonWebhookBodyOrReject({
-        req,
-        res,
-        maxBytes: 1024,
-        emptyObjectOnEmpty: false,
-      }),
-    ).resolves.toEqual({ ok: false });
-    expect(res.statusCode).toBe(400);
-    expect(res.body).toBe("Bad Request");
+  it.each([
+    {
+      name: "returns parsed JSON body",
+      chunks: ['{"ok":true}'],
+      expected: { ok: true, value: { ok: true } },
+      expectedStatusCode: 200,
+      expectedBody: undefined,
+    },
+    {
+      name: "preserves valid JSON null payload",
+      chunks: ["null"],
+      expected: { ok: true, value: null },
+      expectedStatusCode: 200,
+      expectedBody: undefined,
+    },
+    {
+      name: "writes 400 on invalid JSON payload",
+      chunks: ["{bad json"],
+      expected: { ok: false },
+      expectedStatusCode: 400,
+      expectedBody: "Bad Request",
+    },
+  ])("$name", async ({ chunks, expected, expectedStatusCode, expectedBody }) => {
+    const { result, res } = await readJsonBody(chunks);
+    expect(result).toEqual(expected);
+    expect(res.statusCode).toBe(expectedStatusCode);
+    expect(res.body).toBe(expectedBody);
   });
 });
 
 describe("readWebhookBodyOrReject", () => {
   it("returns raw body contents", async () => {
-    const req = createMockRequest({ chunks: ["plain text"] });
-    const res = createMockServerResponse();
-    await expect(
-      readWebhookBodyOrReject({
-        req,
-        res,
-      }),
-    ).resolves.toEqual({ ok: true, value: "plain text" });
+    const { result } = await readRawBody({ chunks: ["plain text"] });
+    expect(result).toEqual({ ok: true, value: "plain text" });
   });
 
   it("enforces strict pre-auth default body limits", async () => {
-    const req = createMockRequest({
-      headers: { "content-length": String(70 * 1024) },
-    });
-    const res = createMockServerResponse();
-    await expect(
-      readWebhookBodyOrReject({
-        req,
-        res,
-        profile: "pre-auth",
-      }),
-    ).resolves.toEqual({ ok: false });
+    const { result, res } = await readRawBody(
+      {
+        headers: { "content-length": String(70 * 1024) },
+      },
+      "pre-auth",
+    );
+    expect(result).toEqual({ ok: false });
     expect(res.statusCode).toBe(413);
   });
 });
 
 describe("beginWebhookRequestPipelineOrReject", () => {
+  it("falls back for non-finite in-flight limiter options", () => {
+    const limiter = createWebhookInFlightLimiter({
+      maxInFlightPerKey: Number.NaN,
+      maxTrackedKeys: Number.NaN,
+    });
+    const releases: Array<() => void> = [];
+    try {
+      for (let index = 0; index < 8; index += 1) {
+        const result = beginWebhookRequestPipelineOrReject({
+          req: createMockRequest({ method: "POST" }),
+          res: createMockServerResponse(),
+          allowMethods: ["POST"],
+          inFlightLimiter: limiter,
+          inFlightKey: "ip:127.0.0.1",
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          releases.push(result.release);
+        }
+      }
+
+      const overflowRes = createMockServerResponse();
+      const overflow = beginWebhookRequestPipelineOrReject({
+        req: createMockRequest({ method: "POST" }),
+        res: overflowRes,
+        allowMethods: ["POST"],
+        inFlightLimiter: limiter,
+        inFlightKey: "ip:127.0.0.1",
+      });
+
+      expect(overflow.ok).toBe(false);
+      expect(overflowRes.statusCode).toBe(429);
+    } finally {
+      for (const release of releases) {
+        release();
+      }
+    }
+  });
+
   it("enforces in-flight request limits and releases slots", () => {
     const limiter = createWebhookInFlightLimiter({
       maxInFlightPerKey: 1,
@@ -232,5 +298,69 @@ describe("beginWebhookRequestPipelineOrReject", () => {
     if (third.ok) {
       third.release();
     }
+  });
+});
+
+describe("runDetachedWebhookWork", () => {
+  it("defers the callback until the request handler can acknowledge", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const order: string[] = [];
+    const detached: Promise<void>[] = [];
+
+    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
+      detached.push(
+        runDetachedWebhookWork(async () => {
+          order.push("work");
+        }),
+      );
+      order.push("ack");
+      expect(order).toEqual(["ack"]);
+      return true;
+    });
+
+    await Promise.all(detached);
+    expect(order).toEqual(["ack", "work"]);
+  });
+
+  it("keeps post-ack processing admitted after the request admission is released", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const { enqueueCommandInLane } = await import("../process/command-queue.js");
+
+    let detached: Promise<number> | null = null;
+    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
+      // Ack-first shape: dispatch continues after the handler (and its
+      // admission) completes; the queue enqueue happens well past release.
+      detached = runDetachedWebhookWork(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25);
+        });
+        return await enqueueCommandInLane("detached-webhook-work-test", async () => 42);
+      });
+      return true;
+    });
+
+    await expect(detached).resolves.toBe(42);
+  });
+
+  it("refuses the same post-ack processing when it merely inherits the request admission", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const { enqueueCommandInLane } = await import("../process/command-queue.js");
+
+    let inherited: Promise<number> | null = null;
+    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
+      inherited = (async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25);
+        });
+        return await enqueueCommandInLane("inherited-webhook-work-test", async () => 42);
+      })();
+      inherited.catch(() => {});
+      return true;
+    });
+
+    await expect(inherited).rejects.toThrow("Gateway is draining");
   });
 });

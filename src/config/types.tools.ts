@@ -1,21 +1,32 @@
+// Defines tool availability and allowlist configuration types.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { AgentModelConfig } from "./types.agents-shared.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
-import type { SecretInput } from "./types.secrets.js";
+import type { ConfiguredProviderRequest } from "./types.provider-request.js";
+export type { MemorySearchConfig } from "./types.memory.js";
 
 export type MediaUnderstandingScopeMatch = {
+  /** Channel/provider id to match before running media or link understanding. */
   channel?: string;
+  /** Direct/group classification from the channel runtime, when available. */
   chatType?: ChatType;
+  /** Attachment or link key prefix used for narrow per-source routing. */
   keyPrefix?: string;
 };
 
 export type MediaUnderstandingScopeRule = {
+  /** Policy applied when match criteria select this scope rule. */
   action: SessionSendPolicyAction;
+  /** Optional match filter; omitted match behaves as a catch-all rule. */
   match?: MediaUnderstandingScopeMatch;
 };
 
 export type MediaUnderstandingScopeConfig = {
+  /** Fallback action when no scope rule matches. */
   default?: SessionSendPolicyAction;
+  /** Ordered allow/block rules; first matching rule wins. */
   rules?: MediaUnderstandingScopeRule[];
 };
 
@@ -33,16 +44,12 @@ export type MediaUnderstandingAttachmentsConfig = {
 type MediaProviderRequestConfig = {
   /** Optional provider-specific query params (merged into requests). */
   providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
   /** Optional base URL override for provider requests. */
   baseUrl?: string;
   /** Optional headers merged into provider requests. */
   headers?: Record<string, string>;
+  /** Optional request transport overrides for provider HTTP calls. */
+  request?: ConfiguredProviderRequest;
 };
 
 export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
@@ -77,6 +84,8 @@ export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
 export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
+  /** Prefer a matching shared model entry. */
+  preferredModel?: string;
   /** Optional scope gating for understanding. */
   scope?: MediaUnderstandingScopeConfig;
   /** Default max bytes to send. */
@@ -85,10 +94,14 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   maxChars?: number;
   /** Default prompt. */
   prompt?: string;
+  /** Internal request-scoped prompt override injected by CLI/runtime wrappers. */
+  _requestPromptOverride?: string;
   /** Default timeout (seconds). */
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Internal request-scoped language override injected by CLI/runtime wrappers. */
+  _requestLanguageOverride?: string;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
@@ -104,6 +117,9 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
    */
   echoFormat?: string;
 };
+
+/** Per-capability defaults and policy. Models live only in tools.media.models. */
+export type MediaUnderstandingCapabilityConfig = Omit<MediaUnderstandingConfig, "models">;
 
 export type LinkModelConfig = {
   /** Use a CLI command for link processing. */
@@ -130,64 +146,103 @@ export type LinkToolsConfig = {
 };
 
 export type MediaToolsConfig = {
-  /** Shared model list applied across image/audio/video. */
+  /** Canonical model list for image/audio/video, selected by capability tags. */
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
-  image?: MediaUnderstandingConfig;
-  audio?: MediaUnderstandingConfig;
-  video?: MediaUnderstandingConfig;
+  image?: MediaUnderstandingCapabilityConfig;
+  audio?: MediaUnderstandingCapabilityConfig;
+  video?: MediaUnderstandingCapabilityConfig;
 };
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
-export type ToolLoopDetectionDetectorConfig = {
-  /** Enable warning/blocking for repeated identical calls to the same tool/params. */
-  genericRepeat?: boolean;
-  /** Enable warning/blocking for known no-progress polling loops. */
-  knownPollNoProgress?: boolean;
-  /** Enable warning/blocking for no-progress ping-pong alternating patterns. */
-  pingPong?: boolean;
-};
-
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
-  /** Maximum tool call history entries retained for loop detection (default: 30). */
-  historySize?: number;
-  /** Warning threshold before a warning-only loop classification (default: 10). */
-  warningThreshold?: number;
-  /** Critical threshold for blocking repetitive loops (default: 20). */
-  criticalThreshold?: number;
-  /** Global no-progress breaker threshold (default: 30). */
-  globalCircuitBreakerThreshold?: number;
-  /** Detector toggles. */
-  detectors?: ToolLoopDetectionDetectorConfig;
 };
+
+export type ToolSearchConfig =
+  | boolean
+  | {
+      /** Enable compact search/call cataloging for large tool sets. */
+      enabled?: boolean;
+      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
+      mode?: "code" | "tools" | "directory";
+      /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
+      codeTimeoutMs?: number;
+      /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
+      searchDefaultLimit?: number;
+      /** Maximum search result count. Runtime clamps to 1..50. */
+      maxSearchLimit?: number;
+    };
+
+export type CodeModeConfig =
+  | boolean
+  | "auto"
+  | {
+      /** Enable generic OpenClaw code mode. Default: "auto", which engages it only for models whose catalog compat flags `codeMode: "preferred"`. */
+      enabled?: boolean | "auto";
+      /** Guest runtime. Only quickjs-wasi is supported. */
+      runtime?: "quickjs-wasi";
+      /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
+      mode?: "only";
+      /** Accepted source languages. */
+      languages?: Array<"javascript" | "typescript">;
+      /** Wall-clock limit in milliseconds for one exec or wait call. */
+      timeoutMs?: number;
+      /** QuickJS heap limit in bytes. */
+      memoryLimitBytes?: number;
+      /** Maximum serialized output bytes. */
+      maxOutputBytes?: number;
+      /** Maximum serialized snapshot bytes. */
+      maxSnapshotBytes?: number;
+      /** Maximum concurrent nested tool calls. */
+      maxPendingToolCalls?: number;
+      /** Retention for suspended snapshots. */
+      snapshotTtlSeconds?: number;
+      /** Default search result count for tools.search. */
+      searchDefaultLimit?: number;
+      /** Maximum search result count for tools.search. */
+      maxSearchLimit?: number;
+    };
+
+export type SwarmConfig =
+  | boolean
+  | {
+      /** Enable collector-mode subagents and agents_wait. Default: false. */
+      enabled?: boolean;
+      /** Maximum concurrently running collector children per swarm group. */
+      maxConcurrent?: number;
+      /** Maximum live collector children per swarm group. */
+      maxChildrenPerGroup?: number;
+      /** Maximum lifetime collector spawns per swarm group. */
+      maxTotalPerGroup?: number;
+      /** Maximum agents_wait timeout in seconds. */
+      waitTimeoutSecondsMax?: number;
+      /** Default child agent id when sessions_spawn omits agentId. */
+      defaultAgentId?: string;
+    };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
-export type ToolPolicyConfig = {
+export type ToolAllowDenyPolicyConfig = {
+  /** Exact tool names allowed in this policy scope. */
   allow?: string[];
-  /**
-   * Additional allowlist entries merged into the effective allowlist.
-   *
-   * Intended for additive configuration (e.g., "also allow lobster") without forcing
-   * users to replace/duplicate an existing allowlist or profile.
-   */
+  /** Additional allowlist entries merged into the inherited policy. */
   alsoAllow?: string[];
+  /** Exact tool names denied after allow expansion; deny wins. */
   deny?: string[];
+};
+
+export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
+  /** Built-in profile used as the base policy before allow/deny merges. */
   profile?: ToolProfileId;
 };
 
-export type GroupToolPolicyConfig = {
-  allow?: string[];
-  /** Additional allowlist entries merged into allow. */
-  alsoAllow?: string[];
-  deny?: string[];
-};
+export type GroupToolPolicyConfig = ToolAllowDenyPolicyConfig;
 
-export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export const TOOLS_BY_SENDER_KEY_TYPES = ["channel", "id", "e164", "username", "name"] as const;
 export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
 
 export function parseToolsBySenderTypedKey(
@@ -197,12 +252,14 @@ export function parseToolsBySenderTypedKey(
   if (!trimmed) {
     return undefined;
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
     const prefix = `${type}:`;
     if (!lowered.startsWith(prefix)) {
       continue;
     }
+    // Preserve the original value casing after the typed prefix; usernames and
+    // display names can be case-sensitive in channel-specific matching code.
     return {
       type,
       value: trimmed.slice(prefix.length),
@@ -215,6 +272,7 @@ export function parseToolsBySenderTypedKey(
  * Per-sender overrides.
  *
  * Prefer explicit key prefixes:
+ * - channel:<channelId>:<senderId>
  * - id:<senderId>
  * - e164:<phone>
  * - username:<handle>
@@ -226,11 +284,13 @@ export function parseToolsBySenderTypedKey(
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
-  /** Exec host routing (default: sandbox). */
-  host?: "sandbox" | "gateway" | "node";
-  /** Exec security mode (default: deny). */
+  /** Exec host routing (default: auto). */
+  host?: "auto" | "sandbox" | "gateway" | "node";
+  /** Normalized exec policy mode. Prefer this over raw security/ask knobs. */
+  mode?: "deny" | "allowlist" | "ask" | "auto" | "full";
+  /** Legacy exec security mode retained when no canonical mode can preserve policy. */
   security?: "deny" | "allowlist" | "full";
-  /** Exec ask mode (default: on-miss). */
+  /** Legacy exec ask mode retained when no canonical mode can preserve policy. */
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;
@@ -238,14 +298,28 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /**
+   * Require explicit approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.).
+   * Prevents silent allowlist reuse and allow-always persistence for those forms.
+   */
+  strictInlineEval?: boolean;
+  /** Render parser-derived command highlights in exec approval prompts (default: false). */
+  commandHighlighting?: boolean;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
+  /** Model-backed reviewer used by tools.exec.mode=auto before falling back to human approval. */
+  reviewer?: {
+    /** Optional reviewer model override (provider/model or agent model config). */
+    model?: AgentModelConfig;
+    /** Reviewer timeout in milliseconds (default: 30000). */
+    timeoutMs?: number;
+  };
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
   /** Default timeout (seconds) before auto-killing exec commands. */
-  timeoutSec?: number;
+  timeoutSeconds?: number;
   /** Emit a running notice (ms) when approval-backed exec runs long (default: 10000, 0 = off). */
   approvalRunningNoticeMs?: number;
   /** How long to keep finished sessions in memory (ms). */
@@ -257,9 +331,9 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
-  /** apply_patch subtool configuration (experimental). */
+  /** apply_patch subtool configuration. */
   applyPatch?: {
-    /** Enable apply_patch for OpenAI models (default: false). */
+    /** Enable apply_patch for OpenAI models (default: true; set false to disable). */
     enabled?: boolean;
     /**
      * Restrict apply_patch paths to the workspace directory.
@@ -268,7 +342,7 @@ export type ExecToolConfig = {
     workspaceOnly?: boolean;
     /**
      * Optional allowlist of model ids that can use apply_patch.
-     * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
+     * Accepts either raw ids (e.g. "gpt-5.4") or full ids (e.g. "openai/gpt-5.4").
      */
     allowModels?: string[];
   };
@@ -282,6 +356,17 @@ export type FsToolsConfig = {
   workspaceOnly?: boolean;
 };
 
+export type SessionsSpawnToolsConfig = {
+  attachments?: {
+    /** Enable inline attachments for sessions_spawn. */
+    enabled?: boolean;
+    maxTotalBytes?: number;
+    maxFiles?: number;
+    maxFileBytes?: number;
+    retainOnSessionKeep?: boolean;
+  };
+};
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -291,6 +376,12 @@ export type AgentToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-sender tool policy overrides keyed by sender identity. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
+  codeMode?: CodeModeConfig;
+  /** Per-agent swarm override; merges over the top-level tools.swarm config. */
+  swarm?: SwarmConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -304,152 +395,11 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Message tool configuration for this agent. */
+  message?: MessageToolsConfig;
   sandbox?: {
-    tools?: {
-      allow?: string[];
-      deny?: string[];
-    };
+    tools?: ToolAllowDenyPolicyConfig;
   };
-};
-
-export type MemorySearchConfig = {
-  /** Enable vector memory search (default: true). */
-  enabled?: boolean;
-  /** Sources to index and search (default: ["memory"]). */
-  sources?: Array<"memory" | "sessions">;
-  /** Extra paths to include in memory search (directories or .md files). */
-  extraPaths?: string[];
-  /** Optional multimodal file indexing for selected extra paths. */
-  multimodal?: {
-    /** Enable image/audio embeddings from extraPaths. */
-    enabled?: boolean;
-    /** Which non-text file types to index. */
-    modalities?: Array<"image" | "audio" | "all">;
-    /** Max bytes allowed per multimodal file before it is skipped. */
-    maxFileBytes?: number;
-  };
-  /** Experimental memory search settings. */
-  experimental?: {
-    /** Enable session transcript indexing (experimental, default: false). */
-    sessionMemory?: boolean;
-  };
-  /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
-    batch?: {
-      /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
-      enabled?: boolean;
-      /** Wait for batch completion (default: true). */
-      wait?: boolean;
-      /** Max concurrent batch jobs (default: 2). */
-      concurrency?: number;
-      /** Poll interval in ms (default: 5000). */
-      pollIntervalMs?: number;
-      /** Timeout in minutes (default: 60). */
-      timeoutMinutes?: number;
-    };
-  };
-  /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
-  /** Embedding model id (remote) or alias (local). */
-  model?: string;
-  /**
-   * Gemini embedding-2 models only: output vector dimensions.
-   * Supported values today are 768, 1536, and 3072.
-   */
-  outputDimensionality?: number;
-  /** Local embedding settings (node-llama-cpp). */
-  local?: {
-    /** GGUF model path or hf: URI. */
-    modelPath?: string;
-    /** Optional cache directory for local models. */
-    modelCacheDir?: string;
-  };
-  /** Index storage configuration. */
-  store?: {
-    driver?: "sqlite";
-    path?: string;
-    vector?: {
-      /** Enable sqlite-vec extension for vector search (default: true). */
-      enabled?: boolean;
-      /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
-      extensionPath?: string;
-    };
-    cache?: {
-      /** Enable embedding cache (default: true). */
-      enabled?: boolean;
-      /** Optional max cache entries per provider/model. */
-      maxEntries?: number;
-    };
-  };
-  /** Chunking configuration. */
-  chunking?: {
-    tokens?: number;
-    overlap?: number;
-  };
-  /** Sync behavior. */
-  sync?: {
-    onSessionStart?: boolean;
-    onSearch?: boolean;
-    watch?: boolean;
-    watchDebounceMs?: number;
-    intervalMinutes?: number;
-    sessions?: {
-      /** Minimum appended bytes before session transcripts are reindexed. */
-      deltaBytes?: number;
-      /** Minimum appended JSONL lines before session transcripts are reindexed. */
-      deltaMessages?: number;
-      /** Force session reindex after compaction-triggered transcript updates (default: true). */
-      postCompactionForce?: boolean;
-    };
-  };
-  /** Query behavior. */
-  query?: {
-    maxResults?: number;
-    minScore?: number;
-    hybrid?: {
-      /** Enable hybrid BM25 + vector search (default: true). */
-      enabled?: boolean;
-      /** Weight for vector similarity when merging results (0-1). */
-      vectorWeight?: number;
-      /** Weight for BM25 text relevance when merging results (0-1). */
-      textWeight?: number;
-      /** Multiplier for candidate pool size (default: 4). */
-      candidateMultiplier?: number;
-      /** Optional MMR re-ranking for result diversity. */
-      mmr?: {
-        /** Enable MMR re-ranking (default: false). */
-        enabled?: boolean;
-        /** Lambda: 0 = max diversity, 1 = max relevance (default: 0.7). */
-        lambda?: number;
-      };
-      /** Optional temporal decay to boost recency in hybrid scoring. */
-      temporalDecay?: {
-        /** Enable temporal decay (default: false). */
-        enabled?: boolean;
-        /** Half-life in days for exponential decay (default: 30). */
-        halfLifeDays?: number;
-      };
-    };
-  };
-  /** Index cache behavior. */
-  cache?: {
-    /** Cache chunk embeddings in SQLite (default: true). */
-    enabled?: boolean;
-    /** Optional cap on cached embeddings (best-effort). */
-    maxEntries?: number;
-  };
-};
-
-type WebSearchLegacyProviderConfig = {
-  apiKey?: SecretInput;
-  baseUrl?: string;
-  model?: string;
-  mode?: string;
-  inlineCitations?: boolean;
 };
 
 export type ToolsConfig = {
@@ -461,40 +411,50 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-sender tool policy overrides keyed by sender identity. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   web?: {
     search?: {
-      /** Enable web search tool (default: true when API key is present). */
+      /** Enable managed web_search and optional Codex-native web search. */
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
-      /** Shared API key slot used by providers that do not need nested config. */
-      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** @deprecated Legacy Brave scoped config. */
-      brave?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Firecrawl scoped config. */
-      firecrawl?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Gemini scoped config. */
-      gemini?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Grok scoped config. */
-      grok?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Kimi scoped config. */
-      kimi?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Perplexity scoped config. */
-      perplexity?: WebSearchLegacyProviderConfig;
-    } & Record<string, unknown>;
+      /** Optional native Codex web search for Codex-capable models. */
+      openaiCodex?: {
+        /** Enable native Codex web search for eligible models. */
+        enabled?: boolean;
+        /** Prefer cached or explicitly request live access. Unrestricted Codex turns resolve cached to live. */
+        mode?: "cached" | "live";
+        /** Optional allowlist of domains passed to the native Codex tool. */
+        allowedDomains?: string[];
+        /** Optional Codex native search context size hint. */
+        contextSize?: "low" | "medium" | "high";
+        /** Optional approximate user location passed to the native Codex tool. */
+        userLocation?: {
+          country?: string;
+          region?: string;
+          city?: string;
+          timezone?: string;
+        };
+      };
+    };
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
+      /** Web fetch fallback provider id. */
+      provider?: string;
       /** Max characters to return from fetched content. */
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
       maxCharsCap?: number;
+      /** Max download size before truncation, defaults to 2000000. */
+      maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for fetched content. */
@@ -505,51 +465,21 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
-      firecrawl?: {
-        /** Enable Firecrawl fallback (default: true when apiKey is set). */
-        enabled?: boolean;
-        /** Firecrawl API key (optional; defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Firecrawl base URL (default: https://api.firecrawl.dev). */
-        baseUrl?: string;
-        /** Whether to keep only main content (default: true). */
-        onlyMainContent?: boolean;
-        /** Max age (ms) for cached Firecrawl content. */
-        maxAgeMs?: number;
-        /** Timeout in seconds for Firecrawl requests. */
-        timeoutSeconds?: number;
+      /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
+      useTrustedEnvProxy?: boolean;
+      /** SSRF policy configuration for web_fetch. */
+      ssrfPolicy?: {
+        /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
+        allowRfc2544BenchmarkRange?: boolean;
+        /** Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility. */
+        allowIpv6UniqueLocalRange?: boolean;
       };
     };
   };
   media?: MediaToolsConfig;
   links?: LinkToolsConfig;
   /** Message tool configuration. */
-  message?: {
-    /**
-     * @deprecated Use tools.message.crossContext settings.
-     * Allows cross-context sends across providers.
-     */
-    allowCrossContextSend?: boolean;
-    crossContext?: {
-      /** Allow sends to other channels within the same provider (default: true). */
-      allowWithinProvider?: boolean;
-      /** Allow sends across different providers (default: false). */
-      allowAcrossProviders?: boolean;
-      /** Cross-context marker configuration. */
-      marker?: {
-        /** Enable origin markers for cross-context sends (default: true). */
-        enabled?: boolean;
-        /** Text prefix template, supports {channel}. */
-        prefix?: string;
-        /** Text suffix template, supports {channel}. */
-        suffix?: string;
-      };
-    };
-    broadcast?: {
-      /** Enable broadcast action (default: true). */
-      enabled?: boolean;
-    };
-  };
+  message?: MessageToolsConfig;
   agentToAgent?: {
     /** Enable agent-to-agent messaging tools. Default: false. */
     enabled?: boolean;
@@ -558,7 +488,7 @@ export type ToolsConfig = {
   };
   /**
    * Session tool visibility controls which sessions can be targeted by session tools
-   * (sessions_list, sessions_history, sessions_send).
+   * (sessions_list, sessions_history, sessions_search, sessions_send).
    *
    * Default: "tree" (current session + spawned subagent sessions).
    */
@@ -584,22 +514,48 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
+  toolSearch?: ToolSearchConfig;
+  /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
+  codeMode?: CodeModeConfig;
+  /** Collector-mode subagents and wait controls. */
+  swarm?: SwarmConfig;
+  /** sessions_spawn tool configuration. */
+  sessions_spawn?: SessionsSpawnToolsConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
-    /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
-    model?: string | { primary?: string; fallbacks?: string[] };
-    tools?: {
-      allow?: string[];
-      /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
-      alsoAllow?: string[];
-      deny?: string[];
-    };
+    tools?: ToolAllowDenyPolicyConfig;
   };
   /** Sandbox tool policy defaults (deny wins). */
   sandbox?: {
-    tools?: {
-      allow?: string[];
-      deny?: string[];
+    tools?: ToolAllowDenyPolicyConfig;
+  };
+  /** Structured update_plan checklist tool; enabled by default. Set false to opt out. */
+  updatePlan?: boolean;
+};
+
+export type MessageToolsConfig = {
+  crossContext?: {
+    /** Allow sends to other channels within the same provider (default: true). */
+    allowWithinProvider?: boolean;
+    /** Allow sends across different providers (default: false). */
+    allowAcrossProviders?: boolean;
+    /** Cross-context marker configuration. */
+    marker?: {
+      /** Enable origin markers for cross-context sends (default: true). */
+      enabled?: boolean;
+      /** Text prefix template, supports {channel}. */
+      prefix?: string;
+      /** Text suffix template, supports {channel}. */
+      suffix?: string;
     };
+  };
+  actions?: {
+    /** Message action names exposed and accepted by the message tool. */
+    allow?: string[];
+  };
+  broadcast?: {
+    /** Enable broadcast action (default: true). */
+    enabled?: boolean;
   };
 };

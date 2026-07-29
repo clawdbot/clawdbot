@@ -1,11 +1,29 @@
-import { describe, expect, test, vi } from "vitest";
+// Feishu tests cover docx.account selection plugin behavior.
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { registerFeishuDocTools } from "./docx.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.fn((creds: { appId?: string } | undefined) => ({
   __appId: creds?.appId,
+  application: {
+    scope: {
+      list: vi.fn(async () => ({
+        code: 0,
+        data: { scopes: [] },
+      })),
+    },
+  },
 }));
+
+function feishuClientAppId(callIndex: number): string | undefined {
+  const resolvedIndex =
+    callIndex < 0 ? createFeishuClientMock.mock.calls.length + callIndex : callIndex;
+  const call = createFeishuClientMock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected createFeishuClient call ${callIndex}`);
+  }
+  return call[0]?.appId;
+}
 
 vi.mock("./client.js", () => {
   return {
@@ -21,6 +39,22 @@ vi.mock("@larksuiteoapi/node-sdk", () => {
 });
 
 describe("feishu_doc account selection", () => {
+  let registerFeishuDocTools: typeof import("./docx.js").registerFeishuDocTools;
+
+  beforeAll(async () => {
+    ({ registerFeishuDocTools } = await import("./docx.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.doUnmock("@larksuiteoapi/node-sdk");
+    vi.resetModules();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   function createDocEnabledConfig(): OpenClawPluginApi["config"] {
     return {
       channels: {
@@ -29,6 +63,28 @@ describe("feishu_doc account selection", () => {
           accounts: {
             a: { appId: "app-a", appSecret: "sec-a", tools: { doc: true } }, // pragma: allowlist secret
             b: { appId: "app-b", appSecret: "sec-b", tools: { doc: true } }, // pragma: allowlist secret
+          },
+        },
+      },
+    } as OpenClawPluginApi["config"];
+  }
+
+  function createMixedToolConfig(): OpenClawPluginApi["config"] {
+    return {
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            a: {
+              appId: "app-a",
+              appSecret: "sec-a", // pragma: allowlist secret
+              tools: { doc: false, scopes: false },
+            },
+            b: {
+              appId: "app-b",
+              appSecret: "sec-b", // pragma: allowlist secret
+              tools: { doc: true, scopes: true },
+            },
           },
         },
       },
@@ -48,8 +104,8 @@ describe("feishu_doc account selection", () => {
     await docToolB.execute("call-b", { action: "list_blocks", doc_token: "d" });
 
     expect(createFeishuClientMock).toHaveBeenCalledTimes(2);
-    expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-a");
-    expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-b");
+    expect(feishuClientAppId(0)).toBe("app-a");
+    expect(feishuClientAppId(1)).toBe("app-b");
   });
 
   test("explicit accountId param overrides agentAccountId context", async () => {
@@ -65,6 +121,46 @@ describe("feishu_doc account selection", () => {
       accountId: "a",
     });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+    expect(feishuClientAppId(-1)).toBe("app-a");
+  });
+
+  test("rejects a disabled contextual account when another account enables docs", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(createMixedToolConfig());
+    registerFeishuDocTools(api);
+
+    const docTool = resolveTool("feishu_doc", { agentAccountId: "a" });
+    const result = await docTool.execute("call-disabled", {
+      action: "list_blocks",
+      doc_token: "d",
+    });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toBe('Feishu Doc tools are disabled for account "a"');
+  });
+
+  test("rejects an explicit disabled account override for docs", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(createMixedToolConfig());
+    registerFeishuDocTools(api);
+
+    const docTool = resolveTool("feishu_doc", { agentAccountId: "b" });
+    const result = await docTool.execute("call-disabled", {
+      action: "list_blocks",
+      doc_token: "d",
+      accountId: "a",
+    });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toBe('Feishu Doc tools are disabled for account "a"');
+  });
+
+  test("rejects a disabled contextual account when another account enables app scopes", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(createMixedToolConfig());
+    registerFeishuDocTools(api);
+
+    const scopesTool = resolveTool("feishu_app_scopes", { agentAccountId: "a" });
+    const result = await scopesTool.execute("call-disabled", {});
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toBe('Feishu App Scopes tools are disabled for account "a"');
   });
 });

@@ -1,17 +1,21 @@
+// Hook loader tests cover loading bundled, workspace, and plugin hooks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { stripAnsi } from "../terminal/ansi.js";
 import { captureEnv } from "../test-utils/env.js";
+import { hasConfiguredInternalHooks, resolveConfiguredInternalHookNames } from "./configured.js";
 import {
   clearInternalHooks,
   getRegisteredEventKeys,
   triggerInternalHook,
   createInternalHookEvent,
+  registerInternalHook,
+  setInternalHooksEnabled,
 } from "./internal-hooks.js";
 import { loadInternalHooks } from "./loader.js";
 
@@ -27,6 +31,7 @@ describe("loader", () => {
 
   beforeEach(async () => {
     clearInternalHooks();
+    setInternalHooksEnabled(true);
     // Create a temp directory for test modules
     tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(tmpDir, { recursive: true });
@@ -43,6 +48,38 @@ describe("loader", () => {
     };
   });
 
+  async function writeDiscoveredHook(params: {
+    sourceDir?: string;
+    hookName: string;
+    handlerCode?: string;
+    events?: string[];
+  }): Promise<string> {
+    const sourceDir = params.sourceDir ?? path.join(tmpDir, "hooks");
+    const hookDir = path.join(sourceDir, params.hookName);
+    await fs.mkdir(hookDir, { recursive: true });
+    const events = params.events ?? ["command:new"];
+    await fs.writeFile(
+      path.join(hookDir, "HOOK.md"),
+      [
+        "---",
+        `name: ${params.hookName}`,
+        `description: ${params.hookName} test hook`,
+        `metadata: {"openclaw":{"events":${JSON.stringify(events)}}}`,
+        "---",
+        "",
+        `# ${params.hookName}`,
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(hookDir, "handler.js"),
+      params.handlerCode ??
+        `export default async function(event) { event.messages.push("${params.hookName}"); }\n`,
+      "utf-8",
+    );
+    return hookDir;
+  }
+
   async function writeHandlerModule(
     fileName: string,
     code = "export default async function() {}",
@@ -52,18 +89,41 @@ describe("loader", () => {
     return handlerPath;
   }
 
+  function withLegacyInternalHookHandlers(
+    config: OpenClawConfig,
+    handlers?: Array<{ event: string; module: string; export?: string }>,
+  ): OpenClawConfig {
+    if (!handlers) {
+      return config;
+    }
+    return {
+      ...config,
+      hooks: {
+        ...config.hooks,
+        internal: {
+          ...config.hooks?.internal,
+          handlers,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
   function createEnabledHooksConfig(
     handlers?: Array<{ event: string; module: string; export?: string }>,
   ): OpenClawConfig {
-    return {
-      hooks: {
-        internal: handlers ? { enabled: true, handlers } : { enabled: true },
+    return withLegacyInternalHookHandlers(
+      {
+        hooks: {
+          internal: { enabled: true },
+        },
       },
-    };
+      handlers,
+    );
   }
 
   afterEach(async () => {
     clearInternalHooks();
+    setInternalHooksEnabled(true);
     loggingState.rawConsole = null;
     setLoggerOverride(null);
     envSnapshot.restore();
@@ -77,6 +137,35 @@ describe("loader", () => {
   });
 
   describe("loadInternalHooks", () => {
+    it("detects configured internal hook surfaces", () => {
+      expect(hasConfiguredInternalHooks({} satisfies OpenClawConfig)).toBe(false);
+      expect(
+        hasConfiguredInternalHooks({
+          hooks: { internal: { entries: { "session-memory": { enabled: true } } } },
+        } satisfies OpenClawConfig),
+      ).toBe(true);
+      expect(
+        hasConfiguredInternalHooks({
+          hooks: { internal: { entries: { "session-memory": { enabled: false } } } },
+        } satisfies OpenClawConfig),
+      ).toBe(false);
+      expect(
+        hasConfiguredInternalHooks({
+          hooks: { internal: { load: { extraDirs: ["/tmp/hooks"] } } },
+        } satisfies OpenClawConfig),
+      ).toBe(true);
+      expect(
+        resolveConfiguredInternalHookNames({
+          hooks: { internal: { entries: { "session-memory": { enabled: true } } } },
+        } satisfies OpenClawConfig),
+      ).toEqual(new Set(["session-memory"]));
+      expect(
+        resolveConfiguredInternalHookNames({
+          hooks: { internal: { enabled: true } },
+        } satisfies OpenClawConfig),
+      ).toBeNull();
+    });
+
     const createLegacyHandlerConfig = () =>
       createEnabledHooksConfig([
         {
@@ -91,45 +180,110 @@ describe("loader", () => {
       expect(getRegisteredEventKeys()).not.toContain("command:new");
     };
 
-    it("should return 0 when hooks are not enabled", async () => {
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: false,
-          },
-        },
-      };
-
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-    });
-
-    it("should return 0 when hooks config is missing", async () => {
-      const cfg: OpenClawConfig = {};
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-    });
-
-    it("should load a handler from a module", async () => {
-      // Create a test handler module
-      const handlerCode = `
-        export default async function(event) {
-          // Test handler
-        }
-      `;
-      const handlerPath = await writeHandlerModule("test-handler.js", handlerCode);
-      const cfg = createEnabledHooksConfig([
+    it("should return 0 when hooks are explicitly disabled", async () => {
+      for (const cfg of [
         {
-          event: "command:new",
-          module: path.basename(handlerPath),
-        },
+          hooks: {
+            internal: {
+              enabled: false,
+            },
+          },
+        } satisfies OpenClawConfig,
+        withLegacyInternalHookHandlers(
+          {
+            hooks: {
+              internal: {
+                enabled: false,
+              },
+            },
+          } satisfies OpenClawConfig,
+          [],
+        ),
+      ]) {
+        const count = await loadInternalHooks(cfg, tmpDir);
+        expect(count).toBe(0);
+      }
+    });
+
+    it("skips hook discovery until internal hooks are configured", async () => {
+      for (const cfg of [
+        {} satisfies OpenClawConfig,
+        { hooks: {} } satisfies OpenClawConfig,
+        { hooks: { internal: {} } } satisfies OpenClawConfig,
+      ]) {
+        const count = await loadInternalHooks(cfg, tmpDir);
+        expect(count).toBe(0);
+      }
+    });
+
+    it("loads only explicitly configured discovered hooks", async () => {
+      const hooksDir = path.join(tmpDir, "managed-hooks");
+      await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "keep-hook" });
+      await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "skip-hook" });
+
+      const count = await loadInternalHooks(
+        {
+          hooks: {
+            internal: {
+              entries: {
+                "keep-hook": { enabled: true },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        tmpDir,
+        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
+      );
+
+      expect(count).toBe(1);
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["keep-hook"]);
+    });
+
+    it("registers unknown event keys anyway (advisory warning, not a load failure)", async () => {
+      const hooksDir = path.join(tmpDir, "managed-hooks");
+      await writeDiscoveredHook({
+        sourceDir: hooksDir,
+        hookName: "typo-hook",
+        events: ["command:nwe", "command:new"],
+      });
+
+      const count = await loadInternalHooks(
+        {
+          hooks: {
+            internal: {
+              entries: {
+                "typo-hook": { enabled: true },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        tmpDir,
+        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
+      );
+
+      // The typo'd key never fires, but validation is advisory: the hook still
+      // loads and its valid subscriptions keep working.
+      expect(count).toBe(1);
+      const keys = getRegisteredEventKeys();
+      expect(keys).toContain("command:nwe");
+      expect(keys).toContain("command:new");
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["typo-hook"]);
+    });
+
+    it("registers legacy handler events with unknown keys anyway (advisory)", async () => {
+      const handlerPath = await writeHandlerModule("legacy-typo-handler.js");
+
+      const cfg = createEnabledHooksConfig([
+        { event: "command:nwe", module: path.basename(handlerPath) },
       ]);
 
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(1);
-
-      const keys = getRegisteredEventKeys();
-      expect(keys).toContain("command:new");
+      expect(getRegisteredEventKeys()).toContain("command:nwe");
     });
 
     it("should load multiple handlers", async () => {
@@ -148,6 +302,67 @@ describe("loader", () => {
       const keys = getRegisteredEventKeys();
       expect(keys).toContain("command:new");
       expect(keys).toContain("command:stop");
+    });
+
+    it("loads legacy handler modules from dot-prefixed workspace paths", async () => {
+      await fs.mkdir(path.join(tmpDir, "..hooks"), { recursive: true });
+      await writeHandlerModule(
+        path.join("..hooks", "legacy-handler.js"),
+        'export default async function(event) { event.messages.push("dot-prefixed-hook"); }\n',
+      );
+
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: path.join("..hooks", "legacy-handler.js"),
+        },
+      ]);
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(1);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["dot-prefixed-hook"]);
+    });
+
+    it("preserves plugin-registered hooks when workspace hooks reload", async () => {
+      const pluginHandler = vi.fn();
+      registerInternalHook("gateway:startup", pluginHandler);
+
+      const count = await loadInternalHooks(createEnabledHooksConfig(), tmpDir);
+
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).toContain("gateway:startup");
+
+      await triggerInternalHook(createInternalHookEvent("gateway", "startup", "gateway:startup"));
+      expect(pluginHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it("replaces prior workspace hook registrations instead of duplicating them", async () => {
+      await writeHandlerModule(
+        "legacy-handler.js",
+        'export default async function(event) { event.messages.push("reloadable-hook"); }\n',
+      );
+
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: "legacy-handler.js",
+        },
+      ]);
+
+      expect(await loadInternalHooks(cfg, tmpDir)).toBe(1);
+      expect(await loadInternalHooks(cfg, tmpDir)).toBe(1);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(
+        event.messages.reduce(
+          (count, message) => count + (message === "reloadable-hook" ? 1 : 0),
+          0,
+        ),
+      ).toBe(1);
     });
 
     it("should support named exports", async () => {
@@ -171,86 +386,58 @@ describe("loader", () => {
       expect(count).toBe(1);
     });
 
-    it("should handle module loading errors gracefully", async () => {
-      const cfg = createEnabledHooksConfig([
-        {
-          event: "command:new",
-          module: "missing-handler.js",
-        },
-      ]);
-
-      // Should not throw and should return 0 (handler failed to load)
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-    });
-
-    it("should handle non-function exports", async () => {
-      // Create a module with a non-function export
-      const handlerPath = await writeHandlerModule(
+    it("should treat invalid handlers as non-loadable", async () => {
+      const badExportPath = await writeHandlerModule(
         "bad-export.js",
         'export default "not a function";',
       );
 
-      const cfg = createEnabledHooksConfig([
-        {
-          event: "command:new",
-          module: path.basename(handlerPath),
-        },
-      ]);
-
-      // Should not throw and should return 0 (handler is not a function)
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
+      for (const cfg of [
+        createEnabledHooksConfig([
+          {
+            event: "command:new",
+            module: "missing-handler.js",
+          },
+        ]),
+        createEnabledHooksConfig([
+          {
+            event: "command:new",
+            module: path.basename(badExportPath),
+          },
+        ]),
+      ]) {
+        const count = await loadInternalHooks(cfg, tmpDir);
+        expect(count).toBe(0);
+      }
     });
 
-    it("should handle relative paths", async () => {
-      // Create a handler module
-      const handlerPath = await writeHandlerModule("relative-handler.js");
+    it("keeps workspace hooks disabled by default until explicitly enabled", async () => {
+      await writeDiscoveredHook({ hookName: "workspace-hook" });
 
-      // Relative to workspaceDir (tmpDir)
-      const relativePath = path.relative(tmpDir, handlerPath);
+      const disabledCount = await loadInternalHooks(createEnabledHooksConfig(), tmpDir);
+      expect(disabledCount).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("command:new");
 
-      const cfg = createEnabledHooksConfig([
+      const enabledCount = await loadInternalHooks(
         {
-          event: "command:new",
-          module: relativePath,
+          hooks: {
+            internal: {
+              enabled: true,
+              entries: {
+                "workspace-hook": {
+                  enabled: true,
+                },
+              },
+            },
+          },
         },
-      ]);
+        tmpDir,
+      );
+      expect(enabledCount).toBe(1);
 
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(1);
-    });
-
-    it("should actually call the loaded handler", async () => {
-      // Create a handler that we can verify was called
-      const handlerCode = `
-        let callCount = 0;
-        export default async function(event) {
-          callCount++;
-        }
-        export function getCallCount() {
-          return callCount;
-        }
-      `;
-      const handlerPath = await writeHandlerModule("callable-handler.js", handlerCode);
-
-      const cfg = createEnabledHooksConfig([
-        {
-          event: "command:new",
-          module: path.basename(handlerPath),
-        },
-      ]);
-
-      await loadInternalHooks(cfg, tmpDir);
-
-      // Trigger the hook
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
-
-      // The handler should have been called, but we can't directly verify
-      // the call count from this context without more complex test infrastructure
-      // This test mainly verifies that loading and triggering doesn't crash
-      expect(getRegisteredEventKeys()).toContain("command:new");
+      expect(event.messages).toContain("workspace-hook");
     });
 
     it("rejects directory hook handlers that escape hook dir via symlink", async () => {
@@ -370,6 +557,43 @@ describe("loader", () => {
       expect(messages).toContain("forged-log");
       expect(messages).not.toContain("\u001b[31m");
       expect(messages).not.toContain("\nforged-log");
+    });
+
+    it("keeps managed hooks active when a workspace hook reuses the same name", async () => {
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      await writeDiscoveredHook({
+        sourceDir: managedHooksDir,
+        hookName: "session-memory",
+        handlerCode: 'export default async function(event) { event.messages.push("managed"); }\n',
+      });
+      await writeDiscoveredHook({
+        hookName: "session-memory",
+        handlerCode:
+          'export default async function(event) { event.messages.push("workspace-override"); }\n',
+      });
+
+      const count = await loadInternalHooks(
+        {
+          hooks: {
+            internal: {
+              enabled: true,
+              entries: {
+                "session-memory": {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+        tmpDir,
+        { managedHooksDir },
+      );
+      expect(count).toBe(1);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toContain("managed");
+      expect(event.messages).not.toContain("workspace-override");
     });
   });
 });

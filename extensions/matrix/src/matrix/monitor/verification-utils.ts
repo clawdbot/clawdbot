@@ -1,3 +1,6 @@
+// Matrix helper module supports verification utils behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const VERIFICATION_EVENT_PREFIX = "m.key.verification.";
 const VERIFICATION_REQUEST_MSGTYPE = "m.key.verification.request";
 
@@ -11,7 +14,7 @@ const VERIFICATION_NOTICE_PREFIXES = [
 ];
 
 function trimMaybeString(input: unknown): string {
-  return typeof input === "string" ? input.trim() : "";
+  return normalizeOptionalString(input) ?? "";
 }
 
 export function isMatrixVerificationEventType(type: unknown): boolean {
@@ -22,7 +25,7 @@ export function isMatrixVerificationRequestMsgType(msgtype: unknown): boolean {
   return trimMaybeString(msgtype) === VERIFICATION_REQUEST_MSGTYPE;
 }
 
-export function isMatrixVerificationNoticeBody(body: unknown): boolean {
+function isMatrixVerificationNoticeBody(body: unknown): boolean {
   const text = trimMaybeString(body);
   return VERIFICATION_NOTICE_PREFIXES.some((prefix) => text.startsWith(prefix));
 }

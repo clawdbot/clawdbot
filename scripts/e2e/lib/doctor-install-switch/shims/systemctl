@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+args=("$@")
+if [[ "${args[0]:-}" == "--user" ]]; then
+  args=("${args[@]:1}")
+fi
+cmd="${args[0]:-}"
+
+case "$cmd" in
+  status) ;;
+  is-active)
+    echo "inactive" >&2
+    exit 3
+    ;;
+  is-enabled)
+    unit="${args[1]:-}"
+    unit_path="$HOME/.config/systemd/user/${unit}"
+    if [ -f "$unit_path" ]; then
+      echo "enabled"
+      exit 0
+    fi
+    echo "disabled" >&2
+    exit 1
+    ;;
+  show)
+    printf "%s\n" \
+      "ActiveState=inactive" \
+      "SubState=dead" \
+      "MainPID=0" \
+      "ExecMainStatus=0" \
+      "ExecMainCode=0"
+    ;;
+esac

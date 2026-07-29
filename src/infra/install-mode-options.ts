@@ -1,15 +1,17 @@
-export type InstallMode = "install" | "update";
+// Resolves common install/update mode options.
+type InstallMode = "install" | "update";
 
-export type InstallModeOptions<TLogger> = {
+type InstallModeOptions<TLogger> = {
   logger?: TLogger;
   mode?: InstallMode;
   dryRun?: boolean;
 };
 
-export type TimedInstallModeOptions<TLogger> = InstallModeOptions<TLogger> & {
+type TimedInstallModeOptions<TLogger> = InstallModeOptions<TLogger> & {
   timeoutMs?: number;
 };
 
+/** Resolves shared install/update mode options with a required logger fallback. */
 export function resolveInstallModeOptions<TLogger>(
   params: InstallModeOptions<TLogger>,
   defaultLogger: TLogger,
@@ -25,6 +27,7 @@ export function resolveInstallModeOptions<TLogger>(
   };
 }
 
+/** Resolves install/update mode options plus an operation timeout default. */
 export function resolveTimedInstallModeOptions<TLogger>(
   params: TimedInstallModeOptions<TLogger>,
   defaultLogger: TLogger,

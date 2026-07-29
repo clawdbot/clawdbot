@@ -1,18 +1,53 @@
-import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+// Default CLI dependency surface with lazy outbound channel send adapters.
+import { normalizeChannelId } from "../channels/registry.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
+import type { CliDeps } from "./deps.types.js";
+import { CLI_OUTBOUND_SEND_FACTORY } from "./outbound-send-mapping.js";
 
 /**
  * Lazy-loaded per-channel send functions, keyed by channel ID.
  * Values are proxy functions that dynamically import the real module on first use.
  */
-export type CliDeps = { [channelId: string]: unknown };
+export type { CliDeps } from "./deps.types.js";
 type RuntimeSend = {
   sendMessage: (...args: unknown[]) => Promise<unknown>;
 };
 type RuntimeSendModule = {
   runtimeSend: RuntimeSend;
 };
+
+const NON_CHANNEL_DEP_KEYS = new Set([
+  "__proto__",
+  "constructor",
+  "cron",
+  "cronConfig",
+  "cronEnabled",
+  "defaultAgentId",
+  "enqueueSystemEvent",
+  "getQueueSize",
+  "hasOwnProperty",
+  "inspect",
+  "log",
+  "migrateOrphanedSessionKeys",
+  "nowMs",
+  "onEvent",
+  "requestHeartbeat",
+  "resolveSessionStorePath",
+  "runHeartbeatOnce",
+  "runIsolatedAgentJob",
+  "runtime",
+  "sendCronFailureAlert",
+  "sessionStorePath",
+  "storePath",
+  "then",
+  "toJSON",
+  "toString",
+  "valueOf",
+]);
+
+function resolveKnownChannelId(raw: string): string | undefined {
+  return normalizeChannelId(raw) ?? undefined;
+}
 
 // Per-channel module caches for lazy loading.
 const senderCache = new Map<string, Promise<RuntimeSend>>();
@@ -38,36 +73,45 @@ function createLazySender(
 }
 
 export function createDefaultDeps(): CliDeps {
-  return {
-    whatsapp: createLazySender(
-      "whatsapp",
-      () => import("./send-runtime/whatsapp.js") as Promise<RuntimeSendModule>,
-    ),
-    telegram: createLazySender(
-      "telegram",
-      () => import("./send-runtime/telegram.js") as Promise<RuntimeSendModule>,
-    ),
-    discord: createLazySender(
-      "discord",
-      () => import("./send-runtime/discord.js") as Promise<RuntimeSendModule>,
-    ),
-    slack: createLazySender(
-      "slack",
-      () => import("./send-runtime/slack.js") as Promise<RuntimeSendModule>,
-    ),
-    signal: createLazySender(
-      "signal",
-      () => import("./send-runtime/signal.js") as Promise<RuntimeSendModule>,
-    ),
-    imessage: createLazySender(
-      "imessage",
-      () => import("./send-runtime/imessage.js") as Promise<RuntimeSendModule>,
-    ),
-  };
+  // Proxy lookup preserves the historic deps.channelName shape without eagerly importing plugins.
+  const deps: CliDeps = {};
+  const resolveSender = (channelId: string) =>
+    createLazySender(channelId, async () => {
+      const { createChannelOutboundRuntimeSend } =
+        await import("./send-runtime/channel-outbound-send.js");
+      return {
+        runtimeSend: createChannelOutboundRuntimeSend({
+          channelId: channelId as import("../channels/plugins/types.public.js").ChannelId,
+          unavailableMessage: `${channelId} outbound adapter is unavailable.`,
+        }) as RuntimeSend,
+      } satisfies RuntimeSendModule;
+    });
+
+  Object.defineProperty(deps, CLI_OUTBOUND_SEND_FACTORY, {
+    configurable: false,
+    enumerable: false,
+    value: resolveSender,
+    writable: false,
+  });
+
+  return new Proxy(deps, {
+    get(target, property, receiver) {
+      if (typeof property !== "string") {
+        return Reflect.get(target, property, receiver);
+      }
+      const existing = Reflect.get(target, property, receiver);
+      if (existing !== undefined || NON_CHANNEL_DEP_KEYS.has(property)) {
+        return existing;
+      }
+      const channelId = resolveKnownChannelId(property);
+      if (!channelId) {
+        return existing;
+      }
+      const sender = resolveSender(channelId);
+      Reflect.set(target, property, sender, receiver);
+      return sender;
+    },
+  });
 }
 
-export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
-  return createOutboundSendDepsFromCliSource(deps);
-}
-
-export { logWebSelfId } from "../plugins/runtime/runtime-whatsapp-boundary.js";
+export { createOutboundSendDeps } from "./outbound-send-deps.js";

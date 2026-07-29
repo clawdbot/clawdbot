@@ -1,7 +1,39 @@
-import type { RequestClient } from "@buape/carbon";
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { createDiscordRestClient } from "./client.js";
+// Discord tests cover client plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDiscordClient, createDiscordRestClient } from "./client.js";
+import type { RequestClient } from "./internal/discord.js";
+import type { GatewayPlugin } from "./internal/gateway.js";
+import { clearGateways, registerGateway } from "./monitor/gateway-registry.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  clearGateways();
+});
+
+describe("createDiscordClient", () => {
+  it("extends a single REST operation after the registered gateway disconnects", async () => {
+    registerGateway("default", { isConnected: false } as GatewayPlugin);
+    const request = createDiscordClient({
+      cfg: {
+        channels: {
+          discord: {
+            token: "discord-token",
+          },
+        },
+      },
+      rest: {} as RequestClient,
+    }).request;
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("sent");
+
+    await expect(request(operation, "send")).resolves.toBe("sent");
+    expect(operation).toHaveBeenCalledTimes(3);
+  });
+});
 
 describe("createDiscordRestClient", () => {
   const fakeRest = {} as RequestClient;
@@ -19,54 +51,23 @@ describe("createDiscordRestClient", () => {
       },
     } as OpenClawConfig;
 
-    const result = createDiscordRestClient(
-      {
-        token: "Bot explicit-token",
-        rest: fakeRest,
-      },
-      cfg,
-    );
+    const result = createDiscordRestClient({ cfg, token: "Bot explicit-token", rest: fakeRest });
 
     expect(result.token).toBe("explicit-token");
     expect(result.rest).toBe(fakeRest);
     expect(result.account.accountId).toBe("default");
   });
 
-  it("keeps account retry config when explicit token is provided", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            ops: {
-              token: {
-                source: "exec",
-                provider: "vault",
-                id: "discord/ops-token",
-              },
-              retry: {
-                attempts: 7,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+  it("applies a caller timeout to a dedicated REST client", () => {
+    const cfg = { channels: { discord: { token: "discord-token" } } } as OpenClawConfig;
 
-    const result = createDiscordRestClient(
-      {
-        accountId: "ops",
-        token: "Bot explicit-account-token",
-        rest: fakeRest,
-      },
-      cfg,
-    );
+    const result = createDiscordRestClient({ cfg, timeoutMs: 250 });
 
-    expect(result.token).toBe("explicit-account-token");
-    expect(result.account.accountId).toBe("ops");
-    expect(result.account.config.retry).toMatchObject({ attempts: 7 });
+    expect(result.rest.options.timeout).toBe(250);
   });
 
-  it("still throws when no explicit token is provided and config token is unresolved", () => {
+  it("still fails closed when no explicit token is provided and config token is unresolved", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
     const cfg = {
       channels: {
         discord: {
@@ -79,13 +80,8 @@ describe("createDiscordRestClient", () => {
       },
     } as OpenClawConfig;
 
-    expect(() =>
-      createDiscordRestClient(
-        {
-          rest: fakeRest,
-        },
-        cfg,
-      ),
-    ).toThrow(/unresolved SecretRef/i);
+    expect(() => createDiscordRestClient({ cfg, rest: fakeRest })).toThrow(
+      /configured for account "default" is unavailable/i,
+    );
   });
 });

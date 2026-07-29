@@ -1,62 +1,69 @@
-export type {
-  AgentToAgentPolicy,
-  SessionAccessAction,
-  SessionAccessResult,
-  SessionToolsVisibility,
-} from "./sessions-access.js";
+/**
+ * Shared session-tool data shapes and classification helpers.
+ *
+ * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
+ */
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
-  resolveSandboxSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
-  resolveSessionToolsVisibility,
 } from "./sessions-access.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
-export type { SessionReferenceResolution } from "./sessions-resolution.js";
 export {
-  isRequesterSpawnedSessionVisible,
-  isResolvedSessionVisibleToRequester,
-  listSpawnedSessionKeys,
-  looksLikeSessionId,
-  looksLikeSessionKey,
+  resolveCurrentSessionClientAlias,
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSessionReference,
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
-  shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
-import {
-  stripDowngradedToolCallText,
-  stripMinimaxToolCallXml,
-  stripModelSpecialTokens,
-  stripThinkingTagsFromText,
-} from "../pi-embedded-utils.js";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
+import type { FastModeSource } from "../../shared/fast-mode.js";
 
-export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+/** Coarse session category used by session list/status tools. */
+type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
-export type SessionListDeliveryContext = {
+/** Delivery target metadata attached to session rows. */
+type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
 };
 
+/** Compact run status shown by session tools. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
-export type SessionListRow = {
+/** Full Gateway session row consumed by session orchestration internals. */
+export type GatewaySessionListRow = {
   key: string;
+  agentId?: string;
   kind: SessionKind;
   channel: string;
+  origin?: {
+    provider?: string;
+    accountId?: string;
+  };
+  spawnedBy?: string;
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
+  parentSessionKey?: string;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
+  archived?: boolean;
+  archivedAt?: number;
+  pinned?: boolean;
+  pinnedAt?: number;
   sessionId?: string;
+  stateVersion?: number;
   model?: string;
   contextTokens?: number | null;
   totalTokens?: number | null;
@@ -67,28 +74,56 @@ export type SessionListRow = {
   runtimeMs?: number;
   childSessions?: string[];
   thinkingLevel?: string;
+  fastMode?: FastMode;
+  effectiveFastMode?: FastMode;
+  effectiveFastModeSource?: FastModeSource;
+  fastAutoOnSeconds?: number;
   verboseLevel?: string;
+  reasoningLevel?: string;
+  elevatedLevel?: string;
+  responseUsage?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   sendPolicy?: string;
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: string | number;
   transcriptPath?: string;
   messages?: unknown[];
 };
 
-function normalizeKey(value?: string) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
+/** Focused model-facing row returned by sessions_list. */
+export type SessionListRow = {
+  key: string;
+  agentId: string;
+  kind: SessionKind;
+  channel: string;
+  label?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
+  parentSessionKey?: string;
+  updatedAt?: number;
+  archived: boolean;
+  pinned: boolean;
+  stateVersion?: number;
+  model?: string;
+  contextTokens?: number;
+  totalTokens?: number;
+  status?: SessionRunStatus;
+  abortedLastRun?: boolean;
+  childSessions?: string[];
+  messages?: unknown[];
+};
 
+/** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
-  const cfg = opts?.config ?? loadConfig();
+  const cfg = opts?.config ?? getRuntimeConfig();
   return {
     cfg,
     ...resolveSandboxedSessionToolContext({
@@ -99,6 +134,7 @@ export function resolveSessionToolContext(opts?: {
   };
 }
 
+/** Classifies a session key/gateway kind into the row category used by tools. */
 export function classifySessionKind(params: {
   key: string;
   gatewayKind?: string | null;
@@ -122,11 +158,13 @@ export function classifySessionKind(params: {
     return "group";
   }
   if (key.includes(":group:") || key.includes(":channel:")) {
+    // Gateway-less archived rows still encode group/channel shape in the session key.
     return "group";
   }
   return "other";
 }
 
+/** Derives the best channel label for a session row. */
 export function deriveChannel(params: {
   key: string;
   kind: SessionKind;
@@ -136,65 +174,13 @@ export function deriveChannel(params: {
   if (params.kind === "cron" || params.kind === "hook" || params.kind === "node") {
     return "internal";
   }
-  const channel = normalizeKey(params.channel ?? undefined);
+  const channel = normalizeOptionalString(params.channel ?? undefined);
   if (channel) {
     return channel;
   }
-  const lastChannel = normalizeKey(params.lastChannel ?? undefined);
+  const lastChannel = normalizeOptionalString(params.lastChannel ?? undefined);
   if (lastChannel) {
     return lastChannel;
   }
-  const parts = params.key.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    return parts[0];
-  }
-  return "unknown";
-}
-
-export function stripToolMessages(messages: unknown[]): unknown[] {
-  return messages.filter((msg) => {
-    if (!msg || typeof msg !== "object") {
-      return true;
-    }
-    const role = (msg as { role?: unknown }).role;
-    return role !== "toolResult" && role !== "tool";
-  });
-}
-
-/**
- * Sanitize text content to strip tool call markers and thinking tags.
- * This ensures user-facing text doesn't leak internal tool representations.
- */
-export function sanitizeTextContent(text: string): string {
-  if (!text) {
-    return text;
-  }
-  return stripThinkingTagsFromText(
-    stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
-  );
-}
-
-export function extractAssistantText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  if ((message as { role?: unknown }).role !== "assistant") {
-    return undefined;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const joined =
-    extractTextFromChatContent(content, {
-      sanitizeText: sanitizeTextContent,
-      joinWith: "",
-      normalizeText: (text) => text.trim(),
-    }) ?? "";
-  const stopReason = (message as { stopReason?: unknown }).stopReason;
-  // Gate on stopReason only — a non-error response with a stale/background errorMessage
-  // should not have its content rewritten with error templates (#13935).
-  const errorContext = stopReason === "error";
-
-  return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
+  return parseRawSessionConversationRef(params.key)?.channel ?? "unknown";
 }

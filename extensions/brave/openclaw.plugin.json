@@ -1,7 +1,19 @@
 {
   "id": "brave",
-  "providerAuthEnvVars": {
-    "brave": ["BRAVE_API_KEY"]
+  "name": "Brave",
+  "description": "OpenClaw Brave Search provider plugin for web search.",
+  "icon": "https://cdn.simpleicons.org/brave",
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "brave",
+        "authMethods": ["api-key"],
+        "envVars": ["BRAVE_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {
@@ -13,7 +25,14 @@
     "webSearch.mode": {
       "label": "Brave Search Mode",
       "help": "Brave Search mode: web or llm-context."
+    },
+    "webSearch.baseUrl": {
+      "label": "Brave Search Base URL",
+      "help": "Optional Brave-compatible API base URL for trusted proxies. Defaults to https://api.search.brave.com."
     }
+  },
+  "contracts": {
+    "webSearchProviders": ["brave"]
   },
   "configSchema": {
     "type": "object",
@@ -29,6 +48,9 @@
           "mode": {
             "type": "string",
             "enum": ["web", "llm-context"]
+          },
+          "baseUrl": {
+            "type": ["string", "object"]
           }
         }
       }

@@ -1,41 +1,5 @@
-async function readChunkWithIdleTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  chunkTimeoutMs: number,
-): Promise<Awaited<ReturnType<typeof reader.read>>> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-
-  return await new Promise((resolve, reject) => {
-    const clear = () => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-    };
-
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      clear();
-      void reader.cancel().catch(() => undefined);
-      reject(new Error(`Matrix media download stalled: no data received for ${chunkTimeoutMs}ms`));
-    }, chunkTimeoutMs);
-
-    void reader.read().then(
-      (result) => {
-        clear();
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (err) => {
-        clear();
-        if (!timedOut) {
-          reject(err);
-        }
-      },
-    );
-  });
-}
+// Matrix plugin module implements read response with limit behavior.
+import { readResponseWithLimit as readSharedResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 
 export async function readResponseWithLimit(
   res: Response,
@@ -43,53 +7,14 @@ export async function readResponseWithLimit(
   opts?: {
     onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
     chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
 ): Promise<Buffer> {
-  const onOverflow =
-    opts?.onOverflow ??
-    ((params: { size: number; maxBytes: number }) =>
-      new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
-  const chunkTimeoutMs = opts?.chunkTimeoutMs;
-
-  const body = res.body;
-  if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await res.arrayBuffer());
-    if (fallback.length > maxBytes) {
-      throw onOverflow({ size: fallback.length, maxBytes, res });
-    }
-    return fallback;
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = chunkTimeoutMs
-        ? await readChunkWithIdleTimeout(reader, chunkTimeoutMs)
-        : await reader.read();
-      if (done) {
-        break;
-      }
-      if (value?.length) {
-        total += value.length;
-        if (total > maxBytes) {
-          try {
-            await reader.cancel();
-          } catch {}
-          throw onOverflow({ size: total, maxBytes, res });
-        }
-        chunks.push(value);
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
-
-  return Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    total,
-  );
+  return await readSharedResponseWithLimit(res, maxBytes, {
+    ...opts,
+    onIdleTimeout:
+      opts?.onIdleTimeout ??
+      (({ chunkTimeoutMs }) =>
+        new Error(`Matrix media download stalled: no data received for ${chunkTimeoutMs}ms`)),
+  });
 }

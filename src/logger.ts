@@ -1,4 +1,7 @@
-import { danger, info, logVerboseConsole, success, warn } from "./globals.js";
+import { expectDefined } from "@openclaw/normalization-core";
+// Provides root logger helpers and themed terminal output.
+import { theme } from "../packages/terminal-core/src/theme.js";
+import { isVerbose } from "./global-state.js";
 import { getLogger } from "./logging/logger.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
@@ -10,7 +13,11 @@ function splitSubsystem(message: string) {
   if (!match) {
     return null;
   }
-  const [, subsystem, rest] = match;
+  const subsystem = match.at(1);
+  const rest = match.at(2);
+  if (subsystem === undefined || rest === undefined) {
+    return null;
+  }
   return { subsystem, rest };
 }
 
@@ -27,12 +34,21 @@ function logWithSubsystem(params: {
 }) {
   const parsed = params.runtime === defaultRuntime ? splitSubsystem(params.message) : null;
   if (parsed) {
-    createSubsystemLogger(parsed.subsystem)[params.subsystemMethod](parsed.rest);
+    const method = expectDefined(
+      createSubsystemLogger(parsed.subsystem)[params.subsystemMethod],
+      "subsystem logger method",
+    );
+    method(parsed.rest);
     return;
   }
   params.runtime[params.runtimeMethod](params.runtimeFormatter(params.message));
   getLogger()[params.loggerMethod](params.message);
 }
+
+const info = theme.info;
+const warn = theme.warn;
+const success = theme.success;
+const danger = theme.error;
 
 export function logInfo(message: string, runtime: RuntimeEnv = defaultRuntime) {
   logWithSubsystem({
@@ -81,5 +97,7 @@ export function logError(message: string, runtime: RuntimeEnv = defaultRuntime) 
 export function logDebug(message: string) {
   // Always emit to file logger (level-filtered); console only when verbose.
   getLogger().debug(message);
-  logVerboseConsole(message);
+  if (isVerbose()) {
+    console.log(theme.muted(message));
+  }
 }

@@ -1,70 +1,68 @@
+// Session key continuity tests cover stable route keys across routing changes.
 import { describe, it, expect } from "vitest";
 import { buildAgentSessionKey } from "./resolve-route.js";
 
-describe("Discord Session Key Continuity", () => {
+describe("Channel Session Key Continuity", () => {
   const agentId = "main";
-  const channel = "discord";
+  const channel = "quietchat";
   const accountId = "default";
 
-  it("generates distinct keys for DM vs Channel (dmScope=main)", () => {
-    // Scenario: Default config (dmScope=main)
-    const dmKey = buildAgentSessionKey({
+  function buildChannelSessionKey(params: {
+    peer: { kind: "direct" | "channel"; id: string };
+    dmScope?: "main" | "per-peer";
+  }) {
+    return buildAgentSessionKey({
       agentId,
       channel,
       accountId,
+      dmScope: params.dmScope ?? "main",
+      peer: params.peer,
+    });
+  }
+
+  function expectDistinctDmAndChannelKeys(params: {
+    dmScope: "main" | "per-peer";
+    expectedDmKey: string;
+  }) {
+    const dmKey = buildChannelSessionKey({
       peer: { kind: "direct", id: "user123" },
-      dmScope: "main",
+      dmScope: params.dmScope,
     });
 
-    const groupKey = buildAgentSessionKey({
-      agentId,
-      channel,
-      accountId,
+    const groupKey = buildChannelSessionKey({
       peer: { kind: "channel", id: "channel456" },
-      dmScope: "main",
     });
 
-    expect(dmKey).toBe("agent:main:main");
-    expect(groupKey).toBe("agent:main:discord:channel:channel456");
+    expect(dmKey).toBe(params.expectedDmKey);
+    expect(groupKey).toBe("agent:main:quietchat:channel:channel456");
     expect(dmKey).not.toBe(groupKey);
-  });
+  }
 
-  it("generates distinct keys for DM vs Channel (dmScope=per-peer)", () => {
-    // Scenario: Multi-user bot config
-    const dmKey = buildAgentSessionKey({
-      agentId,
-      channel,
-      accountId,
-      peer: { kind: "direct", id: "user123" },
-      dmScope: "per-peer",
-    });
-
-    const groupKey = buildAgentSessionKey({
-      agentId,
-      channel,
-      accountId,
-      peer: { kind: "channel", id: "channel456" },
-      dmScope: "per-peer",
-    });
-
-    expect(dmKey).toBe("agent:main:direct:user123");
-    expect(groupKey).toBe("agent:main:discord:channel:channel456");
-    expect(dmKey).not.toBe(groupKey);
-  });
-
-  it("handles empty/invalid IDs safely without collision", () => {
-    // If ID is missing, does it collide?
-    const missingIdKey = buildAgentSessionKey({
-      agentId,
-      channel,
-      accountId,
-      peer: { kind: "channel", id: "" }, // Empty string
-      dmScope: "main",
+  function expectUnknownChannelKeyCase(channelId: string) {
+    const missingIdKey = buildChannelSessionKey({
+      peer: { kind: "channel", id: channelId },
     });
 
     expect(missingIdKey).toContain("unknown");
-
-    // Should still be distinct from main
     expect(missingIdKey).not.toBe("agent:main:main");
+  }
+
+  it.each([
+    {
+      name: "keeps main-scoped DMs distinct from channel sessions",
+      dmScope: "main" as const,
+      expectedDmKey: "agent:main:main",
+    },
+    {
+      name: "keeps per-peer DMs distinct from channel sessions",
+      dmScope: "per-peer" as const,
+      expectedDmKey: "agent:main:direct:user123",
+    },
+  ])("$name", ({ dmScope, expectedDmKey }) => {
+    expectDistinctDmAndChannelKeys({ dmScope, expectedDmKey });
+  });
+
+  it.each(["", "   "] as const)("handles invalid channel id %j without collision", (channelId) => {
+    expectUnknownChannelKeyCase(channelId);
   });
 });

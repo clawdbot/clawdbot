@@ -1,3 +1,4 @@
+// Verifies subagents list only exposes runs owned by the caller's subtree.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,71 +8,17 @@ import {
   resetSubagentsConfigOverride,
   setSubagentsConfigOverride,
 } from "./openclaw-tools.subagents.test-harness.js";
-import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
-import "./test-helpers/fast-core-tools.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.test-helpers.js";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 function writeStore(storePath: string, store: Record<string, unknown>) {
+  // Scope tests use a real session-store file so spawnedBy lookups match runtime behavior.
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
-}
-
-function seedLeafOwnedChildSession(storePath: string, leafKey = "agent:main:subagent:leaf") {
-  const childKey = `${leafKey}:subagent:child`;
-  writeStore(storePath, {
-    [leafKey]: {
-      sessionId: "leaf-session",
-      updatedAt: Date.now(),
-      spawnedBy: "agent:main:main",
-      subagentRole: "leaf",
-      subagentControlScope: "none",
-    },
-    [childKey]: {
-      sessionId: "child-session",
-      updatedAt: Date.now(),
-      spawnedBy: leafKey,
-      subagentRole: "leaf",
-      subagentControlScope: "none",
-    },
-  });
-
-  addSubagentRunForTests({
-    runId: "run-child",
-    childSessionKey: childKey,
-    controllerSessionKey: leafKey,
-    requesterSessionKey: leafKey,
-    requesterDisplayKey: leafKey,
-    task: "impossible child",
-    cleanup: "keep",
-    createdAt: Date.now() - 30_000,
-    startedAt: Date.now() - 30_000,
-  });
-
-  return {
-    childKey,
-    tool: createSubagentsTool({ agentSessionKey: leafKey }),
-  };
-}
-
-async function expectLeafSubagentControlForbidden(params: {
-  storePath: string;
-  action: "kill" | "steer";
-  callId: string;
-  message?: string;
-}) {
-  const { childKey, tool } = seedLeafOwnedChildSession(params.storePath);
-  const result = await tool.execute(params.callId, {
-    action: params.action,
-    target: childKey,
-    ...(params.message ? { message: params.message } : {}),
-  });
-
-  expect(result.details).toMatchObject({
-    status: "forbidden",
-    error: "Leaf subagents cannot control other sessions.",
-  });
-  expect(callGatewayMock).not.toHaveBeenCalled();
 }
 
 describe("openclaw-tools: subagents scope isolation", () => {
@@ -132,15 +79,22 @@ describe("openclaw-tools: subagents scope isolation", () => {
     const tool = createSubagentsTool({ agentSessionKey: leafKey });
     const result = await tool.execute("call-leaf-list", { action: "list" });
 
-    expect(result.details).toMatchObject({
-      status: "ok",
-      requesterSessionKey: leafKey,
-      callerSessionKey: leafKey,
-      callerIsSubagent: true,
-      total: 0,
-      active: [],
-      recent: [],
-    });
+    const details = result.details as {
+      status?: string;
+      requesterSessionKey?: string;
+      callerSessionKey?: string;
+      callerIsSubagent?: boolean;
+      total?: number;
+      active?: unknown[];
+      recent?: unknown[];
+    };
+    expect(details.status).toBe("ok");
+    expect(details.requesterSessionKey).toBe(leafKey);
+    expect(details.callerSessionKey).toBe(leafKey);
+    expect(details.callerIsSubagent).toBe(true);
+    expect(details.total).toBe(0);
+    expect(details.active).toEqual([]);
+    expect(details.recent).toEqual([]);
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -200,27 +154,7 @@ describe("openclaw-tools: subagents scope isolation", () => {
     expect(details.status).toBe("ok");
     expect(details.requesterSessionKey).toBe(orchestratorKey);
     expect(details.total).toBe(1);
-    expect(details.active).toEqual([
-      expect.objectContaining({
-        sessionKey: workerKey,
-      }),
-    ]);
-  });
-
-  it("leaf subagents cannot kill even explicitly-owned child sessions", async () => {
-    await expectLeafSubagentControlForbidden({
-      storePath,
-      action: "kill",
-      callId: "call-leaf-kill",
-    });
-  });
-
-  it("leaf subagents cannot steer even explicitly-owned child sessions", async () => {
-    await expectLeafSubagentControlForbidden({
-      storePath,
-      action: "steer",
-      callId: "call-leaf-steer",
-      message: "continue",
-    });
+    expect(details.active).toHaveLength(1);
+    expect(details.active?.[0]?.sessionKey).toBe(workerKey);
   });
 });

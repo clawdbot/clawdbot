@@ -1,9 +1,10 @@
-// Public API-key onboarding helpers for provider plugins.
-
+/**
+ * Public SDK subpath for API-key provider auth setup and secret input handling.
+ */
 export type { OpenClawConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
 
-export { upsertAuthProfile } from "../agents/auth-profiles.js";
+export { upsertAuthProfile, upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 export {
   formatApiKeyPreview,
   normalizeApiKeyInput,
@@ -13,7 +14,12 @@ export {
   promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
 } from "../plugins/provider-auth-input.js";
-export { applyAuthProfileConfig, buildApiKeyCredential } from "../plugins/provider-auth-helpers.js";
+export {
+  applyAuthProfileConfig,
+  buildApiKeyCredential,
+  upsertApiKeyProfile,
+  type ApiKeyStorageOptions,
+} from "../plugins/provider-auth-helpers.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export {
   normalizeOptionalSecretInput,

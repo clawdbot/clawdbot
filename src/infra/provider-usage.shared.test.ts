@@ -1,13 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+// Covers shared provider usage helpers.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clampPercent,
-  resolveLegacyPiAgentAccessToken,
-  resolveUsageProviderId,
-  withTimeout,
-} from "./provider-usage.shared.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
   afterEach(() => {
@@ -16,13 +10,28 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
-    { value: "z-ai", expected: "zai" },
+    { value: "clawrouter", expected: "clawrouter" },
+    { value: "deepseek", expected: "deepseek" },
+    { value: "zai", expected: "zai" },
+    { value: "z-ai", expected: "z-ai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
-    { value: "unknown-provider", expected: undefined },
+    { value: "minimax-portal", expected: "minimax" },
+    { value: "minimax-cn", expected: "minimax" },
+    { value: "minimax-portal-cn", expected: "minimax" },
+    { value: "claude-cli", expected: "anthropic" },
+    { value: " CLAUDE-CLI ", expected: "anthropic" },
+    { value: " XIAOMI-TOKEN-PLAN ", expected: "xiaomi-token-plan" },
+    { value: "unknown-provider", expected: "unknown-provider" },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },
   ])("normalizes provider ids for %j", ({ value, expected }) => {
     expect(resolveUsageProviderId(value)).toBe(expected);
+  });
+
+  it("maps canonical OpenAI subscription profiles to Codex usage windows", () => {
+    expect(resolveUsageProviderId("openai", { credentialType: "oauth" })).toBe("openai");
+    expect(resolveUsageProviderId("openai", { credentialType: "token" })).toBe("openai");
+    expect(resolveUsageProviderId("openai", { credentialType: "api_key" })).toBeUndefined();
   });
 
   it.each([
@@ -35,21 +44,44 @@ describe("provider-usage.shared", () => {
     expect(clampPercent(value)).toBe(expected);
   });
 
-  it("returns work result when it resolves before timeout", async () => {
-    await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
-  });
-
-  it("propagates work errors before timeout", async () => {
-    await expect(withTimeout(Promise.reject(new Error("boom")), 100, "fallback")).rejects.toThrow(
-      "boom",
-    );
+  it.each([
+    {
+      name: "returns work result when it resolves before timeout",
+      promise: () => Promise.resolve("ok"),
+      expected: "ok",
+    },
+    {
+      name: "propagates work errors before timeout",
+      promise: () => Promise.reject(new Error("boom")),
+      error: "boom",
+    },
+  ])("$name", async ({ promise, expected, error }) => {
+    if (error) {
+      await expect(withTimeout(promise(), 100, "fallback")).rejects.toThrow(error);
+      return;
+    }
+    await expect(withTimeout(promise(), 100, "fallback")).resolves.toBe(expected);
   });
 
   it("returns fallback when timeout wins", async () => {
     vi.useFakeTimers();
-    const late = new Promise<string>((resolve) => setTimeout(() => resolve("late"), 50));
+    const late = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("late"), 50);
+    });
     const result = withTimeout(late, 1, "fallback");
     await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBe("fallback");
+  });
+
+  it("clamps oversized timeout delays before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = withTimeout(new Promise<string>(() => {}), Number.MAX_SAFE_INTEGER, "fallback");
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
     await expect(result).resolves.toBe("fallback");
   });
 
@@ -59,35 +91,5 @@ describe("provider-usage.shared", () => {
     await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
 
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("reads legacy pi auth tokens for known provider aliases", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
-    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-    await fs.writeFile(
-      path.join(home, ".pi", "agent", "auth.json"),
-      `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
-      "utf8",
-    );
-
-    try {
-      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBe(
-        "legacy-zai-key",
-      );
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
-
-  it("returns undefined for invalid legacy pi auth files", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
-    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-    await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), "{not-json", "utf8");
-
-    try {
-      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBeUndefined();
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
   });
 });

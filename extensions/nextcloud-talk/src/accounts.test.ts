@@ -1,30 +1,32 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+// Nextcloud Talk tests cover accounts plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveNextcloudTalkAccount } from "./accounts.js";
+import {
+  listNextcloudTalkAccountIds,
+  resolveDefaultNextcloudTalkAccountId,
+  resolveNextcloudTalkAccount,
+} from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
-describe("resolveNextcloudTalkAccount", () => {
-  it.runIf(process.platform !== "win32")("rejects symlinked botSecretFile paths", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nextcloud-talk-"));
-    const secretFile = path.join(dir, "secret.txt");
-    const secretLink = path.join(dir, "secret-link.txt");
-    fs.writeFileSync(secretFile, "bot-secret\n", "utf8");
-    fs.symlinkSync(secretFile, secretLink);
-
+describe("Nextcloud Talk account resolution", () => {
+  it("preserves top-level default account when named accounts are configured", () => {
     const cfg = {
       channels: {
         "nextcloud-talk": {
           baseUrl: "https://cloud.example.com",
-          botSecretFile: secretLink,
+          botSecret: "shared-secret",
+          accounts: {
+            work: { enabled: false },
+          },
         },
       },
-    } as CoreConfig;
+    } satisfies CoreConfig;
 
-    const account = resolveNextcloudTalkAccount({ cfg });
-    expect(account.secret).toBe("");
-    expect(account.secretSource).toBe("none");
-    fs.rmSync(dir, { recursive: true, force: true });
+    expect(listNextcloudTalkAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultNextcloudTalkAccountId(cfg)).toBe("default");
+    expect(resolveNextcloudTalkAccount({ cfg })).toMatchObject({
+      accountId: "default",
+      baseUrl: "https://cloud.example.com",
+      secret: "shared-secret",
+    });
   });
 });

@@ -1,0 +1,692 @@
+// Msteams tests cover graph plugin behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const {
+  loadMSTeamsSdkWithAuthMock,
+  createMSTeamsTokenProviderMock,
+  fetchWithSsrFGuardMock,
+  readAccessTokenMock,
+  resolveMSTeamsCredentialsMock,
+} = vi.hoisted(() => {
+  return {
+    loadMSTeamsSdkWithAuthMock: vi.fn(),
+    createMSTeamsTokenProviderMock: vi.fn(),
+    fetchWithSsrFGuardMock: vi.fn(
+      async (params: { url: string; init?: RequestInit; timeoutMs?: number }) => ({
+        response: await globalThis.fetch(params.url, params.init),
+        finalUrl: params.url,
+        release: async () => undefined,
+      }),
+    ),
+    readAccessTokenMock: vi.fn(),
+    resolveMSTeamsCredentialsMock: vi.fn(),
+  };
+});
+
+vi.mock("./sdk.js", () => ({
+  loadMSTeamsSdkWithAuth: loadMSTeamsSdkWithAuthMock,
+  createMSTeamsTokenProvider: createMSTeamsTokenProviderMock,
+}));
+
+vi.mock("./token-response.js", () => ({
+  readAccessToken: readAccessTokenMock,
+}));
+
+vi.mock("./token.js", () => ({
+  resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
+}));
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...original,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
+
+import { findGraphUsersByExactIdentity, searchGraphUsers } from "./graph-users.js";
+import {
+  deleteGraphRequest,
+  escapeOData,
+  fetchAllGraphPages,
+  fetchGraphAbsoluteUrl,
+  fetchGraphJson,
+  listChannelsForTeam,
+  listChannelsForTeamWithPageInfo,
+  listTeamsByName,
+  listTeamsByNameWithPageInfo,
+  normalizeQuery,
+  postGraphBetaJson,
+  postGraphJson,
+  resolveGraphToken,
+} from "./graph.js";
+
+const originalFetch = globalThis.fetch;
+const graphToken = "graph-token";
+const mockCredentials = {
+  appId: "app-id",
+  appPassword: "app-password",
+  tenantId: "tenant-id",
+};
+const mockApp = { id: "mock-app" };
+const groupOne = { id: "group-1" };
+const opsTeam = { id: "team-1", displayName: "Ops" };
+const deploymentsChannel = { id: "chan-1", displayName: "Deployments" };
+const userOne = { id: "user-1", displayName: "User One" };
+const bobUser = { id: "user-2", displayName: "Bob" };
+
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
+}
+
+function textResponse(body: string, init?: ResponseInit): Response {
+  return new Response(body, init);
+}
+
+function mockFetch(handler: Parameters<typeof vi.fn>[0]) {
+  globalThis.fetch = vi.fn(handler) as unknown as typeof fetch;
+}
+
+function mockJsonFetchResponse(body: unknown, init?: ResponseInit) {
+  mockFetch(async () => jsonResponse(body, init));
+}
+
+function mockTextFetchResponse(body: string, init?: ResponseInit) {
+  mockFetch(async () => textResponse(body, init));
+}
+
+function graphStreamResponse(body: unknown): {
+  response: Response;
+  arrayBuffer: ReturnType<typeof vi.fn>;
+} {
+  const encoded = new TextEncoder().encode(JSON.stringify(body));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+      controller.close();
+    },
+  });
+  const arrayBuffer = vi.fn(async () => {
+    throw new Error("Graph response must stay streaming");
+  });
+  return {
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "application/json" }),
+      body: stream,
+      arrayBuffer,
+    } as unknown as Response,
+    arrayBuffer,
+  };
+}
+
+function graphCollection<T>(...items: T[]) {
+  return { value: items };
+}
+
+function mockGraphCollection(...items: unknown[]) {
+  mockJsonFetchResponse(graphCollection(...items));
+}
+
+function requestUrl(input: string | URL | Request) {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
+}
+
+function fetchCallUrl(index: number) {
+  const input = vi.mocked(globalThis.fetch).mock.calls[index]?.[0];
+  if (!input) {
+    return "";
+  }
+  return requestUrl(input);
+}
+
+function fetchCallInit(index: number) {
+  return vi.mocked(globalThis.fetch).mock.calls[index]?.[1];
+}
+
+function fetchCallHeader(index: number, name: string) {
+  const headers = fetchCallInit(index)?.headers;
+  if (!headers) {
+    throw new Error(`Expected fetch headers at index ${index}`);
+  }
+  return (headers as Record<string, string>)[name];
+}
+
+function expectFetchPathContains(index: number, expectedPath: string) {
+  expect(fetchCallUrl(index)).toContain(expectedPath);
+}
+
+function fetchCallSearchParam(index: number, name: string): string | null {
+  const url = fetchCallUrl(index);
+  if (!url) {
+    throw new Error(`Expected fetch call ${index}`);
+  }
+  return new URL(url).searchParams.get(name);
+}
+
+async function expectSearchGraphUsers(
+  query: string,
+  expected: Array<Record<string, unknown>>,
+  options?: { token?: string; top?: number },
+) {
+  await expect(
+    searchGraphUsers({
+      token: options?.token ?? graphToken,
+      query,
+      top: options?.top,
+    }),
+  ).resolves.toEqual(expected);
+}
+
+async function expectRejectsToThrow(promise: Promise<unknown>, message: string) {
+  await expect(promise).rejects.toThrow(message);
+}
+
+function mockGraphTokenResolution(options?: {
+  rawToken?: string | null;
+  resolvedToken?: string | null;
+}) {
+  const rawToken = options && "rawToken" in options ? options.rawToken : "raw-graph-token";
+  const resolvedToken =
+    options && "resolvedToken" in options ? options.resolvedToken : "resolved-token";
+  const getAccessToken = vi.fn(async () => rawToken);
+  loadMSTeamsSdkWithAuthMock.mockResolvedValue({ app: mockApp });
+  createMSTeamsTokenProviderMock.mockReturnValue({ getAccessToken });
+  resolveMSTeamsCredentialsMock.mockReturnValue(mockCredentials);
+  readAccessTokenMock.mockReturnValue(resolvedToken);
+  return { getAccessToken };
+}
+
+describe("msteams graph helpers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("normalizes queries and escapes OData apostrophes", () => {
+    expect(normalizeQuery("  Team Alpha  ")).toBe("Team Alpha");
+    expect(normalizeQuery("   ")).toBe("");
+    expect(escapeOData("alice.o'hara")).toBe("alice.o''hara");
+  });
+
+  it("lets the shared SSRF guard select the Graph transport", async () => {
+    mockGraphCollection();
+
+    await fetchGraphJson({
+      token: graphToken,
+      path: "/groups",
+    });
+
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+  });
+
+  it("fetches Graph JSON and surfaces Graph errors with response text", async () => {
+    mockGraphCollection(groupOne);
+
+    await expect(
+      fetchGraphJson<{ value: Array<{ id: string }> }>({
+        token: graphToken,
+        path: "/groups?$select=id",
+        headers: { ConsistencyLevel: "eventual" },
+      }),
+    ).resolves.toEqual(graphCollection(groupOne));
+
+    expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/groups?$select=id");
+    expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
+    expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
+
+    mockTextFetchResponse("forbidden", { status: 403 });
+
+    await expectRejectsToThrow(
+      fetchGraphJson({
+        token: graphToken,
+        path: "/teams/team-1/channels",
+      }),
+      "Graph /teams/team-1/channels failed (403): forbidden",
+    );
+
+    mockTextFetchResponse("{ nope", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expectRejectsToThrow(
+      fetchGraphJson({
+        token: graphToken,
+        path: "/teams/team-1/channels",
+      }),
+      "Graph /teams/team-1/channels failed: malformed JSON response",
+    );
+  });
+
+  it("keeps successful Graph responses streaming for bounded JSON parsing", async () => {
+    const { response, arrayBuffer } = graphStreamResponse(graphCollection(groupOne));
+    mockFetch(async () => response);
+
+    await expect(
+      fetchGraphJson<{ value: Array<{ id: string }> }>({
+        token: graphToken,
+        path: "/groups?$select=id",
+      }),
+    ).resolves.toEqual(graphCollection(groupOne));
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("passes the remaining operation deadline to the guarded Graph transport", async () => {
+    mockGraphCollection(groupOne);
+    const remainingMs = 5_000;
+
+    await fetchGraphJson({
+      token: graphToken,
+      path: "/groups?$select=id",
+      deadline: {
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: remainingMs,
+        deadlineAtMs: Date.now() + remainingMs,
+      },
+    });
+
+    const timeoutMs = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs;
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(remainingMs);
+  });
+
+  it("bounds absolute Graph pagination requests", async () => {
+    mockGraphCollection(groupOne);
+
+    await fetchGraphAbsoluteUrl({
+      token: graphToken,
+      url: "https://graph.microsoft.com/v1.0/groups?$skiptoken=next",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
+  });
+
+  it("posts Graph JSON to v1 and beta roots and treats empty mutation responses as undefined", async () => {
+    mockFetch(async (input) => {
+      if (requestUrl(input).startsWith("https://graph.microsoft.com/beta")) {
+        return new Response(null, { status: 204 });
+      }
+      return jsonResponse({ id: "created-1" });
+    });
+
+    await expect(
+      postGraphJson<{ id: string }>({
+        token: graphToken,
+        path: "/chats/chat-1/pinnedMessages",
+        body: { messageId: "msg-1" },
+      }),
+    ).resolves.toEqual({ id: "created-1" });
+
+    await expect(
+      postGraphBetaJson<undefined>({
+        token: graphToken,
+        path: "/chats/chat-1/messages/msg-1/setReaction",
+        body: { reactionType: "like" },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/chats/chat-1/pinnedMessages");
+    expect(fetchCallInit(0)?.method).toBe("POST");
+    expect(fetchCallInit(0)?.body).toBe(JSON.stringify({ messageId: "msg-1" }));
+    expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
+    expect(fetchCallHeader(0, "Content-Type")).toBe("application/json");
+    expect(fetchCallUrl(1)).toBe(
+      "https://graph.microsoft.com/beta/chats/chat-1/messages/msg-1/setReaction",
+    );
+    expect(fetchCallInit(1)?.method).toBe("POST");
+    expect(fetchCallInit(1)?.body).toBe(JSON.stringify({ reactionType: "like" }));
+  });
+
+  it("surfaces POST and DELETE graph failures with method-specific labels", async () => {
+    mockFetch(async (_input, init) => {
+      const method = init?.method ?? "GET";
+      if (method === "DELETE") {
+        return textResponse("not found", { status: 404 });
+      }
+      return textResponse("denied", { status: 403 });
+    });
+
+    await expectRejectsToThrow(
+      postGraphJson({
+        token: graphToken,
+        path: "/teams/team-1/channels",
+        body: { displayName: "Deployments" },
+      }),
+      "Graph POST /teams/team-1/channels failed (403): denied",
+    );
+
+    await expectRejectsToThrow(
+      deleteGraphRequest({
+        token: graphToken,
+        path: "/teams/team-1/channels/channel-1",
+      }),
+      "Graph DELETE /teams/team-1/channels/channel-1 failed (404): not found",
+    );
+  });
+
+  it("resolves Graph tokens through the SDK auth provider", async () => {
+    const { getAccessToken } = mockGraphTokenResolution();
+
+    await expect(resolveGraphToken({ channels: { msteams: {} } })).resolves.toBe("resolved-token");
+
+    expect(createMSTeamsTokenProviderMock).toHaveBeenCalledWith(mockApp);
+    expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("fails closed for China cloud Graph token resolution", async () => {
+    mockGraphTokenResolution();
+
+    await expectRejectsToThrow(
+      resolveGraphToken({ channels: { msteams: { cloud: "China" } } }),
+      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China",
+    );
+
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
+  });
+
+  it("fails when credentials or access tokens are unavailable", async () => {
+    resolveMSTeamsCredentialsMock.mockReturnValue(undefined);
+    await expectRejectsToThrow(resolveGraphToken({ channels: {} }), "MS Teams credentials missing");
+
+    mockGraphTokenResolution({ rawToken: null, resolvedToken: null });
+
+    await expectRejectsToThrow(
+      resolveGraphToken({ channels: { msteams: {} } }),
+      "MS Teams graph token unavailable",
+    );
+  });
+
+  it("builds encoded Graph paths for teams and channels", async () => {
+    mockFetch(async (input) => {
+      if (requestUrl(input).includes("/groups?")) {
+        return jsonResponse(graphCollection(opsTeam));
+      }
+      return jsonResponse(graphCollection(deploymentsChannel));
+    });
+
+    await expect(listTeamsByName(graphToken, "Bob's Team")).resolves.toEqual([opsTeam]);
+    await expect(listChannelsForTeam(graphToken, "team/ops")).resolves.toEqual([
+      deploymentsChannel,
+    ]);
+
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'Bob''s Team')",
+    );
+    expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName");
+    expectFetchPathContains(1, "/teams/team%2Fops/channels?$select=id,displayName");
+  });
+
+  it("exposes pagination completeness for authorization lookups", async () => {
+    mockFetch(async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/groups?$skip=1")) {
+        return jsonResponse(graphCollection({ id: "team-2", displayName: "Ops" }));
+      }
+      if (url.includes("/groups?")) {
+        return jsonResponse({
+          value: [opsTeam],
+          "@odata.nextLink": "https://graph.microsoft.com/v1.0/groups?$skip=1",
+        });
+      }
+      if (url.includes("/channels?$skip=1")) {
+        return jsonResponse(graphCollection({ id: "channel-2", displayName: "Incidents" }));
+      }
+      return jsonResponse({
+        value: [deploymentsChannel],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/channels?$skip=1",
+      });
+    });
+
+    await expect(listTeamsByNameWithPageInfo(graphToken, "Ops")).resolves.toEqual({
+      items: [opsTeam, { id: "team-2", displayName: "Ops" }],
+      truncated: false,
+    });
+    await expect(listChannelsForTeamWithPageInfo(graphToken, "team-1")).resolves.toEqual({
+      items: [deploymentsChannel, { id: "channel-2", displayName: "Incidents" }],
+      truncated: false,
+    });
+  });
+
+  it("builds an exact identity filter for authorization user lookup", async () => {
+    mockGraphCollection(userOne);
+
+    await expect(
+      findGraphUsersByExactIdentity({
+        token: graphToken,
+        query: "Alice O'Hara",
+      }),
+    ).resolves.toEqual({ items: [userOne], truncated: false });
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "(displayName eq 'Alice O''Hara' or mail eq 'Alice O''Hara' or userPrincipalName eq 'Alice O''Hara')",
+    );
+  });
+
+  it("returns no graph users for blank queries", async () => {
+    mockJsonFetchResponse({});
+    await expectSearchGraphUsers("   ", [], { token: "token-1" });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("uses exact mail or UPN lookup for email-like graph user queries", async () => {
+    mockGraphCollection(userOne);
+
+    await expectSearchGraphUsers("alice.o'hara@example.com", [userOne], {
+      token: "token-2",
+    });
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "(mail eq 'alice.o''hara@example.com' or userPrincipalName eq 'alice.o''hara@example.com')",
+    );
+    expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName,mail,userPrincipalName");
+  });
+
+  it("uses displayName search with eventual consistency and default top handling", async () => {
+    mockFetch(async (input) => {
+      if (requestUrl(input).includes("displayName%3Abob")) {
+        return jsonResponse(graphCollection(bobUser));
+      }
+      return jsonResponse({});
+    });
+
+    await expectSearchGraphUsers("bob", [bobUser], {
+      token: "token-3",
+      top: 25,
+    });
+    await expectSearchGraphUsers("carol", [], { token: "token-4" });
+
+    expectFetchPathContains(
+      0,
+      "/users?$search=%22displayName%3Abob%22&$select=id,displayName,mail,userPrincipalName&$top=25",
+    );
+    expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
+    expectFetchPathContains(
+      1,
+      "/users?$search=%22displayName%3Acarol%22&$select=id,displayName,mail,userPrincipalName&$top=10",
+    );
+  });
+
+  describe("fetchAllGraphPages", () => {
+    type Item = { id: string; name: string };
+
+    /** Build a paged Graph response with optional nextLink. */
+    function pagedResponse(items: Item[], nextLink?: string) {
+      const body: Record<string, unknown> = { value: items };
+      if (nextLink) {
+        body["@odata.nextLink"] = nextLink;
+      }
+      return body;
+    }
+
+    it("single page, no nextLink", async () => {
+      const items = [{ id: "1", name: "a" }];
+      mockJsonFetchResponse(pagedResponse(items));
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+      });
+
+      expect(result).toEqual({ items, truncated: false });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("multiple pages with nextLink chain", async () => {
+      const page1Items = [{ id: "1", name: "a" }];
+      const page2Items = [{ id: "2", name: "b" }];
+      const page3Items = [{ id: "3", name: "c" }];
+      let callCount = 0;
+
+      mockFetch(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return jsonResponse(
+            pagedResponse(page1Items, "https://graph.microsoft.com/v1.0/items?$skiptoken=page2"),
+          );
+        }
+        if (callCount === 2) {
+          return jsonResponse(
+            pagedResponse(page2Items, "https://graph.microsoft.com/v1.0/items?$skiptoken=page3"),
+          );
+        }
+        return jsonResponse(pagedResponse(page3Items));
+      });
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+      });
+
+      expect(result.items).toEqual([...page1Items, ...page2Items, ...page3Items]);
+      expect(result.truncated).toBe(false);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("truncation at maxPages", async () => {
+      mockFetch(async () =>
+        jsonResponse(
+          pagedResponse(
+            [{ id: "x", name: "x" }],
+            "https://graph.microsoft.com/v1.0/items?$skiptoken=more",
+          ),
+        ),
+      );
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        maxPages: 2,
+      });
+
+      expect(result.items).toHaveLength(2);
+      expect(result.truncated).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("findOne early exit", async () => {
+      const target = { id: "target", name: "found-it" };
+      let callCount = 0;
+
+      mockFetch(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return jsonResponse(
+            pagedResponse(
+              [{ id: "1", name: "a" }],
+              "https://graph.microsoft.com/v1.0/items?$skiptoken=p2",
+            ),
+          );
+        }
+        // Page 2 contains the target; page 3 should never be fetched
+        return jsonResponse(
+          pagedResponse(
+            [{ id: "2", name: "b" }, target],
+            "https://graph.microsoft.com/v1.0/items?$skiptoken=p3",
+          ),
+        );
+      });
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        findOne: (item) => item.id === "target",
+      });
+
+      expect(result.found).toEqual(target);
+      expect(result.truncated).toBe(false);
+      // Page 1 items + page 2 items (where match was found)
+      expect(result.items).toEqual([{ id: "1", name: "a" }, { id: "2", name: "b" }, target]);
+      // Only 2 fetches; page 3 was never requested
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("findOne with no match (exhausted)", async () => {
+      mockJsonFetchResponse(pagedResponse([{ id: "1", name: "a" }]));
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        findOne: (item) => item.id === "missing",
+      });
+
+      expect(result.found).toBeUndefined();
+      expect(result.truncated).toBe(false);
+      expect(result.items).toEqual([{ id: "1", name: "a" }]);
+    });
+
+    it("findOne with no match (truncated)", async () => {
+      mockFetch(async () =>
+        jsonResponse(
+          pagedResponse(
+            [{ id: "x", name: "x" }],
+            "https://graph.microsoft.com/v1.0/items?$skiptoken=more",
+          ),
+        ),
+      );
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        maxPages: 2,
+        findOne: (item) => item.id === "missing",
+      });
+
+      expect(result.found).toBeUndefined();
+      expect(result.truncated).toBe(true);
+      expect(result.items).toHaveLength(2);
+    });
+
+    it("empty first page", async () => {
+      mockJsonFetchResponse(pagedResponse([]));
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+      });
+
+      expect(result).toEqual({ items: [], truncated: false });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+});

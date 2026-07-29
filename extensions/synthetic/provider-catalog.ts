@@ -1,9 +1,10 @@
+// Synthetic provider module implements model/runtime integration.
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildSyntheticModelDefinition,
-  type ModelProviderConfig,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_MODEL_CATALOG,
-} from "openclaw/plugin-sdk/provider-models";
+} from "./models.js";
 
 export function buildSyntheticProvider(): ModelProviderConfig {
   return {

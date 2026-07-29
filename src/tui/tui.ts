@@ -1,3 +1,9 @@
+// Runs the interactive TUI loop and coordinates backend, input, and rendering.
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
   Container,
@@ -7,180 +13,187 @@ import {
   ProcessTerminal,
   Text,
   TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
+import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
+import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
+import { setConsoleSubsystemFilter } from "../logging/console.js";
+import { loggingState } from "../logging/state.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+} from "../process/windows-command.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
+  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
-import { getSlashCommands } from "./commands.js";
+import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
-import { GatewayChatClient } from "./gateway-chat.js";
+import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
+import type { TuiBackend } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatTokens } from "./tui-formatters.js";
+import {
+  formatGoalFooter,
+  formatModelFooter,
+  formatTuiErrorMessage,
+  formatTokens,
+} from "./tui-formatters.js";
+import {
+  buildTuiLastSessionScopeKey,
+  readTuiLastSessionKey,
+  resolveRememberedTuiSessionKey,
+  writeTuiLastSessionKey,
+} from "./tui-last-session.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
+import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
+import {
+  disconnectedTuiChatSubmitMessage,
+  resolveTuiChatSubmitAdmission,
+  type TuiChatSubmitAdmission,
+  type TuiPendingSubmit,
+} from "./tui-submit-state.js";
+import {
+  createEditorSubmitHandler,
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+  type TuiSubmitAction,
+} from "./tui-submit.js";
+import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
   AgentSummary,
   SessionInfo,
   SessionScope,
   TuiOptions,
+  TuiResult,
   TuiStateAccess,
 } from "./tui-types.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
+export {
+  createEditorSubmitHandler,
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+} from "./tui-submit.js";
 
-export function createEditorSubmitHandler(params: {
-  editor: {
-    setText: (value: string) => void;
-    addToHistory: (value: string) => void;
+const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", import.meta.url));
+const OPENCLAW_RUN_NODE_SCRIPT_PATH = fileURLToPath(
+  new URL("../../scripts/run-node.mjs", import.meta.url),
+);
+const DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
+const DIST_ENTRY_MJS_PATH = fileURLToPath(new URL("../../dist/entry.mjs", import.meta.url));
+
+const OPENAI_CODEX_PROVIDER = "openai";
+const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
+const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
+const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
+
+type RunTuiOptions = TuiOptions & {
+  backend?: TuiBackend;
+  /** Exact pre-probed remote target for an in-process setup handoff. */
+  boundGateway?: {
+    url: string;
+    token?: string;
+    password?: string;
+    tlsFingerprint?: string;
   };
-  handleCommand: (value: string) => Promise<void> | void;
-  sendMessage: (value: string) => Promise<void> | void;
-  handleBangLine: (value: string) => Promise<void> | void;
-}) {
-  return (text: string) => {
-    const raw = text;
-    const value = raw.trim();
-    params.editor.setText("");
+  config?: OpenClawConfig;
+  title?: string;
+};
 
-    // Keep previous behavior: ignore empty/whitespace-only submissions.
-    if (!value) {
-      return;
+/** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
+export async function resolveCodexCliBin(): Promise<string | null> {
+  const lookupCommand =
+    process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
+  try {
+    const result = await runCommandWithTimeout([lookupCommand, "codex"], {
+      killSignal: "SIGKILL",
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: CODEX_CLI_LOOKUP_TIMEOUT_MS,
+    });
+    if (result.code !== 0 || result.termination !== "exit") {
+      return null;
     }
+    // `where` on Windows can return multiple matches; use PATH order.
+    return result.stdout.trim().split(/\r?\n/)[0]?.trim() || null;
+  } catch {
+    return null;
+  }
+}
 
-    // Bash mode: only if the very first character is '!' and it's not just '!'.
-    // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
-    // Per requirement: a lone '!' should be treated as a normal message.
-    if (raw.startsWith("!") && raw !== "!") {
-      params.editor.addToHistory(raw);
-      void params.handleBangLine(raw);
-      return;
-    }
+export function resolveLocalAuthCliInvocation(params?: {
+  execPath?: string;
+  wrapperPath?: string;
+  runNodePath?: string;
+  hasDistEntry?: boolean;
+  hasRunNodeScript?: boolean;
+}): { command: string; args: string[] } {
+  const hasDistEntry =
+    params?.hasDistEntry ?? (existsSync(DIST_ENTRY_JS_PATH) || existsSync(DIST_ENTRY_MJS_PATH));
+  const hasRunNodeScript = params?.hasRunNodeScript ?? existsSync(OPENCLAW_RUN_NODE_SCRIPT_PATH);
+  const command = params?.execPath ?? process.execPath;
+  const wrapperPath = params?.wrapperPath ?? OPENCLAW_CLI_WRAPPER_PATH;
+  const runNodePath = params?.runNodePath ?? OPENCLAW_RUN_NODE_SCRIPT_PATH;
 
-    // Enable built-in editor prompt history navigation (up/down).
-    params.editor.addToHistory(value);
+  // Prefer the packaged wrapper when build output exists, but keep source-tree
+  // auth working in unbuilt checkouts that only have scripts/run-node.mjs.
+  return hasDistEntry || !hasRunNodeScript
+    ? { command, args: [wrapperPath, "models", "auth", "login"] }
+    : { command, args: [runNodePath, "models", "auth", "login"] };
+}
 
-    if (value.startsWith("/")) {
-      void params.handleCommand(value);
-      return;
-    }
-
-    void params.sendMessage(value);
+export function resolveLocalAuthSpawnInvocation(params: {
+  command: string;
+  args: string[];
+  platform?: NodeJS.Platform;
+}): {
+  args: string[];
+  command: string;
+  options: { windowsHide?: true; windowsVerbatimArguments?: true };
+} {
+  const platform = params.platform ?? process.platform;
+  if (!isWindowsBatchCommand(params.command.trim(), platform)) {
+    return { command: params.command, args: params.args, options: {} };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(platform),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.command, params.args)],
+    options: { windowsHide: true, windowsVerbatimArguments: true },
   };
 }
 
-export function shouldEnableWindowsGitBashPasteFallback(params?: {
-  platform?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  const platform = params?.platform ?? process.platform;
-  const env = params?.env ?? process.env;
-  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
-
-  // Some macOS terminals emit multiline paste as rapid single-line submits.
-  // Enable burst coalescing so pasted blocks stay as one user message.
-  if (platform === "darwin") {
-    if (termProgram.includes("iterm") || termProgram.includes("apple_terminal")) {
-      return true;
-    }
-    return false;
+export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
+  const defaultCwd =
+    params.defaultCwd ?? tryProcessCwd() ?? path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
+  const entryArg = params.args[0]?.trim();
+  if (!entryArg) {
+    return defaultCwd;
   }
-
-  if (platform !== "win32") {
-    return false;
+  const entryBase = path.basename(entryArg).toLowerCase();
+  if (entryBase === "openclaw.mjs") {
+    return path.dirname(entryArg);
   }
-
-  const msystem = (env.MSYSTEM ?? "").toUpperCase();
-  const shell = env.SHELL ?? "";
-  if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
-    return true;
+  if (entryBase === "run-node.mjs") {
+    return path.dirname(path.dirname(entryArg));
   }
-  if (shell.toLowerCase().includes("bash")) {
-    return true;
-  }
-  return termProgram.includes("mintty");
-}
-
-export function createSubmitBurstCoalescer(params: {
-  submit: (value: string) => void;
-  enabled: boolean;
-  burstWindowMs?: number;
-  now?: () => number;
-  setTimer?: typeof setTimeout;
-  clearTimer?: typeof clearTimeout;
-}) {
-  const windowMs = Math.max(1, params.burstWindowMs ?? 50);
-  const now = params.now ?? (() => Date.now());
-  const setTimer = params.setTimer ?? setTimeout;
-  const clearTimer = params.clearTimer ?? clearTimeout;
-  let pending: string | null = null;
-  let pendingAt = 0;
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const clearFlushTimer = () => {
-    if (!flushTimer) {
-      return;
-    }
-    clearTimer(flushTimer);
-    flushTimer = null;
-  };
-
-  const flushPending = () => {
-    if (pending === null) {
-      return;
-    }
-    const value = pending;
-    pending = null;
-    pendingAt = 0;
-    clearFlushTimer();
-    params.submit(value);
-  };
-
-  const scheduleFlush = () => {
-    clearFlushTimer();
-    flushTimer = setTimer(() => {
-      flushPending();
-    }, windowMs);
-  };
-
-  return (value: string) => {
-    if (!params.enabled) {
-      params.submit(value);
-      return;
-    }
-    if (value.includes("\n")) {
-      flushPending();
-      params.submit(value);
-      return;
-    }
-    const ts = now();
-    if (pending === null) {
-      pending = value;
-      pendingAt = ts;
-      scheduleFlush();
-      return;
-    }
-    if (ts - pendingAt <= windowMs) {
-      pending = `${pending}\n${value}`;
-      pendingAt = ts;
-      scheduleFlush();
-      return;
-    }
-    flushPending();
-    pending = value;
-    pendingAt = ts;
-    scheduleFlush();
-  };
+  return defaultCwd;
 }
 
 export function resolveTuiSessionKey(params: {
@@ -202,10 +215,11 @@ export function resolveTuiSessionKey(params: {
   if (trimmed === "global" || trimmed === "unknown") {
     return trimmed;
   }
-  if (trimmed.startsWith("agent:")) {
-    return trimmed.toLowerCase();
-  }
-  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
+  return toAgentStoreSessionKey({
+    agentId: params.currentAgentId,
+    requestKey: trimmed,
+    mainKey: params.sessionMainKey,
+  });
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -219,10 +233,8 @@ export function resolveInitialTuiAgentId(params: {
     return normalizeAgentId(parsed.agentId);
   }
 
-  const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
-    params.cfg,
-    params.cwd ?? process.cwd(),
-  );
+  const cwd = params.cwd ?? tryProcessCwd();
+  const inferredFromWorkspace = cwd ? resolveAgentIdByWorkspacePath(params.cfg, cwd) : null;
   if (inferredFromWorkspace) {
     return inferredFromWorkspace;
   }
@@ -236,12 +248,15 @@ export function resolveGatewayDisconnectState(reason?: string): {
   pairingHint?: string;
 } {
   const reasonLabel = reason?.trim() ? reason.trim() : "closed";
-  if (/pairing required/i.test(reasonLabel)) {
+  // Covers both "pairing required" and a pending "scope upgrade" for a paired device.
+  if (/pairing required|scope upgrade/i.test(reasonLabel)) {
     return {
       connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "pairing required: run openclaw devices list",
+      activityStatus: "device approval needed: preview latest request",
       pairingHint:
-        "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
+        "Device approval needed. Run `openclaw devices approve --latest` to preview the pending request, " +
+        "then rerun the printed `openclaw devices approve <requestId>` command " +
+        "(reuse `--token` or other auth flags if needed), then reconnect.",
     };
   }
   return {
@@ -256,7 +271,7 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   let lastBackspaceAt = -1;
 
   return (data: string): string => {
-    if (!matchesKey(data, Key.backspace)) {
+    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
       return data;
     }
     const ts = now();
@@ -292,7 +307,234 @@ export function stopTuiSafely(stop: () => void): void {
   }
 }
 
+type TerminalLossEmitter = {
+  on(event: "close" | "end", listener: () => void): unknown;
+  off(event: "close" | "end", listener: () => void): unknown;
+};
+
+export function isTuiTerminalLossError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const err = error as { code?: unknown; message?: unknown; syscall?: unknown };
+  const code = typeof err.code === "string" ? err.code : "";
+  const message = typeof err.message === "string" ? err.message : "";
+  const syscall = typeof err.syscall === "string" ? err.syscall : "";
+  if (code === "EIO" || code === "EPIPE") {
+    return true;
+  }
+  return (
+    /\b(EIO|EPIPE)\b/i.test(message) && /\b(read|write|TTY|stdin|stdout)\b/i.test(message + syscall)
+  );
+}
+
+export function installTuiTerminalLossExitHandler(
+  requestExit: () => void,
+  targets: { stdin?: TerminalLossEmitter; stdout?: TerminalLossEmitter } = {
+    stdin: process.stdin,
+    stdout: process.stdout,
+  },
+): () => void {
+  let requested = false;
+  const requestOnce = (): void => {
+    if (requested) {
+      return;
+    }
+    requested = true;
+    requestExit();
+  };
+  const removeUncaughtExceptionHandler = registerUncaughtExceptionHandler((error) => {
+    if (!isTuiTerminalLossError(error)) {
+      return false;
+    }
+    requestOnce();
+    return true;
+  });
+  const onClose = (): void => requestOnce();
+  targets.stdin?.on("end", onClose);
+  targets.stdin?.on("close", onClose);
+  targets.stdout?.on("close", onClose);
+  return () => {
+    removeUncaughtExceptionHandler();
+    targets.stdin?.off("end", onClose);
+    targets.stdin?.off("close", onClose);
+    targets.stdout?.off("close", onClose);
+  };
+}
+
+export function createDeferredTuiFinish(): {
+  requestFinish: () => void;
+  setFinish: (finish: () => void) => void;
+  clearFinish: () => void;
+} {
+  let finishTui: (() => void) | null = null;
+  let finishRequested = false;
+  return {
+    requestFinish: () => {
+      const finish = finishTui;
+      if (finish) {
+        finish();
+        return;
+      }
+      finishRequested = true;
+    },
+    setFinish: (finish) => {
+      finishTui = finish;
+      if (finishRequested) {
+        finish();
+      }
+    },
+    clearFinish: () => {
+      finishTui = null;
+    },
+  };
+}
+
+type DrainableTui = {
+  stop: () => void;
+  terminal?: {
+    drainInput?: (maxMs?: number, idleMs?: number) => Promise<void>;
+  };
+};
+
+const TUI_SHUTDOWN_DRAIN_MAX_MS = 500;
+const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
+const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
+const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
+
+type TuiProcessExitTimer = {
+  unref?: () => void;
+};
+
+type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
+
+type TuiShutdownTask = () => void | Promise<void>;
+
+export function beginTuiShutdown(params: {
+  stopClient: TuiShutdownTask;
+  stopTui: TuiShutdownTask;
+  disposeStatus: () => void;
+  requestFinish: () => void;
+  forceExit: () => void;
+  hardExitMs: number;
+  keepHardExitArmed?: boolean;
+  onError: (error: unknown) => void;
+  clearTimeoutFn?: (timer: TuiProcessExitTimer) => void;
+  setTimeoutFn?: TuiProcessExitTimeout;
+}): TuiProcessExitTimer {
+  const setTimeoutFn =
+    params.setTimeoutFn ??
+    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
+  const hardExitTimer = setTimeoutFn(params.forceExit, params.hardExitMs);
+  hardExitTimer.unref?.();
+  // Stop referenced animations before transport teardown can stall or redraw.
+  params.disposeStatus();
+  void Promise.resolve()
+    .then(params.stopClient)
+    .then(params.stopTui)
+    .finally(() => {
+      if (params.keepHardExitArmed !== true) {
+        const clearTimeoutFn =
+          params.clearTimeoutFn ??
+          ((timer) => clearTimeout(timer as unknown as ReturnType<typeof setTimeout>));
+        clearTimeoutFn(hardExitTimer);
+      }
+      params.disposeStatus();
+    })
+    .catch(params.onError)
+    .finally(params.requestFinish);
+
+  // For the standalone command, settled teardown is not proof that runTui
+  // returned. Its unref keeps clean exits fast while preserving the deadline.
+  return hardExitTimer;
+}
+
+export function createTuiSignalHandlers(params: {
+  handleCtrlC: () => void;
+  requestExit: () => void;
+}): {
+  sigintHandler: () => void;
+  sigtermHandler: () => void;
+  sighupHandler: () => void;
+} {
+  return {
+    sigintHandler: params.handleCtrlC,
+    sigtermHandler: params.requestExit,
+    sighupHandler: params.requestExit,
+  };
+}
+
+export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
+  if (typeof tui.terminal?.drainInput === "function") {
+    try {
+      await tui.terminal.drainInput(TUI_SHUTDOWN_DRAIN_MAX_MS, TUI_SHUTDOWN_DRAIN_IDLE_MS);
+    } catch {
+      // Best-effort only. A failed drain should not skip terminal shutdown.
+    }
+  }
+  stopTuiSafely(() => tui.stop());
+}
+
+const TUI_BUSY_ACTIVITY_STATUSES = new Set([
+  "sending",
+  "waiting",
+  "streaming",
+  "running",
+  "finishing context",
+  "starting up",
+]);
+
+export function isTuiBusyActivityStatus(status: string): boolean {
+  return TUI_BUSY_ACTIVITY_STATUSES.has(status);
+}
+
+export function resolveTuiToolsToggleActivityStatus(params: {
+  currentStatus: string;
+  toolsExpanded: boolean;
+}): string {
+  const toolsStatus = params.toolsExpanded ? "tools expanded" : "tools collapsed";
+  if (isTuiBusyActivityStatus(params.currentStatus)) {
+    return params.currentStatus;
+  }
+  return toolsStatus;
+}
+
+export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {}): number {
+  return TUI_SHUTDOWN_HARD_EXIT_MS + (params.localMode ? resolveLocalRunShutdownGraceMs() : 0);
+}
+
+export function scheduleProcessExitAfterTuiReturn(
+  params: {
+    delayMs?: number;
+    setTimeoutFn?: TuiProcessExitTimeout;
+    exit?: (code?: number) => never | void;
+    writeStderr?: (text: string) => void;
+  } = {},
+): TuiProcessExitTimer {
+  const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
+  const setTimeoutFn =
+    params.setTimeoutFn ??
+    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
+  const exit = params.exit ?? ((code?: number) => process.exit(code));
+  const writeStderr =
+    params.writeStderr ??
+    ((text: string) => {
+      process.stderr.write(text);
+    });
+  const timer = setTimeoutFn(() => {
+    try {
+      writeStderr("openclaw tui forcing process exit after return\n");
+    } catch {
+      // Best effort only; forced exit must not depend on stderr.
+    }
+    exit(0);
+  }, delayMs);
+  timer.unref?.();
+  return timer;
+}
+
 type CtrlCAction = "clear" | "warn" | "exit";
+type TuiCtrlCAction = CtrlCAction | "force-exit";
 
 export function resolveCtrlCAction(params: {
   hasInput: boolean;
@@ -319,8 +561,35 @@ export function resolveCtrlCAction(params: {
   };
 }
 
-export async function runTui(opts: TuiOptions) {
-  const config = loadConfig();
+export function resolveTuiCtrlCAction(params: {
+  hasInput: boolean;
+  now: number;
+  lastCtrlCAt: number;
+  exitRequested?: boolean;
+  wasDisconnected?: boolean;
+  exitWindowMs?: number;
+}): { action: TuiCtrlCAction; nextLastCtrlCAt: number } {
+  if (params.exitRequested === true) {
+    return { action: "force-exit", nextLastCtrlCAt: params.lastCtrlCAt };
+  }
+  if (params.wasDisconnected === true) {
+    return { action: "exit", nextLastCtrlCAt: params.lastCtrlCAt };
+  }
+  return resolveCtrlCAction(params);
+}
+
+function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
+  return {
+    verboseLevel: config.agents?.defaults?.verboseDefault,
+  };
+}
+
+export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
+  const isLocalMode = opts.local === true || opts.backend !== undefined;
+  const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
+  const fallbackCwd = path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
+  const resolveUsableCwd = () => tryProcessCwd() ?? fallbackCwd;
+  const emptySessionInfoDefaults = resolveEmptySessionInfoDefaults(config);
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
@@ -329,16 +598,18 @@ export async function runTui(opts: TuiOptions) {
     cfg: config,
     fallbackAgentId: agentDefaultId,
     initialSessionInput,
-    cwd: process.cwd(),
   });
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
   let initialSessionApplied = false;
+  let rememberedSessionApplied = false;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
+  let pendingSubmit: TuiPendingSubmit | null = null;
   let historyLoaded = false;
   let isConnected = false;
+  let connectionGeneration = 0;
   let wasDisconnected = false;
   let toolsExpanded = false;
   let showThinking = false;
@@ -348,12 +619,20 @@ export async function runTui(opts: TuiOptions) {
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
+  const thinkingLevelOverride = normalizeThinkLevel(opts.thinking);
   let autoMessageSent = false;
-  let sessionInfo: SessionInfo = {};
+  let sessionInfo: SessionInfo = { ...emptySessionInfoDefaults };
+  let dynamicSlashCommands: CommandEntry[] = [];
+  let dynamicSlashCommandsKey: string | null = null;
+  let dynamicSlashCommandsInFlightKey: string | null = null;
+  let dynamicSlashCommandsRequestId = 0;
+  let dynamicSlashCommandsReady = false;
+  let dynamicSlashCommandsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let lastCtrlCAt = 0;
   let exitRequested = false;
+  let exitResult: TuiResult = { exitReason: "exit" };
   let activityStatus = "idle";
-  let connectionStatus = "connecting";
+  let connectionStatus = isLocalMode ? "starting local runtime" : "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
   let statusTimer: NodeJS.Timeout | null = null;
   let statusStartedAt: number | null = null;
@@ -389,12 +668,16 @@ export async function runTui(opts: TuiOptions) {
     },
     set currentAgentId(value) {
       currentAgentId = value;
+      pluginApprovals?.sessionChanged();
+      taskSuggestions?.sessionChanged();
     },
     get currentSessionKey() {
       return currentSessionKey;
     },
     set currentSessionKey(value) {
       currentSessionKey = value;
+      pluginApprovals?.sessionChanged();
+      taskSuggestions?.sessionChanged();
     },
     get currentSessionId() {
       return currentSessionId;
@@ -407,6 +690,12 @@ export async function runTui(opts: TuiOptions) {
     },
     set activeChatRunId(value) {
       activeChatRunId = value;
+    },
+    get pendingSubmit() {
+      return pendingSubmit;
+    },
+    set pendingSubmit(value) {
+      pendingSubmit = value;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -522,11 +811,31 @@ export async function runTui(opts: TuiOptions) {
     localBtwRunIds.clear();
   };
 
-  const client = await GatewayChatClient.connect({
-    url: opts.url,
-    token: opts.token,
-    password: opts.password,
-  });
+  let client: TuiBackend;
+  if (opts.backend) {
+    client = opts.backend;
+  } else if (opts.local) {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    client = new EmbeddedTuiBackend();
+  } else {
+    const { GatewayChatClient } = await import("./gateway-chat.js");
+    client = opts.boundGateway
+      ? GatewayChatClient.connectBound({ config, ...opts.boundGateway })
+      : await GatewayChatClient.connect({
+          url: opts.url,
+          token: opts.token,
+          password: opts.password,
+          tlsFingerprint: opts.tlsFingerprint,
+        });
+  }
+  const previousConsoleSubsystemFilter = isLocalMode
+    ? loggingState.consoleSubsystemFilter
+      ? [...loggingState.consoleSubsystemFilter]
+      : null
+    : null;
+  if (isLocalMode) {
+    setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
+  }
 
   const tui = new TUI(new ProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
@@ -549,17 +858,89 @@ export async function runTui(opts: TuiOptions) {
   root.addChild(footer);
   root.addChild(editor);
 
-  const updateAutocompleteProvider = () => {
+  const resolveDynamicSlashCommandsKey = () => currentAgentId;
+
+  const applyAutocompleteProvider = () => {
+    const dynamicKey = resolveDynamicSlashCommandsKey();
+    const slashCommands = getSlashCommands({
+      cfg: config,
+      local: isLocalMode,
+      provider: sessionInfo.modelProvider,
+      model: sessionInfo.model,
+      agentRuntime: sessionInfo.agentRuntime?.id,
+      thinkingLevels: sessionInfo.thinkingLevels,
+      dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
+    });
+    editor.shouldSubmitAutocomplete = (text) =>
+      shouldSubmitExactArgumentCompletion(text, slashCommands);
     editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(
-        getSlashCommands({
-          cfg: config,
-          provider: sessionInfo.modelProvider,
-          model: sessionInfo.model,
-        }),
-        process.cwd(),
-      ),
+      new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
     );
+  };
+
+  const clearDynamicSlashCommandsRefreshTimer = () => {
+    if (!dynamicSlashCommandsRefreshTimer) {
+      return;
+    }
+    clearTimeout(dynamicSlashCommandsRefreshTimer);
+    dynamicSlashCommandsRefreshTimer = null;
+  };
+
+  const refreshDynamicSlashCommands = () => {
+    clearDynamicSlashCommandsRefreshTimer();
+    const key = resolveDynamicSlashCommandsKey();
+    if (
+      !dynamicSlashCommandsReady ||
+      !isConnected ||
+      !client.listCommands ||
+      dynamicSlashCommandsKey === key ||
+      dynamicSlashCommandsInFlightKey === key
+    ) {
+      return;
+    }
+    dynamicSlashCommandsInFlightKey = key;
+    const requestId = ++dynamicSlashCommandsRequestId;
+    const agentId = currentAgentId;
+    void client
+      .listCommands({
+        agentId,
+        scope: "text",
+        includeArgs: false,
+      })
+      .then((commands) => {
+        if (
+          requestId !== dynamicSlashCommandsRequestId ||
+          key !== resolveDynamicSlashCommandsKey()
+        ) {
+          return;
+        }
+        dynamicSlashCommands = commands;
+        dynamicSlashCommandsKey = key;
+        applyAutocompleteProvider();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (dynamicSlashCommandsInFlightKey === key) {
+          dynamicSlashCommandsInFlightKey = null;
+        }
+      });
+  };
+
+  const scheduleDynamicSlashCommandsRefresh = () => {
+    if (
+      !dynamicSlashCommandsReady ||
+      dynamicSlashCommandsRefreshTimer ||
+      dynamicSlashCommandsKey === resolveDynamicSlashCommandsKey()
+    ) {
+      return;
+    }
+    dynamicSlashCommandsRefreshTimer = setTimeout(refreshDynamicSlashCommands, 0);
+    dynamicSlashCommandsRefreshTimer.unref?.();
+  };
+
+  const updateAutocompleteProvider = () => {
+    applyAutocompleteProvider();
+    scheduleDynamicSlashCommandsRefresh();
   };
 
   tui.addChild(root);
@@ -589,17 +970,89 @@ export async function runTui(opts: TuiOptions) {
 
   currentSessionKey = resolveSessionKey(initialSessionInput);
 
+  const buildLastSessionScopeKeyFor = (sessionKey = currentSessionKey) => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    return buildTuiLastSessionScopeKey({
+      connectionUrl: client.connection.url,
+      agentId: parsed?.agentId ?? currentAgentId,
+      sessionScope,
+    });
+  };
+
+  const rememberCurrentSessionKey = (sessionKey: string) => {
+    const trimmed = sessionKey.trim();
+    if (!trimmed || trimmed === "unknown") {
+      return;
+    }
+    void writeTuiLastSessionKey({
+      scopeKey: buildLastSessionScopeKeyFor(trimmed),
+      sessionKey: trimmed,
+    }).catch(() => undefined);
+  };
+
+  const restoreRememberedSession = async (expectedConnectionGeneration: number) => {
+    if (initialSessionInput || rememberedSessionApplied) {
+      return;
+    }
+    const remembered = await readTuiLastSessionKey({
+      scopeKey: buildLastSessionScopeKeyFor(),
+    });
+    if (expectedConnectionGeneration !== connectionGeneration || !isConnected || exitRequested) {
+      return;
+    }
+    const rememberedKey = remembered ? resolveSessionKey(remembered) : null;
+    if (!rememberedKey || rememberedKey === currentSessionKey) {
+      rememberedSessionApplied = true;
+      return;
+    }
+    const rememberedAgent = parseAgentSessionKey(rememberedKey)?.agentId;
+    if (rememberedAgent && normalizeAgentId(rememberedAgent) !== currentAgentId) {
+      rememberedSessionApplied = true;
+      return;
+    }
+    const sessions = await client
+      .listSessions({
+        limit: TUI_SESSION_LOOKUP_LIMIT,
+        search: rememberedKey,
+        includeGlobal: false,
+        includeUnknown: false,
+        agentId: currentAgentId,
+      })
+      .catch(() => null);
+    if (
+      !sessions ||
+      expectedConnectionGeneration !== connectionGeneration ||
+      !isConnected ||
+      exitRequested
+    ) {
+      return;
+    }
+    // An abandoned connection must leave restoration eligible for the next handshake.
+    rememberedSessionApplied = true;
+    const restored = resolveRememberedTuiSessionKey({
+      rememberedKey,
+      currentAgentId,
+      sessions: sessions.sessions,
+    });
+    if (!restored || restored === currentSessionKey) {
+      return;
+    }
+    currentSessionKey = restored;
+    updateHeader();
+    updateFooter();
+  };
+
   const updateHeader = () => {
     const sessionLabel = formatSessionKey(currentSessionKey);
     const agentLabel = formatAgentLabel(currentAgentId);
+    const title = opts.title ?? "openclaw tui";
     header.setText(
       theme.header(
-        `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
+        `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
       ),
     );
   };
 
-  const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
 
@@ -671,7 +1124,7 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
     statusTimer = setInterval(() => {
-      if (!busyStates.has(activityStatus)) {
+      if (!isTuiBusyActivityStatus(activityStatus)) {
         return;
       }
       updateBusyStatusMessage();
@@ -684,6 +1137,14 @@ export async function runTui(opts: TuiOptions) {
     }
     clearInterval(statusTimer);
     statusTimer = null;
+  };
+
+  const stopStatusTimeout = () => {
+    if (!statusTimeout) {
+      return;
+    }
+    clearTimeout(statusTimeout);
+    statusTimeout = null;
   };
 
   const startWaitingTimer = () => {
@@ -716,8 +1177,18 @@ export async function runTui(opts: TuiOptions) {
     waitingPhrase = null;
   };
 
+  const disposeStatus = () => {
+    stopStatusTimer();
+    stopWaitingTimer();
+    stopStatusTimeout();
+    clearDynamicSlashCommandsRefreshTimer();
+    dynamicSlashCommandsRequestId += 1;
+    statusLoader?.stop();
+    statusLoader = null;
+  };
+
   const renderStatus = () => {
-    const isBusy = busyStates.has(activityStatus);
+    const isBusy = isTuiBusyActivityStatus(activityStatus);
     if (isBusy) {
       if (!statusStartedAt || lastActivityStatus !== activityStatus) {
         statusStartedAt = Date.now();
@@ -748,11 +1219,17 @@ export async function runTui(opts: TuiOptions) {
     connectionStatus = text;
     renderStatus();
     if (statusTimeout) {
-      clearTimeout(statusTimeout);
+      stopStatusTimeout();
     }
     if (ttlMs && ttlMs > 0) {
       statusTimeout = setTimeout(() => {
-        connectionStatus = isConnected ? "connected" : "disconnected";
+        connectionStatus = isConnected
+          ? isLocalMode
+            ? "local ready"
+            : "connected"
+          : isLocalMode
+            ? "local stopped"
+            : "disconnected";
         renderStatus();
       }, ttlMs);
     }
@@ -763,20 +1240,80 @@ export async function runTui(opts: TuiOptions) {
     renderStatus();
   };
 
+  const withTuiSuspended = async <T>(work: () => Promise<T>): Promise<T> => {
+    await drainAndStopTuiSafely(tui);
+    if (isLocalMode) {
+      setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
+    }
+    try {
+      return await work();
+    } finally {
+      if (isLocalMode) {
+        setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
+      }
+      tui.start();
+      tui.setFocus(editor);
+      updateHeader();
+      updateFooter();
+      tui.requestRender(true);
+    }
+  };
+
+  const runAuthFlow = isLocalMode
+    ? async (params: { provider?: string }) =>
+        await withTuiSuspended(async () => {
+          const provider = params.provider?.trim() || undefined;
+
+          // Codex owns its auth store; delegate when the CLI is available.
+          const codexBin =
+            provider === OPENAI_CODEX_PROVIDER ||
+            (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
+              ? await resolveCodexCliBin()
+              : null;
+
+          return await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
+            (resolve, reject) => {
+              let command: string;
+              let args: string[];
+              if (codexBin) {
+                command = codexBin;
+                args = ["login"];
+              } else {
+                ({ command, args } = resolveLocalAuthCliInvocation());
+                if (provider) {
+                  args.push("--provider", provider);
+                }
+              }
+
+              const invocation = resolveLocalAuthSpawnInvocation({ command, args });
+              const child = spawn(invocation.command, invocation.args, {
+                cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveUsableCwd() }),
+                env: process.env,
+                stdio: "inherit",
+                ...invocation.options,
+              });
+              child.once("error", reject);
+              child.once("exit", (exitCode, signal) => {
+                resolve({ exitCode, signal });
+              });
+            },
+          );
+        })
+    : undefined;
+
   const updateFooter = () => {
     const sessionKeyLabel = formatSessionKey(currentSessionKey);
     const sessionLabel = sessionInfo.displayName
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = sessionInfo.model
-      ? sessionInfo.modelProvider
-        ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
-        : sessionInfo.model
-      : "unknown";
+    const modelLabel = formatModelFooter({
+      model: sessionInfo.model,
+      thinkingLevel: thinkingLevelOverride ?? sessionInfo.thinkingLevel,
+    });
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
-    const think = sessionInfo.thinkingLevel ?? "off";
-    const fast = sessionInfo.fastMode === true;
+    const fastLabel =
+      sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
@@ -785,8 +1322,8 @@ export async function runTui(opts: TuiOptions) {
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
-      think !== "off" ? `think ${think}` : null,
-      fast ? "fast" : null,
+      formatGoalFooter(sessionInfo.goal),
+      fastLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
@@ -795,6 +1332,15 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const pluginApprovals = createTuiPluginApprovalController({
+    client,
+    chatLog,
+    getAgentId: () => currentAgentId,
+    getSessionKey: () => currentSessionKey,
+    openOverlay,
+    closeOverlay,
+    requestRender: () => tui.requestRender(),
+  });
   const btw = {
     showResult: (params: { question: string; text: string; isError?: boolean }) => {
       chatLog.showBtw(params);
@@ -828,24 +1374,51 @@ export async function runTui(opts: TuiOptions) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    rememberSessionKey: rememberCurrentSessionKey,
   });
   const {
     refreshAgents,
     refreshSessionInfo,
     applySessionInfoFromPatch,
+    applySessionMutationResult,
     loadHistory,
     setSession,
     abortActive,
   } = sessionActions;
+  const taskSuggestions = createTuiTaskSuggestionController({
+    client,
+    chatLog,
+    getAgentId: () => currentAgentId,
+    getSessionKey: () => currentSessionKey,
+    openOverlay,
+    closeOverlay,
+    requestRender: () => tui.requestRender(),
+    onAccepted: setSession,
+  });
 
-  const { handleChatEvent, handleAgentEvent, handleBtwEvent } = createEventHandlers({
+  const {
+    handleChatEvent,
+    handleAgentEvent,
+    handleBtwEvent,
+    handleSessionsChangedEvent,
+    handleSessionMessageEvent,
+    pauseStreamingWatchdog,
+    reconnectStreamingWatchdog,
+    consumeCompletedRunForPendingSend,
+    isRunObserved,
+    reconcileHistoryAfterGap,
+    flushPendingHistoryRefreshIfIdle,
+    dispose: disposeEventHandlers,
+  } = createEventHandlers({
     chatLog,
     btw,
     tui,
     state,
+    localMode: isLocalMode,
     setActivityStatus,
     refreshSessionInfo,
     loadHistory,
+    noteLocalRunId,
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
@@ -854,28 +1427,66 @@ export async function runTui(opts: TuiOptions) {
     clearLocalBtwRunIds,
   });
 
-  const requestExit = () => {
+  const deferredFinish = createDeferredTuiFinish();
+  const forceExit = () => {
+    try {
+      process.stderr.write("openclaw tui forcing exit\n");
+    } catch {
+      // Best effort only; force exit must not depend on stderr.
+    }
+    process.exit(130);
+  };
+  const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {
+      forceExit();
       return;
     }
     exitRequested = true;
-    client.stop();
-    stopTuiSafely(() => tui.stop());
-    process.exit(0);
+    connectionGeneration += 1;
+    exitResult = {
+      exitReason: result?.exitReason ?? "exit",
+      ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
+    };
+    disposeEventHandlers();
+    pluginApprovals?.dispose();
+    taskSuggestions?.dispose();
+    beginTuiShutdown({
+      stopClient: () => client.stop(),
+      stopTui: () => drainAndStopTuiSafely(tui),
+      disposeStatus,
+      requestFinish: deferredFinish.requestFinish,
+      forceExit,
+      hardExitMs: resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
+      keepHardExitArmed: opts.forceProcessExitOnReturn === true,
+      onError: (err) => {
+        if (!isTuiTerminalLossError(err)) {
+          try {
+            process.stderr.write(`openclaw tui shutdown failed: ${formatTuiErrorMessage(err)}\n`);
+          } catch {
+            // Best effort only; exit must still complete.
+          }
+        }
+      },
+    });
   };
+  const exitAwareClient = client as TuiBackend & {
+    setRequestExitHandler?: (handler: () => void) => void;
+  };
+  exitAwareClient.setRequestExitHandler?.(() => requestExit());
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
     createCommandHandlers({
       client,
       chatLog,
       tui,
-      opts,
+      opts: { ...opts, local: isLocalMode },
       state,
       deliverDefault,
       openOverlay,
       closeOverlay,
       refreshSessionInfo,
       applySessionInfoFromPatch,
+      applySessionMutationResult,
       loadHistory,
       setSession,
       refreshAgents,
@@ -886,6 +1497,10 @@ export async function runTui(opts: TuiOptions) {
       noteLocalBtwRunId,
       forgetLocalRunId,
       forgetLocalBtwRunId,
+      consumeCompletedRunForPendingSend,
+      isRunObserved,
+      flushPendingHistoryRefreshIfIdle,
+      runAuthFlow,
       requestExit,
     });
 
@@ -896,11 +1511,38 @@ export async function runTui(opts: TuiOptions) {
     closeOverlay,
   });
   updateAutocompleteProvider();
+  const admitChatMessage = (message: string) =>
+    resolveTuiChatSubmitAdmission({
+      isConnected: state.isConnected,
+      activeChatRunId: state.activeChatRunId,
+      pendingSubmit: state.pendingSubmit,
+      message,
+    });
+  const notifyBlockedChatSubmit = (
+    _message: string,
+    reason: Exclude<TuiChatSubmitAdmission, "allowed">,
+  ) => {
+    if (reason === "pending") {
+      addBlockedChatSubmitNotice(chatLog);
+    } else {
+      chatLog.addSystem(disconnectedTuiChatSubmitMessage(isLocalMode));
+      setActivityStatus("disconnected");
+    }
+    tui.requestRender();
+  };
+  const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
+    const message = formatTuiErrorMessage(error);
+    chatLog.addSystem(`${action} submit failed: ${message}`);
+    tui.requestRender();
+  };
   const submitHandler = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
     handleBangLine: runLocalShellLine,
+    onSubmitError: notifySubmitError,
+    admitMessage: admitChatMessage,
+    onBlockedMessageSubmit: notifyBlockedChatSubmit,
   });
   editor.onSubmit = createSubmitBurstCoalescer({
     submit: submitHandler,
@@ -917,11 +1559,17 @@ export async function runTui(opts: TuiOptions) {
   };
   const handleCtrlC = () => {
     const now = Date.now();
-    const decision = resolveCtrlCAction({
+    const decision = resolveTuiCtrlCAction({
       hasInput: editor.getText().trim().length > 0,
       now,
       lastCtrlCAt,
+      exitRequested,
+      wasDisconnected,
     });
+    if (decision.action === "force-exit") {
+      forceExit();
+      return;
+    }
     lastCtrlCAt = decision.nextLastCtrlCAt;
     if (decision.action === "clear") {
       editor.setText("");
@@ -945,7 +1593,14 @@ export async function runTui(opts: TuiOptions) {
   editor.onCtrlO = () => {
     toolsExpanded = !toolsExpanded;
     chatLog.setToolsExpanded(toolsExpanded);
-    setActivityStatus(toolsExpanded ? "tools expanded" : "tools collapsed");
+    // Ctrl+O is presentation-only; preserve busy activity so the status loader
+    // does not disappear before the run lifecycle ends.
+    setActivityStatus(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: activityStatus,
+        toolsExpanded,
+      }),
+    );
     tui.requestRender();
   };
   editor.onCtrlL = () => {
@@ -963,7 +1618,8 @@ export async function runTui(opts: TuiOptions) {
   };
 
   tui.addInputListener((data) => {
-    if (!chatLog.hasVisibleBtw()) {
+    // A visible overlay owns Enter even while an inline BTW card remains visible.
+    if (tui.hasOverlay() || !chatLog.hasVisibleBtw()) {
       return undefined;
     }
     if (editor.getText().length > 0) {
@@ -978,6 +1634,11 @@ export async function runTui(opts: TuiOptions) {
   });
 
   client.onEvent = (evt) => {
+    if (exitRequested) {
+      return;
+    }
+    pluginApprovals?.handleEvent(evt.event, evt.payload);
+    taskSuggestions?.handleEvent(evt.event, evt.payload);
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
     }
@@ -987,34 +1648,154 @@ export async function runTui(opts: TuiOptions) {
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
     }
+    if (evt.event === "sessions.changed") {
+      handleSessionsChangedEvent(evt.payload);
+    }
+    if (evt.event === "session.message") {
+      handleSessionMessageEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
+    if (exitRequested) {
+      return;
+    }
+    const connectedGeneration = ++connectionGeneration;
+    const ownsConnection = () =>
+      connectedGeneration === connectionGeneration && isConnected && !exitRequested;
     isConnected = true;
     pairingHintShown = false;
     const reconnected = wasDisconnected;
     wasDisconnected = false;
-    setConnectionStatus("connected");
+    if (reconnected) {
+      reconnectStreamingWatchdog();
+    }
+    setConnectionStatus(isLocalMode ? "local ready" : "connected");
+    // A reconnect may already have restored a live run's busy status. Only
+    // claim the status line when startup owns it, then release that exact state.
+    if (!isTuiBusyActivityStatus(activityStatus)) {
+      setActivityStatus("starting up");
+    }
     void (async () => {
+      for (let attempt = 0; attempt < SESSION_SUBSCRIPTION_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await client.subscribeSessionEvents?.();
+          break;
+        } catch (err) {
+          if (!ownsConnection()) {
+            return;
+          }
+          if (attempt + 1 === SESSION_SUBSCRIPTION_MAX_ATTEMPTS) {
+            chatLog.addSystem(`session event subscribe failed: ${formatTuiErrorMessage(err)}`);
+            if (activityStatus === "starting up") {
+              setActivityStatus("idle");
+            }
+            setConnectionStatus("session event subscription failed");
+            tui.requestRender();
+            return;
+          }
+          // A connected but unsubscribed TUI misses every peer's message. Wait
+          // between idempotent retries and abandon this generation on reconnect.
+          await delay(SESSION_SUBSCRIPTION_RETRY_DELAY_MS * (attempt + 1));
+          if (!ownsConnection()) {
+            return;
+          }
+        }
+      }
+      if (!ownsConnection()) {
+        return;
+      }
       await refreshAgents();
+      if (!ownsConnection()) {
+        return;
+      }
+      await restoreRememberedSession(connectedGeneration);
+      if (!ownsConnection()) {
+        return;
+      }
       updateHeader();
+      updateAutocompleteProvider();
+      try {
+        await pluginApprovals?.refresh();
+      } catch (err) {
+        if (!ownsConnection()) {
+          return;
+        }
+        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
+      }
+      if (!ownsConnection()) {
+        return;
+      }
+      try {
+        await taskSuggestions?.refresh();
+      } catch (err) {
+        if (!ownsConnection()) {
+          return;
+        }
+        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
+      }
+      if (!ownsConnection()) {
+        return;
+      }
       await loadHistory();
-      setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
+      if (!ownsConnection()) {
+        return;
+      }
+      if (activityStatus === "starting up") {
+        setActivityStatus("idle");
+      }
+      setConnectionStatus(
+        isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
+        4000,
+      );
       tui.requestRender();
+      dynamicSlashCommandsReady = true;
+      scheduleDynamicSlashCommandsRefresh();
       if (!autoMessageSent && autoMessage) {
         autoMessageSent = true;
         await sendMessage(autoMessage);
+        if (!ownsConnection()) {
+          return;
+        }
       }
       updateFooter();
       tui.requestRender();
-    })();
+    })().catch((err: unknown) => {
+      if (!ownsConnection()) {
+        return;
+      }
+      chatLog.addSystem(`startup failed: ${formatTuiErrorMessage(err)}`);
+      if (activityStatus === "starting up") {
+        setActivityStatus("idle");
+      }
+      setConnectionStatus("startup failed", 5000);
+      tui.requestRender();
+    });
   };
 
   client.onDisconnected = (reason) => {
+    if (exitRequested) {
+      return;
+    }
+    connectionGeneration += 1;
     isConnected = false;
     wasDisconnected = true;
     historyLoaded = false;
-    const disconnectState = resolveGatewayDisconnectState(reason);
+    dynamicSlashCommands = [];
+    dynamicSlashCommandsKey = null;
+    dynamicSlashCommandsInFlightKey = null;
+    dynamicSlashCommandsReady = false;
+    clearDynamicSlashCommandsRefreshTimer();
+    dynamicSlashCommandsRequestId += 1;
+    updateAutocompleteProvider();
+    pauseStreamingWatchdog();
+    const disconnectState = isLocalMode
+      ? {
+          connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
+          activityStatus: "idle",
+          pairingHint: undefined,
+        }
+      : resolveGatewayDisconnectState(reason);
     setConnectionStatus(disconnectState.connectionStatus, 5000);
     setActivityStatus(disconnectState.activityStatus);
     if (disconnectState.pairingHint && !pairingHintShown) {
@@ -1026,29 +1807,65 @@ export async function runTui(opts: TuiOptions) {
   };
 
   client.onGap = (info) => {
+    if (exitRequested || !isConnected) {
+      return;
+    }
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    reconcileHistoryAfterGap();
+    void (async () => {
+      try {
+        await pluginApprovals?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
+      }
+      try {
+        await taskSuggestions?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
+      }
+    })();
     tui.requestRender();
   };
 
   updateHeader();
-  setConnectionStatus("connecting");
+  setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
   updateFooter();
-  const sigintHandler = () => {
-    handleCtrlC();
-  };
-  const sigtermHandler = () => {
-    requestExit();
-  };
+  const { sigintHandler, sigtermHandler, sighupHandler } = createTuiSignalHandlers({
+    handleCtrlC,
+    requestExit,
+  });
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
+  process.on("SIGHUP", sighupHandler);
+  let cleanupTerminalLossHandler: (() => void) | null = installTuiTerminalLossExitHandler(() =>
+    requestExit(),
+  );
   tui.start();
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
+      disposeStatus();
+      disposeEventHandlers();
+      pluginApprovals?.dispose();
+      taskSuggestions?.dispose();
+      if (isLocalMode) {
+        setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
+      }
+      cleanupTerminalLossHandler?.();
+      cleanupTerminalLossHandler = null;
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
+      process.removeListener("SIGHUP", sighupHandler);
+      process.removeListener("exit", finish);
+      deferredFinish.clearFinish();
       resolve();
     };
     process.once("exit", finish);
+    deferredFinish.setFinish(finish);
   });
+  if (opts.forceProcessExitOnReturn === true) {
+    scheduleProcessExitAfterTuiReturn();
+  }
+  return exitResult;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

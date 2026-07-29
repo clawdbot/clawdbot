@@ -3,201 +3,217 @@ summary: "Model provider overview with example configs + CLI flows"
 read_when:
   - You need a provider-by-provider model setup reference
   - You want example configs or CLI onboarding commands for model providers
-title: "Model Providers"
+title: "Model providers"
+sidebarTitle: "Model providers"
 ---
 
-# Model providers
-
-This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
-For model selection rules, see [/concepts/models](/concepts/models).
+Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram). For model selection rules, see [Models](/concepts/models).
 
 ## Quick rules
 
-- Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
-- If you set `agents.defaults.models`, it becomes the allowlist.
-- CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
-- Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
-  OpenClaw merges that output into `models.providers` before writing
-  `models.json`.
-- Provider manifests can declare `providerAuthEnvVars` so generic env-based
-  auth probes do not need to load plugin runtime. The remaining core env-var
-  map is now just for non-plugin/core providers and a few generic-precedence
-  cases such as Anthropic API-key-first onboarding.
-- Provider plugins can also own provider runtime behavior via
-  `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
-  `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`,
-  `refreshOAuth`, `buildAuthDoctorHint`,
-  `isCacheTtlEligible`, `buildMissingAuthMessage`,
-  `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`,
-  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
-  `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
-  `fetchUsageSnapshot`.
-- Note: provider runtime `capabilities` is shared runner metadata (provider
-  family, transcript/tooling quirks, transport/cache hints). It is not the
-  same as the [public capability model](/plugins/architecture#public-capability-model)
-  which describes what a plugin registers (text inference, speech, etc.).
+<AccordionGroup>
+  <Accordion title="Model refs and CLI helpers">
+    - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
+    - `agents.defaults.models` stores aliases and per-model settings; `agents.defaults.modelPolicy.allow` is the optional explicit override allowlist.
+    - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+    - `models.providers.*.contextWindow` / `contextTokens` / `maxTokens` set provider-level defaults; `models.providers.*.models[].contextWindow` / `contextTokens` / `maxTokens` override them per model.
+    - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
+
+  </Accordion>
+  <Accordion title="Adding provider auth does not change your primary model">
+    `openclaw configure` preserves an existing `agents.defaults.model.primary` when you add or reauth a provider. `openclaw models auth login` does the same unless you pass `--set-default`. Provider plugins may still return a recommended default model in their auth config patch, but OpenClaw treats that as "make this model available" when a primary model already exists, not "replace the current primary model."
+
+    To intentionally switch the default model, use `openclaw models set <provider/model>` or `openclaw models auth login --provider <id> --set-default`.
+
+  </Accordion>
+  <Accordion title="OpenAI provider/runtime split">
+    OpenAI model refs and agent runtimes are separate:
+
+    - `openai/<model>` selects the canonical OpenAI provider and model. The prefix alone never selects Codex.
+    - With provider/model runtime policy unset or `auto`, OpenAI may select Codex implicitly only for an exact official HTTPS Platform Responses or ChatGPT Responses route with no authored request override.
+    - Authored Completions adapters, custom endpoints, and routes with authored request behavior stay on OpenClaw. Plaintext official HTTP endpoints are rejected.
+    - legacy Codex model refs are legacy config that doctor rewrites to `openai/<model>`.
+    - Provider/model `agentRuntime.id: "openclaw"` explicitly keeps an otherwise eligible route on OpenClaw. `agentRuntime.id: "codex"` requires Codex and fails closed when the effective route is not Codex-compatible.
+
+    See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime) and [Codex harness](/plugins/codex-harness). If the provider/runtime split is confusing, read [Agent runtimes](/concepts/agent-runtimes) first.
+
+    Plugin auto-enable follows the same boundary: an implicitly Codex-compatible effective route can enable the Codex plugin, while explicit provider/model `agentRuntime.id: "codex"` or legacy `codex/<model>` refs require it. An `openai/*` prefix by itself does not.
+
+    Fresh OpenAI setup uses a route-specific GPT-5.6 ref: API-key setup selects
+    `openai/gpt-5.6` (the bare direct-API id resolves to Sol), while
+    ChatGPT/Codex OAuth selects exact `openai/gpt-5.6-sol` for the native Codex
+    catalog. Existing explicit primaries, including `openai/gpt-5.5`, are
+    preserved when OpenAI auth is added or refreshed. GPT-5.5 remains available
+    through either runtime as an explicit recovery choice for accounts without
+    GPT-5.6 access.
+
+  </Accordion>
+  <Accordion title="CLI runtimes">
+    CLI runtimes use the same split: choose canonical model refs such as `anthropic/claude-*` or `google/gemini-*`, then set provider/model runtime policy to `claude-cli` or `google-gemini-cli` when you want a local CLI backend.
+
+    Legacy `claude-cli/*` and `google-gemini-cli/*` refs migrate back to canonical provider refs with the runtime recorded separately. Legacy `codex-cli/*` refs migrate to `openai/*` and use the Codex app-server route; OpenClaw no longer keeps a bundled Codex CLI backend.
+
+  </Accordion>
+</AccordionGroup>
+
+## Configure providers in the Control UI
+
+Open **Settings → Model Providers** in the Control UI to add, replace, or remove provider API keys stored in `models.providers.<id>.apiKey`. The page identifies whether each API key comes from OpenClaw config or an environment variable without displaying the credential. Environment-provided keys remain managed by the gateway process environment.
+
+Use **Test connection** to run a live provider probe and see latency or a categorized authentication, rate-limit, billing, timeout, or response error. A probe makes a real provider request and may consume a small number of tokens. OAuth and token profiles can also be logged out from the provider card.
+
+The **Default models** card manages the primary model, ordered fallbacks, and utility model from the configured model catalog. Choose the models, then save them together to the existing `agents.defaults.model` and `agents.defaults.utilityModel` settings. For the utility model, **Automatic** leaves the setting unset and **Disabled** stores an empty string to turn utility routing off.
 
 ## Plugin-owned provider behavior
 
-Provider plugins can now own most provider-specific logic while OpenClaw keeps
-the generic inference loop.
+Most provider-specific logic lives in provider plugins (`registerProvider(...)`) while OpenClaw keeps the generic inference loop. Plugins own onboarding, model catalogs, auth env-var mapping, transport/config normalization, tool-schema cleanup, failover classification, OAuth refresh, usage reporting, thinking/reasoning profiles, and more.
 
-Typical split:
+The full list of provider-SDK hooks and bundled-plugin examples lives in [Provider plugins](/plugins/sdk-provider-plugins). A provider that needs a totally custom request executor is a separate, deeper extension surface.
 
-- `auth[].run` / `auth[].runNonInteractive`: provider owns onboarding/login
-  flows for `openclaw onboard`, `openclaw models auth`, and headless setup
-- `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
-  legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
-- `catalog`: provider appears in `models.providers`
-- `resolveDynamicModel`: provider accepts model ids not present in the local
-  static catalog yet
-- `prepareDynamicModel`: provider needs a metadata refresh before retrying
-  dynamic resolution
-- `normalizeResolvedModel`: provider needs transport or base URL rewrites
-- `capabilities`: provider publishes transcript/tooling/provider-family quirks
-- `prepareExtraParams`: provider defaults or normalizes per-model request params
-- `wrapStreamFn`: provider applies request headers/body/model compat wrappers
-- `formatApiKey`: provider formats stored auth profiles into the runtime
-  `apiKey` string expected by the transport
-- `refreshOAuth`: provider owns OAuth refresh when the shared `pi-ai`
-  refreshers are not enough
-- `buildAuthDoctorHint`: provider appends repair guidance when OAuth refresh
-  fails
-- `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
-- `buildMissingAuthMessage`: provider replaces the generic auth-store error
-  with a provider-specific recovery hint
-- `suppressBuiltInModel`: provider hides stale upstream rows and can return a
-  vendor-owned error for direct resolution failures
-- `augmentModelCatalog`: provider appends synthetic/final catalog rows after
-  discovery and config merging
-- `isBinaryThinking`: provider owns binary on/off thinking UX
-- `supportsXHighThinking`: provider opts selected models into `xhigh`
-- `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
-  model family
-- `isModernModelRef`: provider owns live/smoke preferred-model matching
-- `prepareRuntimeAuth`: provider turns a configured credential into a short
-  lived runtime token
-- `resolveUsageAuth`: provider resolves usage/quota credentials for `/usage`
-  and related status/reporting surfaces
-- `fetchUsageSnapshot`: provider owns the usage endpoint fetch/parsing while
-  core still owns the summary shell and formatting
-
-Current bundled examples:
-
-- `anthropic`: Claude 4.6 forward-compat fallback, auth repair hints, usage
-  endpoint fetching, and cache-TTL/provider-family metadata
-- `openrouter`: pass-through model ids, request wrappers, provider capability
-  hints, and cache-TTL policy
-- `github-copilot`: onboarding/device login, forward-compat model fallback,
-  Claude-thinking transcript hints, runtime token exchange, and usage endpoint
-  fetching
-- `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
-  normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
-  OpenAI/Codex catalog rows, thinking/live-model policy, and
-  provider-family metadata
-- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback and
-  modern-model matching; Gemini CLI OAuth also owns auth-profile token
-  formatting, usage-token parsing, and quota endpoint fetching for usage
-  surfaces
-- `moonshot`: shared transport, plugin-owned thinking payload normalization
-- `kilocode`: shared transport, plugin-owned request headers, reasoning payload
-  normalization, Gemini transcript hints, and cache-TTL policy
-- `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
-  policy, binary-thinking/live-model policy, and usage auth + quota fetching
-- `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
-- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
-  `modelstudio`, `nvidia`, `qianfan`, `synthetic`, `together`, `venice`,
-  `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
-- `qwen-portal`: plugin-owned catalog, OAuth login, and OAuth refresh
-- `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
-
-The bundled `openai` plugin now owns both provider ids: `openai` and
-`openai-codex`.
-
-That covers providers that still fit OpenClaw's normal transports. A provider
-that needs a totally custom request executor is a separate, deeper extension
-surface.
+<Note>
+Provider-owned runner behavior lives on explicit provider hooks such as replay policy, tool-schema normalization, stream wrapping, and transport/request helpers. The legacy `ProviderPlugin.capabilities` static bag is compatibility-only and is no longer read by shared runner logic.
+</Note>
 
 ## API key rotation
 
-- Supports generic provider rotation for selected providers.
-- Configure multiple keys via:
-  - `OPENCLAW_LIVE_<PROVIDER>_KEY` (single live override, highest priority)
-  - `<PROVIDER>_API_KEYS` (comma or semicolon list)
-  - `<PROVIDER>_API_KEY` (primary key)
-  - `<PROVIDER>_API_KEY_*` (numbered list, e.g. `<PROVIDER>_API_KEY_1`)
-- For Google providers, `GOOGLE_API_KEY` is also included as fallback.
-- Key selection order preserves priority and deduplicates values.
-- Requests are retried with the next key only on rate-limit responses (for example `429`, `rate_limit`, `quota`, `resource exhausted`).
-- Non-rate-limit failures fail immediately; no key rotation is attempted.
-- When all candidate keys fail, the final error is returned from the last attempt.
+<AccordionGroup>
+  <Accordion title="Key sources and priority">
+    Configure multiple keys via:
 
-## Built-in providers (pi-ai catalog)
+    - `OPENCLAW_LIVE_<PROVIDER>_KEY` (single live override, highest priority)
+    - `<PROVIDER>_API_KEYS` (comma or semicolon list)
+    - `<PROVIDER>_API_KEY` (primary key)
+    - `<PROVIDER>_API_KEY_*` (numbered list, e.g. `<PROVIDER>_API_KEY_1`)
 
-OpenClaw ships with the pi‑ai catalog. These providers require **no**
-`models.providers` config; just set auth + pick a model.
+    For Google providers, `GOOGLE_API_KEY` is also included as fallback. Key selection order preserves priority and deduplicates values.
+
+  </Accordion>
+  <Accordion title="When rotation kicks in">
+    - Requests are retried with the next key only on rate-limit responses (for example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, or periodic usage-limit messages).
+    - Non-rate-limit failures fail immediately; no key rotation is attempted.
+    - When all candidate keys fail, the final error is returned from the last attempt.
+
+  </Accordion>
+</AccordionGroup>
+
+## Official provider plugins
+
+Official provider plugins publish their own model catalog rows. These providers require **no** `models.providers` model entries; enable the provider plugin, set auth, and pick a model. Use `models.providers` only for explicit custom providers or narrow request settings such as timeouts.
 
 ### OpenAI
 
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
 - Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
-- Example models: `openai/gpt-5.4`, `openai/gpt-5.4-pro`
+- Fresh setup default: `openai/gpt-5.6`; on the direct API, the bare id resolves to Sol.
+- Example models: `openai/gpt-5.6`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`
+- Verify account/model availability with `openclaw models list --provider openai` if a specific install or API key behaves differently.
 - CLI: `openclaw onboard --auth-choice openai-api-key`
-- Default transport is `auto` (WebSocket-first, SSE fallback)
+- Default transport is `auto`; OpenClaw passes the transport choice to the shared model runtime.
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
-- OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
 - OpenAI priority processing can be enabled via `agents.defaults.models["openai/<model>"].params.serviceTier`
-- OpenAI fast mode can be enabled per model via `agents.defaults.models["<provider>/<model>"].params.fastMode`
-- `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because the live OpenAI API rejects it; Spark is treated as Codex-only
+- `/fast` and `params.fastMode` map direct `openai/*` Responses requests to `service_tier=priority` on `api.openai.com`
+- Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
+- Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) apply only on native OpenAI traffic to `api.openai.com`, not generic OpenAI-compatible proxies
+- Native OpenAI routes also keep Responses `store`, prompt-cache hints, and OpenAI reasoning-compat payload shaping; proxy routes do not
+- `openai/gpt-5.3-codex-spark` is available only through ChatGPT/Codex OAuth; direct OpenAI API-key and Azure API-key routes reject it
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
 }
 ```
+
+If the API organization does not expose GPT-5.6, set
+`openai/gpt-5.5` explicitly. Normal onboarding and reauthentication preserve an
+existing explicit primary model; `models auth login --set-default` and
+`models set` are the intentional replacement paths.
 
 ### Anthropic
 
 - Provider: `anthropic`
-- Auth: `ANTHROPIC_API_KEY` or `claude setup-token`
+- Auth: `ANTHROPIC_API_KEY`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
-- Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
-- Direct API-key models support the shared `/fast` toggle and `params.fastMode`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Policy note: setup-token support is technical compatibility; Anthropic has blocked some subscription usage outside Claude Code in the past. Verify current Anthropic terms and decide based on your risk tolerance.
-- Recommendation: Anthropic API key auth is the safer, recommended path over subscription setup-token auth.
+- Example model: `anthropic/claude-opus-5`
+- CLI: `openclaw onboard --auth-choice apiKey`
+- Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
+- Preferred Claude CLI config keeps the model ref canonical and selects the CLI
+  backend separately: `anthropic/claude-opus-5` with
+  model-scoped `agentRuntime.id: "claude-cli"`. Legacy
+  `claude-cli/claude-opus-4-7` refs still work for compatibility.
+
+<Note>
+Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthropic setup-token auth remains supported, but OpenClaw prefers Claude CLI reuse when available.
+</Note>
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
 }
 ```
 
-### OpenAI Code (Codex)
+### OpenAI ChatGPT/Codex OAuth
 
-- Provider: `openai-codex`
+- Provider: `openai`
 - Auth: OAuth (ChatGPT)
-- Example model: `openai-codex/gpt-5.4`
-- CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
-- Default transport is `auto` (WebSocket-first, SSE fallback)
-- Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
-- Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`
-- `openai-codex/gpt-5.3-codex-spark` remains available when the Codex OAuth catalog exposes it; entitlement-dependent
-- Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
+- Fresh native Codex app-server harness ref: `openai/gpt-5.6-sol`
+- Native Codex app-server harness docs: [Codex harness](/plugins/codex-harness)
+- Legacy model refs: `codex/gpt-*`, `openai-codex/gpt-*`
+- Plugin boundary: `openai/*` loads the OpenAI plugin; explicit runtime policy or the provider-owned effective route decides whether the native Codex app-server plugin is selected.
+- CLI: `openclaw onboard --auth-choice openai` or `openclaw models auth login --provider openai`
+- OpenClaw's embedded ChatGPT Responses transport defaults to `auto` (WebSocket-first, SSE fallback).
+- `agents.defaults.models["openai/<model>"].params.transport`, `params.serviceTier`, and `params.fastMode` are authored embedded-request settings. They keep implicit runtime selection on OpenClaw; native Codex owns its app-server transport and service tier.
+- Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) are only attached on native Codex traffic to `chatgpt.com/backend-api`, not generic OpenAI-compatible proxies
+- The shared `/fast` toggle remains available as a runtime control; it is distinct from authored model params.
+- The native Codex catalog can expose exact `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` refs according to account access. It does not apply the direct API's bare `gpt-5.6` alias client-side.
+- `openai/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai.models[].contextTokens`
+- Sign in with `openai` auth and use `openai/gpt-5.6-sol` for a fresh subscription-backed setup. Select `openai/gpt-5.5` explicitly if that Codex workspace does not expose GPT-5.6.
+- Use provider/model `agentRuntime.id: "openclaw"` to keep an otherwise eligible route on the built-in runtime. With runtime unset or `auto`, only an exact official HTTPS Responses/ChatGPT-compatible route with no authored request override may select Codex implicitly.
+- Legacy Codex GPT refs are legacy state, not a live provider route. Use canonical `openai/*` refs for new agent config, and run `openclaw doctor --fix` to migrate `codex/*` and `openai-codex/*` refs while preserving their native Codex semantics with model-scoped `agentRuntime.id: "codex"`. Existing explicit canonical `openai/gpt-5.5` selections are not upgraded.
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
+  plugins: { entries: { codex: { enabled: true } } },
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.6-sol" },
+    },
+  },
 }
 ```
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        models: [{ id: "gpt-5.5", contextTokens: 160000 }],
+      },
+    },
+  },
+}
+```
+
+### Other subscription-style hosted options
+
+<CardGroup cols={3}>
+  <Card title="MiniMax" href="/providers/minimax">
+    MiniMax Coding Plan OAuth or API key access.
+  </Card>
+  <Card title="Qwen Cloud" href="/providers/qwen">
+    Qwen Cloud provider surface plus Alibaba DashScope and Coding Plan endpoint mapping.
+  </Card>
+  <Card title="Z.AI (GLM)" href="/providers/zai">
+    Z.AI Coding Plan or general API endpoints.
+  </Card>
+</CardGroup>
 
 ### OpenCode
 
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
-- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.5`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`
 - CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
@@ -211,111 +227,167 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
 - Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `OPENCLAW_LIVE_GEMINI_KEY` (single override)
-- Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`
+- Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3.5-flash`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
+- Alias: `google/gemini-3.1-pro` is accepted and normalized to Google's live Gemini API id, `google/gemini-3.1-pro-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
+- Thinking: `/think adaptive` uses Google dynamic thinking. Gemini 3/3.1 omit a fixed `thinkingLevel`; Gemini 2.5 sends `thinkingBudget: -1`.
+- Direct Gemini runs also accept `agents.defaults.models["google/<model>"].params.cachedContent` (or legacy `cached_content`) to forward a provider-native `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
 
 ### Google Vertex and Gemini CLI
 
 - Providers: `google-vertex`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
-- Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
-- Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
-  - Enable: `openclaw plugins enable google`
-  - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
-    tokens in auth profiles on the gateway host.
+
+<Warning>
+Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
+</Warning>
+
+Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
+
+<Steps>
+  <Step title="Install Gemini CLI">
+    <Tabs>
+      <Tab title="brew">
+        ```bash
+        brew install gemini-cli
+        ```
+      </Tab>
+      <Tab title="npm">
+        ```bash
+        npm install -g @google/gemini-cli
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Enable plugin">
+    ```bash
+    openclaw plugins enable google
+    ```
+  </Step>
+  <Step title="Login">
+    ```bash
+    openclaw models auth login --provider google-gemini-cli --set-default
+    ```
+
+    Default model: `google-gemini-cli/gemini-3-flash-preview`. You do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores tokens in auth profiles on the gateway host.
+
+  </Step>
+  <Step title="Set project (if needed)">
+    If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
+  </Step>
+</Steps>
+
+Gemini CLI uses `stream-json` by default. OpenClaw reads assistant stream
+messages and normalizes `stats.cached` into `cacheRead`; legacy
+`--output-format json` overrides still read reply text from `response`.
 
 ### Z.AI (GLM)
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-5`
+- Example model: `zai/glm-5.2`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
-  - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
+  - Model refs use the canonical `zai/*` provider ID.
+  - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
 
 ### Vercel AI Gateway
 
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
-- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
+- Example models: `vercel-ai-gateway/anthropic/claude-opus-4.6`, `vercel-ai-gateway/moonshotai/kimi-k2.6`
 - CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
-
-### Kilo Gateway
-
-- Provider: `kilocode`
-- Auth: `KILOCODE_API_KEY`
-- Example model: `kilocode/anthropic/claude-opus-4.6`
-- CLI: `openclaw onboard --kilocode-api-key <key>`
-- Base URL: `https://api.kilo.ai/api/gateway/`
-- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.5 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
-
-See [/providers/kilocode](/providers/kilocode) for setup details.
 
 ### Other bundled provider plugins
 
-- OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
-- Example model: `openrouter/anthropic/claude-sonnet-4-6`
-- Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
-- Example model: `kilocode/anthropic/claude-opus-4.6`
-- MiniMax: `minimax` (`MINIMAX_API_KEY`)
-- Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
-- Kimi Coding: `kimi-coding` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
-- Qianfan: `qianfan` (`QIANFAN_API_KEY`)
-- Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
-- NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
-- Together: `together` (`TOGETHER_API_KEY`)
-- Venice: `venice` (`VENICE_API_KEY`)
-- Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)
-- Vercel AI Gateway: `vercel-ai-gateway` (`AI_GATEWAY_API_KEY`)
-- Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`)
-- Cloudflare AI Gateway: `cloudflare-ai-gateway` (`CLOUDFLARE_AI_GATEWAY_API_KEY`)
-- Volcengine: `volcengine` (`VOLCANO_ENGINE_API_KEY`)
-- BytePlus: `byteplus` (`BYTEPLUS_API_KEY`)
-- xAI: `xai` (`XAI_API_KEY`)
-- Mistral: `mistral` (`MISTRAL_API_KEY`)
-- Example model: `mistral/mistral-large-latest`
-- CLI: `openclaw onboard --auth-choice mistral-api-key`
-- Groq: `groq` (`GROQ_API_KEY`)
-- Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
-  - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
-  - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
-- GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
-- Hugging Face Inference example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
+| Provider                                | Id                               | Auth env                                             | Example model                                          |
+| --------------------------------------- | -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
+| Arcee                                   | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`            | `arcee/trinity-large-thinking`                         |
+| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                   | `byteplus-plan/ark-code-latest`                        |
+| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                   | `cerebras/zai-glm-4.7`                                 |
+| Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`             | `chutes/zai-org/GLM-5-TEE`                             |
+| ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                                 | `clawrouter/anthropic/claude-sonnet-4-6`               |
+| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                     | `cohere/command-a-plus-05-2026`                        |
+| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                  | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`              |
+| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                   | `deepseek/deepseek-v4-flash`                           |
+| Featherless AI                          | `featherless`                    | `FEATHERLESS_API_KEY`                                | `featherless/Qwen/Qwen3-32B`                           |
+| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` | -                                                      |
+| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                        | `gmi/google/gemini-3.1-flash-lite`                     |
+| Groq                                    | `groq`                           | `GROQ_API_KEY`                                       | `groq/llama-3.3-70b-versatile`                         |
+| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                | `huggingface/deepseek-ai/DeepSeek-R1`                  |
+| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`            | `minimax/MiniMax-M3`                                   |
+| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                    | `mistral/mistral-large-latest`                         |
+| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                   | `moonshot/kimi-k2.6`                                   |
+| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                     | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`             |
+| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                     | `novita/deepseek/deepseek-v3-0324`                     |
+| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                     | `ollama-cloud/kimi-k2.6`                               |
+| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`             | `openrouter/auto`                                      |
+| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                    | `qianfan/deepseek-v3.2`                                |
+| Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                                   | `tencent-tokenhub/hy3-preview`                         |
+| Together                                | `together`                       | `TOGETHER_API_KEY`                                   | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`     |
+| Venice                                  | `venice`                         | `VENICE_API_KEY`                                     | -                                                      |
+| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                 | `vercel-ai-gateway/anthropic/claude-opus-4.6`          |
+| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                             | `volcengine-plan/ark-code-latest`                      |
+| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`           | `xai/grok-4.3`                                         |
+| Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY`       | `xiaomi/mimo-v2.5` / `xiaomi-token-plan/mimo-v2.5-pro` |
+
+#### Quirks worth knowing
+
+<AccordionGroup>
+  <Accordion title="OpenRouter">
+    Applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. DeepSeek, Moonshot, and ZAI refs are cache-TTL eligible for OpenRouter-managed prompt caching but do not receive Anthropic cache markers. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
+  </Accordion>
+  <Accordion title="Kilo Gateway">
+    Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo-auto/balanced` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
+  </Accordion>
+  <Accordion title="MiniMax">
+    API-key onboarding writes explicit M3 and M2.7 chat model definitions; image understanding stays on the plugin-owned `MiniMax-VL-01` media provider.
+  </Accordion>
+  <Accordion title="NVIDIA">
+    Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
+  </Accordion>
+  <Accordion title="xAI">
+    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; API keys still work via `XAI_API_KEY` or plugin config, and Grok `web_search` reuses the same auth profile before API-key fallback. Grok 4.5 is selectable for chat, coding, and agentic work where available; `grok-4.3` remains the regional-safe bundled default. Older `/fast` and `params.fastMode: true` configurations still resolve through xAI's Grok 4.3 compatibility redirects, but new configurations should select a current model directly. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
+  </Accordion>
+</AccordionGroup>
 
 ## Providers via `models.providers` (custom/base URL)
 
-Use `models.providers` (or `models.json`) to add **custom** providers or
-OpenAI/Anthropic‑compatible proxies.
+Use `models.providers` (or `models.json`) to add **custom** providers or OpenAI/Anthropic-compatible proxies.
 
-Many of the bundled provider plugins below already publish a default catalog.
-Use explicit `models.providers.<id>` entries only when you want to override the
-default base URL, headers, or model list.
+Many of the bundled provider plugins below already publish a default catalog. Use explicit `models.providers.<id>` entries only when you want to override the default base URL, headers, or model list.
+
+Bundled and catalog-known routes take their `compat` capabilities from the owning provider plugin. A config `compat` block is for a custom provider/model or a different `api`/`baseUrl` route whose endpoint contract you have verified; see the [custom-provider capability guide](/gateway/config-tools#custom-provider-capability-declarations). Doctor removes legacy values that merely repeat the catalog and leaves divergent values visible for operator review.
+
+Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
+
+`agents.defaults.models["provider/model"]` controls aliases and per-model metadata for agents. It neither restricts overrides nor registers a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`; use `agents.defaults.modelPolicy.allow` separately when you want an override restriction.
 
 ### Moonshot AI (Kimi)
 
-Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
+Install `@openclaw/moonshot-provider` before onboarding. Add an explicit `models.providers.moonshot` entry only when you need to override the base URL or model metadata:
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
-- Example model: `moonshot/kimi-k2.5`
+- Example model: `moonshot/kimi-k3`
+- CLI: `openclaw onboard --auth-choice moonshot-api-key` or `openclaw onboard --auth-choice moonshot-api-key-cn`
 
-Kimi K2 model IDs:
+Kimi model IDs:
 
 [//]: # "moonshot-kimi-k2-model-refs:start"
 
+- `moonshot/kimi-k2.6`
+- `moonshot/kimi-k3`
+- `moonshot/kimi-k2.7-code`
+- `moonshot/kimi-k2.7-code-highspeed`
 - `moonshot/kimi-k2.5`
-- `moonshot/kimi-k2-0905-preview`
-- `moonshot/kimi-k2-turbo-preview`
-- `moonshot/kimi-k2-thinking`
-- `moonshot/kimi-k2-thinking-turbo`
 
 [//]: # "moonshot-kimi-k2-model-refs:end"
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "moonshot/kimi-k2.5" } },
+    defaults: { model: { primary: "moonshot/kimi-k2.6" } },
   },
   models: {
     mode: "merge",
@@ -324,45 +396,41 @@ Kimi K2 model IDs:
         baseUrl: "https://api.moonshot.ai/v1",
         apiKey: "${MOONSHOT_API_KEY}",
         api: "openai-completions",
-        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }],
+        models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
       },
     },
   },
 }
 ```
 
+See [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot) for the full setup guide.
+
 ### Kimi Coding
 
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
-- Provider: `kimi-coding`
+- Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Example model: `kimi-coding/k2p5`
+- Kimi K3: `kimi/k3` (up to 1M, tier-gated) or `kimi/k3-256k` (256K, lower quota use)
+- Kimi Code: `kimi/kimi-for-coding`
+- Kimi Code HighSpeed: `kimi/kimi-for-coding-highspeed`
 
 ```json5
 {
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
-    defaults: { model: { primary: "kimi-coding/k2p5" } },
+    defaults: { model: { primary: "kimi/kimi-for-coding" } },
   },
 }
 ```
 
-### Qwen OAuth (free tier)
-
-Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
-The bundled provider plugin is enabled by default, so just log in:
-
-```bash
-openclaw models auth login --provider qwen-portal --set-default
-```
-
-Model refs:
-
-- `qwen-portal/coder-model`
-- `qwen-portal/vision-model`
-
-See [/providers/qwen](/providers/qwen) for setup details and notes.
+Kimi K3 uses adaptive thinking. `--thinking minimal|low` selects low effort,
+`--thinking medium|high|adaptive` selects high effort, and `--thinking xhigh|max`
+selects max effort. Catalog pricing is $3/MTok input, $15/MTok output, and
+$0.30/MTok cache reads. Legacy `kimi/kimi-code` and `kimi/k2p5` remain
+accepted as compatibility model ids and normalize to Kimi's stable API model
+id; the previously published `kimi/k3[1m]` ref normalizes to `kimi/k3` for
+existing configs.
 
 ### Volcano Engine (Doubao)
 
@@ -370,32 +438,36 @@ Volcano Engine (火山引擎) provides access to Doubao and other models in Chin
 
 - Provider: `volcengine` (coding: `volcengine-plan`)
 - Auth: `VOLCANO_ENGINE_API_KEY`
-- Example model: `volcengine/doubao-seed-1-8-251228`
+- Example model: `volcengine-plan/ark-code-latest`
 - CLI: `openclaw onboard --auth-choice volcengine-api-key`
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "volcengine/doubao-seed-1-8-251228" } },
+    defaults: { model: { primary: "volcengine-plan/ark-code-latest" } },
   },
 }
 ```
 
-Available models:
+Onboarding defaults to the coding surface, but the general `volcengine/*` catalog is registered at the same time.
 
-- `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
-- `volcengine/doubao-seed-code-preview-251028`
-- `volcengine/kimi-k2-5-260127` (Kimi K2.5)
-- `volcengine/glm-4-7-251222` (GLM 4.7)
-- `volcengine/deepseek-v3-2-251201` (DeepSeek V3.2 128K)
+In onboarding/configure model pickers, the Volcengine auth choice prefers both `volcengine/*` and `volcengine-plan/*` rows. If those models are not loaded yet, OpenClaw falls back to the unfiltered catalog instead of showing an empty provider-scoped picker.
 
-Coding models (`volcengine-plan`):
+<Tabs>
+  <Tab title="Standard models">
+    - `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
+    - `volcengine/doubao-seed-code-preview-251028`
+    - `volcengine/kimi-k2-5-260127` (Kimi K2.5)
+    - `volcengine/glm-4-7-251222` (GLM 4.7)
+    - `volcengine/deepseek-v3-2-251201` (DeepSeek V3.2)
 
-- `volcengine-plan/ark-code-latest`
-- `volcengine-plan/doubao-seed-code`
-- `volcengine-plan/kimi-k2.5`
-- `volcengine-plan/kimi-k2-thinking`
-- `volcengine-plan/glm-4.7`
+  </Tab>
+  <Tab title="Coding models (volcengine-plan)">
+    - `volcengine-plan/ark-code-latest`
+    - `volcengine-plan/doubao-seed-code`
+
+  </Tab>
+</Tabs>
 
 ### BytePlus (International)
 
@@ -403,30 +475,35 @@ BytePlus ARK provides access to the same models as Volcano Engine for internatio
 
 - Provider: `byteplus` (coding: `byteplus-plan`)
 - Auth: `BYTEPLUS_API_KEY`
-- Example model: `byteplus/seed-1-8-251228`
+- Example model: `byteplus-plan/ark-code-latest`
 - CLI: `openclaw onboard --auth-choice byteplus-api-key`
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "byteplus/seed-1-8-251228" } },
+    defaults: { model: { primary: "byteplus-plan/ark-code-latest" } },
   },
 }
 ```
 
-Available models:
+Onboarding defaults to the coding surface, but the general `byteplus/*` catalog is registered at the same time.
 
-- `byteplus/seed-1-8-251228` (Seed 1.8)
-- `byteplus/kimi-k2-5-260127` (Kimi K2.5)
-- `byteplus/glm-4-7-251222` (GLM 4.7)
+In onboarding/configure model pickers, the BytePlus auth choice prefers both `byteplus/*` and `byteplus-plan/*` rows. If those models are not loaded yet, OpenClaw falls back to the unfiltered catalog instead of showing an empty provider-scoped picker.
 
-Coding models (`byteplus-plan`):
+<Tabs>
+  <Tab title="Standard models">
+    - `byteplus/seed-1-8-251228` (Seed 1.8)
+    - `byteplus/kimi-k2-5-260127` (Kimi K2.5)
+    - `byteplus/glm-4-7-251222` (GLM 4.7)
 
-- `byteplus-plan/ark-code-latest`
-- `byteplus-plan/doubao-seed-code`
-- `byteplus-plan/kimi-k2.5`
-- `byteplus-plan/kimi-k2-thinking`
-- `byteplus-plan/glm-4.7`
+  </Tab>
+  <Tab title="Coding models (byteplus-plan)">
+    - `byteplus-plan/ark-code-latest`
+    - `byteplus-plan/kimi-k2.5`
+    - `byteplus-plan/glm-4.7`
+
+  </Tab>
+</Tabs>
 
 ### Synthetic
 
@@ -434,13 +511,13 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 
 - Provider: `synthetic`
 - Auth: `SYNTHETIC_API_KEY`
-- Example model: `synthetic/hf:MiniMaxAI/MiniMax-M2.5`
+- Example model: `synthetic/hf:MiniMaxAI/MiniMax-M3`
 - CLI: `openclaw onboard --auth-choice synthetic-api-key`
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" } },
+    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" } },
   },
   models: {
     mode: "merge",
@@ -449,7 +526,7 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
         baseUrl: "https://api.synthetic.new/anthropic",
         apiKey: "${SYNTHETIC_API_KEY}",
         api: "anthropic-messages",
-        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.5", name: "MiniMax M2.5" }],
+        models: [{ id: "hf:MiniMaxAI/MiniMax-M3", name: "MiniMax M3" }],
       },
     },
   },
@@ -460,10 +537,44 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 
 MiniMax is configured via `models.providers` because it uses custom endpoints:
 
-- MiniMax (Anthropic‑compatible): `--auth-choice minimax-api`
-- Auth: `MINIMAX_API_KEY`
+- MiniMax OAuth (Global): `--auth-choice minimax-global-oauth`
+- MiniMax OAuth (CN): `--auth-choice minimax-cn-oauth`
+- MiniMax API key (Global): `--auth-choice minimax-global-api`
+- MiniMax API key (CN): `--auth-choice minimax-cn-api`
+- Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY` for `minimax-portal`
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
+
+<Note>
+On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by default for the M2.x family unless you explicitly set it; MiniMax-M3 (and M3.x) stays on the provider's omitted/adaptive thinking path by default. `/fast on` rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
+</Note>
+
+Plugin-owned capability split:
+
+- Text/chat defaults stay on `minimax/MiniMax-M3`
+- Image generation is `minimax/image-01` or `minimax-portal/image-01`
+- Image understanding is plugin-owned `MiniMax-VL-01` on both MiniMax auth paths
+- Web search stays on provider id `minimax`
+
+### LM Studio
+
+LM Studio ships as a bundled provider plugin which uses the native API:
+
+- Provider: `lmstudio`
+- Auth: `LM_API_TOKEN`
+- Default inference base URL: `http://localhost:1234/v1`
+
+Then set a model (replace with one of the IDs returned by `http://localhost:1234/api/v1/models`):
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "lmstudio/openai/gpt-oss-20b" } },
+  },
+}
+```
+
+OpenClaw uses LM Studio's native `/api/v1/models` and `/api/v1/models/load` for discovery + auto-load, with `/v1/chat/completions` for inference by default. If you want LM Studio JIT loading, TTL, and auto-evict to own model lifecycle, set `models.providers.lmstudio.params.preload: false`. See [/providers/lmstudio](/providers/lmstudio) for setup and troubleshooting.
 
 ### Ollama
 
@@ -487,21 +598,17 @@ ollama pull llama3.3
 }
 ```
 
-Ollama is detected locally at `http://127.0.0.1:11434` when you opt in with
-`OLLAMA_API_KEY`, and the bundled provider plugin adds Ollama directly to
-`openclaw onboard` and the model picker. See [/providers/ollama](/providers/ollama)
-for onboarding, cloud/local mode, and custom configuration.
+Ollama is detected locally at `http://127.0.0.1:11434` when you opt in with `OLLAMA_API_KEY`, and the bundled provider plugin adds Ollama directly to `openclaw onboard` and the model picker. See [/providers/ollama](/providers/ollama) for onboarding, cloud/local mode, and custom configuration.
 
 ### vLLM
 
-vLLM ships as a bundled provider plugin for local/self-hosted OpenAI-compatible
-servers:
+vLLM ships as a bundled provider plugin for local/self-hosted OpenAI-compatible servers:
 
 - Provider: `vllm`
 - Auth: Optional (depends on your server)
 - Default base URL: `http://127.0.0.1:8000/v1`
 
-To opt in to auto-discovery locally (any value works if your server doesn’t enforce auth):
+To opt in to auto-discovery locally (any value works if your server doesn't enforce auth):
 
 ```bash
 export VLLM_API_KEY="vllm-local"
@@ -521,15 +628,13 @@ See [/providers/vllm](/providers/vllm) for details.
 
 ### SGLang
 
-SGLang ships as a bundled provider plugin for fast self-hosted
-OpenAI-compatible servers:
+SGLang ships as a bundled provider plugin for fast self-hosted OpenAI-compatible servers:
 
 - Provider: `sglang`
 - Auth: Optional (depends on your server)
 - Default base URL: `http://127.0.0.1:30000/v1`
 
-To opt in to auto-discovery locally (any value works if your server does not
-enforce auth):
+To opt in to auto-discovery locally (any value works if your server does not enforce auth):
 
 ```bash
 export SGLANG_API_KEY="sglang-local"
@@ -549,26 +654,27 @@ See [/providers/sglang](/providers/sglang) for details.
 
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
-Example (OpenAI‑compatible):
+Example (OpenAI-compatible):
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "lmstudio/minimax-m2.5-gs32" },
-      models: { "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" } },
+      model: { primary: "lmstudio/my-local-model" },
+      models: { "lmstudio/my-local-model": { alias: "Local" } },
     },
   },
   models: {
     providers: {
       lmstudio: {
         baseUrl: "http://localhost:1234/v1",
-        apiKey: "LMSTUDIO_KEY",
+        apiKey: "${LM_API_TOKEN}",
         api: "openai-completions",
+        timeoutSeconds: 300,
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5",
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -582,19 +688,32 @@ Example (OpenAI‑compatible):
 }
 ```
 
-Notes:
+<AccordionGroup>
+  <Accordion title="Default optional fields">
+    For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional. When omitted, OpenClaw defaults to:
 
-- For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
-  When omitted, OpenClaw defaults to:
-  - `reasoning: false`
-  - `input: ["text"]`
-  - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
-  - `contextWindow: 200000`
-  - `maxTokens: 8192`
-- Recommended: set explicit values that match your proxy/model limits.
-- For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
-- If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
-- For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
+    - `reasoning: false`
+    - `input: ["text"]`
+    - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
+    - `contextWindow: 200000`
+    - `maxTokens: 8192`
+
+    Recommended: set explicit values that match your proxy/model limits.
+
+  </Accordion>
+  <Accordion title="Proxy-route shaping rules">
+    - For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
+    - Proxy-style OpenAI-compatible routes also skip native OpenAI-only request shaping: no `service_tier`, no Responses `store`, no Completions `store`, no prompt-cache hints, no OpenAI reasoning-compat payload shaping, and no hidden OpenClaw attribution headers.
+    - For OpenAI-compatible Completions proxies that need vendor-specific fields, set `agents.defaults.models["provider/model"].params.extra_body` (or `extraBody`) to merge extra JSON into the outbound request body.
+    - For vLLM chat-template controls, set `agents.defaults.models["provider/model"].params.chat_template_kwargs`. The bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true` for `vllm/nemotron-3-*` when the session thinking level is off.
+    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole run.
+    - Model provider HTTP calls allow Surge, Clash, and sing-box fake-IP DNS answers in `198.18.0.0/15` and `fc00::/7` only for the configured provider `baseUrl` hostname. Custom/local provider endpoints also trust that exact configured `scheme://host:port` origin for guarded model requests, including loopback, LAN, and tailnet hosts. This is not a new config option; the `baseUrl` you configure extends the request policy only for that origin. Fake-IP hostname allowance and exact-origin trust are independent mechanisms. Other private, loopback, link-local, metadata destinations, and different ports still require an explicit `models.providers.<id>.request.allowPrivateNetwork: true` opt-in. Set `models.providers.<id>.request.allowPrivateNetwork: false` to opt out of the exact-origin trust.
+    - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
+    - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
+    - For `api: "anthropic-messages"` on non-direct endpoints (any provider other than canonical `anthropic`, or a custom `models.providers.anthropic.baseUrl` whose host is not a public `api.anthropic.com` endpoint), OpenClaw suppresses implicit Anthropic beta headers such as `claude-code-20250219`, `interleaved-thinking-2025-05-14`, and OAuth markers, so custom Anthropic-compatible proxies do not reject unsupported beta flags. Set `models.providers.<id>.headers["anthropic-beta"]` explicitly if your proxy needs specific beta features.
+
+  </Accordion>
+</AccordionGroup>
 
 ## CLI examples
 
@@ -604,4 +723,11 @@ openclaw models set opencode/claude-opus-4-6
 openclaw models list
 ```
 
-See also: [/gateway/configuration](/gateway/configuration) for full configuration examples.
+See also: [Configuration](/gateway/configuration) for full configuration examples.
+
+## Related
+
+- [Configuration reference](/gateway/config-agents#agent-defaults) - model config keys
+- [Model failover](/concepts/model-failover) - fallback chains and retry behavior
+- [Models](/concepts/models) - model configuration and aliases
+- [Providers](/providers) - per-provider setup guides

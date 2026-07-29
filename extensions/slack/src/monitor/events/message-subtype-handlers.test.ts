@@ -1,3 +1,4 @@
+// Slack tests cover message subtype handlers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
@@ -41,7 +42,7 @@ describe("resolveSlackMessageSubtypeHandler", () => {
     expect(handler?.describe("general")).toContain("deleted");
   });
 
-  it("resolves thread_broadcast metadata and identifiers", () => {
+  it("does not treat thread_broadcast as a metadata-only system event", () => {
     const event = {
       type: "message",
       subtype: "thread_broadcast",
@@ -51,13 +52,7 @@ describe("resolveSlackMessageSubtypeHandler", () => {
       user: "U1",
     } as unknown as SlackMessageEvent;
 
-    const handler = resolveSlackMessageSubtypeHandler(event);
-    expect(handler?.eventKind).toBe("thread_broadcast");
-    expect(handler?.resolveSenderId(event)).toBe("U1");
-    expect(handler?.resolveChannelId(event)).toBe("C1");
-    expect(handler?.resolveChannelType(event)).toBeUndefined();
-    expect(handler?.contextKey(event)).toBe("slack:thread:broadcast:C1:123.456");
-    expect(handler?.describe("general")).toContain("broadcast");
+    expect(resolveSlackMessageSubtypeHandler(event)).toBeUndefined();
   });
 
   it("returns undefined for regular messages", () => {

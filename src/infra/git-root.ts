@@ -1,7 +1,8 @@
+// Discovers git repository roots by walking ancestor directories.
 import fs from "node:fs";
 import path from "node:path";
 
-export const DEFAULT_GIT_DISCOVERY_MAX_DEPTH = 12;
+const DEFAULT_GIT_DISCOVERY_MAX_DEPTH = 12;
 
 function walkUpFrom<T>(
   startDir: string,

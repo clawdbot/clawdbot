@@ -1,6 +1,13 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+// Telegram plugin module implements runtime behavior.
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import type { TelegramRuntime } from "./runtime.types.js";
 
-const { setRuntime: setTelegramRuntime, getRuntime: getTelegramRuntime } =
-  createPluginRuntimeStore<PluginRuntime>("Telegram runtime not initialized");
-export { getTelegramRuntime, setTelegramRuntime };
+const {
+  setRuntime: setTelegramRuntime,
+  getRuntime: getTelegramRuntime,
+  tryGetRuntime: getOptionalTelegramRuntime,
+} = createPluginRuntimeStore<TelegramRuntime>({
+  pluginId: "telegram",
+  errorMessage: "Telegram runtime not initialized",
+});
+export { getOptionalTelegramRuntime, getTelegramRuntime, setTelegramRuntime };

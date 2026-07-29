@@ -1,0 +1,4 @@
+interface:
+  display_name: "Discrawl"
+  short_description: "Search local Discord archives and freshness"
+  default_prompt: "Use $discrawl to search local Discord archives, check freshness, inspect DMs or channel slices, and report exact date spans and source gaps."

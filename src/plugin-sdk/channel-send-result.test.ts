@@ -1,3 +1,6 @@
+/**
+ * Tests channel send result normalization and adapter wrapping helpers.
+ */
 import { describe, expect, it } from "vitest";
 import {
   attachChannelToResult,
@@ -8,8 +11,8 @@ import {
   createRawChannelSendResultAdapter,
 } from "./channel-send-result.js";
 
-describe("attachChannelToResult", () => {
-  it("preserves the existing result shape and stamps the channel", () => {
+describe("attachChannelToResult(s)", () => {
+  it("stamps channel metadata on single and batch results", () => {
     expect(
       attachChannelToResult("discord", {
         messageId: "m1",
@@ -22,11 +25,7 @@ describe("attachChannelToResult", () => {
       ok: true,
       extra: "value",
     });
-  });
-});
 
-describe("attachChannelToResults", () => {
-  it("stamps each result in a list with the shared channel id", () => {
     expect(
       attachChannelToResults("signal", [
         { messageId: "m1", timestamp: 1 },
@@ -37,10 +36,28 @@ describe("attachChannelToResults", () => {
       { channel: "signal", messageId: "m2", timestamp: 2 },
     ]);
   });
+
+  it("keeps the explicitly attached channel authoritative", () => {
+    const providerResult = {
+      channel: "stale-provider-channel",
+      messageId: "m1",
+    };
+
+    expect(attachChannelToResult("configured-channel", providerResult)).toEqual({
+      channel: "configured-channel",
+      messageId: "m1",
+    });
+    expect(attachChannelToResults("configured-channel", [providerResult])).toEqual([
+      {
+        channel: "configured-channel",
+        messageId: "m1",
+      },
+    ]);
+  });
 });
 
 describe("buildChannelSendResult", () => {
-  it("normalizes raw send results", () => {
+  it("normalizes raw send results directly", () => {
     const result = buildChannelSendResult("zalo", {
       ok: false,
       messageId: null,
@@ -73,31 +90,48 @@ describe("createAttachedChannelResultAdapter", () => {
       sendPoll: async () => ({ messageId: "m3", pollId: "p1" }),
     });
 
-    await expect(adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" })).resolves.toEqual({
-      channel: "discord",
-      messageId: "m1",
-      channelId: "c1",
-    });
-    await expect(adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" })).resolves.toEqual({
-      channel: "discord",
-      messageId: "m2",
-    });
-    await expect(
-      adapter.sendPoll!({
-        cfg: {} as never,
-        to: "x",
-        poll: { question: "t", options: ["a", "b"] },
-      }),
-    ).resolves.toEqual({
-      channel: "discord",
-      messageId: "m3",
-      pollId: "p1",
-    });
+    const sendCases = [
+      {
+        name: "sendText",
+        run: () => adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" }),
+        expected: {
+          channel: "discord",
+          messageId: "m1",
+          channelId: "c1",
+        },
+      },
+      {
+        name: "sendMedia",
+        run: () => adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" }),
+        expected: {
+          channel: "discord",
+          messageId: "m2",
+        },
+      },
+      {
+        name: "sendPoll",
+        run: () =>
+          adapter.sendPoll!({
+            cfg: {} as never,
+            to: "x",
+            poll: { question: "t", options: ["a", "b"] },
+          }),
+        expected: {
+          channel: "discord",
+          messageId: "m3",
+          pollId: "p1",
+        },
+      },
+    ];
+
+    for (const testCase of sendCases) {
+      await expect(testCase.run()).resolves.toEqual(testCase.expected);
+    }
   });
 });
 
 describe("createRawChannelSendResultAdapter", () => {
-  it("normalizes raw send results", async () => {
+  it("normalizes successes and rejects provider failures", async () => {
     const adapter = createRawChannelSendResultAdapter({
       channel: "zalo",
       sendText: async () => ({ ok: true, messageId: "m1" }),
@@ -110,11 +144,19 @@ describe("createRawChannelSendResultAdapter", () => {
       messageId: "m1",
       error: undefined,
     });
-    await expect(adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" })).resolves.toEqual({
-      channel: "zalo",
-      ok: false,
-      messageId: "",
-      error: new Error("boom"),
+    await expect(adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" })).rejects.toThrow(
+      "boom",
+    );
+  });
+
+  it("uses a channel-specific error when a failed result has no message", async () => {
+    const adapter = createRawChannelSendResultAdapter({
+      channel: "legacy-test",
+      sendText: async () => ({ ok: false }),
     });
+
+    await expect(adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" })).rejects.toThrow(
+      "Channel send failed for legacy-test",
+    );
   });
 });

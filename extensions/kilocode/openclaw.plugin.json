@@ -1,14 +1,36 @@
 {
   "id": "kilocode",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
   "providers": ["kilocode"],
-  "providerAuthEnvVars": {
-    "kilocode": ["KILOCODE_API_KEY"]
+  "modelPricing": {
+    "providers": {
+      "kilocode": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "kilocode",
+        "envVars": ["KILOCODE_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "kilocode",
       "method": "api-key",
       "choiceId": "kilocode-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Kilo Gateway API key",
       "choiceHint": "API key (OpenRouter-compatible)",
       "groupId": "kilocode",
@@ -24,5 +46,32 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "kilocode": {
+        "baseUrl": "https://api.kilo.ai/api/gateway/",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "kilo-auto/balanced",
+            "name": "Auto Balanced",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0.325,
+              "output": 1.95,
+              "cacheRead": 0.0325,
+              "cacheWrite": 0.40625
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "kilocode": "refreshable"
+    }
   }
 }

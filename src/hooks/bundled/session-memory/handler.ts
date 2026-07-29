@@ -2,31 +2,204 @@
  * Session memory hook handler
  *
  * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with LLM-generated slug
+ * Creates a new dated memory file with a timestamp slug by default
  */
 
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  resolveDefaultAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import {
+  loadTranscriptEvents,
+  readSessionTranscriptBoundedMessageTailPage,
+  type TranscriptEvent,
+} from "../../../config/sessions/session-accessor.js";
+import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../../../infra/env.js";
+import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../../routing/session-key.js";
-import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
+import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { countSessionMemoryMessages, getRecentSessionContentFromEvents } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
+const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
+const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
+
+function pickDateTimePart(
+  parts: Intl.DateTimeFormatPart[],
+  type: Intl.DateTimeFormatPartTypes,
+): string | undefined {
+  return parts.find((part) => part.type === type)?.value;
+}
+
+function resolveLocalTimeZone(): string | undefined {
+  const timeZone = process.env.TZ?.trim();
+  if (!timeZone) {
+    return undefined;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatLocalSessionTimestamp(date: Date): {
+  date: string;
+  time: string;
+  timeSlug: string;
+  timeZoneName?: string;
+} {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: resolveLocalTimeZone(),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "short",
+  }).formatToParts(date);
+
+  const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
+  const month = pickDateTimePart(parts, "month") ?? String(date.getMonth() + 1).padStart(2, "0");
+  const day = pickDateTimePart(parts, "day") ?? String(date.getDate()).padStart(2, "0");
+  const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
+  const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
+  const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
+  const timeZoneName = [...parts]
+    .toReversed()
+    .find((part) => part.type === "timeZoneName")
+    ?.value?.trim();
+
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${minute}:${second}`,
+    timeSlug: `${hour}${minute}`,
+    timeZoneName,
+  };
+}
+
+async function resolveAvailableMemoryFilename(params: {
+  memoryDir: string;
+  dateStr: string;
+  slug: string;
+}): Promise<string> {
+  const basename = `${params.dateStr}-${params.slug}`;
+  let suffix = 1;
+
+  while (true) {
+    const filename = suffix === 1 ? `${basename}.md` : `${basename}-${suffix}.md`;
+    try {
+      await fs.access(path.join(params.memoryDir, filename));
+      suffix += 1;
+    } catch (err) {
+      if ((err as { code?: string }).code === "ENOENT") {
+        return filename;
+      }
+      throw err;
+    }
+  }
+}
+
+async function getRecentSqliteSessionContent(
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
+  messageCount: number,
+  capturedEvents?: TranscriptEvent[],
+): Promise<string | null> {
+  try {
+    const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
+    const latestResetIndex = capturedEvents
+      ? -1
+      : events.findLastIndex(
+          (event) =>
+            Boolean(event) &&
+            typeof event === "object" &&
+            !Array.isArray(event) &&
+            (event as { type?: unknown }).type === "reset",
+        );
+    const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
+    return getRecentSessionContentFromEvents(
+      selectVisibleTranscriptEvents(retiredEvents),
+      messageCount,
+    );
+  } catch {
+    return null;
+  }
+}
+
+// The bounded reader already projects the active branch, but message pages
+// omit intervening control ancestors. Relink this snapshot so the shared
+// visibility selector can validate it without dropping active messages.
+function relinkCapturedActiveMessageEvents(events: TranscriptEvent[]): TranscriptEvent[] {
+  let parentId: string | null = null;
+  return events.map((event, index) => {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      return event;
+    }
+    const record = event as Record<string, unknown>;
+    if (record.type !== "message") {
+      return event;
+    }
+    const id = typeof record.id === "string" ? record.id : `session-memory-${index + 1}`;
+    const linked = { ...record, id, parentId } as TranscriptEvent;
+    parentId = id;
+    return linked;
+  });
+}
+
+function captureRecentSessionMemoryEvents(
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
+  messageCount: number,
+): TranscriptEvent[] {
+  const captured: TranscriptEvent[] = [];
+  let capturedBytes = 0;
+  let offset = 0;
+  let totalMessages = Number.POSITIVE_INFINITY;
+  while (
+    offset < totalMessages &&
+    offset < SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES &&
+    capturedBytes < SESSION_MEMORY_CAPTURE_MAX_BYTES &&
+    countSessionMemoryMessages(
+      selectVisibleTranscriptEvents(relinkCapturedActiveMessageEvents(captured)),
+    ) < messageCount
+  ) {
+    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: SESSION_MEMORY_CAPTURE_MAX_BYTES - capturedBytes,
+      maxMessages: Math.min(
+        SESSION_MEMORY_CAPTURE_PAGE_MESSAGES,
+        SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES - offset,
+      ),
+      offset,
+    });
+    totalMessages = page.totalMessages;
+    if (page.scannedMessages === 0) {
+      break;
+    }
+    captured.unshift(...page.events.map(({ event }) => event));
+    capturedBytes += page.serializedBytes;
+    offset += page.scannedMessages;
+  }
+  return relinkCapturedActiveMessageEvents(captured);
+}
 
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
@@ -48,161 +221,18 @@ function resolveDisplaySessionKey(params: {
 }
 
 /**
- * Read recent messages from session file for slug generation
- */
-async function getRecentSessionContent(
-  sessionFilePath: string,
-  messageCount: number = 15,
-): Promise<string | null> {
-  try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
-    const lines = content.trim().split("\n");
-
-    // Parse JSONL and extract user/assistant messages first
-    const allMessages: string[] = [];
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        // Session files have entries with type="message" containing a nested message object
-        if (entry.type === "message" && entry.message) {
-          const msg = entry.message;
-          const role = msg.role;
-          if ((role === "user" || role === "assistant") && msg.content) {
-            if (role === "user" && hasInterSessionUserProvenance(msg)) {
-              continue;
-            }
-            // Extract text content
-            const text = Array.isArray(msg.content)
-              ? // oxlint-disable-next-line typescript/no-explicit-any
-                msg.content.find((c: any) => c.type === "text")?.text
-              : msg.content;
-            if (text && !text.startsWith("/")) {
-              allMessages.push(`${role}: ${text}`);
-            }
-          }
-        }
-      } catch {
-        // Skip invalid JSON lines
-      }
-    }
-
-    // Then slice to get exactly messageCount messages
-    const recentMessages = allMessages.slice(-messageCount);
-    return recentMessages.join("\n");
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Try the active transcript first; if /new already rotated it,
- * fallback to the latest .jsonl.reset.* sibling.
- */
-async function getRecentSessionContentWithResetFallback(
-  sessionFilePath: string,
-  messageCount: number = 15,
-): Promise<string | null> {
-  const primary = await getRecentSessionContent(sessionFilePath, messageCount);
-  if (primary) {
-    return primary;
-  }
-
-  try {
-    const dir = path.dirname(sessionFilePath);
-    const base = path.basename(sessionFilePath);
-    const resetPrefix = `${base}.reset.`;
-    const files = await fs.readdir(dir);
-    const resetCandidates = files.filter((name) => name.startsWith(resetPrefix)).toSorted();
-
-    if (resetCandidates.length === 0) {
-      return primary;
-    }
-
-    const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
-    const fallback = await getRecentSessionContent(latestResetPath, messageCount);
-
-    if (fallback) {
-      log.debug("Loaded session content from reset fallback", {
-        sessionFilePath,
-        latestResetPath,
-      });
-    }
-
-    return fallback || primary;
-  } catch {
-    return primary;
-  }
-}
-
-function stripResetSuffix(fileName: string): string {
-  const resetIndex = fileName.indexOf(".reset.");
-  return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
-}
-
-async function findPreviousSessionFile(params: {
-  sessionsDir: string;
-  currentSessionFile?: string;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  try {
-    const files = await fs.readdir(params.sessionsDir);
-    const fileSet = new Set(files);
-
-    const baseFromReset = params.currentSessionFile
-      ? stripResetSuffix(path.basename(params.currentSessionFile))
-      : undefined;
-    if (baseFromReset && fileSet.has(baseFromReset)) {
-      return path.join(params.sessionsDir, baseFromReset);
-    }
-
-    const trimmedSessionId = params.sessionId?.trim();
-    if (trimmedSessionId) {
-      const canonicalFile = `${trimmedSessionId}.jsonl`;
-      if (fileSet.has(canonicalFile)) {
-        return path.join(params.sessionsDir, canonicalFile);
-      }
-
-      const topicVariants = files
-        .filter(
-          (name) =>
-            name.startsWith(`${trimmedSessionId}-topic-`) &&
-            name.endsWith(".jsonl") &&
-            !name.includes(".reset."),
-        )
-        .toSorted()
-        .toReversed();
-      if (topicVariants.length > 0) {
-        return path.join(params.sessionsDir, topicVariants[0]);
-      }
-    }
-
-    if (!params.currentSessionFile) {
-      return undefined;
-    }
-
-    const nonResetJsonl = files
-      .filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
-      .toSorted()
-      .toReversed();
-    if (nonResetJsonl.length > 0) {
-      return path.join(params.sessionsDir, nonResetJsonl[0]);
-    }
-  } catch {
-    // Ignore directory read errors.
-  }
-  return undefined;
-}
-
-/**
  * Save session context to memory when /new or /reset command is triggered
  */
-const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
-    return;
-  }
+const pendingSessionMemoryWrites = new Set<Promise<void>>();
 
+export async function flushSessionMemoryWritesForTest(): Promise<void> {
+  await Promise.allSettled(pendingSessionMemoryWrites);
+}
+
+async function saveSessionMemoryNow(
+  event: Parameters<HookHandler>[0],
+  capturedEvents?: TranscriptEvent[],
+): Promise<void> {
   try {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
@@ -212,7 +242,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
-    const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
+    const agentId =
+      typeof context.agentId === "string" && context.agentId.trim()
+        ? context.agentId.trim()
+        : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
+    const contextStorePath =
+      typeof context.storePath === "string" && context.storePath.trim()
+        ? context.storePath.trim()
+        : undefined;
     const workspaceDir =
       contextWorkspaceDir ||
       (cfg
@@ -226,49 +263,26 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Get today's date for filename
+    // Use the user's local timezone for memory artifact names and headings.
     const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+    const localTimestamp = formatLocalSessionTimestamp(now);
+    const dateStr = localTimestamp.date;
 
-    // Generate descriptive slug from session using LLM
+    // Generate descriptive slug from session when explicitly enabled
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
     const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
       string,
       unknown
     >;
-    const currentSessionId = sessionEntry.sessionId as string;
-    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
-
-    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
-    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
-      const sessionsDirs = new Set<string>();
-      if (currentSessionFile) {
-        sessionsDirs.add(path.dirname(currentSessionFile));
-      }
-      sessionsDirs.add(path.join(workspaceDir, "sessions"));
-
-      for (const sessionsDir of sessionsDirs) {
-        const recoveredSessionFile = await findPreviousSessionFile({
-          sessionsDir,
-          currentSessionFile,
-          sessionId: currentSessionId,
-        });
-        if (!recoveredSessionFile) {
-          continue;
-        }
-        currentSessionFile = recoveredSessionFile;
-        log.debug("Found previous session file", { file: currentSessionFile });
-        break;
-      }
-    }
+    const currentSessionId =
+      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
-      sessionFile: currentSessionFile,
       hasCfg: Boolean(cfg),
     });
-
-    const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -280,47 +294,51 @@ const saveSessionToMemory: HookHandler = async (event) => {
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (sessionFile) {
-      // Get recent conversation content, with fallback to rotated reset transcript.
-      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+    if (currentSessionId) {
+      sessionContent = await getRecentSqliteSessionContent(
+        {
+          agentId,
+          sessionId: currentSessionId,
+          sessionKey: event.sessionKey,
+          storePath: contextStorePath ?? resolveStorePath(cfg?.session?.store, { agentId }),
+        },
+        messageCount,
+        capturedEvents,
+      );
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,
       });
 
       // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
-      const isTestEnv =
-        process.env.OPENCLAW_TEST_FAST === "1" ||
-        process.env.VITEST === "true" ||
-        process.env.VITEST === "1" ||
-        process.env.NODE_ENV === "test";
-      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
+      const isTestEnv = isVitestRuntimeEnv();
+      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
+        slug = await generateSlugViaLLM({ sessionContent, cfg, model: slugModel });
         log.debug("Generated slug", { slug });
       }
     }
 
     // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
+      slug = localTimestamp.timeSlug;
       log.debug("Using fallback timestamp slug", { slug });
     }
 
     // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
+    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
-      path: memoryFilePath.replace(os.homedir(), "~"),
+      path: shortenHomePath(memoryFilePath),
     });
 
-    // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1].split(".")[0];
+    const timeStr = localTimestamp.time;
+    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -328,7 +346,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
+      `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
@@ -344,16 +362,12 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const entry = entryParts.join("\n");
 
     // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
-      encoding: "utf-8",
-    });
+    const memoryRoot = await root(memoryDir);
+    await memoryRoot.write(filename, entry, { encoding: "utf-8" });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
+    const relPath = shortenHomePath(memoryFilePath);
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {
@@ -366,6 +380,57 @@ const saveSessionToMemory: HookHandler = async (event) => {
       log.error("Failed to save session memory", { error: String(err) });
     }
   }
+}
+
+const saveSessionToMemory: HookHandler = (event) => {
+  // Only trigger on reset/new commands. This is silent housekeeping, so keep it
+  // off the command reply path.
+  const isResetCommand = event.action === "new" || event.action === "reset";
+  if (event.type !== "command" || !isResetCommand) {
+    return;
+  }
+
+  let capturedEvents: TranscriptEvent[] | undefined;
+  try {
+    const context = event.context || {};
+    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
+      string,
+      unknown
+    >;
+    const sessionId =
+      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
+    if (sessionId) {
+      const cfg = context.cfg as OpenClawConfig | undefined;
+      const agentId =
+        typeof context.agentId === "string" && context.agentId.trim()
+          ? context.agentId.trim()
+          : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
+      const storePath =
+        typeof context.storePath === "string" && context.storePath.trim()
+          ? context.storePath.trim()
+          : resolveStorePath(cfg?.session?.store, { agentId });
+      const hookConfig = resolveHookConfig(cfg, "session-memory");
+      const messageCount =
+        typeof hookConfig?.messages === "number" && hookConfig.messages > 0
+          ? hookConfig.messages
+          : 15;
+      capturedEvents = captureRecentSessionMemoryEvents(
+        { agentId, sessionId, sessionKey: event.sessionKey, storePath },
+        messageCount,
+      );
+    }
+  } catch {
+    // Projection reads verify indexedSeq against the latest committed seq in
+    // one transaction. An in-flight rebuild throws here and schedules repair,
+    // so the async writer falls back to the authoritative transcript rows.
+  }
+  const writePromise = saveSessionMemoryNow(event, capturedEvents);
+  pendingSessionMemoryWrites.add(writePromise);
+  void writePromise.finally(() => {
+    pendingSessionMemoryWrites.delete(writePromise);
+  });
 };
 
 export default saveSessionToMemory;

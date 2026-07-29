@@ -1,74 +1,123 @@
 ---
-title: "Kilo Gateway"
 summary: "Use Kilo Gateway's unified API to access many models in OpenClaw"
+title: "Kilo Gateway"
 read_when:
   - You want a single API key for many LLMs
   - You want to run models via Kilo Gateway in OpenClaw
 ---
 
-# Kilo Gateway
+Kilo Gateway routes requests to many models behind a single OpenAI-compatible endpoint and API key.
 
-Kilo Gateway provides a **unified API** that routes requests to many models behind a single
-endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
+| Property | Value                              |
+| -------- | ---------------------------------- |
+| Provider | `kilocode`                         |
+| Auth     | `KILOCODE_API_KEY`                 |
+| API      | OpenAI-compatible                  |
+| Base URL | `https://api.kilo.ai/api/gateway/` |
 
-## Getting an API key
-
-1. Go to [app.kilo.ai](https://app.kilo.ai)
-2. Sign in or create an account
-3. Navigate to API Keys and generate a new key
-
-## CLI setup
+## Install plugin
 
 ```bash
-openclaw onboard --kilocode-api-key <key>
+openclaw plugins install @openclaw/kilocode-provider
+openclaw gateway restart
 ```
 
-Or set the environment variable:
+## Setup
 
-```bash
-export KILOCODE_API_KEY="<your-kilocode-api-key>" # pragma: allowlist secret
-```
+<Steps>
+  <Step title="Create an account">
+    Go to [app.kilo.ai](https://app.kilo.ai), sign in or create an account, then generate an API key.
+  </Step>
+  <Step title="Run onboarding">
+    ```bash
+    openclaw onboard --auth-choice kilocode-api-key
+    ```
 
-## Config snippet
+    Or set the environment variable directly:
+
+    ```bash
+    export KILOCODE_API_KEY="<your-kilocode-api-key>" # pragma: allowlist secret
+    ```
+
+  </Step>
+  <Step title="Verify the model is available">
+    ```bash
+    openclaw models list --provider kilocode
+    ```
+  </Step>
+</Steps>
+
+## Default model and catalog
+
+The default model is `kilocode/kilo-auto/balanced`, Kilo Gateway's balanced smart-routing tier.
+OpenClaw does not publish a task-to-upstream-model mapping for it; routing behind
+`kilo-auto/balanced` is owned by Kilo Gateway.
+
+At startup OpenClaw queries `GET https://api.kilo.ai/api/gateway/models` and merges discovered models
+ahead of a static fallback catalog. The static fallback contains only
+`kilocode/kilo-auto/balanced` (`Auto Balanced`, `input: ["text", "image"]`, `reasoning: true`,
+`contextWindow: 1000000`, `maxTokens: 65536`).
+
+Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
+`kilocode/anthropic/claude-sonnet-4`, `kilocode/openai/gpt-5.5`). Run `/models kilocode` or
+`openclaw models list --provider kilocode` to see the full discovered list.
+
+## Config example
 
 ```json5
 {
   env: { KILOCODE_API_KEY: "<your-kilocode-api-key>" }, // pragma: allowlist secret
   agents: {
     defaults: {
-      model: { primary: "kilocode/kilo/auto" },
+      model: { primary: "kilocode/kilo-auto/balanced" },
     },
   },
 }
 ```
 
-## Default model
+## Behavior notes
 
-The default model is `kilocode/kilo/auto`, a smart routing model that automatically selects
-the best underlying model based on the task:
+<AccordionGroup>
+  <Accordion title="Transport and compatibility">
+    Kilo Gateway is OpenRouter-compatible, so it uses the proxy-style OpenAI-compatible request
+    path rather than native OpenAI request shaping (no `store`, no OpenAI reasoning-effort payload).
 
-- Planning, debugging, and orchestration tasks route to Claude Opus
-- Code writing and exploration tasks route to Claude Sonnet
+    - Gemini-backed Kilo refs stay on the proxy-Gemini path: OpenClaw sanitizes Gemini thought
+      signatures there but does not enable native Gemini replay validation or bootstrap rewrites.
+    - Requests use a Bearer token built from your API key.
 
-## Available models
+  </Accordion>
 
-OpenClaw dynamically discovers available models from the Kilo Gateway at startup. Use
-`/models kilocode` to see the full list of models available with your account.
+  <Accordion title="Stream wrapper and reasoning">
+    The Kilo stream wrapper adds an `X-KILOCODE-FEATURE` request header (default `openclaw`,
+    override with the `KILOCODE_FEATURE` env var) and normalizes reasoning-effort payloads for
+    models that support it.
 
-Any model available on the gateway can be used with the `kilocode/` prefix:
+    <Warning>
+    `kilocode/kilo-auto/balanced` and `x-ai/*` refs skip reasoning-effort injection. Use a concrete
+    model ref such as `kilocode/anthropic/claude-sonnet-4` if you need reasoning support.
+    </Warning>
 
-```
-kilocode/kilo/auto              (default - smart routing)
-kilocode/anthropic/claude-sonnet-4
-kilocode/openai/gpt-5.2
-kilocode/google/gemini-3-pro-preview
-...and many more
-```
+  </Accordion>
 
-## Notes
+  <Accordion title="Troubleshooting">
+    - If model discovery fails at startup, OpenClaw falls back to the static catalog containing `kilocode/kilo-auto/balanced`.
+    - Confirm your API key is valid and that your Kilo account has the desired models enabled.
+    - When Gateway runs as a daemon, ensure `KILOCODE_API_KEY` is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
 
-- Model refs are `kilocode/<model-id>` (e.g., `kilocode/anthropic/claude-sonnet-4`).
-- Default model: `kilocode/kilo/auto`
-- Base URL: `https://api.kilo.ai/api/gateway/`
-- For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
-- Kilo Gateway uses a Bearer token with your API key under the hood.
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
+    Choosing providers, model refs, and failover behavior.
+  </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
+    Full OpenClaw configuration reference.
+  </Card>
+  <Card title="Kilo Gateway" href="https://app.kilo.ai" icon="arrow-up-right-from-square">
+    Kilo Gateway dashboard, API keys, and account management.
+  </Card>
+</CardGroup>

@@ -1,40 +1,30 @@
-import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
+// Static auth-choice option definitions used before provider manifests are loaded.
+import { resolveLegacyAuthChoiceAliasesForCli } from "./auth-choice-legacy.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
-
-export type { AuthChoiceGroupId };
 
 export type AuthChoiceOption = {
   value: AuthChoice;
   label: string;
   hint?: string;
+  providerId?: string;
   groupId?: AuthChoiceGroupId;
   groupLabel?: string;
   groupHint?: string;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
 };
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
   hint?: string;
+  methodMessage?: string;
+  providerIds?: string[];
   options: AuthChoiceOption[];
 };
 
 export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
-  {
-    value: "chutes",
-    label: "Chutes (OAuth)",
-    groupId: "chutes",
-    groupLabel: "Chutes",
-    groupHint: "OAuth",
-  },
-  {
-    value: "litellm-api-key",
-    label: "LiteLLM API key",
-    hint: "Unified gateway for 100+ LLM providers",
-    groupId: "litellm",
-    groupLabel: "LiteLLM",
-    groupHint: "Unified LLM gateway (100+ providers)",
-  },
   {
     value: "custom-api-key",
     label: "Custom Provider",
@@ -45,9 +35,13 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
 ];
 
+/** Format static auth-choice values for Commander help/validation text. */
 export function formatStaticAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;
+  config?: import("../config/config.js").OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
   const includeSkip = params?.includeSkip ?? true;
   const includeLegacyAliases = params?.includeLegacyAliases ?? false;
@@ -57,7 +51,7 @@ export function formatStaticAuthChoiceChoicesForCli(params?: {
     values.push("skip");
   }
   if (includeLegacyAliases) {
-    values.push(...AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI);
+    values.push(...resolveLegacyAuthChoiceAliasesForCli(params));
   }
 
   return values.join("|");

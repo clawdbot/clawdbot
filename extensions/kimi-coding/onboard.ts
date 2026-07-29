@@ -1,5 +1,6 @@
+// Kimi Coding setup module handles plugin onboarding behavior.
 import {
-  applyProviderConfigWithDefaultModelPreset,
+  createDefaultModelPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -12,29 +13,29 @@ export const KIMI_MODEL_REF = `kimi/${KIMI_CODING_DEFAULT_MODEL_ID}`;
 export const KIMI_CODING_MODEL_REF = KIMI_MODEL_REF;
 
 function resolveKimiCodingDefaultModel() {
-  return buildKimiCodingProvider().models[0];
+  return buildKimiCodingProvider().models.find(
+    (model) => model.id === KIMI_CODING_DEFAULT_MODEL_ID,
+  );
 }
 
-function applyKimiCodingPreset(cfg: OpenClawConfig, primaryModelRef?: string): OpenClawConfig {
-  const defaultModel = resolveKimiCodingDefaultModel();
-  if (!defaultModel) {
-    return cfg;
-  }
-  return applyProviderConfigWithDefaultModelPreset(cfg, {
-    providerId: "kimi",
-    api: "anthropic-messages",
-    baseUrl: KIMI_CODING_BASE_URL,
-    defaultModel,
-    defaultModelId: KIMI_CODING_DEFAULT_MODEL_ID,
-    aliases: [{ modelRef: KIMI_MODEL_REF, alias: "Kimi" }],
-    primaryModelRef,
-  });
-}
-
-export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyKimiCodingPreset(cfg);
-}
+const kimiCodingPresetAppliers = createDefaultModelPresetAppliers({
+  primaryModelRef: KIMI_MODEL_REF,
+  resolveParams: (_cfg: OpenClawConfig) => {
+    const defaultModel = resolveKimiCodingDefaultModel();
+    if (!defaultModel) {
+      return null;
+    }
+    return {
+      providerId: "kimi",
+      api: "anthropic-messages",
+      baseUrl: KIMI_CODING_BASE_URL,
+      defaultModel,
+      defaultModelId: KIMI_CODING_DEFAULT_MODEL_ID,
+      aliases: [{ modelRef: KIMI_MODEL_REF, alias: "Kimi" }],
+    };
+  },
+});
 
 export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyKimiCodingPreset(cfg, KIMI_MODEL_REF);
+  return kimiCodingPresetAppliers.applyConfig(cfg);
 }

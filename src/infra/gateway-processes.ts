@@ -1,115 +1,19 @@
-import { spawnSync } from "node:child_process";
+// Inspects local gateway processes for status and diagnostics.
 import fsSync from "node:fs";
-import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
+import { spawnPsSync } from "./spawn-ps.js";
+import {
+  readWindowsListeningPidsOnPortSync,
+  readWindowsProcessArgsSync,
+} from "./windows-port-pids.js";
 
-const WINDOWS_GATEWAY_DISCOVERY_TIMEOUT_MS = 5_000;
+// Gateway process helpers verify argv before signaling or reporting listener
+// PIDs so stale port owners cannot be mistaken for OpenClaw.
+const GATEWAY_PS_PROBE_TIMEOUT_MS = 1_000;
 
-function extractWindowsCommandLine(raw: string): string | null {
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (const line of lines) {
-    if (!line.toLowerCase().startsWith("commandline=")) {
-      continue;
-    }
-    const value = line.slice("commandline=".length).trim();
-    return value || null;
-  }
-  return lines.find((line) => line.toLowerCase() !== "commandline") ?? null;
-}
-
-function readWindowsProcessArgsViaPowerShell(pid: number): string[] | null {
-  const ps = spawnSync(
-    "powershell",
-    [
-      "-NoProfile",
-      "-Command",
-      `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty CommandLine)`,
-    ],
-    {
-      encoding: "utf8",
-      timeout: WINDOWS_GATEWAY_DISCOVERY_TIMEOUT_MS,
-      windowsHide: true,
-    },
-  );
-  if (ps.error || ps.status !== 0) {
-    return null;
-  }
-  const command = ps.stdout.trim();
-  return command ? parseCmdScriptCommandLine(command) : null;
-}
-
-function readWindowsProcessArgsViaWmic(pid: number): string[] | null {
-  const wmic = spawnSync(
-    "wmic",
-    ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
-    {
-      encoding: "utf8",
-      timeout: WINDOWS_GATEWAY_DISCOVERY_TIMEOUT_MS,
-      windowsHide: true,
-    },
-  );
-  if (wmic.error || wmic.status !== 0) {
-    return null;
-  }
-  const command = extractWindowsCommandLine(wmic.stdout);
-  return command ? parseCmdScriptCommandLine(command) : null;
-}
-
-function readWindowsListeningPidsViaPowerShell(port: number): number[] | null {
-  const ps = spawnSync(
-    "powershell",
-    [
-      "-NoProfile",
-      "-Command",
-      `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess)`,
-    ],
-    {
-      encoding: "utf8",
-      timeout: WINDOWS_GATEWAY_DISCOVERY_TIMEOUT_MS,
-      windowsHide: true,
-    },
-  );
-  if (ps.error || ps.status !== 0) {
-    return null;
-  }
-  return ps.stdout
-    .split(/\r?\n/)
-    .map((line) => Number.parseInt(line.trim(), 10))
-    .filter((pid) => Number.isFinite(pid) && pid > 0);
-}
-
-function readWindowsListeningPidsViaNetstat(port: number): number[] {
-  const netstat = spawnSync("netstat", ["-ano", "-p", "tcp"], {
-    encoding: "utf8",
-    timeout: WINDOWS_GATEWAY_DISCOVERY_TIMEOUT_MS,
-    windowsHide: true,
-  });
-  if (netstat.error || netstat.status !== 0) {
-    return [];
-  }
-  const pids = new Set<number>();
-  for (const line of netstat.stdout.split(/\r?\n/)) {
-    const match = line.match(/^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
-    if (!match) {
-      continue;
-    }
-    const parsedPort = Number.parseInt(match[2] ?? "", 10);
-    const pid = Number.parseInt(match[3] ?? "", 10);
-    if (parsedPort === port && Number.isFinite(pid) && pid > 0) {
-      pids.add(pid);
-    }
-  }
-  return [...pids];
-}
-
-function readWindowsListeningPidsOnPortSync(port: number): number[] {
-  return readWindowsListeningPidsViaPowerShell(port) ?? readWindowsListeningPidsViaNetstat(port);
-}
-
+/** Read command argv for a PID using the current platform's process APIs. */
 export function readGatewayProcessArgsSync(pid: number): string[] | null {
   if (process.platform === "linux") {
     try {
@@ -119,10 +23,7 @@ export function readGatewayProcessArgsSync(pid: number): string[] | null {
     }
   }
   if (process.platform === "darwin") {
-    const ps = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
-      encoding: "utf8",
-      timeout: 1000,
-    });
+    const ps = spawnPsSync(["-o", "command=", "-p", String(pid)], GATEWAY_PS_PROBE_TIMEOUT_MS);
     if (ps.error || ps.status !== 0) {
       return null;
     }
@@ -130,26 +31,36 @@ export function readGatewayProcessArgsSync(pid: number): string[] | null {
     return command ? command.split(/\s+/) : null;
   }
   if (process.platform === "win32") {
-    return readWindowsProcessArgsViaPowerShell(pid) ?? readWindowsProcessArgsViaWmic(pid);
+    return readWindowsProcessArgsSync(pid);
   }
   return null;
 }
 
+/** Signal a PID only after its argv matches a gateway process. */
 export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "SIGUSR1"): void {
   const args = readGatewayProcessArgsSync(pid);
   if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
     throw new Error(`refusing to signal non-gateway process pid ${pid}`);
   }
-  process.kill(pid, signal);
+  try {
+    process.kill(pid, signal);
+  } catch (err) {
+    // The verified process can exit between argv inspection and signaling;
+    // ESRCH already satisfies the requested stop or restart handoff.
+    if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+      throw err;
+    }
+  }
 }
 
+/** Find listener PIDs on `port` and keep only verified gateway processes. */
 export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[] {
   const rawPids =
     process.platform === "win32"
       ? readWindowsListeningPidsOnPortSync(port)
       : findUnixGatewayPidsOnPortSync(port);
 
-  return Array.from(new Set(rawPids))
+  return uniqueValues(rawPids)
     .filter((pid): pid is number => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
     .filter((pid) => {
       const args = readGatewayProcessArgsSync(pid);
@@ -157,6 +68,7 @@ export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[
     });
 }
 
+/** Format gateway PIDs for human-facing diagnostics. */
 export function formatGatewayPidList(pids: number[]): string {
   return pids.join(", ");
 }

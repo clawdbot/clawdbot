@@ -1,6 +1,15 @@
+// Android node capability live tests verify paired node command allowlists and remote policy behavior.
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadConfig } from "../config/config.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
+import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
+import {
+  ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
+  findMissingRequiredAndroidNodeCommands,
+} from "../../test/helpers/gateway/android-node-capabilities-required-commands.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
@@ -8,8 +17,9 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient } from "./client.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
+import { resolveNodeCommandAllowlist } from "./node-command-policy.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled();
 const LIVE_ANDROID_NODE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_ANDROID_NODE);
 const describeLive = LIVE && LIVE_ANDROID_NODE ? describe : describe.skip;
 const SKIPPED_INTERACTIVE_COMMANDS = new Set<string>();
@@ -41,8 +51,24 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  expect(Array.isArray(value), label).toBe(false);
+  return value as Record<string, unknown>;
+}
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function expectNonEmptyString(value: unknown, label: string): string {
+  const text = readString(value);
+  if (text === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return text;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -64,10 +90,48 @@ function parseErrorCode(message: string): string {
   return "UNKNOWN";
 }
 
+function readGatewayErrorCode(err: unknown, fallbackMessage: string): string {
+  const byField = readString(asRecord(err).gatewayCode);
+  if (byField) {
+    return byField;
+  }
+  return parseErrorCode(fallbackMessage);
+}
+
 function assertObjectPayload(command: string, payload: unknown): Record<string, unknown> {
   const obj = asRecord(payload);
   expect(Object.keys(obj).length, `${command} payload must be a JSON object`).toBeGreaterThan(0);
   return obj;
+}
+
+const VALID_A2UI_JSONL = [
+  JSON.stringify({
+    surfaceUpdate: {
+      surfaceId: "main",
+      components: [
+        {
+          id: "root",
+          component: { Column: { children: { explicitList: ["text"] } } },
+        },
+        {
+          id: "text",
+          component: {
+            Text: {
+              text: { literalString: "Android Canvas live test" },
+              usageHint: "body",
+            },
+          },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+].join("\n");
+
+function assertA2uiPushPayload(command: string, payload: unknown) {
+  const obj = assertObjectPayload(command, payload);
+  expect(obj.ok).toBe(true);
+  expect(readStringArray(obj.surfaces)).toContain("main");
 }
 
 const COMMAND_PROFILES: Record<string, CommandProfile> = {
@@ -92,7 +156,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("canvas.eval", payload);
-      expect(obj.result).toBeDefined();
+      expect(obj).toHaveProperty("result");
     },
   },
   "canvas.snapshot": {
@@ -101,19 +165,25 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("canvas.snapshot", payload);
-      expect(readString(obj.format)).not.toBeNull();
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.format, "canvas.snapshot format");
+      expectNonEmptyString(obj.base64, "canvas.snapshot base64");
     },
   },
   "canvas.a2ui.push": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.push", payload);
+    },
   },
   "canvas.a2ui.pushJSONL": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.pushJSONL", payload);
+    },
   },
   "canvas.a2ui.reset": {
     buildParams: () => ({}),
@@ -135,7 +205,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("camera.snap", payload);
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.base64, "camera.snap base64");
     },
   },
   "camera.clip": {
@@ -144,7 +214,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("camera.clip", payload);
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.base64, "camera.clip base64");
     },
   },
   "location.get": {
@@ -169,8 +239,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.info", payload);
-      expect(readString(obj.systemName)).not.toBeNull();
-      expect(readString(obj.systemVersion)).not.toBeNull();
+      expectNonEmptyString(obj.systemName, "device.info systemName");
+      expectNonEmptyString(obj.systemVersion, "device.info systemVersion");
     },
   },
   "device.permissions": {
@@ -179,7 +249,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.permissions", payload);
-      expect(asRecord(obj.permissions)).toBeTruthy();
+      expectRecord(obj.permissions, "device.permissions payload");
     },
   },
   "device.health": {
@@ -188,7 +258,16 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.health", payload);
-      expect(asRecord(obj.memory)).toBeTruthy();
+      expectRecord(obj.memory, "device.health memory payload");
+    },
+  },
+  "device.apps": {
+    buildParams: () => ({ query: "calendar", includeSystem: true, limit: 5 }),
+    timeoutMs: 20_000,
+    outcome: "success",
+    onSuccess: (payload) => {
+      const obj = assertObjectPayload("device.apps", payload);
+      expect(Array.isArray(obj.apps)).toBe(true);
     },
   },
   "notifications.list": {
@@ -213,13 +292,23 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "error",
     allowedErrorCodes: ["INVALID_REQUEST"],
   },
+  "sms.search": {
+    buildParams: () => ({}),
+    timeoutMs: 20_000,
+    outcome: "success",
+    onSuccess: (payload) => {
+      const obj = assertObjectPayload("sms.search", payload);
+      expect(["number", "string"]).toContain(typeof obj.count);
+      expect(Array.isArray(obj.messages)).toBe(true);
+    },
+  },
   "debug.logs": {
     buildParams: () => ({}),
     timeoutMs: 20_000,
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("debug.logs", payload);
-      expect(readString(obj.logs)).not.toBeNull();
+      expectNonEmptyString(obj.logs, "debug.logs logs");
     },
   },
   "debug.ed25519": {
@@ -228,13 +317,13 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("debug.ed25519", payload);
-      expect(readString(obj.diagnostics)).not.toBeNull();
+      expectNonEmptyString(obj.diagnostics, "debug.ed25519 diagnostics");
     },
   },
 };
 
-function resolveGatewayConnection() {
-  const cfg = loadConfig();
+async function resolveGatewayConnection() {
+  const cfg = await readLiveTestConfig();
   const urlOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_URL);
   const details = buildGatewayConnectionDetails({
     config: cfg,
@@ -250,11 +339,67 @@ function resolveGatewayConnection() {
     },
   });
   return {
+    details,
     url: details.url,
     token: creds.token,
     password: creds.password,
   };
 }
+
+async function resolvePolicyConfigForRun(params: {
+  client: GatewayClient;
+  connectionDetails: ReturnType<typeof buildGatewayConnectionDetails>;
+  loadLocalConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
+}): Promise<OpenClawConfig> {
+  if (shouldFetchRemotePolicyConfig(params.connectionDetails)) {
+    const raw = await params.client.request("config.get", {});
+    return unwrapRemoteConfigSnapshot(raw);
+  }
+
+  const loadLocalConfig = params.loadLocalConfig ?? readLiveTestConfig;
+  return await loadLocalConfig();
+}
+
+describe("resolvePolicyConfigForRun", () => {
+  it("skips local config loading for remote runs", async () => {
+    const request = vi.fn().mockResolvedValue({ config: { gateway: { bind: "127.0.0.1" } } });
+    const loadLocalConfig = vi.fn(() => {
+      throw new Error("local config should not load in remote mode");
+    });
+
+    const result = await resolvePolicyConfigForRun({
+      client: { request } as unknown as GatewayClient,
+      connectionDetails: {
+        url: "wss://example.invalid/gateway",
+        urlSource: "env override",
+        message: "remote",
+      },
+      loadLocalConfig,
+    });
+
+    expect(loadLocalConfig).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith("config.get", {});
+    expectRecord(result.gateway, "remote gateway config");
+  });
+
+  it("still uses local config loading for local loopback runs", async () => {
+    const localConfig = { gateway: { bind: "127.0.0.1" } } as unknown as OpenClawConfig;
+    const loadLocalConfig = vi.fn(() => localConfig);
+
+    const result = await resolvePolicyConfigForRun({
+      client: { request: vi.fn() } as unknown as GatewayClient,
+      connectionDetails: {
+        url: "ws://127.0.0.1:4000/gateway",
+        urlSource: "local loopback",
+        message: "local",
+      },
+      loadLocalConfig,
+    });
+
+    expect(loadLocalConfig).toHaveBeenCalledTimes(1);
+    expect(result).toBe(localConfig);
+  });
+});
 
 async function connectGatewayClient(params: {
   url: string;
@@ -280,7 +425,7 @@ async function connectGatewayClient(params: {
       url: params.url,
       token: params.token,
       password: params.password,
-      connectDelayMs: 0,
+      connectChallengeTimeoutMs: 0,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: "android-live-test",
       clientVersion: "dev",
@@ -333,11 +478,14 @@ function selectTargetNode(nodes: NodeListNode[]): NodeListNode {
     throw new Error("no Android node found in node.list");
   }
 
-  return androidNodes.slice().toSorted((a, b) => {
-    const aMs = typeof a.connectedAtMs === "number" ? a.connectedAtMs : 0;
-    const bMs = typeof b.connectedAtMs === "number" ? b.connectedAtMs : 0;
-    return bMs - aMs;
-  })[0];
+  return expectDefined(
+    androidNodes.slice().toSorted((a, b) => {
+      const aMs = typeof a.connectedAtMs === "number" ? a.connectedAtMs : 0;
+      const bMs = typeof b.connectedAtMs === "number" ? b.connectedAtMs : 0;
+      return bMs - aMs;
+    })[0],
+    "androidNodes.slice().toSorted((a, b) => { const aMs = typeof a.connec... test invariant",
+  );
 }
 
 async function invokeNodeCommand(params: {
@@ -371,7 +519,7 @@ async function invokeNodeCommand(params: {
     return {
       command: params.command,
       ok: false,
-      errorCode: parseErrorCode(message),
+      errorCode: readGatewayErrorCode(err, message),
       errorMessage: message,
       durationMs: Math.max(1, Date.now() - startedAt),
     };
@@ -416,7 +564,7 @@ describeLive("android node capability integration (preconditioned)", () => {
   const results = new Map<string, CommandResult>();
 
   beforeAll(async () => {
-    const { url, token, password } = resolveGatewayConnection();
+    const { details, url, token, password } = await resolveGatewayConnection();
     client = await connectGatewayClient({ url, token, password });
 
     const listRaw = await client.request("node.list", {});
@@ -447,16 +595,44 @@ describeLive("android node capability integration (preconditioned)", () => {
     const describeObj = asRecord(describeRaw);
     const commands = readStringArray(describeObj.commands);
     expect(commands.length, "node.describe advertised no commands").toBeGreaterThan(0);
-    commandsToRun = commands.filter((command) => !SKIPPED_INTERACTIVE_COMMANDS.has(command));
+
+    const cfg = await resolvePolicyConfigForRun({
+      client,
+      connectionDetails: details,
+    });
+    const allowlist = resolveNodeCommandAllowlist(cfg, {
+      platform: target.platform,
+      deviceFamily: target.deviceFamily,
+      commands,
+    });
+
+    commandsToRun = commands.filter(
+      (command) => allowlist.has(command) && !SKIPPED_INTERACTIVE_COMMANDS.has(command),
+    );
     expect(
       commandsToRun.length,
-      "node.describe advertised only interactive commands (nothing runnable in CI/dev integration mode)",
+      "node.describe advertised no non-interactive allowlisted commands (check gateway.nodes.commands allow/deny)",
     ).toBeGreaterThan(0);
 
     const missingProfiles = commandsToRun.filter((command) => !COMMAND_PROFILES[command]);
     if (missingProfiles.length > 0) {
       throw new Error(
         `unmapped advertised commands: ${missingProfiles.join(", ")} (update COMMAND_PROFILES before running this suite)`,
+      );
+    }
+
+    const missingRequiredCommands = findMissingRequiredAndroidNodeCommands({
+      commandsToRun,
+      requiredCommands: ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
+    });
+    if (missingRequiredCommands.length > 0) {
+      throw new Error(
+        [
+          `Android node missing required non-interactive command(s): ${missingRequiredCommands.join(", ")}`,
+          `runnable after policy filtering (${commandsToRun.length}/${ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS.length}): ${commandsToRun.join(", ")}`,
+          `advertised by node.describe: ${commands.join(", ")}`,
+          "precondition: update the Android node, or fix gateway.nodes.commands allow/deny before running this suite",
+        ].join("\n"),
       );
     }
   }, 60_000);
@@ -468,7 +644,10 @@ describeLive("android node capability integration (preconditioned)", () => {
 
   const profiledCommands = Object.keys(COMMAND_PROFILES).toSorted();
   for (const command of profiledCommands) {
-    const profile = COMMAND_PROFILES[command];
+    const profile = expectDefined(
+      COMMAND_PROFILES[command],
+      "COMMAND_PROFILES[command] test invariant",
+    );
     const timeout = Math.max(20_000, profile.timeoutMs ?? 20_000) + 15_000;
     it(`command: ${command}`, { timeout }, async () => {
       if (!client) {
@@ -478,6 +657,8 @@ describeLive("android node capability integration (preconditioned)", () => {
         return;
       }
       const result = await invokeNodeCommand({ client, nodeId, command, profile, ctx });
+      expect(result.command).toBe(command);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
       results.set(command, result);
       const issue = evaluateCommandResult({ result, profile, ctx });
       if (!issue) {
@@ -496,22 +677,20 @@ describeLive("android node capability integration (preconditioned)", () => {
 
   it("covers every advertised non-interactive command", () => {
     const missingRuns = commandsToRun.filter((command) => !results.has(command));
-    if (missingRuns.length === 0) {
-      return;
-    }
     const summary = [...results.values()]
       .map((entry) => {
         const status = entry.ok ? "ok" : `err:${entry.errorCode ?? "UNKNOWN"}`;
         return `${entry.command} -> ${status} (${entry.durationMs}ms)`;
       })
       .join("\n");
-    throw new Error(
+    expect(
+      missingRuns,
       [
         `advertised commands missing execution (${missingRuns.length}/${commandsToRun.length})`,
         ...missingRuns,
         "summary:",
         summary,
       ].join("\n"),
-    );
+    ).toStrictEqual([]);
   });
 });

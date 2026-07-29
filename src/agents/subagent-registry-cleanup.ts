@@ -1,10 +1,16 @@
+/**
+ * Subagent registry cleanup decisions.
+ *
+ * Decides whether completed runs can be cleaned up, deferred for descendants, retried, or abandoned.
+ */
+import { getDeliveryAttemptCount } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type DeferredCleanupDecision =
+type DeferredCleanupDecision =
   | {
       kind: "defer-descendants";
       delayMs: number;
@@ -20,6 +26,7 @@ export type DeferredCleanupDecision =
       resumeDelayMs?: number;
     };
 
+/** Resolve the lifecycle ended reason used when cleaning up a subagent run. */
 export function resolveCleanupCompletionReason(
   entry: SubagentRunRecord,
 ): SubagentLifecycleEndedReason {
@@ -30,6 +37,7 @@ function resolveEndedAgoMs(entry: SubagentRunRecord, now: number): number {
   return typeof entry.endedAt === "number" ? now - entry.endedAt : 0;
 }
 
+/** Decide whether deferred subagent cleanup should retry, defer, or give up. */
 export function resolveDeferredCleanupDecision(params: {
   entry: SubagentRunRecord;
   now: number;
@@ -51,7 +59,7 @@ export function resolveDeferredCleanupDecision(params: {
     return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
   }
 
-  const retryCount = (params.entry.announceRetryCount ?? 0) + 1;
+  const retryCount = getDeliveryAttemptCount(params.entry) + 1;
   const expiryExceeded = isCompletionMessageFlow
     ? completionHardExpiryExceeded
     : endedAgo > params.announceExpiryMs;
@@ -66,9 +74,6 @@ export function resolveDeferredCleanupDecision(params: {
   return {
     kind: "retry",
     retryCount,
-    resumeDelayMs:
-      params.entry.expectsCompletionMessage === true
-        ? params.resolveAnnounceRetryDelayMs(retryCount)
-        : undefined,
+    resumeDelayMs: params.resolveAnnounceRetryDelayMs(retryCount),
   };
 }

@@ -1,11 +1,9 @@
+// Safe-bin policy facade: profile metadata and argv validation live in split
+// modules, while callers import the stable aggregate surface from here.
 export {
-  SAFE_BIN_PROFILE_FIXTURES,
+  DEFAULT_SAFE_BINS,
   SAFE_BIN_PROFILES,
-  buildLongFlagPrefixMap,
-  collectKnownLongFlags,
   normalizeSafeBinProfileFixtures,
-  renderSafeBinDeniedFlagsDocBullets,
-  resolveSafeBinDeniedFlags,
   resolveSafeBinProfiles,
   type SafeBinProfile,
   type SafeBinProfileFixture,

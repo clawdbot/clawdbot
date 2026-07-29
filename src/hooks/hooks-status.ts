@@ -1,15 +1,23 @@
+// Hook status helpers summarize configured, installed, and plugin-provided hooks.
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
-import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
+import { hasBinary, isHookConfigPathTruthy, isHookEnvSatisfied } from "./config.js";
+import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
+import {
+  resolveHookConfig,
+  resolveHookEnableState,
+  resolveHookEntries,
+  type HookEnableStateReason,
+} from "./policy.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
-export type HookStatusConfigCheck = RequirementConfigCheck;
+type HookStatusConfigCheck = RequirementConfigCheck;
 
-export type HookInstallOption = {
+type HookInstallOption = {
   id: string;
   kind: HookInstallSpec["kind"];
   label: string;
@@ -28,9 +36,13 @@ export type HookStatusEntry = {
   emoji?: string;
   homepage?: string;
   events: string[];
+  /** Declared events no core trigger site emits (likely typos; fire only if a plugin emits them). */
+  unknownEvents: string[];
   always: boolean;
-  disabled: boolean;
-  eligible: boolean;
+  enabledByConfig: boolean;
+  requirementsSatisfied: boolean;
+  loadable: boolean;
+  blockedReason?: HookEnableStateReason | "missing requirements";
   managedByPlugin: boolean;
   requirements: Requirements;
   missing: Requirements;
@@ -84,12 +96,12 @@ function buildHookStatus(
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
-  const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
+  const enableState = resolveHookEnableState({ entry, config, hookConfig });
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
-  const isEnvSatisfied = (envName: string) =>
-    Boolean(process.env[envName] || hookConfig?.env?.[envName]);
-  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+  const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
+  const isEnvSatisfied = (envName: string) => isHookEnvSatisfied(envName, hookConfig);
+  const isConfigSatisfied = (pathStr: string) => isHookConfigPathTruthy(config, pathStr);
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
@@ -101,7 +113,10 @@ function buildHookStatus(
       isConfigSatisfied,
     });
 
-  const eligible = !disabled && requirementsSatisfied;
+  const enabledByConfig = enableState.enabled;
+  const loadable = enabledByConfig && requirementsSatisfied;
+  const blockedReason =
+    enableState.reason ?? (requirementsSatisfied ? undefined : "missing requirements");
 
   return {
     name: entry.hook.name,
@@ -115,9 +130,12 @@ function buildHookStatus(
     emoji,
     homepage,
     events,
+    unknownEvents,
     always,
-    disabled,
-    eligible,
+    enabledByConfig,
+    requirementsSatisfied,
+    loadable,
+    blockedReason,
     managedByPlugin,
     requirements: required,
     missing,
@@ -136,7 +154,9 @@ export function buildWorkspaceHookStatus(
   },
 ): HookStatusReport {
   const managedHooksDir = opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks");
-  const hookEntries = opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts);
+  const hookEntries = resolveHookEntries(
+    opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts),
+  );
 
   return {
     workspaceDir,

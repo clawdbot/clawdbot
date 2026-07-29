@@ -1,3 +1,7 @@
+// Diffs helper module supports config behavior.
+import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
+import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
+import { z } from "zod";
 import type { OpenClawPluginConfigSchema } from "../api.js";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
@@ -12,12 +16,13 @@ import {
   type DiffLayout,
   type DiffMode,
   type DiffOutputFormat,
-  type DiffPresentationDefaults,
   type DiffTheme,
   type DiffToolDefaults,
 } from "./types.js";
+import { normalizeViewerBaseUrl } from "./url.js";
 
 type DiffsPluginConfig = {
+  viewerBaseUrl?: string;
   defaults?: {
     fontFamily?: string;
     fontSize?: number;
@@ -32,13 +37,18 @@ type DiffsPluginConfig = {
     fileQuality?: DiffImageQualityPreset;
     fileScale?: number;
     fileMaxWidth?: number;
+    /** @deprecated Use fileFormat. */
     format?: DiffOutputFormat;
-    // Backward-compatible aliases retained for existing configs.
+    /** @deprecated Use fileFormat. */
     imageFormat?: DiffOutputFormat;
+    /** @deprecated Use fileQuality. */
     imageQuality?: DiffImageQualityPreset;
+    /** @deprecated Use fileScale. */
     imageScale?: number;
+    /** @deprecated Use fileMaxWidth. */
     imageMaxWidth?: number;
     mode?: DiffMode;
+    ttlSeconds?: number;
   };
   security?: {
     allowRemoteViewer?: boolean;
@@ -66,7 +76,7 @@ const DEFAULT_IMAGE_QUALITY_PROFILES = {
   { scale: number; maxWidth: number; maxPixels: number }
 >;
 
-export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
+const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   fontFamily: "Fira Code",
   fontSize: 15,
   lineSpacing: 1.6,
@@ -81,140 +91,147 @@ export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   fileScale: DEFAULT_IMAGE_QUALITY_PROFILES.standard.scale,
   fileMaxWidth: DEFAULT_IMAGE_QUALITY_PROFILES.standard.maxWidth,
   mode: "both",
+  ttlSeconds: 1800,
 };
 
-export type DiffsPluginSecurityConfig = {
+type DiffsPluginSecurityConfig = {
   allowRemoteViewer: boolean;
 };
 
-export const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
+const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
   allowRemoteViewer: false,
 };
 
-const DIFFS_PLUGIN_CONFIG_JSON_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    defaults: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        fontFamily: { type: "string", default: DEFAULT_DIFFS_TOOL_DEFAULTS.fontFamily },
-        fontSize: {
-          type: "number",
-          minimum: 10,
-          maximum: 24,
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fontSize,
-        },
-        lineSpacing: {
-          type: "number",
-          minimum: 1,
-          maximum: 3,
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing,
-        },
-        layout: {
-          type: "string",
-          enum: [...DIFF_LAYOUTS],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.layout,
-        },
-        showLineNumbers: {
-          type: "boolean",
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.showLineNumbers,
-        },
-        diffIndicators: {
-          type: "string",
-          enum: [...DIFF_INDICATORS],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.diffIndicators,
-        },
-        wordWrap: { type: "boolean", default: DEFAULT_DIFFS_TOOL_DEFAULTS.wordWrap },
-        background: { type: "boolean", default: DEFAULT_DIFFS_TOOL_DEFAULTS.background },
-        theme: {
-          type: "string",
-          enum: [...DIFF_THEMES],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.theme,
-        },
-        fileFormat: {
-          type: "string",
-          enum: [...DIFF_OUTPUT_FORMATS],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fileFormat,
-        },
-        format: {
-          type: "string",
-          enum: [...DIFF_OUTPUT_FORMATS],
-        },
-        fileQuality: {
-          type: "string",
-          enum: [...DIFF_IMAGE_QUALITY_PRESETS],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fileQuality,
-        },
-        fileScale: {
-          type: "number",
-          minimum: 1,
-          maximum: 4,
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fileScale,
-        },
-        fileMaxWidth: {
-          type: "number",
-          minimum: 640,
-          maximum: 2400,
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.fileMaxWidth,
-        },
-        imageFormat: {
-          type: "string",
-          enum: [...DIFF_OUTPUT_FORMATS],
-        },
-        imageQuality: {
-          type: "string",
-          enum: [...DIFF_IMAGE_QUALITY_PRESETS],
-        },
-        imageScale: {
-          type: "number",
-          minimum: 1,
-          maximum: 4,
-        },
-        imageMaxWidth: {
-          type: "number",
-          minimum: 640,
-          maximum: 2400,
-        },
-        mode: {
-          type: "string",
-          enum: [...DIFF_MODES],
-          default: DEFAULT_DIFFS_TOOL_DEFAULTS.mode,
-        },
-      },
-    },
-    security: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        allowRemoteViewer: {
-          type: "boolean",
-          default: DEFAULT_DIFFS_PLUGIN_SECURITY.allowRemoteViewer,
-        },
-      },
-    },
+const VIEWER_BASE_URL_JSON_SCHEMA = {
+  type: "string",
+  format: "uri",
+  pattern: "^[Hh][Tt][Tt][Pp][Ss]?://",
+  not: {
+    pattern: "[?#]",
   },
-} as const;
+} as const satisfies Record<string, unknown>;
 
-export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = {
+const DiffsPluginJsonSchemaSource = z.strictObject({
+  viewerBaseUrl: z
+    .string()
+    .superRefine((value, ctx) => {
+      try {
+        normalizeViewerBaseUrl(value, "viewerBaseUrl");
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "Invalid viewerBaseUrl",
+        });
+      }
+    })
+    .optional(),
+  defaults: z
+    .strictObject({
+      fontFamily: z.string().default(DEFAULT_DIFFS_TOOL_DEFAULTS.fontFamily).optional(),
+      fontSize: z.number().min(10).max(24).default(DEFAULT_DIFFS_TOOL_DEFAULTS.fontSize).optional(),
+      lineSpacing: z
+        .number()
+        .min(1)
+        .max(3)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing)
+        .optional(),
+      layout: z.enum(DIFF_LAYOUTS).default(DEFAULT_DIFFS_TOOL_DEFAULTS.layout).optional(),
+      showLineNumbers: z.boolean().default(DEFAULT_DIFFS_TOOL_DEFAULTS.showLineNumbers).optional(),
+      diffIndicators: z
+        .enum(DIFF_INDICATORS)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.diffIndicators)
+        .optional(),
+      wordWrap: z.boolean().default(DEFAULT_DIFFS_TOOL_DEFAULTS.wordWrap).optional(),
+      background: z.boolean().default(DEFAULT_DIFFS_TOOL_DEFAULTS.background).optional(),
+      theme: z.enum(DIFF_THEMES).default(DEFAULT_DIFFS_TOOL_DEFAULTS.theme).optional(),
+      fileFormat: z.enum(DIFF_OUTPUT_FORMATS).optional(),
+      format: z.enum(DIFF_OUTPUT_FORMATS).optional().describe("Deprecated alias for fileFormat."),
+      fileQuality: z.enum(DIFF_IMAGE_QUALITY_PRESETS).optional(),
+      fileScale: z.number().min(1).max(4).optional(),
+      fileMaxWidth: z.number().min(640).max(2400).optional(),
+      imageFormat: z
+        .enum(DIFF_OUTPUT_FORMATS)
+        .optional()
+        .describe("Deprecated alias for fileFormat."),
+      imageQuality: z
+        .enum(DIFF_IMAGE_QUALITY_PRESETS)
+        .optional()
+        .describe("Deprecated alias for fileQuality."),
+      imageScale: z.number().min(1).max(4).optional().describe("Deprecated alias for fileScale."),
+      imageMaxWidth: z
+        .number()
+        .min(640)
+        .max(2400)
+        .optional()
+        .describe("Deprecated alias for fileMaxWidth."),
+      mode: z.enum(DIFF_MODES).default(DEFAULT_DIFFS_TOOL_DEFAULTS.mode).optional(),
+      ttlSeconds: z
+        .number()
+        .min(1)
+        .max(21_600)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.ttlSeconds)
+        .optional(),
+    })
+    .optional(),
+  security: z
+    .strictObject({
+      allowRemoteViewer: z
+        .boolean()
+        .default(DEFAULT_DIFFS_PLUGIN_SECURITY.allowRemoteViewer)
+        .optional(),
+    })
+    .optional(),
+});
+
+const diffsPluginConfigSchemaBase = buildPluginConfigSchema(DiffsPluginJsonSchemaSource, {
   safeParse(value: unknown) {
     if (value === undefined) {
       return { success: true, data: undefined };
     }
-    try {
-      return { success: true, data: resolveDiffsPluginDefaults(value) };
-    } catch (error) {
+    const result = DiffsPluginJsonSchemaSource.safeParse(value);
+    if (result.success) {
       return {
-        success: false,
-        error: {
-          issues: [{ path: [], message: error instanceof Error ? error.message : String(error) }],
-        },
+        success: true,
+        data: buildDiffsPluginConfigShape(result.data as DiffsPluginConfig),
       };
     }
+    return {
+      success: false,
+      error: {
+        issues: mapPluginConfigIssues(result.error.issues),
+      },
+    };
   },
-  jsonSchema: DIFFS_PLUGIN_CONFIG_JSON_SCHEMA,
+});
+
+export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = {
+  ...diffsPluginConfigSchemaBase,
+  jsonSchema: {
+    ...diffsPluginConfigSchemaBase.jsonSchema,
+    properties: {
+      ...(diffsPluginConfigSchemaBase.jsonSchema as { properties?: Record<string, unknown> })
+        .properties,
+      viewerBaseUrl: VIEWER_BASE_URL_JSON_SCHEMA,
+    },
+  },
 };
+
+function resolveConfiguredValue<T>(options: {
+  primary: T | undefined;
+  aliases: Array<T | undefined>;
+}): T | undefined {
+  const alias = options.aliases.find((value): value is T => value !== undefined);
+  return options.primary ?? alias;
+}
+
+function buildDiffsPluginConfigShape(config: DiffsPluginConfig): DiffsPluginConfig {
+  const viewerBaseUrl = resolveDiffsPluginViewerBaseUrl(config);
+  return {
+    ...(viewerBaseUrl !== undefined ? { viewerBaseUrl } : {}),
+    ...(config.defaults !== undefined ? { defaults: resolveDiffsPluginDefaults(config) } : {}),
+    ...(config.security !== undefined ? { security: resolveDiffsPluginSecurity(config) } : {}),
+  };
+}
 
 export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
@@ -226,27 +243,42 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
     return { ...DEFAULT_DIFFS_TOOL_DEFAULTS };
   }
 
-  const fileQuality = normalizeFileQuality(defaults.fileQuality ?? defaults.imageQuality);
+  const fileQuality = normalizeFileQuality(
+    resolveConfiguredValue({
+      primary: defaults.fileQuality,
+      aliases: [defaults.imageQuality],
+    }),
+  );
   const profile = DEFAULT_IMAGE_QUALITY_PROFILES[fileQuality];
+  const fileFormat = resolveConfiguredValue({
+    primary: defaults.fileFormat,
+    aliases: [defaults.imageFormat, defaults.format],
+  });
+  const fileScale = resolveConfiguredValue({
+    primary: defaults.fileScale,
+    aliases: [defaults.imageScale],
+  });
+  const fileMaxWidth = resolveConfiguredValue({
+    primary: defaults.fileMaxWidth,
+    aliases: [defaults.imageMaxWidth],
+  });
 
   return {
     fontFamily: normalizeFontFamily(defaults.fontFamily),
-    fontSize: normalizeFontSize(defaults.fontSize),
-    lineSpacing: normalizeLineSpacing(defaults.lineSpacing),
+    fontSize: normalizeDiffFontSize(defaults.fontSize),
+    lineSpacing: normalizeDiffLineSpacing(defaults.lineSpacing),
     layout: normalizeLayout(defaults.layout),
     showLineNumbers: defaults.showLineNumbers !== false,
     diffIndicators: normalizeDiffIndicators(defaults.diffIndicators),
     wordWrap: defaults.wordWrap !== false,
     background: defaults.background !== false,
     theme: normalizeTheme(defaults.theme),
-    fileFormat: normalizeFileFormat(defaults.fileFormat ?? defaults.imageFormat ?? defaults.format),
+    fileFormat: normalizeFileFormat(fileFormat),
     fileQuality,
-    fileScale: normalizeFileScale(defaults.fileScale ?? defaults.imageScale, profile.scale),
-    fileMaxWidth: normalizeFileMaxWidth(
-      defaults.fileMaxWidth ?? defaults.imageMaxWidth,
-      profile.maxWidth,
-    ),
+    fileScale: normalizeFileScale(fileScale, profile.scale),
+    fileMaxWidth: normalizeFileMaxWidth(fileMaxWidth, profile.maxWidth),
     mode: normalizeMode(defaults.mode),
+    ttlSeconds: normalizeTtlSeconds(defaults.ttlSeconds),
   };
 }
 
@@ -265,29 +297,18 @@ export function resolveDiffsPluginSecurity(config: unknown): DiffsPluginSecurity
   };
 }
 
-export function toPresentationDefaults(defaults: DiffToolDefaults): DiffPresentationDefaults {
-  const {
-    fontFamily,
-    fontSize,
-    lineSpacing,
-    layout,
-    showLineNumbers,
-    diffIndicators,
-    wordWrap,
-    background,
-    theme,
-  } = defaults;
-  return {
-    fontFamily,
-    fontSize,
-    lineSpacing,
-    layout,
-    showLineNumbers,
-    diffIndicators,
-    wordWrap,
-    background,
-    theme,
-  };
+export function resolveDiffsPluginViewerBaseUrl(config: unknown): string | undefined {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return undefined;
+  }
+
+  const viewerBaseUrl = (config as DiffsPluginConfig).viewerBaseUrl;
+  if (typeof viewerBaseUrl !== "string") {
+    return undefined;
+  }
+
+  const normalized = viewerBaseUrl.trim();
+  return normalized ? normalizeViewerBaseUrl(normalized) : undefined;
 }
 
 function normalizeFontFamily(fontFamily?: string): string {
@@ -295,7 +316,7 @@ function normalizeFontFamily(fontFamily?: string): string {
   return normalized || DEFAULT_DIFFS_TOOL_DEFAULTS.fontFamily;
 }
 
-function normalizeFontSize(fontSize?: number): number {
+export function normalizeDiffFontSize(fontSize?: number): number {
   if (fontSize === undefined || !Number.isFinite(fontSize)) {
     return DEFAULT_DIFFS_TOOL_DEFAULTS.fontSize;
   }
@@ -303,7 +324,7 @@ function normalizeFontSize(fontSize?: number): number {
   return Math.min(Math.max(rounded, 10), 24);
 }
 
-function normalizeLineSpacing(lineSpacing?: number): number {
+export function normalizeDiffLineSpacing(lineSpacing?: number): number {
   if (lineSpacing === undefined || !Number.isFinite(lineSpacing)) {
     return DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing;
   }
@@ -356,17 +377,20 @@ function normalizeMode(mode?: DiffMode): DiffMode {
   return mode && DIFF_MODES.includes(mode) ? mode : DEFAULT_DIFFS_TOOL_DEFAULTS.mode;
 }
 
+function normalizeTtlSeconds(ttlSeconds?: number): number {
+  if (ttlSeconds === undefined || !Number.isFinite(ttlSeconds)) {
+    return DEFAULT_DIFFS_TOOL_DEFAULTS.ttlSeconds;
+  }
+  const rounded = Math.floor(ttlSeconds);
+  return Math.min(Math.max(rounded, 1), 21_600);
+}
+
 export function resolveDiffImageRenderOptions(params: {
   defaults: DiffFileDefaults;
   fileFormat?: DiffOutputFormat;
-  format?: DiffOutputFormat;
   fileQuality?: DiffImageQualityPreset;
   fileScale?: number;
   fileMaxWidth?: number;
-  imageFormat?: DiffOutputFormat;
-  imageQuality?: DiffImageQualityPreset;
-  imageScale?: number;
-  imageMaxWidth?: number;
 }): {
   format: DiffOutputFormat;
   qualityPreset: DiffImageQualityPreset;
@@ -374,22 +398,17 @@ export function resolveDiffImageRenderOptions(params: {
   maxWidth: number;
   maxPixels: number;
 } {
-  const format = normalizeFileFormat(
-    params.fileFormat ?? params.imageFormat ?? params.format ?? params.defaults.fileFormat,
-  );
-  const qualityOverrideProvided =
-    params.fileQuality !== undefined || params.imageQuality !== undefined;
-  const qualityPreset = normalizeFileQuality(
-    params.fileQuality ?? params.imageQuality ?? params.defaults.fileQuality,
-  );
+  const format = normalizeFileFormat(params.fileFormat ?? params.defaults.fileFormat);
+  const qualityOverrideProvided = params.fileQuality !== undefined;
+  const qualityPreset = normalizeFileQuality(params.fileQuality ?? params.defaults.fileQuality);
   const profile = DEFAULT_IMAGE_QUALITY_PROFILES[qualityPreset];
 
   const scale = normalizeFileScale(
-    params.fileScale ?? params.imageScale,
+    params.fileScale,
     qualityOverrideProvided ? profile.scale : params.defaults.fileScale,
   );
   const maxWidth = normalizeFileMaxWidth(
-    params.fileMaxWidth ?? params.imageMaxWidth,
+    params.fileMaxWidth,
     qualityOverrideProvided ? profile.maxWidth : params.defaults.fileMaxWidth,
   );
 

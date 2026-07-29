@@ -8,6 +8,8 @@ description: |
 
 Single tool `feishu_wiki` for knowledge base operations.
 
+Wiki `space_id` values are opaque strings. Always keep them quoted in tool calls, even when they contain only digits; passing a long numeric-looking ID as a number can corrupt the suffix due to JavaScript number precision limits.
+
 ## Token Extraction
 
 From URL `https://xxx.feishu.cn/wiki/ABC123def` → `token` = `ABC123def`
@@ -20,7 +22,12 @@ From URL `https://xxx.feishu.cn/wiki/ABC123def` → `token` = `ABC123def`
 { "action": "spaces" }
 ```
 
-Returns all accessible wiki spaces.
+Returns one page of accessible wiki spaces plus `has_more` and `page_token`.
+Continue with the returned `page_token` while `has_more` is true:
+
+```json
+{ "action": "spaces", "page_token": "next-page-token" }
+```
 
 ### List Nodes
 
@@ -33,6 +40,10 @@ With parent:
 ```json
 { "action": "nodes", "space_id": "7xxx", "parent_node_token": "wikcnXXX" }
 ```
+
+Returns one page of nodes plus `has_more` and `page_token`. Continue with the
+same `space_id` and `parent_node_token`, adding the returned `page_token`, while
+`has_more` is true. Both list actions accept optional `page_size` from 1 to 50.
 
 ### Get Node Details
 

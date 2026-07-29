@@ -1,24 +1,10 @@
-import fs from "node:fs";
-import JSON5 from "json5";
-import { resolveConfigPath } from "../config/paths.js";
+// Lightweight banner option parser kept out of the full CLI import path.
 import type { TaglineMode } from "./tagline.js";
 
-function parseTaglineMode(value: unknown): TaglineMode | undefined {
+/** Parse an explicit CLI banner tagline mode. */
+export function parseTaglineMode(value: unknown): TaglineMode | undefined {
   if (value === "random" || value === "default" || value === "off") {
     return value;
   }
   return undefined;
-}
-
-export function readCliBannerTaglineMode(
-  env: NodeJS.ProcessEnv = process.env,
-): TaglineMode | undefined {
-  try {
-    const configPath = resolveConfigPath(env);
-    const raw = fs.readFileSync(configPath, "utf8");
-    const parsed: { cli?: { banner?: { taglineMode?: unknown } } } = JSON5.parse(raw);
-    return parseTaglineMode(parsed.cli?.banner?.taglineMode);
-  } catch {
-    return undefined;
-  }
 }

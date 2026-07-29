@@ -1,35 +1,13 @@
-import { OPENCODE_GO_DEFAULT_MODEL_REF } from "openclaw/plugin-sdk/provider-models";
+// Opencode Go setup module handles plugin onboarding behavior.
 import {
   applyAgentDefaultModelPrimary,
-  withAgentModelAliases,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export { OPENCODE_GO_DEFAULT_MODEL_REF };
-
-const OPENCODE_GO_ALIAS_DEFAULTS: Record<string, string> = {
-  "opencode-go/kimi-k2.5": "Kimi",
-  "opencode-go/glm-5": "GLM",
-  "opencode-go/minimax-m2.5": "MiniMax",
-};
+export const OPENCODE_GO_DEFAULT_MODEL_REF = "opencode-go/kimi-k2.6";
 
 export function applyOpencodeGoProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models: withAgentModelAliases(
-          cfg.agents?.defaults?.models,
-          Object.entries(OPENCODE_GO_ALIAS_DEFAULTS).map(([modelRef, alias]) => ({
-            modelRef,
-            alias,
-          })),
-        ),
-      },
-    },
-  };
+  return cfg;
 }
 
 export function applyOpencodeGoConfig(cfg: OpenClawConfig): OpenClawConfig {

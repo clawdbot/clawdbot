@@ -18,7 +18,7 @@ public enum OpenClawKitResources {
     private static func locateBundle() -> Bundle {
         // 1. Check inside Bundle.main (packaged apps copy resources here)
         if let mainResourceURL = Bundle.main.resourceURL {
-            let bundleURL = mainResourceURL.appendingPathComponent("\(bundleName).bundle")
+            let bundleURL = mainResourceURL.appendingPathComponent("\(self.bundleName).bundle")
             if let bundle = Bundle(url: bundleURL) {
                 return bundle
             }
@@ -60,7 +60,7 @@ public enum OpenClawKitResources {
             roots.append(baseURL.appendingPathComponent("Contents/Resources"))
 
             var current = baseURL
-            for _ in 0 ..< 5 {
+            for _ in 0..<5 {
                 current = current.deletingLastPathComponent()
                 roots.append(current)
                 roots.append(current.appendingPathComponent("Resources"))
@@ -68,7 +68,7 @@ public enum OpenClawKitResources {
             }
 
             for root in roots {
-                let bundleURL = root.appendingPathComponent("\(bundleName).bundle")
+                let bundleURL = root.appendingPathComponent("\(self.bundleName).bundle")
                 if let bundle = Bundle(url: bundleURL) {
                     return bundle
                 }
@@ -79,5 +79,5 @@ public enum OpenClawKitResources {
     }
 }
 
-// Helper class for bundle lookup via Bundle(for:)
+/// Helper class for bundle lookup via Bundle(for:)
 private final class BundleLocator {}

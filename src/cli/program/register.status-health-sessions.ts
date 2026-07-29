@@ -1,24 +1,92 @@
+// Status, health, sessions, commitments, and task/flow command registration.
 import type { Command } from "commander";
-import { healthCommand } from "../../commands/health.js";
-import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
-import { sessionsCommand } from "../../commands/sessions.js";
-import { statusCommand } from "../../commands/status.js";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parsePositiveIntOrUndefined } from "./helpers.js";
+import { parsePositiveIntOrUndefined, parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
+}
+
+type SessionsListCliOptions = {
+  json?: boolean;
+  verbose?: boolean;
+  store?: string;
+  agent?: string;
+  allAgents?: boolean;
+  active?: string;
+  limit?: string;
+};
+
+function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  let promise: Promise<T> | undefined;
+  return () => (promise ??= load());
+}
+
+const loadCommitmentsCommands = createModuleLoader(() => import("../../commands/commitments.js"));
+const loadTasksCommands = createModuleLoader(() => import("../../commands/tasks.js"));
+const loadFlowsCommands = createModuleLoader(() => import("../../commands/flows.js"));
+
+function addSessionsListOptions(command: Command): Command {
+  return command
+    .option("--json", "Output as JSON", false)
+    .option("--verbose", "Verbose logging", false)
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--all-agents", "Aggregate sessions across all configured agents", false)
+    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+    .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)');
+}
+
+function mergeSessionsListOptions(
+  opts: SessionsListCliOptions,
+  parentOpts?: SessionsListCliOptions,
+): SessionsListCliOptions {
+  return {
+    json: Boolean(opts.json || parentOpts?.json),
+    verbose: Boolean(opts.verbose || parentOpts?.verbose),
+    store: opts.store ?? parentOpts?.store,
+    agent: opts.agent ?? parentOpts?.agent,
+    allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+    active: opts.active ?? parentOpts?.active,
+    limit: opts.limit ?? parentOpts?.limit,
+  };
+}
+
+async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const { sessionsCommand } = await import("../../commands/sessions.js");
+  await sessionsCommand(
+    {
+      json: Boolean(opts.json),
+      store: opts.store,
+      agent: opts.agent,
+      allAgents: Boolean(opts.allAgents),
+      active: opts.active,
+      limit: opts.limit,
+    },
+    defaultRuntime,
+  );
 }
 
 function parseTimeoutMs(timeout: unknown): number | null | undefined {
   const parsed = parsePositiveIntOrUndefined(timeout);
   if (timeout !== undefined && parsed === undefined) {
     defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
+    defaultRuntime.exit(1);
+    return null;
+  }
+  return parsed;
+}
+
+function parseTasksAuditLimit(limit: unknown): number | null | undefined {
+  const parsed = parseStrictPositiveIntOrUndefined(limit);
+  if (limit !== undefined && parsed === undefined) {
+    defaultRuntime.error("--limit must be a positive integer, for example --limit 25.");
     defaultRuntime.exit(1);
     return null;
   }
@@ -40,6 +108,7 @@ async function runWithVerboseAndTimeout(
   });
 }
 
+/** Register status/health plus persistent session/task inspection command groups. */
 export function registerStatusHealthSessionsCommands(program: Command) {
   program
     .command("status")
@@ -73,6 +142,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
+        const { statusCommand } = await import("../../commands/status.js");
         await statusCommand(
           {
             json: Boolean(opts.json),
@@ -101,6 +171,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
+        const { healthCommand } = await import("../../commands/health.js");
         await healthCommand(
           {
             json: Boolean(opts.json),
@@ -112,15 +183,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
-  const sessionsCmd = program
-    .command("sessions")
-    .description("List stored conversation sessions")
-    .option("--json", "Output as JSON", false)
-    .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
-    .option("--all-agents", "Aggregate sessions across all configured agents", false)
-    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+  const sessionsCmd = addSessionsListOptions(
+    program.command("sessions").description("List stored conversation sessions"),
+  )
     .addHelpText(
       "after",
       () =>
@@ -129,6 +194,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --agent work", "List sessions for one agent."],
           ["openclaw sessions --all-agents", "Aggregate sessions across agents."],
           ["openclaw sessions --active 120", "Only last 2 hours."],
+          ["openclaw sessions --limit 25", "Show the newest 25 sessions."],
           ["openclaw sessions --json", "Machine-readable output."],
           ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
         ])}\n\n${theme.muted(
@@ -141,19 +207,16 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
     )
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      await sessionsCommand(
-        {
-          json: Boolean(opts.json),
-          store: opts.store as string | undefined,
-          agent: opts.agent as string | undefined,
-          allAgents: Boolean(opts.allAgents),
-          active: opts.active as string | undefined,
-        },
-        defaultRuntime,
-      );
+      await runSessionsListCli(opts as SessionsListCliOptions);
     });
   sessionsCmd.enablePositionalOptions();
+
+  addSessionsListOptions(
+    sessionsCmd.command("list").description("List stored conversation sessions"),
+  ).action(async (opts, command) => {
+    const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+    await runSessionsListCli(mergeSessionsListOptions(opts as SessionsListCliOptions, parentOpts));
+  });
 
   sessionsCmd
     .command("cleanup")
@@ -168,6 +231,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "Remove store entries whose transcript files are missing (bypasses age/count retention)",
       false,
     )
+    .option(
+      "--fix-dm-scope",
+      "Retire stale direct-DM session rows that no longer match session.dmScope=main",
+      false,
+    )
     .option("--active-key <key>", "Protect this session key from budget-eviction")
     .option("--json", "Output JSON", false)
     .addHelpText(
@@ -178,6 +246,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           [
             "openclaw sessions cleanup --dry-run --fix-missing",
             "Also preview pruning entries with missing transcript files.",
+          ],
+          [
+            "openclaw sessions cleanup --dry-run --fix-dm-scope",
+            "Preview stale direct-DM rows after returning dmScope to main.",
           ],
           ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
           ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
@@ -198,6 +270,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsCleanupCommand } = await import("../../commands/sessions-cleanup.js");
         await sessionsCleanupCommand(
           {
             store: (opts.store as string | undefined) ?? parentOpts?.store,
@@ -206,6 +279,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             dryRun: Boolean(opts.dryRun),
             enforce: Boolean(opts.enforce),
             fixMissing: Boolean(opts.fixMissing),
+            fixDmScope: Boolean(opts.fixDmScope),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },
@@ -213,4 +287,480 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
+
+  sessionsCmd
+    .command("tail")
+    .description("Tail human-readable session trajectory progress")
+    .option("--session-key <key>", "Session key to tail (default: active sessions or latest)")
+    .option("--tail <count>", "Number of existing trajectory events to show", "80")
+    .option("--follow", "Continue following for new trajectory events", false)
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--all-agents", "Aggregate sessions across all configured agents", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            allAgents?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsTailCommand } = await import("../../commands/sessions-tail.js");
+        await sessionsTailCommand(
+          {
+            sessionKey: opts.sessionKey as string | undefined,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+            follow: Boolean(opts.follow),
+            tail: opts.tail as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("export-trajectory")
+    .description("Export a redacted trajectory bundle for a stored session")
+    .option("--session-key <key>", "Session key to export")
+    .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
+    .option("--workspace <path>", "Workspace root for the export (default: current directory)")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id for resolving the default session store")
+    .option("--request-json-base64 <payload>", "Base64url-encoded export request")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { exportTrajectoryCommand } = await import("../../commands/export-trajectory.js");
+        await exportTrajectoryCommand(
+          {
+            sessionKey: opts.sessionKey as string | undefined,
+            output: opts.output as string | undefined,
+            workspace: opts.workspace as string | undefined,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            requestJsonBase64: opts.requestJsonBase64 as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("compact <key>")
+    .description("Compact a stored session transcript via the running gateway")
+    .option("--agent <id>", "Agent id that owns the session (required for global keys)")
+    .option(
+      "--max-lines <count>",
+      "Truncate to the last N transcript lines instead of LLM summarization",
+    )
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (password auth)")
+    .option("--timeout <ms>", "RPC timeout in milliseconds (defaults to no client deadline)")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw sessions compact "agent:main:main"',
+            "LLM-summarize a session to reclaim context budget.",
+          ],
+          [
+            'openclaw sessions compact "agent:main:main" --max-lines 200',
+            "Truncate to the last 200 transcript lines instead.",
+          ],
+          [
+            'openclaw sessions compact "agent:work:main" --agent work --json',
+            "Target one agent's session and emit JSON.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by the sessions.compact gateway RPC; exits non-zero when compaction fails.",
+        )}`,
+    )
+    .action(async (key: string, opts, command) => {
+      // Sibling `sessions` subcommands inherit parent options (see list/cleanup
+      // above): `--agent`/`--json` may be supplied on the parent `sessions`
+      // command, e.g. `openclaw sessions --agent work compact <key>`. Merge those
+      // so a parent `--agent` is not silently dropped and the wrong agent's
+      // session compacted.
+      //
+      // The parent also defines list-only options (`--store`/`--all-agents`/
+      // `--active`/`--limit`). `compact` mutates the single session the gateway
+      // resolves from <key> + --agent, so it cannot honor a parent `--store`
+      // (the gateway picks the store) and the rest are meaningless here.
+      // Silently dropping `--store` is the dangerous case — the user could
+      // believe they targeted one store while the gateway compacts another — so
+      // reject any unsupported inherited option instead of ignoring it.
+      const parentOpts = command.parent?.opts() as
+        | {
+            agent?: string;
+            json?: boolean;
+            store?: string;
+            allAgents?: boolean;
+            active?: string;
+            limit?: string;
+            verbose?: boolean;
+          }
+        | undefined;
+      const unsupportedParentOptions = [
+        parentOpts?.store !== undefined ? "--store" : undefined,
+        parentOpts?.allAgents ? "--all-agents" : undefined,
+        parentOpts?.active !== undefined ? "--active" : undefined,
+        parentOpts?.limit !== undefined ? "--limit" : undefined,
+        parentOpts?.verbose ? "--verbose" : undefined,
+      ].filter((flag): flag is string => flag !== undefined);
+      if (unsupportedParentOptions.length > 0) {
+        const plural = unsupportedParentOptions.length > 1 ? "options" : "option";
+        defaultRuntime.error(
+          `\`sessions compact\` does not support the parent \`sessions\` ${plural} ${unsupportedParentOptions.join(", ")}; the gateway resolves the target store from <key> and --agent.`,
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+      const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);
+      if (opts.maxLines !== undefined && maxLines === undefined) {
+        defaultRuntime.error("--max-lines must be a positive integer.");
+        defaultRuntime.exit(1);
+        return;
+      }
+      const timeoutMs = parseStrictPositiveIntOrUndefined(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        defaultRuntime.error("--timeout must be a positive integer (milliseconds).");
+        defaultRuntime.exit(1);
+        return;
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsCompactCommand } = await import("../../commands/sessions-compact.js");
+        await sessionsCompactCommand(
+          {
+            key,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            maxLines,
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined,
+            token: opts.token as string | undefined,
+            password: opts.password as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const commitmentsCmd = program
+    .command("commitments")
+    .description("List and manage inferred follow-up commitments")
+    .option("--json", "Output JSON instead of text", false)
+    .option("--agent <id>", "Agent id to inspect")
+    .option("--status <status>", "Filter by status (pending, sent, dismissed, snoozed, expired)")
+    .option("--all", "Show all statuses", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw commitments", "List pending inferred follow-ups."],
+          ["openclaw commitments --all", "List all inferred follow-ups."],
+          ["openclaw commitments --agent work", "List one agent's inferred follow-ups."],
+          ["openclaw commitments dismiss cm_abc123", "Dismiss a follow-up."],
+        ])}`,
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { commitmentsListCommand } = await loadCommitmentsCommands();
+        await commitmentsListCommand(
+          {
+            json: Boolean(opts.json),
+            agent: opts.agent as string | undefined,
+            status: opts.status as string | undefined,
+            all: Boolean(opts.all),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  commitmentsCmd.enablePositionalOptions();
+
+  commitmentsCmd
+    .command("list")
+    .description("List inferred follow-up commitments")
+    .option("--json", "Output JSON instead of text", false)
+    .option("--agent <id>", "Agent id to inspect")
+    .option("--status <status>", "Filter by status (pending, sent, dismissed, snoozed, expired)")
+    .option("--all", "Show all statuses", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | { json?: boolean; agent?: string; status?: string; all?: boolean }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { commitmentsListCommand } = await loadCommitmentsCommands();
+        await commitmentsListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+            all: Boolean(opts.all || parentOpts?.all),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  commitmentsCmd
+    .command("dismiss <ids...>")
+    .description("Dismiss inferred follow-up commitments")
+    .option("--json", "Output JSON instead of text", false)
+    .action(async (ids: string[], opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { commitmentsDismissCommand } = await loadCommitmentsCommands();
+        await commitmentsDismissCommand(
+          {
+            ids,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const tasksCmd = program
+    .command("tasks")
+    .description("Inspect durable background tasks and TaskFlow state")
+    .option("--json", "Output as JSON", false)
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksListCommand } = await loadTasksCommands();
+        await tasksListCommand(
+          {
+            json: Boolean(opts.json),
+            runtime: opts.runtime as string | undefined,
+            status: opts.status as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  tasksCmd.enablePositionalOptions();
+
+  tasksCmd
+    .command("list")
+    .description("List tracked background tasks")
+    .option("--json", "Output as JSON", false)
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            json?: boolean;
+            runtime?: string;
+            status?: string;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksListCommand } = await loadTasksCommands();
+        await tasksListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("audit")
+    .description("Show stale or broken background tasks and TaskFlows")
+    .option("--json", "Output as JSON", false)
+    .option("--severity <level>", "Filter by severity (warn, error)")
+    .option(
+      "--code <name>",
+      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps, restore_failed, stale_waiting, stale_blocked, cancel_stuck, missing_linked_tasks, blocked_task_missing)",
+    )
+    .option("--limit <n>", "Limit displayed findings")
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      const limit = parseTasksAuditLimit(opts.limit);
+      if (limit === null) {
+        return;
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksAuditCommand } = await loadTasksCommands();
+        await tasksAuditCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            severity: opts.severity as "warn" | "error" | undefined,
+            code: opts.code as
+              | "stale_queued"
+              | "stale_running"
+              | "lost"
+              | "delivery_failed"
+              | "missing_cleanup"
+              | "inconsistent_timestamps"
+              | "restore_failed"
+              | "stale_waiting"
+              | "stale_blocked"
+              | "cancel_stuck"
+              | "missing_linked_tasks"
+              | "blocked_task_missing"
+              | undefined,
+            limit,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("maintenance")
+    .description("Preview or apply tasks and TaskFlow maintenance")
+    .option("--json", "Output as JSON", false)
+    .option("--apply", "Apply reconciliation, cleanup stamping, and pruning", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksMaintenanceCommand } = await loadTasksCommands();
+        await tasksMaintenanceCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            apply: Boolean(opts.apply),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("show")
+    .description("Show one background task by task id, run id, or session key")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksShowCommand } = await loadTasksCommands();
+        await tasksShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("notify")
+    .description("Set task notify policy")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
+    .action(async (lookup, notify) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksNotifyCommand } = await loadTasksCommands();
+        await tasksNotifyCommand(
+          {
+            lookup,
+            notify: notify as "done_only" | "state_changes" | "silent",
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("cancel")
+    .description("Cancel a running background task")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksCancelCommand } = await loadTasksCommands();
+        await tasksCancelCommand(
+          {
+            lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const tasksFlowCmd = tasksCmd
+    .command("flow")
+    .description("Inspect durable TaskFlow state under tasks");
+
+  tasksFlowCmd
+    .command("list")
+    .description("List tracked TaskFlows")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsListCommand } = await loadFlowsCommands();
+        await flowsListCommand(
+          {
+            json: Boolean(opts.json),
+            status: opts.status as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("show")
+    .description("Show one TaskFlow by flow id or owner key")
+    .argument("<lookup>", "Flow id or owner key")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsShowCommand } = await loadFlowsCommands();
+        await flowsShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("cancel")
+    .description("Cancel a running TaskFlow")
+    .argument("<lookup>", "Flow id or owner key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { flowsCancelCommand } = await loadFlowsCommands();
+        await flowsCancelCommand(
+          {
+            lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

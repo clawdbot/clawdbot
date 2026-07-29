@@ -1,5 +1,13 @@
+// Tests infra environment loading and variable normalization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import {
+  isFastTestRuntimeEnv,
+  isTruthyEnvValue,
+  logAcceptedEnvOption,
+  normalizeEnv,
+  normalizeZaiEnv,
+} from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -11,17 +19,8 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
-type EnvModule = typeof import("./env.js");
-
-let isTruthyEnvValue: EnvModule["isTruthyEnvValue"];
-let logAcceptedEnvOption: EnvModule["logAcceptedEnvOption"];
-let normalizeEnv: EnvModule["normalizeEnv"];
-let normalizeZaiEnv: EnvModule["normalizeZaiEnv"];
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
-    await import("./env.js"));
+beforeEach(() => {
+  loggerMocks.info.mockClear();
 });
 
 describe("normalizeZaiEnv", () => {
@@ -70,8 +69,29 @@ describe("isTruthyEnvValue", () => {
   });
 });
 
+describe("isFastTestRuntimeEnv", () => {
+  it("ignores OPENCLAW_TEST_FAST outside a test runtime", () => {
+    withEnv(
+      {
+        NODE_ENV: "production",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+        OPENCLAW_TEST_FAST: "1",
+      },
+      () => {
+        expect(isFastTestRuntimeEnv()).toBe(false);
+      },
+    );
+  });
+
+  it("honors OPENCLAW_TEST_FAST inside a detected test runtime", () => {
+    expect(isFastTestRuntimeEnv({ VITEST: "1", OPENCLAW_TEST_FAST: "1" })).toBe(true);
+  });
+});
+
 describe("logAcceptedEnvOption", () => {
-  it("logs accepted env options once with redaction and formatting", () => {
+  it("logs accepted env options once with redaction and formatting", async () => {
     loggerMocks.info.mockClear();
 
     withEnv(
@@ -94,7 +114,9 @@ describe("logAcceptedEnvOption", () => {
       },
     );
 
-    expect(loggerMocks.info).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(loggerMocks.info).toHaveBeenCalledTimes(1);
+    });
     expect(loggerMocks.info).toHaveBeenCalledWith(
       "env: OPENCLAW_TEST_ENV=<redacted> (test option)",
     );
@@ -132,6 +154,27 @@ describe("logAcceptedEnvOption", () => {
     );
 
     expect(loggerMocks.info).not.toHaveBeenCalled();
+  });
+
+  it("keeps bounded non-secret values UTF-16 well-formed", async () => {
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_UTF16_TEST_ENV: `${"x".repeat(159)}🚀tail`,
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_UTF16_TEST_ENV",
+          description: "UTF-16 test",
+        });
+      },
+    );
+
+    await vi.waitFor(() => expect(loggerMocks.info).toHaveBeenCalledTimes(1));
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      `env: OPENCLAW_UTF16_TEST_ENV=${"x".repeat(159)}… (UTF-16 test)`,
+    );
   });
 });
 

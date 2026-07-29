@@ -1,109 +1,80 @@
+// Moonshot provider module implements model/runtime integration.
 import {
+  buildOpenAiCompatibleVideoRequestBody,
+  coerceOpenAiCompatibleVideoText,
   describeImageWithModel,
   describeImagesWithModel,
+  resolveMediaUnderstandingString,
   type MediaUnderstandingProvider,
+  type OpenAiCompatibleVideoPayload,
   type VideoDescriptionRequest,
   type VideoDescriptionResult,
-  assertOkOrThrowHttpError,
-  normalizeBaseUrl,
-  postJsonRequest,
 } from "openclaw/plugin-sdk/media-understanding";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  readProviderJsonResponse,
+  resolveProviderHttpRequestConfig,
+} from "openclaw/plugin-sdk/provider-http";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
-const DEFAULT_MOONSHOT_VIDEO_MODEL = "kimi-k2.5";
+const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
+// Media defaults are capability-specific and intentionally independent from chat onboarding.
+const DEFAULT_MOONSHOT_IMAGE_MODEL =
+  manifest.mediaUnderstandingProviderMetadata.moonshot.defaultModels.image;
+const DEFAULT_MOONSHOT_VIDEO_MODEL =
+  manifest.mediaUnderstandingProviderMetadata.moonshot.defaultModels.video;
 const DEFAULT_MOONSHOT_VIDEO_PROMPT = "Describe the video.";
 
-type MoonshotVideoPayload = {
-  choices?: Array<{
-    message?: {
-      content?: string | Array<{ text?: string }>;
-      reasoning_content?: string;
-    };
-  }>;
-};
-
-function resolveModel(model?: string): string {
-  const trimmed = model?.trim();
-  return trimmed || DEFAULT_MOONSHOT_VIDEO_MODEL;
-}
-
-function resolvePrompt(prompt?: string): string {
-  const trimmed = prompt?.trim();
-  return trimmed || DEFAULT_MOONSHOT_VIDEO_PROMPT;
-}
-
-function coerceMoonshotText(payload: MoonshotVideoPayload): string | null {
-  const message = payload.choices?.[0]?.message;
-  if (!message) {
-    return null;
-  }
-  if (typeof message.content === "string" && message.content.trim()) {
-    return message.content.trim();
-  }
-  if (Array.isArray(message.content)) {
-    const text = message.content
-      .map((part) => (typeof part.text === "string" ? part.text.trim() : ""))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    if (text) {
-      return text;
-    }
-  }
-  if (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) {
-    return message.reasoning_content.trim();
-  }
-  return null;
-}
-
-export async function describeMoonshotVideo(
+async function describeMoonshotVideo(
   params: VideoDescriptionRequest,
 ): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_MOONSHOT_VIDEO_BASE_URL);
-  const model = resolveModel(params.model);
-  const mime = params.mime ?? "video/mp4";
-  const prompt = resolvePrompt(params.prompt);
+  const model = resolveMediaUnderstandingString(params.model, DEFAULT_MOONSHOT_VIDEO_MODEL);
+  const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
+  const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_MOONSHOT_VIDEO_PROMPT);
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      baseUrl: params.baseUrl,
+      defaultBaseUrl: DEFAULT_MOONSHOT_VIDEO_BASE_URL,
+      headers: params.headers,
+      request: params.request,
+      defaultHeaders: {
+        "content-type": "application/json",
+        authorization: `Bearer ${params.apiKey}`,
+      },
+      provider: "moonshot",
+      api: "openai-completions",
+      capability: "video",
+      transport: "media-understanding",
+    });
   const url = `${baseUrl}/chat/completions`;
 
-  const headers = new Headers(params.headers);
-  if (!headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-  if (!headers.has("authorization")) {
-    headers.set("authorization", `Bearer ${params.apiKey}`);
-  }
-
-  const body = {
+  const body = buildOpenAiCompatibleVideoRequestBody({
     model,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          {
-            type: "video_url",
-            video_url: {
-              url: `data:${mime};base64,${params.buffer.toString("base64")}`,
-            },
-          },
-        ],
-      },
-    ],
-  };
+    prompt,
+    mime,
+    buffer: params.buffer,
+  });
 
   const { response: res, release } = await postJsonRequest({
     url,
     headers,
     body,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
+    allowPrivateNetwork,
+    dispatcherPolicy,
   });
 
   try {
     await assertOkOrThrowHttpError(res, "Moonshot video description failed");
-    const payload = (await res.json()) as MoonshotVideoPayload;
-    const text = coerceMoonshotText(payload);
+    const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
+      res,
+      "Moonshot video description failed",
+    );
+    const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {
       throw new Error("Moonshot video description response missing content");
     }
@@ -116,6 +87,11 @@ export async function describeMoonshotVideo(
 export const moonshotMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "moonshot",
   capabilities: ["image", "video"],
+  defaultModels: {
+    image: DEFAULT_MOONSHOT_IMAGE_MODEL,
+    video: DEFAULT_MOONSHOT_VIDEO_MODEL,
+  },
+  autoPriority: { video: 20 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
   describeVideo: describeMoonshotVideo,

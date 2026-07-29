@@ -1,6 +1,8 @@
+// Covers preferred OpenClaw temp directory resolution.
+import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { POSIX_OPENCLAW_TMP_DIR, resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import { DEFAULT_POSIX_TMP_ROOT, resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 type TmpDirOptions = NonNullable<Parameters<typeof resolvePreferredOpenClawTmpDir>[0]>;
 
@@ -54,7 +56,7 @@ function resolveWithReadOnlyTmpFallback(params: {
   return resolvePreferredOpenClawTmpDir({
     accessSync: readOnlyTmpAccessSync(),
     lstatSync: vi.fn((target: string) => {
-      if (target === POSIX_OPENCLAW_TMP_DIR) {
+      if (target === DEFAULT_POSIX_TMP_ROOT) {
         throw nodeErrorWithCode("ENOENT");
       }
       if (target === params.fallbackPath) {
@@ -76,6 +78,18 @@ function symlinkTmpDirLstat() {
 
 function expectFallsBackToOsTmpDir(params: { lstatSync: NonNullable<TmpDirOptions["lstatSync"]> }) {
   const { resolved, tmpdir } = resolveWithMocks({ lstatSync: params.lstatSync });
+  expect(resolved).toBe(fallbackTmp());
+  expect(tmpdir).toHaveBeenCalled();
+}
+
+function expectResolvesFallbackTmpDir(params: {
+  lstatSync: NonNullable<TmpDirOptions["lstatSync"]>;
+  accessSync?: NonNullable<TmpDirOptions["accessSync"]>;
+}) {
+  const { resolved, tmpdir } = resolveWithMocks({
+    lstatSync: params.lstatSync,
+    ...(params.accessSync ? { accessSync: params.accessSync } : {}),
+  });
   expect(resolved).toBe(fallbackTmp());
   expect(tmpdir).toHaveBeenCalled();
 }
@@ -104,7 +118,7 @@ function resolveWithMocks(params: {
   const chmodSync = params.chmodSync ?? vi.fn();
   const warn = params.warn ?? vi.fn();
   const wrappedLstatSync = vi.fn((target: string) => {
-    if (target === POSIX_OPENCLAW_TMP_DIR) {
+    if (target === DEFAULT_POSIX_TMP_ROOT) {
       return params.lstatSync(target);
     }
     if (target === fallbackPath) {
@@ -142,7 +156,7 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(lstatSync).toHaveBeenCalledTimes(1);
     expect(accessSync).toHaveBeenCalledTimes(1);
-    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(resolved).toBe(DEFAULT_POSIX_TMP_ROOT);
     expect(tmpdir).not.toHaveBeenCalled();
   });
 
@@ -153,69 +167,64 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       lstatSync: lstatSyncMock,
     });
 
-    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
-    expect(accessSync).toHaveBeenCalledWith("/tmp", expect.any(Number));
-    expect(mkdirSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, expect.any(Object));
+    expect(resolved).toBe(DEFAULT_POSIX_TMP_ROOT);
+    expect(accessSync).toHaveBeenCalledWith("/tmp", fsConstants.W_OK | fsConstants.X_OK);
+    expect(mkdirSync).toHaveBeenCalledWith(DEFAULT_POSIX_TMP_ROOT, {
+      recursive: true,
+      mode: 0o700,
+    });
     expect(tmpdir).not.toHaveBeenCalled();
   });
 
-  it("falls back to os.tmpdir()/openclaw when /tmp/openclaw is not a directory", () => {
-    const lstatSync = vi.fn(() => makeDirStat({ isDirectory: false, mode: 0o100644 }));
-    const { resolved, tmpdir } = resolveWithMocks({ lstatSync });
-
-    expect(resolved).toBe(fallbackTmp());
-    expect(tmpdir).toHaveBeenCalled();
-  });
-
-  it("falls back to os.tmpdir()/openclaw when /tmp is not writable", () => {
-    const accessSync = vi.fn((target: string) => {
-      if (target === "/tmp") {
-        throw new Error("read-only");
-      }
-    });
-    const lstatSync = vi.fn(() => {
-      throw nodeErrorWithCode("ENOENT");
-    });
-    const { resolved, tmpdir } = resolveWithMocks({
-      accessSync,
-      lstatSync,
-    });
-
-    expect(resolved).toBe(fallbackTmp());
-    expect(tmpdir).toHaveBeenCalled();
-  });
-
-  it("falls back when /tmp/openclaw exists but is not writable", () => {
-    const accessSync = vi.fn((target: string) => {
-      if (target === POSIX_OPENCLAW_TMP_DIR) {
-        throw new Error("not writable");
-      }
-    });
-    const { resolved, tmpdir } = resolveWithMocks({
-      accessSync,
+  it.each([
+    {
+      name: "falls back to os.tmpdir()/openclaw when /tmp/openclaw is not a directory",
+      lstatSync: vi.fn(() => makeDirStat({ isDirectory: false, mode: 0o100644 })),
+    },
+    {
+      name: "falls back to os.tmpdir()/openclaw when /tmp is not writable",
+      lstatSync: vi.fn(() => {
+        throw nodeErrorWithCode("ENOENT");
+      }),
+      accessSync: vi.fn((target: string) => {
+        if (target === "/tmp") {
+          throw new Error("read-only");
+        }
+      }),
+    },
+    {
+      name: "falls back when /tmp/openclaw exists but is not writable",
       lstatSync: vi.fn(() => secureDirStat()),
-    });
-
-    expect(resolved).toBe(fallbackTmp());
-    expect(tmpdir).toHaveBeenCalled();
-  });
-
-  it("falls back when /tmp/openclaw is a symlink", () => {
-    expectFallsBackToOsTmpDir({ lstatSync: symlinkTmpDirLstat() });
-  });
-
-  it("falls back when /tmp/openclaw is not owned by the current user", () => {
-    expectFallsBackToOsTmpDir({ lstatSync: vi.fn(() => makeDirStat({ uid: 0 })) });
-  });
-
-  it("falls back when /tmp/openclaw is group/other writable", () => {
-    expectFallsBackToOsTmpDir({ lstatSync: vi.fn(() => makeDirStat({ mode: 0o40777 })) });
+      accessSync: vi.fn((target: string) => {
+        if (target === DEFAULT_POSIX_TMP_ROOT) {
+          throw new Error("not writable");
+        }
+      }),
+    },
+    {
+      name: "falls back when /tmp/openclaw is a symlink",
+      lstatSync: symlinkTmpDirLstat(),
+    },
+    {
+      name: "falls back when /tmp/openclaw is not owned by the current user",
+      lstatSync: vi.fn(() => makeDirStat({ uid: 0 })),
+    },
+    {
+      name: "falls back when /tmp/openclaw is group/other writable",
+      lstatSync: vi.fn(() => makeDirStat({ mode: 0o40777 })),
+    },
+  ])("$name", ({ lstatSync, accessSync }) => {
+    if (accessSync) {
+      expectResolvesFallbackTmpDir({ lstatSync, accessSync });
+      return;
+    }
+    expectFallsBackToOsTmpDir({ lstatSync });
   });
 
   it("repairs existing /tmp/openclaw permissions when they are too broad", () => {
     let preferredMode = 0o40777;
     const chmodSync = vi.fn((target: string, mode: number) => {
-      if (target === POSIX_OPENCLAW_TMP_DIR && mode === 0o700) {
+      if (target === DEFAULT_POSIX_TMP_ROOT && mode === 0o700) {
         preferredMode = 0o40700;
       }
     });
@@ -227,9 +236,11 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       warn,
     });
 
-    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
-    expect(chmodSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, 0o700);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
+    expect(resolved).toBe(DEFAULT_POSIX_TMP_ROOT);
+    expect(chmodSync).toHaveBeenCalledWith(DEFAULT_POSIX_TMP_ROOT, 0o700);
+    expect(warn).toHaveBeenCalledWith(
+      `[openclaw] tightened permissions on temp dir: ${DEFAULT_POSIX_TMP_ROOT}`,
+    );
     expect(tmpdir).not.toHaveBeenCalled();
   });
 
@@ -248,7 +259,7 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       );
     const chmodSync = vi.fn((target: string, mode: number) => {
       chmodCalls += 1;
-      if (target === POSIX_OPENCLAW_TMP_DIR && mode === 0o700 && chmodCalls > 1) {
+      if (target === DEFAULT_POSIX_TMP_ROOT && mode === 0o700 && chmodCalls > 1) {
         preferredMode = 0o40700;
       }
     });
@@ -260,13 +271,15 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       warn,
     });
 
-    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
-    expect(mkdirSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, {
+    expect(resolved).toBe(DEFAULT_POSIX_TMP_ROOT);
+    expect(mkdirSync).toHaveBeenCalledWith(DEFAULT_POSIX_TMP_ROOT, {
       recursive: true,
       mode: 0o700,
     });
-    expect(chmodSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, 0o700);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
+    expect(chmodSync).toHaveBeenCalledWith(DEFAULT_POSIX_TMP_ROOT, 0o700);
+    expect(warn).toHaveBeenCalledWith(
+      `[openclaw] tightened permissions on temp dir: ${DEFAULT_POSIX_TMP_ROOT}`,
+    );
     expect(tmpdir).not.toHaveBeenCalled();
   });
 
@@ -306,7 +319,7 @@ describe("resolvePreferredOpenClawTmpDir", () => {
         }
       }),
       lstatSync: vi.fn((target: string) => {
-        if (target === POSIX_OPENCLAW_TMP_DIR) {
+        if (target === DEFAULT_POSIX_TMP_ROOT) {
           throw nodeErrorWithCode("ENOENT");
         }
         if (target === fallbackPath) {
@@ -387,7 +400,107 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(resolved).toBe(fallbackPath);
     expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
+    expect(warn).toHaveBeenCalledWith(
+      `[openclaw] tightened permissions on temp dir: ${fallbackPath}`,
+    );
+  });
+
+  it("uses /tmp/openclaw when another process tightened permissions before repair", () => {
+    const chmodSync = vi.fn();
+    const warn = vi.fn();
+    const tmpdir = vi.fn(() => "/var/fallback");
+    const states = [0o40777, 0o40700, 0o40700];
+    const lstatSync = vi.fn<NonNullable<TmpDirOptions["lstatSync"]>>((target: string) => {
+      if (target === DEFAULT_POSIX_TMP_ROOT) {
+        return makeDirStat({ mode: states.shift() ?? 0o40700 });
+      }
+      return secureDirStat();
+    });
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn(),
+      lstatSync,
+      chmodSync,
+      mkdirSync: vi.fn(),
+      getuid: vi.fn(() => 501),
+      tmpdir,
+      warn,
+    });
+
+    expect(resolved).toBe(DEFAULT_POSIX_TMP_ROOT);
+    expect(chmodSync).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(tmpdir).not.toHaveBeenCalled();
+  });
+
+  it("uses fallback when another process tightened fallback permissions before repair", () => {
+    const fallbackPath = fallbackTmp();
+    const chmodSync = vi.fn();
+    const warn = vi.fn();
+    const states = [0o40777, 0o40700, 0o40700];
+
+    const resolved = resolveWithReadOnlyTmpFallback({
+      fallbackPath,
+      fallbackLstatSync: vi.fn(() => makeDirStat({ mode: states.shift() ?? 0o40700 })),
+      chmodSync,
+      warn,
+    });
+
+    expect(resolved).toBe(fallbackPath);
+    expect(chmodSync).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("uses /tmp/openclaw when chmod loses a concurrent repair race", () => {
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === DEFAULT_POSIX_TMP_ROOT && mode === 0o700) {
+        throw nodeErrorWithCode("EPERM");
+      }
+    });
+    const warn = vi.fn();
+    const states = [0o40777, 0o40777, 0o40700];
+    const lstatSync = vi.fn<NonNullable<TmpDirOptions["lstatSync"]>>((target: string) => {
+      if (target === DEFAULT_POSIX_TMP_ROOT) {
+        return makeDirStat({ mode: states.shift() ?? 0o40700 });
+      }
+      return secureDirStat();
+    });
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn(),
+      lstatSync,
+      chmodSync,
+      mkdirSync: vi.fn(),
+      getuid: vi.fn(() => 501),
+      tmpdir: vi.fn(() => "/var/fallback"),
+      warn,
+    });
+
+    expect(resolved).toBe(DEFAULT_POSIX_TMP_ROOT);
+    expect(chmodSync).toHaveBeenCalledWith(DEFAULT_POSIX_TMP_ROOT, 0o700);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("uses fallback when chmod loses a concurrent fallback repair race", () => {
+    const fallbackPath = fallbackTmp();
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === fallbackPath && mode === 0o700) {
+        throw nodeErrorWithCode("EACCES");
+      }
+    });
+    const warn = vi.fn();
+    const states = [0o40777, 0o40777, 0o40700];
+
+    const resolved = resolveWithReadOnlyTmpFallback({
+      fallbackPath,
+      fallbackLstatSync: vi.fn(() => makeDirStat({ mode: states.shift() ?? 0o40700 })),
+      chmodSync,
+      warn,
+    });
+
+    expect(resolved).toBe(fallbackPath);
+    expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("throws when the fallback directory cannot be created", () => {
@@ -395,7 +508,7 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       resolvePreferredOpenClawTmpDir({
         accessSync: readOnlyTmpAccessSync(),
         lstatSync: vi.fn((target: string) => {
-          if (target === POSIX_OPENCLAW_TMP_DIR || target === fallbackTmp()) {
+          if (target === DEFAULT_POSIX_TMP_ROOT || target === fallbackTmp()) {
             throw nodeErrorWithCode("ENOENT");
           }
           return secureDirStat();
@@ -409,5 +522,54 @@ describe("resolvePreferredOpenClawTmpDir", () => {
         warn: vi.fn(),
       }),
     ).toThrow(/Unable to create fallback OpenClaw temp dir/);
+  });
+
+  it("skips the POSIX preferred path on Windows even when /tmp is accessible (#60713)", () => {
+    // Node on Windows resolves the POSIX path `/tmp` to `C:\tmp` against the
+    // current drive root. If `C:\tmp` happens to exist (Git, MSYS2, etc.
+    // create it), the previous code path returned `/tmp/openclaw` and routed
+    // log files / TTS temp files there instead of `%TEMP%\openclaw`. The
+    // platform: "win32" branch must skip the POSIX path entirely.
+    const winFallback = path.win32.join("C:\\Users\\u\\AppData\\Local\\Temp", "openclaw-501");
+    const accessSync = vi.fn();
+    const lstatSync = vi.fn((target: string) => {
+      if (target === DEFAULT_POSIX_TMP_ROOT || target === winFallback) {
+        return secureDirStat();
+      }
+      throw nodeErrorWithCode("ENOENT");
+    });
+    const mkdirSync = vi.fn();
+    const chmodSync = vi.fn();
+    const tmpdir = vi.fn(() => "C:\\Users\\u\\AppData\\Local\\Temp");
+
+    const result = resolvePreferredOpenClawTmpDir({
+      platform: "win32",
+      accessSync,
+      lstatSync,
+      mkdirSync,
+      chmodSync,
+      getuid: vi.fn(() => 501),
+      tmpdir,
+      warn: vi.fn(),
+    });
+
+    expect(result).toBe(winFallback);
+    expect(result).not.toBe(DEFAULT_POSIX_TMP_ROOT);
+    expect(tmpdir).toHaveBeenCalled();
+  });
+
+  it("still uses the POSIX preferred path on non-Windows platforms when available", () => {
+    const result = resolvePreferredOpenClawTmpDir({
+      platform: "linux",
+      accessSync: vi.fn(),
+      lstatSync: vi.fn(() => secureDirStat()),
+      mkdirSync: vi.fn(),
+      chmodSync: vi.fn(),
+      getuid: vi.fn(() => 501),
+      tmpdir: vi.fn(() => "/var/fallback"),
+      warn: vi.fn(),
+    });
+
+    expect(result).toBe(DEFAULT_POSIX_TMP_ROOT);
   });
 });

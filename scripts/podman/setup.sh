@@ -1,24 +1,37 @@
 #!/usr/bin/env bash
-# One-time host setup for rootless OpenClaw in Podman: creates the openclaw
-# user, builds the image, loads it into that user's Podman store, and installs
-# the launch script. Run from repo root with sudo capability.
+# One-time host setup for rootless OpenClaw in Podman. Uses the current
+# non-root user throughout, builds or pulls the image into that user's Podman
+# store, writes config under ~/.openclaw by default, and uses the repo-local
+# launch script at ./scripts/run-openclaw-podman.sh.
 #
 # Usage: ./scripts/podman/setup.sh [--quadlet|--container]
-#   --quadlet   Install systemd Quadlet so the container runs as a user service
-#   --container Only install user + image + launch script; you start the container manually (default)
+#   --quadlet   Install a Podman Quadlet as the current user's systemd service
+#   --container Only install image + config; you start the container manually (default)
 #   Or set OPENCLAW_PODMAN_QUADLET=1 (or 0) to choose without a flag.
 #
 # After this, start the gateway manually:
 #   ./scripts/run-openclaw-podman.sh launch
-#   ./scripts/run-openclaw-podman.sh launch setup   # onboarding wizard
-# Or as the openclaw user: sudo -u openclaw /home/openclaw/run-openclaw-podman.sh
-# If you used --quadlet, you can also: sudo systemctl --machine openclaw@ --user start openclaw.service
+#   ./scripts/run-openclaw-podman.sh launch setup
+# Or, if you used --quadlet:
+#   systemctl --user start openclaw.service
 set -euo pipefail
 
-OPENCLAW_USER="${OPENCLAW_PODMAN_USER:-openclaw}"
 REPO_PATH="${OPENCLAW_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+source "$REPO_PATH/scripts/lib/build-metadata.sh"
+source "$REPO_PATH/scripts/lib/host-timeout.sh"
 RUN_SCRIPT_SRC="$REPO_PATH/scripts/run-openclaw-podman.sh"
 QUADLET_TEMPLATE="$REPO_PATH/scripts/podman/openclaw.container.in"
+OPENCLAW_USER="$(id -un)"
+OPENCLAW_HOME="${HOME:-}"
+OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-}"
+OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-}"
+OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
+OPENCLAW_CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
+PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
+HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
+QUADLET_GATEWAY_PORT="18789"
+PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"
+PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -27,142 +40,141 @@ require_cmd() {
   fi
 }
 
-is_writable_dir() {
-  local dir="$1"
-  [[ -n "$dir" && -d "$dir" && ! -L "$dir" && -w "$dir" && -x "$dir" ]]
-}
-
-is_safe_tmp_base() {
-  local dir="$1"
-  local mode=""
-  local owner=""
-  is_writable_dir "$dir" || return 1
-  mode="$(stat -Lc '%a' "$dir" 2>/dev/null || true)"
-  if [[ -n "$mode" ]]; then
-    local perm=$((8#$mode))
-    if (( (perm & 0022) != 0 && (perm & 01000) == 0 )); then
-      return 1
-    fi
-  fi
-  if is_root; then
-    owner="$(stat -Lc '%u' "$dir" 2>/dev/null || true)"
-    if [[ -n "$owner" && "$owner" != "0" ]]; then
-      return 1
-    fi
-  fi
-  return 0
-}
-
-resolve_image_tmp_dir() {
-  if ! is_root && is_safe_tmp_base "${TMPDIR:-}"; then
-    printf '%s' "$TMPDIR"
-    return 0
-  fi
-  if is_safe_tmp_base "/var/tmp"; then
-    printf '%s' "/var/tmp"
-    return 0
-  fi
-  if is_safe_tmp_base "/tmp"; then
-    printf '%s' "/tmp"
-    return 0
-  fi
-  printf '%s' "/tmp"
-}
-
 is_root() { [[ "$(id -u)" -eq 0 ]]; }
 
-run_root() {
-  if is_root; then
-    "$@"
-  else
-    sudo "$@"
+fail() {
+  echo "$*" >&2
+  exit 1
+}
+
+run_podman_pull() {
+  local image="$1"
+  openclaw_host_timeout_cmd "$PODMAN_PULL_TIMEOUT" podman pull "$image"
+}
+
+run_podman_build() {
+  openclaw_host_timeout_cmd "$PODMAN_BUILD_TIMEOUT" podman build "$@"
+}
+
+validate_single_line_value() {
+  local label="$1"
+  local value="$2"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    fail "Invalid $label: control characters are not allowed."
   fi
 }
 
-run_as_user() {
-  # When switching users, the caller's cwd may be inaccessible to the target
-  # user (e.g. a private home dir). Wrap in a subshell that cd's to a
-  # world-traversable directory so sudo/runuser don't fail with "cannot chdir".
-  # TODO: replace with fully rootless podman build to eliminate the need for
-  # user-switching entirely.
-  local user="$1"
-  shift
-  if command -v sudo >/dev/null 2>&1; then
-    ( cd /tmp 2>/dev/null || cd /; sudo -u "$user" "$@" )
-  elif is_root && command -v runuser >/dev/null 2>&1; then
-    ( cd /tmp 2>/dev/null || cd /; runuser -u "$user" -- "$@" )
+validate_absolute_path() {
+  local label="$1"
+  local value="$2"
+  validate_single_line_value "$label" "$value"
+  [[ "$value" == /* ]] || fail "Invalid $label: expected an absolute path."
+  [[ "$value" != *"//"* ]] || fail "Invalid $label: repeated slashes are not allowed."
+  [[ "$value" != *"/./"* && "$value" != */. && "$value" != *"/../"* && "$value" != */.. ]] ||
+    fail "Invalid $label: dot path segments are not allowed."
+}
+
+validate_mount_source_path() {
+  local label="$1"
+  local value="$2"
+  validate_absolute_path "$label" "$value"
+  [[ "$value" != *:* ]] || fail "Invalid $label: ':' is not allowed in Podman bind-mount source paths."
+}
+
+validate_container_name() {
+  local value="$1"
+  validate_single_line_value "container name" "$value"
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] ||
+    fail "Invalid container name: $value"
+}
+
+validate_image_name() {
+  local value="$1"
+  validate_single_line_value "image name" "$value"
+  case "$value" in
+    oci-archive:*|docker-archive:*|dir:*|oci:*|containers-storage:*|docker-daemon:*|archive:* )
+      fail "Invalid image name: transport prefixes are not allowed: $value"
+      ;;
+  esac
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] ||
+    fail "Invalid image name: $value"
+}
+
+ensure_safe_existing_dir() {
+  local label="$1"
+  local dir="$2"
+  validate_absolute_path "$label" "$dir"
+  [[ -d "$dir" ]] || fail "Missing $label: $dir"
+  [[ ! -L "$dir" ]] || fail "Unsafe $label: symlinks are not allowed ($dir)"
+}
+
+stat_uid() {
+  local path="$1"
+  if stat -f '%u' "$path" >/dev/null 2>&1; then
+    stat -f '%u' "$path"
   else
-    echo "Need sudo (or root+runuser) to run commands as $user." >&2
-    exit 1
+    stat -Lc '%u' "$path"
   fi
 }
 
-run_as_openclaw() {
-  # Avoid root writes into $OPENCLAW_HOME (symlink/hardlink/TOCTOU footguns).
-  # Anything under the target user's home should be created/modified as that user.
-  run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" "$@"
+stat_mode() {
+  local path="$1"
+  if stat -f '%Lp' "$path" >/dev/null 2>&1; then
+    stat -f '%Lp' "$path"
+  else
+    stat -Lc '%a' "$path"
+  fi
+}
+
+ensure_private_existing_dir_owned_by_user() {
+  local label="$1"
+  local dir="$2"
+  local uid=""
+  local mode=""
+  ensure_safe_existing_dir "$label" "$dir"
+  uid="$(stat_uid "$dir")"
+  [[ "$uid" == "$(id -u)" ]] || fail "Unsafe $label: not owned by current user ($dir)"
+  mode="$(stat_mode "$dir")"
+  (( (8#$mode & 0022) == 0 )) || fail "Unsafe $label: group/other writable ($dir)"
+}
+
+ensure_safe_write_file_path() {
+  local label="$1"
+  local file="$2"
+  local dir
+  validate_absolute_path "$label" "$file"
+  if [[ -e "$file" ]]; then
+    [[ ! -L "$file" ]] || fail "Unsafe $label: symlinks are not allowed ($file)"
+    [[ -f "$file" ]] || fail "Unsafe $label: expected a regular file ($file)"
+  fi
+  dir="$(dirname "$file")"
+  ensure_safe_existing_dir "${label} parent directory" "$dir"
+}
+
+write_file_atomically() {
+  local file="$1"
+  local mode="$2"
+  local dir=""
+  local tmp=""
+  ensure_safe_write_file_path "output file" "$file"
+  dir="$(dirname "$file")"
+  tmp="$(mktemp "$dir/.tmp.XXXXXX")"
+  cat >"$tmp"
+  chmod "$mode" "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+validate_port() {
+  local label="$1"
+  local value="$2"
+  local numeric=""
+  [[ "$value" =~ ^[0-9]{1,5}$ ]] || fail "Invalid $label: must be numeric."
+  numeric=$((10#$value))
+  (( numeric >= 1 && numeric <= 65535 )) || fail "Invalid $label: out of range."
 }
 
 escape_sed_replacement_pipe_delim() {
-  # Escape replacement metacharacters for sed "s|...|...|g" replacement text.
   printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
-}
-
-# Quadlet: opt-in via --quadlet or OPENCLAW_PODMAN_QUADLET=1
-INSTALL_QUADLET=false
-for arg in "$@"; do
-  case "$arg" in
-    --quadlet)   INSTALL_QUADLET=true ;;
-    --container) INSTALL_QUADLET=false ;;
-  esac
-done
-if [[ -n "${OPENCLAW_PODMAN_QUADLET:-}" ]]; then
-  case "${OPENCLAW_PODMAN_QUADLET,,}" in
-    1|yes|true)  INSTALL_QUADLET=true ;;
-    0|no|false) INSTALL_QUADLET=false ;;
-  esac
-fi
-
-require_cmd podman
-if ! is_root; then
-  require_cmd sudo
-fi
-if [[ ! -f "$REPO_PATH/Dockerfile" ]]; then
-  echo "Dockerfile not found at $REPO_PATH. Set OPENCLAW_REPO_PATH to the repo root." >&2
-  exit 1
-fi
-if [[ ! -f "$RUN_SCRIPT_SRC" ]]; then
-  echo "Launch script not found at $RUN_SCRIPT_SRC." >&2
-  exit 1
-fi
-
-generate_token_hex_32() {
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 32
-    return 0
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY'
-import secrets
-print(secrets.token_hex(32))
-PY
-    return 0
-  fi
-  if command -v od >/dev/null 2>&1; then
-    # 32 random bytes -> 64 lowercase hex chars
-    od -An -N32 -tx1 /dev/urandom | tr -d " \n"
-    return 0
-  fi
-  echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
-  exit 1
-}
-
-user_exists() {
-  local user="$1"
-  if command -v getent >/dev/null 2>&1; then
-    getent passwd "$user" >/dev/null 2>&1 && return 0
-  fi
-  id -u "$user" >/dev/null 2>&1
 }
 
 resolve_user_home() {
@@ -180,133 +192,294 @@ resolve_user_home() {
   printf '%s' "$home"
 }
 
-resolve_nologin_shell() {
-  for cand in /usr/sbin/nologin /sbin/nologin /usr/bin/nologin /bin/false; do
-    if [[ -x "$cand" ]]; then
-      printf '%s' "$cand"
-      return 0
-    fi
-  done
-  printf '%s' "/usr/sbin/nologin"
+generate_token_hex_32() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+    return 0
+  fi
+  if command -v od >/dev/null 2>&1; then
+    od -An -N32 -tx1 /dev/urandom | tr -d " \n"
+    return 0
+  fi
+  echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
+  exit 1
 }
 
-# Create openclaw user (non-login, with home) if missing
-if ! user_exists "$OPENCLAW_USER"; then
-  NOLOGIN_SHELL="$(resolve_nologin_shell)"
-  echo "Creating user $OPENCLAW_USER ($NOLOGIN_SHELL, with home)..."
-  if command -v useradd >/dev/null 2>&1; then
-    run_root useradd -m -s "$NOLOGIN_SHELL" "$OPENCLAW_USER"
-  elif command -v adduser >/dev/null 2>&1; then
-    # Debian/Ubuntu: adduser supports --disabled-password/--gecos. Busybox adduser differs.
-    run_root adduser --disabled-password --gecos "" --shell "$NOLOGIN_SHELL" "$OPENCLAW_USER"
-  else
-    echo "Neither useradd nor adduser found, cannot create user $OPENCLAW_USER." >&2
-    exit 1
-  fi
-else
-  echo "User $OPENCLAW_USER already exists."
-fi
-
-OPENCLAW_HOME="$(resolve_user_home "$OPENCLAW_USER")"
-OPENCLAW_UID="$(id -u "$OPENCLAW_USER" 2>/dev/null || true)"
-OPENCLAW_CONFIG="$OPENCLAW_HOME/.openclaw"
-LAUNCH_SCRIPT_DST="$OPENCLAW_HOME/run-openclaw-podman.sh"
-
-# Prefer systemd user services (Quadlet) for production. Enable lingering early so rootless Podman can run
-# without an interactive login.
-if command -v loginctl &>/dev/null; then
-  run_root loginctl enable-linger "$OPENCLAW_USER" 2>/dev/null || true
-fi
-if [[ -n "${OPENCLAW_UID:-}" && -d /run/user ]] && command -v systemctl &>/dev/null; then
-  if [[ ! -d "/run/user/$OPENCLAW_UID" ]]; then
-    run_root install -d -m 700 -o "$OPENCLAW_UID" -g "$OPENCLAW_UID" "/run/user/$OPENCLAW_UID" || true
-  fi
-  run_root mkdir -p "/run/user/$OPENCLAW_UID/containers" || true
-  run_root chown "$OPENCLAW_UID:$OPENCLAW_UID" "/run/user/$OPENCLAW_UID/containers" || true
-  run_root chmod 700 "/run/user/$OPENCLAW_UID/containers" || true
-fi
-
-mkdir_user_dirs_as_openclaw() {
-  run_root install -d -m 700 -o "$OPENCLAW_UID" -g "$OPENCLAW_UID" "$OPENCLAW_HOME" "$OPENCLAW_CONFIG"
-  run_root install -d -m 700 -o "$OPENCLAW_UID" -g "$OPENCLAW_UID" "$OPENCLAW_CONFIG/workspace"
-}
-
-ensure_subid_entry() {
+seed_local_control_ui_origins() {
   local file="$1"
-  if [[ ! -f "$file" ]]; then
-    return 1
+  local port="$2"
+  local dir=""
+  local tmp=""
+  ensure_safe_write_file_path "config file" "$file"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "Warning: python3 not found; unable to seed gateway.controlUi.allowedOrigins in $file." >&2
+    return 0
   fi
-  grep -q "^${OPENCLAW_USER}:" "$file" 2>/dev/null
+  dir="$(dirname "$file")"
+  tmp="$(mktemp "$dir/.config.tmp.XXXXXX")"
+  if ! python3 - "$file" "$port" "$tmp" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+port = sys.argv[2]
+tmp = sys.argv[3]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except json.JSONDecodeError as exc:
+    print(
+        f"Warning: unable to seed gateway.controlUi.allowedOrigins in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if not isinstance(data, dict):
+    raise SystemExit(f"{path}: expected top-level object")
+gateway = data.setdefault("gateway", {})
+if not isinstance(gateway, dict):
+    raise SystemExit(f"{path}: expected gateway object")
+gateway.setdefault("mode", "local")
+control_ui = gateway.setdefault("controlUi", {})
+if not isinstance(control_ui, dict):
+    raise SystemExit(f"{path}: expected gateway.controlUi object")
+allowed = control_ui.get("allowedOrigins")
+managed_localhosts = {"127.0.0.1", "localhost"}
+desired = [
+    f"http://127.0.0.1:{port}",
+    f"http://localhost:{port}",
+]
+if not isinstance(allowed, list):
+    allowed = []
+cleaned = []
+for origin in allowed:
+    if not isinstance(origin, str):
+        continue
+    normalized = origin.strip()
+    if not normalized:
+        continue
+    if normalized.startswith("http://"):
+        host_port = normalized[len("http://") :]
+        host = host_port.split(":", 1)[0]
+        if host in managed_localhosts:
+            continue
+    cleaned.append(normalized)
+control_ui["allowedOrigins"] = cleaned + desired
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+PY
+  then
+    rm -f "$tmp"
+    return 0
+  fi
+  [[ -s "$tmp" ]] || {
+    rm -f "$tmp"
+    return 0
+  }
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$file"
 }
 
-if ! ensure_subid_entry /etc/subuid || ! ensure_subid_entry /etc/subgid; then
-  echo "WARNING: ${OPENCLAW_USER} may not have subuid/subgid ranges configured." >&2
-  echo "If rootless Podman fails, add 'openclaw:100000:65536' to both /etc/subuid and /etc/subgid." >&2
+upsert_env_var() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp
+  local dir
+  ensure_safe_write_file_path "env file" "$file"
+  dir="$(dirname "$file")"
+  tmp="$(mktemp "$dir/.env.tmp.XXXXXX")"
+  if [[ -f "$file" ]]; then
+    awk -v k="$key" -v v="$value" '
+      BEGIN { found = 0 }
+      $0 ~ ("^" k "=") { print k "=" v; found = 1; next }
+      { print }
+      END { if (!found) print k "=" v }
+    ' "$file" >"$tmp"
+  else
+    printf '%s=%s\n' "$key" "$value" >"$tmp"
+  fi
+  mv "$tmp" "$file"
+  chmod 600 "$file" 2>/dev/null || true
+}
+
+INSTALL_QUADLET=false
+for arg in "$@"; do
+  case "$arg" in
+    --quadlet) INSTALL_QUADLET=true ;;
+    --container) INSTALL_QUADLET=false ;;
+  esac
+done
+if [[ -n "${OPENCLAW_PODMAN_QUADLET:-}" ]]; then
+  case "${OPENCLAW_PODMAN_QUADLET,,}" in
+    1|yes|true) INSTALL_QUADLET=true ;;
+    0|no|false) INSTALL_QUADLET=false ;;
+  esac
+fi
+if [[ "$INSTALL_QUADLET" == true && "$PLATFORM_NAME" != "Linux" ]]; then
+  fail "--quadlet is only supported on Linux with systemd user services."
 fi
 
-mkdir_user_dirs_as_openclaw
+SEED_GATEWAY_PORT="$HOST_GATEWAY_PORT"
+if [[ "$INSTALL_QUADLET" == true ]]; then
+  SEED_GATEWAY_PORT="$QUADLET_GATEWAY_PORT"
+fi
 
-IMAGE_TMP_BASE="$(resolve_image_tmp_dir)"
-echo "Using temp base for image export: $IMAGE_TMP_BASE"
-IMAGE_TAR_DIR="$(mktemp -d "${IMAGE_TMP_BASE%/}/openclaw-podman-image.XXXXXX")"
-chmod 700 "$IMAGE_TAR_DIR"
-IMAGE_TAR="$IMAGE_TAR_DIR/openclaw-image.tar"
-cleanup_image_tar() {
-  rm -rf "$IMAGE_TAR_DIR"
-}
-trap cleanup_image_tar EXIT
+require_cmd podman
+if is_root; then
+  echo "Run scripts/podman/setup.sh as your normal user so Podman stays rootless." >&2
+  exit 1
+fi
+if [[ "$OPENCLAW_IMAGE" == "openclaw:local" ]] && [[ ! -f "$REPO_PATH/Dockerfile" ]]; then
+  echo "Dockerfile not found at $REPO_PATH. Set OPENCLAW_REPO_PATH to the repo root." >&2
+  exit 1
+fi
+if [[ ! -f "$RUN_SCRIPT_SRC" ]]; then
+  echo "Launch script not found at $RUN_SCRIPT_SRC." >&2
+  exit 1
+fi
 
+if [[ -z "$OPENCLAW_HOME" ]]; then
+  OPENCLAW_HOME="$(resolve_user_home "$OPENCLAW_USER")"
+fi
+if [[ -z "$OPENCLAW_HOME" ]]; then
+  echo "Unable to resolve HOME for user $OPENCLAW_USER." >&2
+  exit 1
+fi
+if [[ -z "$OPENCLAW_CONFIG_DIR" ]]; then
+  OPENCLAW_CONFIG_DIR="$OPENCLAW_HOME/.openclaw"
+fi
+if [[ -z "$OPENCLAW_WORKSPACE_DIR" ]]; then
+  OPENCLAW_WORKSPACE_DIR="$OPENCLAW_CONFIG_DIR/workspace"
+fi
+validate_absolute_path "home directory" "$OPENCLAW_HOME"
+validate_mount_source_path "config directory" "$OPENCLAW_CONFIG_DIR"
+validate_mount_source_path "workspace directory" "$OPENCLAW_WORKSPACE_DIR"
+validate_container_name "$OPENCLAW_CONTAINER_NAME"
+validate_image_name "$OPENCLAW_IMAGE"
+validate_port "gateway host port" "$HOST_GATEWAY_PORT"
+validate_port "seed gateway port" "$SEED_GATEWAY_PORT"
+
+install -d -m 700 "$OPENCLAW_CONFIG_DIR" "$OPENCLAW_WORKSPACE_DIR"
+ensure_private_existing_dir_owned_by_user "config directory" "$OPENCLAW_CONFIG_DIR"
+ensure_private_existing_dir_owned_by_user "workspace directory" "$OPENCLAW_WORKSPACE_DIR"
+
+OPENCLAW_IMAGE_APT_PACKAGES="${OPENCLAW_IMAGE_APT_PACKAGES-${OPENCLAW_DOCKER_APT_PACKAGES:-}}"
+OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"
 BUILD_ARGS=()
-if [[ -n "${OPENCLAW_DOCKER_APT_PACKAGES:-}" ]]; then
-  BUILD_ARGS+=(--build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}")
+BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$REPO_PATH")"
+BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
+BUILD_ARGS+=(--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}")
+if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
+fi
+if [[ -n "$OPENCLAW_IMAGE_APT_PACKAGES" ]]; then
+  BUILD_ARGS+=(--build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}")
+fi
+if [[ -n "$OPENCLAW_IMAGE_PIP_PACKAGES" ]]; then
+  BUILD_ARGS+=(--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}")
 fi
 if [[ -n "${OPENCLAW_EXTENSIONS:-}" ]]; then
   BUILD_ARGS+=(--build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}")
 fi
+if [[ -n "${OPENCLAW_INSTALL_BROWSER:-}" ]]; then
+  BUILD_ARGS+=(--build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}")
+fi
 
-echo "Building image openclaw:local..."
-podman build -t openclaw:local -f "$REPO_PATH/Dockerfile" "${BUILD_ARGS[@]}" "$REPO_PATH"
-echo "Saving image to $IMAGE_TAR ..."
-podman save -o "$IMAGE_TAR" openclaw:local
+if [[ "$OPENCLAW_IMAGE" == "openclaw:local" ]]; then
+  echo "Building image $OPENCLAW_IMAGE ..."
+  run_podman_build -t "$OPENCLAW_IMAGE" -f "$REPO_PATH/Dockerfile" "${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}" "$REPO_PATH"
+else
+  if podman image exists "$OPENCLAW_IMAGE" >/dev/null 2>&1; then
+    echo "Using existing image $OPENCLAW_IMAGE"
+  else
+    echo "Pulling image $OPENCLAW_IMAGE ..."
+    run_podman_pull "$OPENCLAW_IMAGE"
+  fi
+fi
 
-echo "Loading image into $OPENCLAW_USER Podman store..."
-run_as_openclaw podman load -i "$IMAGE_TAR"
-
-echo "Installing launch script to $LAUNCH_SCRIPT_DST ..."
-run_root install -m 0755 -o "$OPENCLAW_UID" -g "$OPENCLAW_UID" "$RUN_SCRIPT_SRC" "$LAUNCH_SCRIPT_DST"
-
-if [[ ! -f "$OPENCLAW_CONFIG/.env" ]]; then
+ENV_FILE="$OPENCLAW_CONFIG_DIR/.env"
+if [[ ! -f "$ENV_FILE" ]]; then
   TOKEN="$(generate_token_hex_32)"
-  run_as_openclaw sh -lc "umask 077 && printf '%s\n' 'OPENCLAW_GATEWAY_TOKEN=$TOKEN' > '$OPENCLAW_CONFIG/.env'"
-  echo "Generated OPENCLAW_GATEWAY_TOKEN and wrote it to $OPENCLAW_CONFIG/.env"
+  (
+    umask 077
+    write_file_atomically "$ENV_FILE" 600 <<EOF
+OPENCLAW_GATEWAY_TOKEN=$TOKEN
+EOF
+  )
+  echo "Generated OPENCLAW_GATEWAY_TOKEN and wrote it to $ENV_FILE"
 fi
+upsert_env_var "$ENV_FILE" "OPENCLAW_PODMAN_CONTAINER" "$OPENCLAW_CONTAINER_NAME"
+upsert_env_var "$ENV_FILE" "OPENCLAW_PODMAN_IMAGE" "$OPENCLAW_IMAGE"
 
-if [[ ! -f "$OPENCLAW_CONFIG/openclaw.json" ]]; then
-  run_as_openclaw sh -lc "umask 077 && cat > '$OPENCLAW_CONFIG/openclaw.json' <<'JSON'
-{ \"gateway\": { \"mode\": \"local\" } }
-JSON"
-  echo "Wrote minimal config to $OPENCLAW_CONFIG/openclaw.json"
+CONFIG_JSON="$OPENCLAW_CONFIG_DIR/openclaw.json"
+if [[ ! -f "$CONFIG_JSON" ]]; then
+  (
+    umask 077
+    write_file_atomically "$CONFIG_JSON" 600 <<JSON
+{
+  "gateway": {
+    "mode": "local",
+        "controlUi": {
+          "allowedOrigins": [
+        "http://127.0.0.1:${SEED_GATEWAY_PORT}",
+        "http://localhost:${SEED_GATEWAY_PORT}"
+      ]
+    }
+  }
+}
+JSON
+  )
+  echo "Wrote minimal config to $CONFIG_JSON"
 fi
+seed_local_control_ui_origins "$CONFIG_JSON" "$SEED_GATEWAY_PORT"
 
 if [[ "$INSTALL_QUADLET" == true ]]; then
   QUADLET_DIR="$OPENCLAW_HOME/.config/containers/systemd"
   QUADLET_DST="$QUADLET_DIR/openclaw.container"
   echo "Installing Quadlet to $QUADLET_DST ..."
-  run_as_openclaw mkdir -p "$QUADLET_DIR"
+  mkdir -p "$QUADLET_DIR"
+  ensure_safe_existing_dir "quadlet directory" "$QUADLET_DIR"
   OPENCLAW_HOME_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_HOME")"
-  sed "s|{{OPENCLAW_HOME}}|$OPENCLAW_HOME_ESCAPED|g" "$QUADLET_TEMPLATE" | \
-    run_as_openclaw sh -lc "cat > '$QUADLET_DST'"
-  run_as_openclaw chmod 0644 "$QUADLET_DST"
+  OPENCLAW_CONFIG_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_CONFIG_DIR")"
+  OPENCLAW_WORKSPACE_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_WORKSPACE_DIR")"
+  OPENCLAW_IMAGE_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_IMAGE")"
+  OPENCLAW_CONTAINER_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_CONTAINER_NAME")"
+  sed \
+    -e "s|{{OPENCLAW_HOME}}|$OPENCLAW_HOME_ESCAPED|g" \
+    -e "s|{{OPENCLAW_CONFIG_DIR}}|$OPENCLAW_CONFIG_ESCAPED|g" \
+    -e "s|{{OPENCLAW_WORKSPACE_DIR}}|$OPENCLAW_WORKSPACE_ESCAPED|g" \
+    -e "s|{{IMAGE_NAME}}|$OPENCLAW_IMAGE_ESCAPED|g" \
+    -e "s|{{CONTAINER_NAME}}|$OPENCLAW_CONTAINER_ESCAPED|g" \
+    "$QUADLET_TEMPLATE" | write_file_atomically "$QUADLET_DST" 644
 
-  echo "Reloading and enabling user service..."
-  run_root systemctl --machine "${OPENCLAW_USER}@" --user daemon-reload
-  run_root systemctl --machine "${OPENCLAW_USER}@" --user enable --now openclaw.service
-  echo "Quadlet installed and service started."
+  if command -v systemctl >/dev/null 2>&1; then
+    echo "Reloading and starting user service..."
+    if systemctl --user daemon-reload && systemctl --user start openclaw.service; then
+      echo "Quadlet installed and service started."
+    else
+      echo "Quadlet installed, but automatic start failed." >&2
+      echo "Try: systemctl --user daemon-reload && systemctl --user start openclaw.service" >&2
+      if command -v loginctl >/dev/null 2>&1; then
+        echo "For boot persistence on headless hosts, you may also need: sudo loginctl enable-linger $(whoami)" >&2
+      fi
+    fi
+  else
+    echo "systemctl not found; Quadlet installed but not started." >&2
+  fi
 else
-  echo "Container + launch script installed."
+  echo "Container setup complete."
 fi
 
 echo
 echo "Next:"
 echo "  ./scripts/run-openclaw-podman.sh launch"
 echo "  ./scripts/run-openclaw-podman.sh launch setup"
+echo "  openclaw --container $OPENCLAW_CONTAINER_NAME dashboard --no-open"

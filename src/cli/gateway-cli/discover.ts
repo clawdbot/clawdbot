@@ -1,5 +1,7 @@
+// Gateway discovery rendering helpers for Bonjour and wide-area DNS beacon output.
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
-import { colorize, theme } from "../../terminal/theme.js";
+import { buildGatewayDiscoveryTarget } from "../../infra/gateway-discovery-targets.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
 export type GatewayDiscoverOpts = {
@@ -12,19 +14,15 @@ export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number
 }
 
 export function pickBeaconHost(beacon: GatewayBonjourBeacon): string | null {
-  // Security: TXT records are unauthenticated. Prefer the resolved service endpoint (SRV/A/AAAA)
-  // over TXT-provided routing hints.
-  const host = beacon.host || beacon.tailnetDns || beacon.lanHost;
-  return host?.trim() ? host.trim() : null;
+  return buildGatewayDiscoveryTarget(beacon).endpoint?.host ?? null;
 }
 
-export function pickGatewayPort(beacon: GatewayBonjourBeacon): number {
-  // Security: TXT records are unauthenticated. Prefer the resolved service port over TXT gatewayPort.
-  const port = beacon.port ?? beacon.gatewayPort ?? 18789;
-  return port > 0 ? port : 18789;
+export function pickGatewayPort(beacon: GatewayBonjourBeacon): number | null {
+  return buildGatewayDiscoveryTarget(beacon).endpoint?.port ?? null;
 }
 
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
+  // Use display and endpoint fields; Bonjour can surface the same gateway on multiple interfaces.
   const out: GatewayBonjourBeacon[] = [];
   const seen = new Set<string>();
   for (const b of beacons) {
@@ -47,16 +45,9 @@ export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBe
 }
 
 export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): string[] {
-  const nameRaw = (beacon.displayName || beacon.instanceName || "Gateway").trim();
-  const domainRaw = (beacon.domain || "local.").trim();
-
-  const title = colorize(rich, theme.accentBright, nameRaw);
-  const domain = colorize(rich, theme.muted, domainRaw);
-
-  const host = pickBeaconHost(beacon);
-  const gatewayPort = pickGatewayPort(beacon);
-  const scheme = beacon.gatewayTls ? "wss" : "ws";
-  const wsUrl = host ? `${scheme}://${host}:${gatewayPort}` : null;
+  const target = buildGatewayDiscoveryTarget(beacon);
+  const title = colorize(rich, theme.accentBright, target.title);
+  const domain = colorize(rich, theme.muted, target.domain);
 
   const lines = [`- ${title} ${domain}`];
 
@@ -70,8 +61,10 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
     lines.push(`  ${colorize(rich, theme.info, "host")}: ${beacon.host}`);
   }
 
-  if (wsUrl) {
-    lines.push(`  ${colorize(rich, theme.muted, "ws")}: ${colorize(rich, theme.command, wsUrl)}`);
+  if (target.wsUrl) {
+    lines.push(
+      `  ${colorize(rich, theme.muted, "ws")}: ${colorize(rich, theme.command, target.wsUrl)}`,
+    );
   }
   if (beacon.role) {
     lines.push(`  ${colorize(rich, theme.muted, "role")}: ${beacon.role}`);
@@ -85,8 +78,8 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
       : "enabled";
     lines.push(`  ${colorize(rich, theme.muted, "tls")}: ${fingerprint}`);
   }
-  if (typeof beacon.sshPort === "number" && beacon.sshPort > 0 && host) {
-    const ssh = `ssh -N -L 18789:127.0.0.1:18789 <user>@${host} -p ${beacon.sshPort}`;
+  if (target.endpoint && target.sshPort) {
+    const ssh = `ssh -N -L 18789:127.0.0.1:18789 <user>@${target.endpoint.host} -p ${target.sshPort}`;
     lines.push(`  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, ssh)}`);
   }
   return lines;

@@ -1,4 +1,5 @@
-import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+// Discord helper module supports model picker utils behavior.
+import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 
 export function createModelsProviderData(
   entries: Record<string, string[]>,
@@ -21,5 +22,6 @@ export function createModelsProviderData(
       provider: defaultProvider,
       model: entries[defaultProvider]?.[0] ?? "gpt-4o",
     },
+    modelNames: new Map<string, string>(),
   };
 }

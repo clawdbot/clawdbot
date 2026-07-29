@@ -1,24 +1,64 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
+import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
 
+type StartupScopedPluginSnapshot = NonNullable<
+  ReturnType<typeof getCurrentPluginMetadataSnapshot>
+> & {
+  startup?: {
+    pluginIds?: readonly unknown[];
+  };
+};
+
+function resolveStartupPluginIdsFromCurrentSnapshot(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): string[] | undefined {
+  const snapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  }) as StartupScopedPluginSnapshot | undefined;
+  const pluginIds = snapshot?.startup?.pluginIds;
+  if (!Array.isArray(pluginIds)) {
+    return undefined;
+  }
+  return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
+}
+
+/** Ensure standalone runtime plugins are loaded for the current agent context. */
 export function ensureRuntimePluginsLoaded(params: {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
-}): void {
+}): PluginRegistry | undefined {
+  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
+    return undefined;
+  }
   const workspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
-
-  loadOpenClawPlugins({
+  const startupPluginIds = resolveStartupPluginIdsFromCurrentSnapshot({
     config: params.config,
     workspaceDir,
-    runtimeOptions: params.allowGatewaySubagentBinding
-      ? {
-          allowGatewaySubagentBinding: true,
-        }
-      : undefined,
+  });
+  const allowGatewaySubagentBinding =
+    params.allowGatewaySubagentBinding === true ||
+    getActivePluginRuntimeSubagentMode() === "gateway-bindable";
+  return ensureStandaloneRuntimePluginRegistryLoaded({
+    requiredPluginIds: startupPluginIds,
+    loadOptions: {
+      config: params.config,
+      workspaceDir,
+      ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
+      ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
+      runtimeOptions: allowGatewaySubagentBinding
+        ? { allowGatewaySubagentBinding: true }
+        : undefined,
+    },
   });
 }

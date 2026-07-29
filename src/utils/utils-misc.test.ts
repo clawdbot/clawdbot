@@ -1,7 +1,19 @@
+// Misc utility tests cover small shared helper behavior.
 import { describe, expect, it } from "vitest";
-import { parseBooleanValue } from "./boolean.js";
-import { isReasoningTagProvider } from "./provider-utils.js";
+import { z } from "zod";
+import { asBoolean, parseBooleanValue } from "./boolean.js";
+import { chunkItems } from "./chunk-items.js";
 import { splitShellArgs } from "./shell-argv.js";
+import { safeParseJsonWithSchema, safeParseWithSchema } from "./zod-parse.js";
+
+describe("asBoolean", () => {
+  it("accepts booleans only", () => {
+    expect(asBoolean(true)).toBe(true);
+    expect(asBoolean(false)).toBe(false);
+    expect(asBoolean("true")).toBeUndefined();
+    expect(asBoolean(1)).toBeUndefined();
+  });
+});
 
 describe("parseBooleanValue", () => {
   it("handles boolean inputs", () => {
@@ -42,55 +54,6 @@ describe("parseBooleanValue", () => {
   });
 });
 
-describe("isReasoningTagProvider", () => {
-  const cases: Array<{
-    name: string;
-    value: string | null | undefined;
-    expected: boolean;
-  }> = [
-    {
-      name: "returns false for ollama - native reasoning field, no tags needed (#2279)",
-      value: "ollama",
-      expected: false,
-    },
-    {
-      name: "returns false for case-insensitive ollama",
-      value: "Ollama",
-      expected: false,
-    },
-    {
-      name: "returns true for google (gemini-api-key auth provider)",
-      value: "google",
-      expected: true,
-    },
-    {
-      name: "returns true for Google (case-insensitive)",
-      value: "Google",
-      expected: true,
-    },
-    { name: "returns true for google-gemini-cli", value: "google-gemini-cli", expected: true },
-    {
-      name: "returns true for google-generative-ai",
-      value: "google-generative-ai",
-      expected: true,
-    },
-    { name: "returns true for minimax", value: "minimax", expected: true },
-    { name: "returns true for minimax-cn", value: "minimax-cn", expected: true },
-    { name: "returns false for null", value: null, expected: false },
-    { name: "returns false for undefined", value: undefined, expected: false },
-    { name: "returns false for empty", value: "", expected: false },
-    { name: "returns false for anthropic", value: "anthropic", expected: false },
-    { name: "returns false for openai", value: "openai", expected: false },
-    { name: "returns false for openrouter", value: "openrouter", expected: false },
-  ];
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(isReasoningTagProvider(testCase.value)).toBe(testCase.expected);
-    });
-  }
-});
-
 describe("splitShellArgs", () => {
   it("splits whitespace and respects quotes", () => {
     expect(splitShellArgs(`qmd --foo "bar baz"`)).toEqual(["qmd", "--foo", "bar baz"]);
@@ -111,5 +74,30 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(`echo hi # comment && whoami`)).toEqual(["echo", "hi"]);
     expect(splitShellArgs(`echo "hi # still-literal"`)).toEqual(["echo", "hi # still-literal"]);
     expect(splitShellArgs(`echo hi#tail`)).toEqual(["echo", "hi#tail"]);
+  });
+});
+
+describe("chunkItems", () => {
+  it("splits items into fixed-size chunks", () => {
+    expect(chunkItems([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+  });
+
+  it("keeps one row when the requested size is not positive", () => {
+    expect(chunkItems([1, 2, 3], 0)).toEqual([[1, 2, 3]]);
+  });
+});
+
+describe("zod parse helpers", () => {
+  const schema = z.object({ name: z.string() });
+
+  it("returns parsed data for schema-valid values", () => {
+    expect(safeParseWithSchema(schema, { name: "Ada" })).toEqual({ name: "Ada" });
+    expect(safeParseJsonWithSchema(schema, `{"name":"Ada"}`)).toEqual({ name: "Ada" });
+  });
+
+  it("returns null for schema failures or invalid JSON", () => {
+    expect(safeParseWithSchema(schema, { name: 1 })).toBeNull();
+    expect(safeParseJsonWithSchema(schema, `{"name":1}`)).toBeNull();
+    expect(safeParseJsonWithSchema(schema, `{`)).toBeNull();
   });
 });

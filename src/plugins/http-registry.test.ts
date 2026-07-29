@@ -1,39 +1,37 @@
+/** Verifies plugin HTTP route registration, collision detection, and metadata capture. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerPluginHttpRoute } from "./http-registry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRegistry } from "./registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 function expectRouteRegistrationDenied(params: {
   replaceExisting: boolean;
   expectedLogFragment: string;
 }) {
-  const registry = createEmptyPluginRegistry();
-  const logs: string[] = [];
+  const { registry, logs, register } = createLoggedRouteHarness();
 
-  registerPluginHttpRoute({
+  register({
     path: "/plugins/demo",
     auth: "plugin",
-    handler: vi.fn(),
-    registry,
     pluginId: "demo-a",
     source: "demo-a-src",
-    log: (msg) => logs.push(msg),
   });
 
-  const unregister = registerPluginHttpRoute({
+  const unregister = register({
     path: "/plugins/demo",
     auth: "plugin",
     ...(params.replaceExisting ? { replaceExisting: true } : {}),
-    handler: vi.fn(),
-    registry,
     pluginId: "demo-b",
     source: "demo-b-src",
-    log: (msg) => logs.push(msg),
   });
 
   expect(registry.httpRoutes).toHaveLength(1);
@@ -41,6 +39,51 @@ function expectRouteRegistrationDenied(params: {
 
   unregister();
   expect(registry.httpRoutes).toHaveLength(1);
+}
+
+function expectRegisteredRouteShape(
+  registry: ReturnType<typeof createEmptyPluginRegistry>,
+  params: {
+    path: string;
+    handler?: unknown;
+    auth: "plugin" | "gateway";
+    match?: "exact" | "prefix";
+    pluginId?: string;
+    source?: string;
+  },
+) {
+  expect(registry.httpRoutes).toHaveLength(1);
+  expect(registry.httpRoutes[0]).toEqual({
+    path: params.path,
+    handler: params.handler ?? registry.httpRoutes[0]?.handler,
+    auth: params.auth,
+    match: params.match ?? "exact",
+    pluginId: params.pluginId,
+    source: params.source,
+  });
+}
+
+function createLoggedRouteHarness() {
+  const registry = createEmptyPluginRegistry();
+  const logs: string[] = [];
+  return {
+    registry,
+    logs,
+    register: (
+      params: Omit<
+        Parameters<typeof registerPluginHttpRoute>[0],
+        "registry" | "handler" | "log"
+      > & {
+        handler?: Parameters<typeof registerPluginHttpRoute>[0]["handler"];
+      },
+    ) =>
+      registerPluginHttpRoute({
+        ...params,
+        handler: params.handler ?? vi.fn(),
+        registry,
+        log: (msg) => logs.push(msg),
+      }),
+  };
 }
 
 describe("registerPluginHttpRoute", () => {
@@ -60,14 +103,60 @@ describe("registerPluginHttpRoute", () => {
       registry,
     });
 
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.path).toBe("/plugins/demo");
-    expect(registry.httpRoutes[0]?.handler).toBe(handler);
-    expect(registry.httpRoutes[0]?.auth).toBe("plugin");
-    expect(registry.httpRoutes[0]?.match).toBe("exact");
+    expectRegisteredRouteShape(registry, {
+      path: "/plugins/demo",
+      handler,
+      auth: "plugin",
+      match: "exact",
+    });
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(0);
+  });
+
+  it("marks gateway method dispatch entitlement only for plugins declaring the contract", () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    const config = {} as OpenClawConfig;
+    const plainRecord = createPluginRecord({
+      id: "plain-http",
+      source: "/plugins/plain-http/index.ts",
+    });
+    const adminRecord = createPluginRecord({
+      id: "admin-http",
+      source: "/plugins/admin-http/index.ts",
+      contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    });
+
+    pluginRegistry.registry.plugins.push(plainRecord, adminRecord);
+    pluginRegistry.createApi(plainRecord, { config }).registerHttpRoute({
+      path: "/plain",
+      auth: "gateway",
+      handler: vi.fn(),
+    });
+    pluginRegistry.createApi(adminRecord, { config }).registerHttpRoute({
+      path: "/admin",
+      auth: "gateway",
+      handler: vi.fn(),
+    });
+
+    const plainRoute = pluginRegistry.registry.httpRoutes.find(
+      (route) => route.pluginId === "plain-http",
+    );
+    const adminRoute = pluginRegistry.registry.httpRoutes.find(
+      (route) => route.pluginId === "admin-http",
+    );
+
+    expect(plainRoute?.gatewayMethodDispatchAllowed).toBeUndefined();
+    expect(adminRoute?.gatewayMethodDispatchAllowed).toBe(true);
   });
 
   it("returns noop unregister when path is missing", () => {
@@ -84,34 +173,29 @@ describe("registerPluginHttpRoute", () => {
 
     expect(registry.httpRoutes).toHaveLength(0);
     expect(logs).toEqual(['plugin: webhook path missing for account "default"']);
-    expect(() => unregister()).not.toThrow();
+    unregister();
   });
 
   it("replaces stale route on same path when replaceExisting=true", () => {
-    const registry = createEmptyPluginRegistry();
-    const logs: string[] = [];
+    const { registry, logs, register } = createLoggedRouteHarness();
     const firstHandler = vi.fn();
     const secondHandler = vi.fn();
 
-    const unregisterFirst = registerPluginHttpRoute({
+    const unregisterFirst = register({
       path: "/plugins/synology",
       auth: "plugin",
       handler: firstHandler,
-      registry,
       accountId: "default",
       pluginId: "synology-chat",
-      log: (msg) => logs.push(msg),
     });
 
-    const unregisterSecond = registerPluginHttpRoute({
+    const unregisterSecond = register({
       path: "/plugins/synology",
       auth: "plugin",
       replaceExisting: true,
       handler: secondHandler,
-      registry,
       accountId: "default",
       pluginId: "synology-chat",
-      log: (msg) => logs.push(msg),
     });
 
     expect(registry.httpRoutes).toHaveLength(1);
@@ -129,44 +213,41 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(0);
   });
 
-  it("rejects conflicting route registrations without replaceExisting", () => {
-    expectRouteRegistrationDenied({
+  it.each([
+    {
+      name: "rejects conflicting route registrations without replaceExisting",
       replaceExisting: false,
       expectedLogFragment: "route conflict",
-    });
-  });
-
-  it("rejects route replacement when a different plugin owns the route", () => {
-    expectRouteRegistrationDenied({
+    },
+    {
+      name: "rejects route replacement when a different plugin owns the route",
       replaceExisting: true,
       expectedLogFragment: "route replacement denied",
+    },
+  ] as const)("$name", ({ replaceExisting, expectedLogFragment }) => {
+    expectRouteRegistrationDenied({
+      replaceExisting,
+      expectedLogFragment,
     });
   });
 
   it("rejects mixed-auth overlapping routes", () => {
-    const registry = createEmptyPluginRegistry();
-    const logs: string[] = [];
+    const { registry, logs, register } = createLoggedRouteHarness();
 
-    registerPluginHttpRoute({
+    register({
       path: "/plugin/secure",
       auth: "gateway",
       match: "prefix",
-      handler: vi.fn(),
-      registry,
       pluginId: "demo-gateway",
       source: "demo-gateway-src",
-      log: (msg) => logs.push(msg),
     });
 
-    const unregister = registerPluginHttpRoute({
+    const unregister = register({
       path: "/plugin/secure/report",
       auth: "plugin",
       match: "exact",
-      handler: vi.fn(),
-      registry,
       pluginId: "demo-plugin",
       source: "demo-plugin-src",
-      log: (msg) => logs.push(msg),
     });
 
     expect(registry.httpRoutes).toHaveLength(1);
@@ -185,16 +266,43 @@ describe("registerPluginHttpRoute", () => {
     setActivePluginRegistry(laterActiveRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/bluebubbles-webhook",
+      path: "/imessage-webhook",
       auth: "plugin",
       handler: vi.fn(),
     });
 
-    expect(startupRegistry.httpRoutes).toHaveLength(1);
-    expect(startupRegistry.httpRoutes[0]?.path).toBe("/bluebubbles-webhook");
+    expectRegisteredRouteShape(startupRegistry, {
+      path: "/imessage-webhook",
+      auth: "plugin",
+    });
     expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
 
     unregister();
     expect(startupRegistry.httpRoutes).toHaveLength(0);
+  });
+
+  it("prefers the scoped route registry over the process-global pinned registry", () => {
+    const scopedRegistry = createEmptyPluginRegistry();
+    const pinnedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(pinnedRegistry);
+    pinActivePluginHttpRouteRegistry(pinnedRegistry);
+
+    const unregister = withPluginHttpRouteRegistry(scopedRegistry, () =>
+      registerPluginHttpRoute({
+        path: "/scoped-webhook",
+        auth: "plugin",
+        handler: vi.fn(),
+      }),
+    );
+
+    expectRegisteredRouteShape(scopedRegistry, {
+      path: "/scoped-webhook",
+      auth: "plugin",
+    });
+    expect(pinnedRegistry.httpRoutes).toHaveLength(0);
+
+    unregister();
+    expect(scopedRegistry.httpRoutes).toHaveLength(0);
   });
 });

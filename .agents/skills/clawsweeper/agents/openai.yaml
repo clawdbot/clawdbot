@@ -1,0 +1,4 @@
+interface:
+  display_name: "ClawSweeper"
+  short_description: "Inspect ClawSweeper commit review reports and Actions runs."
+  default_prompt: "Review recent ClawSweeper commit reports and summarize findings."

@@ -1,7 +1,20 @@
+/**
+ * Sandbox filesystem bridge implementation.
+ *
+ * Resolves container paths to mounted host paths and executes guarded reads, writes, stats, renames, and deletes.
+ */
 import fs from "node:fs";
-import type { SandboxBackendCommandResult } from "./backend.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
+import type {
+  SandboxBackendCommandResult,
+  SandboxFsBridgeContext,
+} from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
+  buildPinnedCreatePlan,
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
+  buildPinnedCopyPlan,
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
   buildPinnedRenamePlan,
@@ -9,12 +22,14 @@ import {
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
+import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   buildSandboxFsMounts,
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
+import type { SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -23,60 +38,28 @@ type RunCommandOptions = {
   signal?: AbortSignal;
 };
 
-export type SandboxResolvedPath = {
-  hostPath?: string;
-  relativePath: string;
-  containerPath: string;
-};
+export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 
-export type SandboxFsStat = {
-  type: "file" | "directory" | "other";
-  size: number;
-  mtimeMs: number;
-};
-
-export type SandboxFsBridge = {
-  resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
-  readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
-  writeFile(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void>;
-  mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
-  remove(params: {
-    filePath: string;
-    cwd?: string;
-    recursive?: boolean;
-    force?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void>;
-  rename(params: { from: string; to: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
-  stat(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<SandboxFsStat | null>;
-};
-
-export function createSandboxFsBridge(params: { sandbox: SandboxContext }): SandboxFsBridge {
+/** Create the filesystem bridge for local Docker-style mounted sandboxes. */
+export function createSandboxFsBridge(params: {
+  sandbox: SandboxFsBridgeContext;
+}): SandboxFsBridge {
   return new SandboxFsBridgeImpl(params.sandbox);
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
-  private readonly sandbox: SandboxContext;
+  private readonly sandbox: SandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
   private readonly pathGuard: SandboxFsPathGuard;
 
-  constructor(sandbox: SandboxContext) {
+  constructor(sandbox: SandboxFsBridgeContext) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
     const mountsByContainer = [...this.mounts].toSorted(
       (a, b) => b.containerRoot.length - a.containerRoot.length,
     );
+    // Longest mount first keeps nested agent/skill mounts from being claimed by
+    // the broader workspace root during symlink and mutation safety checks.
     this.pathGuard = new SandboxFsPathGuard({
       mountsByContainer,
       runCommand: (script, options) => this.runCommand(script, options),
@@ -96,9 +79,43 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;
+    maxBytes?: number;
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    return this.readPinnedFile(target);
+    return this.readPinnedFile(target, params.maxBytes);
+  }
+
+  async copyFile(params: {
+    sourcePath: string;
+    destinationPath: string;
+    cwd?: string;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const source = this.resolveResolvedPath({ filePath: params.sourcePath, cwd: params.cwd });
+    const destination = this.resolveResolvedPath({
+      filePath: params.destinationPath,
+      cwd: params.cwd,
+    });
+    this.ensureWriteAccess(destination, "copy files");
+    const sourceCheck = {
+      target: source,
+      options: { action: "copy files", allowedType: "file" } as const,
+    };
+    const destinationCheck = {
+      target: destination,
+      options: { action: "copy files", requireWritable: true } as const,
+    };
+    await this.runCheckedCommand({
+      ...buildPinnedCopyPlan({
+        sourceCheck,
+        destinationCheck,
+        source: await this.pathGuard.resolveAnchoredPinnedEntry(source, "copy files"),
+        destination: await this.pathGuard.resolveAnchoredPinnedEntry(destination, "copy files"),
+        mkdir: params.mkdir !== false,
+      }),
+      signal: params.signal,
+    });
   }
 
   async writeFile(params: {
@@ -132,6 +149,49 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       stdin: buffer,
       signal: params.signal,
     });
+  }
+
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveResolvedPath(params);
+    this.ensureWriteAccess(target, "create files");
+    const createCheck = {
+      target,
+      options: { action: "create files", requireWritable: true } as const,
+    };
+    await this.pathGuard.assertPathSafety(target, createCheck.options);
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const pinnedCreateTarget = await this.pathGuard.resolveAnchoredPinnedEntry(
+      target,
+      "create files",
+    );
+    const result = await this.runCheckedCommand({
+      ...buildPinnedCreatePlan({
+        check: createCheck,
+        pinned: pinnedCreateTarget,
+        mkdir: params.mkdir !== false,
+      }),
+      allowFailure: true,
+      stdin: buffer,
+      signal: params.signal,
+    });
+    if (result.code === SANDBOX_CREATE_EXISTS_EXIT_CODE) {
+      return "exists";
+    }
+    if (result.code !== 0) {
+      throw new Error(
+        `sandbox create failed for ${target.containerPath}: ${result.stderr.toString("utf8").trim()}`,
+      );
+    }
+    return "created";
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
@@ -237,12 +297,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     }
     const text = result.stdout.toString("utf8").trim();
     const [typeRaw, sizeRaw, mtimeRaw] = text.split("|");
-    const size = Number.parseInt(sizeRaw ?? "0", 10);
-    const mtime = Number.parseInt(mtimeRaw ?? "0", 10) * 1000;
     return {
       type: coerceStatType(typeRaw),
-      size: Number.isFinite(size) ? size : 0,
-      mtimeMs: Number.isFinite(mtime) ? mtime : 0,
+      size: parseSandboxStatSize(sizeRaw),
+      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
   }
 
@@ -270,10 +328,30 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
   }
 
-  private async readPinnedFile(target: SandboxResolvedFsPath): Promise<Buffer> {
+  private async readPinnedFile(target: SandboxResolvedFsPath, maxBytes?: number): Promise<Buffer> {
     const opened = await this.pathGuard.openReadableFile(target);
     try {
-      return fs.readFileSync(opened.fd);
+      if (maxBytes === undefined) {
+        return fs.readFileSync(opened.fd);
+      }
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+        throw new RangeError("maxBytes must be a non-negative safe integer");
+      }
+      const initialStat = fs.fstatSync(opened.fd);
+      if (!initialStat.isFile()) {
+        throw new Error(`Sandbox read requires a regular file: ${target.containerPath}`);
+      }
+      if (initialStat.size > maxBytes) {
+        throw new RangeError(`File exceeds ${maxBytes} bytes`);
+      }
+      // Read and recheck the same guarded descriptor so path swaps and file
+      // growth cannot bypass the byte limit or allocate an unbounded buffer.
+      const data = readFileDescriptorBoundedSync(opened.fd, maxBytes);
+      const finalStat = fs.fstatSync(opened.fd);
+      if (!finalStat.isFile() || finalStat.size > maxBytes) {
+        throw new RangeError(`File exceeds ${maxBytes} bytes`);
+      }
+      return data;
     } finally {
       fs.closeSync(opened.fd);
     }
@@ -284,6 +362,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   ): Promise<SandboxBackendCommandResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
     if (plan.recheckBeforeCommand) {
+      // Mutations that can create or swap path parents re-run the anchored
+      // checks immediately before command execution to close TOCTOU gaps.
       await this.pathGuard.assertPathChecks(plan.checks);
     }
     return await this.runCommand(plan.script, {
@@ -326,7 +406,7 @@ function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
   if (!typeRaw) {
     return "other";
   }
-  const normalized = typeRaw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(typeRaw) ?? "";
   if (normalized.includes("directory")) {
     return "directory";
   }

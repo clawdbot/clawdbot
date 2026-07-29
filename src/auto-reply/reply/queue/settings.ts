@@ -1,12 +1,13 @@
-import { getChannelPlugin } from "../../../channels/plugins/index.js";
+// Resolves queue settings from config, directives, and fallback policy.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
-import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
+import {
+  normalizePersistedQueueMode,
+  normalizeQueueDropPolicy,
+  normalizeQueueMode,
+} from "./normalize.js";
 import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
-import type { QueueMode, QueueSettings, ResolveQueueSettingsParams } from "./types.js";
-
-function defaultQueueModeForChannel(_channel?: string): QueueMode {
-  return "collect";
-}
+import type { QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 
 /** Resolve per-channel debounce override from debounceMsByChannel map. */
 function resolveChannelDebounce(
@@ -20,17 +21,8 @@ function resolveChannelDebounce(
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
-function resolvePluginDebounce(channelKey: string | undefined): number | undefined {
-  if (!channelKey) {
-    return undefined;
-  }
-  const plugin = getChannelPlugin(channelKey);
-  const value = plugin?.defaults?.queue?.debounceMs;
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
-}
-
 export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {
-  const channelKey = params.channel?.trim().toLowerCase();
+  const channelKey = normalizeOptionalLowercaseString(params.channel);
   const queueCfg = params.cfg.messages?.queue;
   const providerModeRaw =
     channelKey && queueCfg?.byChannel
@@ -38,16 +30,15 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
       : undefined;
   const resolvedMode =
     params.inlineMode ??
-    normalizeQueueMode(params.sessionEntry?.queueMode) ??
+    normalizePersistedQueueMode(params.sessionEntry?.queueMode) ??
     normalizeQueueMode(providerModeRaw) ??
     normalizeQueueMode(queueCfg?.mode) ??
-    defaultQueueModeForChannel(channelKey);
+    "steer";
   const debounceRaw =
     params.inlineOptions?.debounceMs ??
     params.sessionEntry?.queueDebounceMs ??
     resolveChannelDebounce(queueCfg?.debounceMsByChannel, channelKey) ??
-    resolvePluginDebounce(channelKey) ??
-    queueCfg?.debounceMs ??
+    params.pluginDebounceMs ??
     DEFAULT_QUEUE_DEBOUNCE_MS;
   const capRaw =
     params.inlineOptions?.cap ??

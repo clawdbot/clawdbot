@@ -68,6 +68,10 @@ openclaw plugins install @openclaw/nostr
 - **open**: Anyone can message the bot (use with caution)
 - **disabled**: DMs are disabled
 
+Inbound event signatures are verified before policy enforcement and NIP-04 decryption.
+Unknown senders in `pairing` mode can receive a pairing reply, but their original DM body is not
+processed unless approved.
+
 ### Example: Allowlist Mode
 
 ```json
@@ -113,6 +117,8 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 
 - Private keys are never logged
 - Event signatures are verified before processing
+- Sender policy is checked before expensive crypto work
+- Inbound DMs are rate-limited and oversized payloads are dropped before decrypt
 - Use environment variables for keys, never commit to config files
 - Consider using `allowlist` mode in production
 

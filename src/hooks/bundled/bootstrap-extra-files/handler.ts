@@ -1,3 +1,5 @@
+// Bootstrap extra files hook injects configured extra files into startup context.
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   filterBootstrapFilesForSession,
   loadExtraBootstrapFilesWithDiagnostics,
@@ -9,25 +11,20 @@ import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
 const HOOK_KEY = "bootstrap-extra-files";
 const log = createSubsystemLogger("bootstrap-extra-files");
 
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
-}
-
+/** Resolve legacy and current config keys for extra bootstrap file patterns. */
 function resolveExtraBootstrapPatterns(hookConfig: Record<string, unknown>): string[] {
-  const fromPaths = normalizeStringArray(hookConfig.paths);
+  const fromPaths = normalizeTrimmedStringList(hookConfig.paths);
   if (fromPaths.length > 0) {
     return fromPaths;
   }
-  const fromPatterns = normalizeStringArray(hookConfig.patterns);
+  const fromPatterns = normalizeTrimmedStringList(hookConfig.patterns);
   if (fromPatterns.length > 0) {
     return fromPatterns;
   }
-  return normalizeStringArray(hookConfig.files);
+  return normalizeTrimmedStringList(hookConfig.files);
 }
 
+/** Agent-bootstrap hook that appends configured extra files to the session bootstrap set. */
 const bootstrapExtraFilesHook: HookHandler = async (event) => {
   if (!isAgentBootstrapEvent(event)) {
     return;
@@ -61,6 +58,8 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     if (extras.length === 0) {
       return;
     }
+    // Re-run session filtering after append so extra files obey the same
+    // per-session include rules as the original bootstrap files.
     context.bootstrapFiles = filterBootstrapFilesForSession(
       [...context.bootstrapFiles, ...extras],
       context.sessionKey,

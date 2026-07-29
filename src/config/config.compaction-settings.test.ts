@@ -1,131 +1,82 @@
+// Verifies compaction settings config parsing and defaults.
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
-import { withTempHomeConfig } from "./test-helpers.js";
+import { applyCompactionDefaults } from "./defaults.js";
+import type { OpenClawConfig } from "./types.js";
+
+function materializeCompactionConfig(
+  compaction: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["compaction"],
+) {
+  const cfg = applyCompactionDefaults({
+    agents: {
+      defaults: {
+        compaction,
+      },
+    },
+  });
+  return cfg.agents?.defaults?.compaction;
+}
 
 describe("config compaction settings", () => {
-  it("preserves memory flush config values", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              reserveTokensFloor: 12_345,
-              identifierPolicy: "custom",
-              identifierInstructions: "Keep ticket IDs unchanged.",
-              qualityGuard: {
-                enabled: true,
-                maxRetries: 2,
-              },
-              memoryFlush: {
-                enabled: false,
-                softThresholdTokens: 1234,
-                prompt: "Write notes.",
-                systemPrompt: "Flush memory now.",
-              },
-            },
-          },
-        },
+  it("preserves memory flush config values", () => {
+    const compaction = materializeCompactionConfig({
+      mode: "safeguard",
+      identifierPolicy: "strict",
+      qualityGuard: {
+        enabled: true,
+        maxRetries: 2,
       },
-      async () => {
-        const cfg = loadConfig();
+      midTurnPrecheck: {
+        enabled: true,
+      },
+      memoryFlush: {
+        enabled: false,
+        model: "ollama/qwen3:8b",
+        softThresholdTokens: 1234,
+      },
+      maxActiveTranscriptBytes: "20mb",
+    });
 
-        expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(12_345);
-        expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
-        expect(cfg.agents?.defaults?.compaction?.reserveTokens).toBeUndefined();
-        expect(cfg.agents?.defaults?.compaction?.keepRecentTokens).toBeUndefined();
-        expect(cfg.agents?.defaults?.compaction?.identifierPolicy).toBe("custom");
-        expect(cfg.agents?.defaults?.compaction?.identifierInstructions).toBe(
-          "Keep ticket IDs unchanged.",
-        );
-        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.enabled).toBe(true);
-        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.maxRetries).toBe(2);
-        expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(false);
-        expect(cfg.agents?.defaults?.compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
-        expect(cfg.agents?.defaults?.compaction?.memoryFlush?.prompt).toBe("Write notes.");
-        expect(cfg.agents?.defaults?.compaction?.memoryFlush?.systemPrompt).toBe(
-          "Flush memory now.",
-        );
-      },
-    );
+    expect(compaction?.mode).toBe("safeguard");
+    expect(compaction?.keepRecentTokens).toBeUndefined();
+    expect(compaction?.identifierPolicy).toBe("strict");
+    expect(compaction?.qualityGuard?.enabled).toBe(true);
+    expect(compaction?.qualityGuard?.maxRetries).toBe(2);
+    expect(compaction?.midTurnPrecheck?.enabled).toBe(true);
+    expect(compaction?.memoryFlush?.enabled).toBe(false);
+    expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
+    expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
+    expect(compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 
-  it("preserves pi compaction override values", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              reserveTokens: 15_000,
-              keepRecentTokens: 12_000,
-            },
-          },
-        },
-      },
-      async () => {
-        const cfg = loadConfig();
-        expect(cfg.agents?.defaults?.compaction?.reserveTokens).toBe(15_000);
-        expect(cfg.agents?.defaults?.compaction?.keepRecentTokens).toBe(12_000);
-      },
-    );
+  it("defaults compaction mode to safeguard", () => {
+    const compaction = materializeCompactionConfig({});
+
+    expect(compaction?.mode).toBe("safeguard");
   });
 
-  it("defaults compaction mode to safeguard", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              reserveTokensFloor: 9000,
-            },
-          },
-        },
-      },
-      async () => {
-        const cfg = loadConfig();
+  it("preserves recent turn safeguard values during materialization", () => {
+    const compaction = materializeCompactionConfig({
+      mode: "safeguard",
+      recentTurnsPreserve: 4,
+    });
 
-        expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
-        expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(9000);
-      },
-    );
+    expect(compaction?.recentTurnsPreserve).toBe(4);
   });
 
-  it("preserves recent turn safeguard values through loadConfig()", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              recentTurnsPreserve: 4,
-            },
-          },
-        },
+  it("preserves oversized quality guard retry values for runtime clamping", () => {
+    const compaction = materializeCompactionConfig({
+      qualityGuard: {
+        maxRetries: 99,
       },
-      async () => {
-        const cfg = loadConfig();
-        expect(cfg.agents?.defaults?.compaction?.recentTurnsPreserve).toBe(4);
-      },
-    );
+    });
+
+    expect(compaction?.qualityGuard?.maxRetries).toBe(99);
   });
 
-  it("preserves oversized quality guard retry values for runtime clamping", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              qualityGuard: {
-                maxRetries: 99,
-              },
-            },
-          },
-        },
-      },
-      async () => {
-        const cfg = loadConfig();
-        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.maxRetries).toBe(99);
-      },
-    );
-  });
+  it.each(["off", "low", "adaptive", "max", "ultra"] as const)(
+    "preserves compaction thinkingLevel=%s during materialization",
+    (thinkingLevel) => {
+      expect(materializeCompactionConfig({ thinkingLevel })?.thinkingLevel).toBe(thinkingLevel);
+    },
+  );
 });

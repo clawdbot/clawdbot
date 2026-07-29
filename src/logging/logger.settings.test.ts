@@ -1,16 +1,20 @@
+// Logger settings tests cover normalization of logger configuration values.
 import { describe, expect, it } from "vitest";
-import { __test__ } from "./logger.js";
+import { testApi } from "./logger.js";
 
-describe("shouldSkipLoadConfigFallback", () => {
-  it("matches config validate invocations", () => {
-    expect(__test__.shouldSkipLoadConfigFallback(["node", "openclaw", "config", "validate"])).toBe(
-      true,
-    );
+describe("shouldSkipMutatingLoggingConfigRead", () => {
+  it("matches config schema and validate invocations", () => {
+    expect(
+      testApi.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "schema"]),
+    ).toBe(true);
+    expect(
+      testApi.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "validate"]),
+    ).toBe(true);
   });
 
   it("handles root flags before config validate", () => {
     expect(
-      __test__.shouldSkipLoadConfigFallback([
+      testApi.shouldSkipMutatingLoggingConfigRead([
         "node",
         "openclaw",
         "--profile",
@@ -25,8 +29,8 @@ describe("shouldSkipLoadConfigFallback", () => {
 
   it("does not match other commands", () => {
     expect(
-      __test__.shouldSkipLoadConfigFallback(["node", "openclaw", "config", "get", "foo"]),
+      testApi.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "get", "foo"]),
     ).toBe(false);
-    expect(__test__.shouldSkipLoadConfigFallback(["node", "openclaw", "status"])).toBe(false);
+    expect(testApi.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "status"])).toBe(false);
   });
 });

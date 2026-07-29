@@ -1,11 +1,23 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
-import { setAbortMemory } from "./abort.js";
+// Builds message body text from session state and reply metadata.
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { setAbortMemory } from "./abort-primitives.js";
+import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 
+const sessionAccessorRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-accessor.js"),
+);
+
+function loadSessionAccessorRuntime() {
+  return sessionAccessorRuntimeLoader.load();
+}
+
+/** Applies one-shot session hints to the agent-visible body and clears consumed flags. */
 export async function applySessionHints(params: {
   baseBody: string;
   abortedLastRun: boolean;
   sessionEntry?: SessionEntry;
+  sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
@@ -17,23 +29,48 @@ export async function applySessionHints(params: {
     : "";
   if (abortedHint) {
     prefixedBodyBase = `${abortedHint}\n\n${prefixedBodyBase}`;
-    if (params.sessionEntry && params.sessionStore && params.sessionKey) {
-      params.sessionEntry.abortedLastRun = false;
-      params.sessionEntry.updatedAt = Date.now();
-      params.sessionStore[params.sessionKey] = params.sessionEntry;
+    // The abort hint is one-shot; clear durable state once it is added.
+    const sessionEntry = params.sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
+    if (sessionEntry && params.sessionEntryHandle && params.sessionKey) {
+      const updatedAt = Date.now();
+      params.sessionEntryHandle.patchCurrent({
+        abortedLastRun: false,
+        updatedAt,
+      });
       if (params.storePath) {
         const sessionKey = params.sessionKey;
-        await updateSessionStore(params.storePath, (store) => {
-          const entry = store[sessionKey] ?? params.sessionEntry;
-          if (!entry) {
-            return;
-          }
-          store[sessionKey] = {
-            ...entry,
+        const { patchSessionEntry } = await loadSessionAccessorRuntime();
+        await patchSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey,
+          },
+          () => ({
             abortedLastRun: false,
-            updatedAt: Date.now(),
-          };
-        });
+            updatedAt,
+          }),
+          { fallbackEntry: params.sessionEntryHandle.getCurrent() ?? sessionEntry },
+        );
+      }
+    } else if (sessionEntry && params.sessionStore && params.sessionKey) {
+      const updatedAt = Date.now();
+      sessionEntry.abortedLastRun = false;
+      sessionEntry.updatedAt = updatedAt;
+      params.sessionStore[params.sessionKey] = sessionEntry;
+      if (params.storePath) {
+        const sessionKey = params.sessionKey;
+        const { patchSessionEntry } = await loadSessionAccessorRuntime();
+        await patchSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey,
+          },
+          () => ({
+            abortedLastRun: false,
+            updatedAt,
+          }),
+          { fallbackEntry: sessionEntry },
+        );
       }
     } else if (params.abortKey) {
       setAbortMemory(params.abortKey, false);

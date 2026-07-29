@@ -1,18 +1,21 @@
-import type { OpenClawConfig } from "../config/config.js";
+/** Policy gates for ACP availability, dispatch, and allowed agent ids. */
+import { AcpRuntimeError } from "@openclaw/acp-core/runtime/errors";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { AcpRuntimeError } from "./runtime/errors.js";
 
 const ACP_DISABLED_MESSAGE = "ACP is disabled by policy (`acp.enabled=false`).";
 const ACP_DISPATCH_DISABLED_MESSAGE =
   "ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`).";
 
-export type AcpDispatchPolicyState = "enabled" | "acp_disabled" | "dispatch_disabled";
+type AcpDispatchPolicyState = "enabled" | "acp_disabled" | "dispatch_disabled";
 
+/** Returns whether ACP is globally enabled by config policy. */
 export function isAcpEnabledByPolicy(cfg: OpenClawConfig): boolean {
   return cfg.acp?.enabled !== false;
 }
 
-export function resolveAcpDispatchPolicyState(cfg: OpenClawConfig): AcpDispatchPolicyState {
+/** Resolves the effective dispatch policy state for inbound ACP routing. */
+function resolveAcpDispatchPolicyState(cfg: OpenClawConfig): AcpDispatchPolicyState {
   if (!isAcpEnabledByPolicy(cfg)) {
     return "acp_disabled";
   }
@@ -23,10 +26,7 @@ export function resolveAcpDispatchPolicyState(cfg: OpenClawConfig): AcpDispatchP
   return "enabled";
 }
 
-export function isAcpDispatchEnabledByPolicy(cfg: OpenClawConfig): boolean {
-  return resolveAcpDispatchPolicyState(cfg) === "enabled";
-}
-
+/** Returns the operator-facing dispatch block message, if any. */
 export function resolveAcpDispatchPolicyMessage(cfg: OpenClawConfig): string | null {
   const state = resolveAcpDispatchPolicyState(cfg);
   if (state === "acp_disabled") {
@@ -38,6 +38,7 @@ export function resolveAcpDispatchPolicyMessage(cfg: OpenClawConfig): string | n
   return null;
 }
 
+/** Returns the runtime error for dispatch-blocked ACP routing, if blocked. */
 export function resolveAcpDispatchPolicyError(cfg: OpenClawConfig): AcpRuntimeError | null {
   const message = resolveAcpDispatchPolicyMessage(cfg);
   if (!message) {
@@ -46,7 +47,16 @@ export function resolveAcpDispatchPolicyError(cfg: OpenClawConfig): AcpRuntimeEr
   return new AcpRuntimeError("ACP_DISPATCH_DISABLED", message);
 }
 
-export function isAcpAgentAllowedByPolicy(cfg: OpenClawConfig, agentId: string): boolean {
+/** Returns the runtime error for explicit ACP turns when ACP itself is disabled. */
+export function resolveAcpExplicitTurnPolicyError(cfg: OpenClawConfig): AcpRuntimeError | null {
+  if (isAcpEnabledByPolicy(cfg)) {
+    return null;
+  }
+  return new AcpRuntimeError("ACP_DISPATCH_DISABLED", ACP_DISABLED_MESSAGE);
+}
+
+/** Returns whether an agent id passes the optional ACP allowed-agent list. */
+function isAcpAgentAllowedByPolicy(cfg: OpenClawConfig, agentId: string): boolean {
   const allowed = (cfg.acp?.allowedAgents ?? [])
     .map((entry) => normalizeAgentId(entry))
     .filter(Boolean);
@@ -56,6 +66,7 @@ export function isAcpAgentAllowedByPolicy(cfg: OpenClawConfig, agentId: string):
   return allowed.includes(normalizeAgentId(agentId));
 }
 
+/** Returns the runtime error for agent-policy rejection, if rejected. */
 export function resolveAcpAgentPolicyError(
   cfg: OpenClawConfig,
   agentId: string,

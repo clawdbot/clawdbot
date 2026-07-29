@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler harness behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +20,8 @@ export async function createBaseDiscordMessageContext(
     historyLimit: 0,
     mediaMaxBytes: 1024,
     textLimit: 4000,
-    sender: { label: "user" },
+    sender: { id: "U1", label: "user", name: "alice", isPluralKit: false },
+    memberRoleIds: [],
     replyToMode: "off",
     ackReactionScope: "group-mentions",
     groupPolicy: "open",
@@ -46,6 +48,7 @@ export async function createBaseDiscordMessageContext(
     commandAuthorized: true,
     baseText: "hi",
     messageText: "hi",
+    preparedMedia: [],
     wasMentioned: false,
     shouldRequireMention: true,
     canDetectMention: true,

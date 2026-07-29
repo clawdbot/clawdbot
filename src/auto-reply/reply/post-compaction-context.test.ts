@@ -1,14 +1,24 @@
+// Tests post-compaction context loading and prompt attachment behavior.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
-  const tmpDir = path.join("/tmp", "test-post-compaction-" + Date.now());
+  let tmpDir = "";
+  const defaultPostCompactionCfg = {
+    agents: {
+      defaults: {
+        compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+      },
+    },
+  } satisfies OpenClawConfig;
 
   beforeEach(() => {
-    fs.mkdirSync(tmpDir, { recursive: true });
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "test-post-compaction-"));
   });
 
   afterEach(() => {
@@ -28,13 +38,36 @@ describe("readPostCompactionContext", () => {
         },
       },
     } as OpenClawConfig;
-    const result = await readPostCompactionContext(tmpDir, cfg);
-    expect(result).not.toBeNull();
+    const result = await readPostCompactionContext(tmpDir, { cfg });
     expect(result).toContain("Do startup things");
     expect(result).toContain("Be safe");
     if (expectDefaultProse) {
       expect(result).toContain("Run your Session Startup sequence");
     }
+  }
+
+  async function readDefaultPostCompactionContext(options?: {
+    cfg?: OpenClawConfig;
+    agentId?: string;
+    nowMs?: number;
+  }) {
+    const cfg = {
+      ...defaultPostCompactionCfg,
+      ...options?.cfg,
+      agents: {
+        ...defaultPostCompactionCfg.agents,
+        ...options?.cfg?.agents,
+        defaults: {
+          ...defaultPostCompactionCfg.agents.defaults,
+          ...options?.cfg?.agents?.defaults,
+          compaction: {
+            ...defaultPostCompactionCfg.agents.defaults.compaction,
+            ...options?.cfg?.agents?.defaults?.compaction,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    return readPostCompactionContext(tmpDir, { ...options, cfg });
   }
 
   it("returns null when no AGENTS.md exists", async () => {
@@ -44,8 +77,25 @@ describe("readPostCompactionContext", () => {
 
   it("returns null when AGENTS.md has no relevant sections", async () => {
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "# My Agent\n\nSome content.\n");
-    const result = await readPostCompactionContext(tmpDir);
+    const result = await readDefaultPostCompactionContext();
     expect(result).toBeNull();
+  });
+
+  it("returns null when AGENTS.md exceeds the byte read limit", async () => {
+    // An unbounded read would extract the section header at the top of the file;
+    // the bound rejects the whole file instead of allocating it all.
+    const oversized = `## Session Startup\n\n` + "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), oversized);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toBeNull();
+  });
+
+  it("extracts sections from an AGENTS.md just under the byte read limit", async () => {
+    const section = `## Session Startup\n\nDo startup things.\n`;
+    const padding = "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - section.length);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), section + padding);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toContain("Do startup things");
   });
 
   it("extracts Session Startup section", async () => {
@@ -62,8 +112,7 @@ Read these files:
 Not relevant.
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readPostCompactionContext(tmpDir);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext();
     expect(result).toContain("Session Startup");
     expect(result).toContain("WORKFLOW_AUTO.md");
     expect(result).toContain("Post-compaction context refresh");
@@ -83,8 +132,7 @@ Never do Y.
 Stuff.
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readPostCompactionContext(tmpDir);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext();
     expect(result).toContain("Red Lines");
     expect(result).toContain("Never do X");
   });
@@ -105,8 +153,7 @@ Never break things.
 Ignore this.
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readPostCompactionContext(tmpDir);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext();
     expect(result).toContain("Session Startup");
     expect(result).toContain("Red Lines");
     expect(result).not.toContain("Other");
@@ -115,9 +162,52 @@ Ignore this.
   it("truncates when content exceeds limit", async () => {
     const longContent = "## Session Startup\n\n" + "A".repeat(4000) + "\n\n## Other\n\nStuff.";
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), longContent);
-    const result = await readPostCompactionContext(tmpDir);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext();
     expect(result).toContain("[truncated]");
+    expect(result?.length).toBeLessThan(2600);
+  });
+
+  it("keeps truncated post-compaction context UTF-16 safe", async () => {
+    const prefix = "A".repeat(159);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), `## Session Startup\n\n${prefix}😀tail`);
+    const cfg = {
+      agents: {
+        defaults: {
+          contextLimits: { postCompactionMaxChars: 180 },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await readDefaultPostCompactionContext({ cfg });
+
+    expect(result).toContain(`## Session Startup\n\n${prefix}\n...[truncated]...`);
+  });
+
+  it("honors per-agent post-compaction context limit overrides", async () => {
+    const longContent =
+      "## Session Startup\n\n" + "B".repeat(4000) + "\n\n## Red Lines\n\nGuardrails.";
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), longContent);
+    const cfg = {
+      agents: {
+        defaults: {
+          contextLimits: {
+            postCompactionMaxChars: 1800,
+          },
+        },
+        list: [
+          {
+            id: "writer",
+            contextLimits: {
+              postCompactionMaxChars: 300,
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = await readDefaultPostCompactionContext({ cfg, agentId: "writer" });
+    expect(result).toContain("[truncated]");
+    expect(result?.length).toBeLessThan(1_200);
   });
 
   it("matches section names case-insensitively", async () => {
@@ -130,8 +220,7 @@ Read WORKFLOW_AUTO.md
 ## Other
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readPostCompactionContext(tmpDir);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext();
     expect(result).toContain("WORKFLOW_AUTO.md");
   });
 
@@ -145,8 +234,7 @@ Read these files.
 ### Other
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readPostCompactionContext(tmpDir);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext();
     expect(result).toContain("Read these files");
   });
 
@@ -165,8 +253,7 @@ Real red lines here.
 ## Other
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readPostCompactionContext(tmpDir);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext();
     expect(result).toContain("Real red lines here");
     expect(result).not.toContain("inside a code block");
   });
@@ -183,8 +270,7 @@ Never do Y.
 ## Other Section
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readPostCompactionContext(tmpDir);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext();
     expect(result).toContain("Rule 1");
     expect(result).toContain("Rule 2");
     expect(result).not.toContain("Other Section");
@@ -197,7 +283,7 @@ Never do Y.
       fs.writeFileSync(outside, "secret");
       fs.symlinkSync(outside, path.join(tmpDir, "AGENTS.md"));
 
-      const result = await readPostCompactionContext(tmpDir);
+      const result = await readDefaultPostCompactionContext();
       expect(result).toBeNull();
     },
   );
@@ -209,7 +295,7 @@ Never do Y.
       fs.writeFileSync(outside, "secret");
       fs.linkSync(outside, path.join(tmpDir, "AGENTS.md"));
 
-      const result = await readPostCompactionContext(tmpDir);
+      const result = await readDefaultPostCompactionContext();
       expect(result).toBeNull();
     },
   );
@@ -229,13 +315,11 @@ Never modify memory/YYYY-MM-DD.md destructively.
     } as OpenClawConfig;
     // 2026-03-03 14:00 UTC = 2026-03-03 09:00 EST
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
-    const result = await readPostCompactionContext(tmpDir, cfg, nowMs);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext({ cfg, nowMs });
     expect(result).toContain("memory/2026-03-03.md");
     expect(result).not.toContain("memory/YYYY-MM-DD.md");
-    expect(result).toContain(
-      "Current time: Tuesday, March 3rd, 2026 — 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
-    );
+    expect(result).toContain("Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York)");
+    expect(result).toContain("Reference UTC: 2026-03-03 14:00 UTC");
   });
 
   it("appends current time line even when no YYYY-MM-DD placeholder is present", async () => {
@@ -245,8 +329,7 @@ Read WORKFLOW.md on startup.
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
-    const result = await readPostCompactionContext(tmpDir, undefined, nowMs);
-    expect(result).not.toBeNull();
+    const result = await readDefaultPostCompactionContext({ nowMs });
     expect(result).toContain("Current time:");
   });
 
@@ -254,10 +337,17 @@ Read WORKFLOW.md on startup.
   // postCompactionSections config
   // -------------------------------------------------------------------------
   describe("agents.defaults.compaction.postCompactionSections", () => {
-    it("uses default sections (Session Startup + Red Lines) when config is not set", async () => {
+    it("returns null when postCompactionSections is not configured", async () => {
       const content = `## Session Startup\n\nDo startup.\n\n## Red Lines\n\nDo not break.\n\n## Other\n\nIgnore.\n`;
       fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
       const result = await readPostCompactionContext(tmpDir);
+      expect(result).toBeNull();
+    });
+
+    it("uses default sections when explicitly configured", async () => {
+      const content = `## Session Startup\n\nDo startup.\n\n## Red Lines\n\nDo not break.\n\n## Other\n\nIgnore.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      const result = await readDefaultPostCompactionContext();
       expect(result).toContain("Session Startup");
       expect(result).toContain("Red Lines");
       expect(result).not.toContain("Other");
@@ -273,8 +363,7 @@ Read WORKFLOW.md on startup.
           },
         },
       } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, cfg);
-      expect(result).not.toBeNull();
+      const result = await readPostCompactionContext(tmpDir, { cfg });
       expect(result).toContain("Critical Rules");
       expect(result).toContain("My custom rules");
       // Default sections must not be included when overridden
@@ -292,8 +381,7 @@ Read WORKFLOW.md on startup.
           },
         },
       } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, cfg);
-      expect(result).not.toBeNull();
+      const result = await readPostCompactionContext(tmpDir, { cfg });
       expect(result).toContain("Onboard things");
       expect(result).toContain("Safe things");
       expect(result).not.toContain("Ignore");
@@ -309,8 +397,7 @@ Read WORKFLOW.md on startup.
           },
         },
       } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, cfg);
-      // Empty array = opt-out: no post-compaction context injection
+      const result = await readPostCompactionContext(tmpDir, { cfg });
       expect(result).toBeNull();
     });
 
@@ -324,7 +411,7 @@ Read WORKFLOW.md on startup.
           },
         },
       } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, cfg);
+      const result = await readPostCompactionContext(tmpDir, { cfg });
       expect(result).toBeNull();
     });
 
@@ -341,8 +428,7 @@ Read WORKFLOW.md on startup.
           },
         },
       } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, cfg);
-      expect(result).not.toBeNull();
+      const result = await readPostCompactionContext(tmpDir, { cfg });
       // Must not reference the hardcoded default section name
       expect(result).not.toContain("Session Startup");
       // Must reference the actual configured section names
@@ -352,15 +438,14 @@ Read WORKFLOW.md on startup.
     it("uses default 'Session Startup' prose when default sections are active", async () => {
       const content = `## Session Startup\n\nDo startup.\n`;
       fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-      const result = await readPostCompactionContext(tmpDir);
-      expect(result).not.toBeNull();
+      const result = await readDefaultPostCompactionContext();
       expect(result).toContain("Run your Session Startup sequence");
     });
 
     it("falls back to legacy sections when defaults are explicitly configured", async () => {
       // Older AGENTS.md templates use "Every Session" / "Safety" instead of
-      // "Session Startup" / "Red Lines". Explicitly setting the defaults should
-      // still trigger the legacy fallback — same behavior as leaving the field unset.
+      // "Session Startup" / "Red Lines". Explicitly setting the defaults still
+      // triggers the legacy fallback.
       await expectLegacySectionFallback(["Session Startup", "Red Lines"]);
     });
 
@@ -378,8 +463,7 @@ Read WORKFLOW.md on startup.
           },
         },
       } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, cfg);
-      expect(result).not.toBeNull();
+      const result = await readPostCompactionContext(tmpDir, { cfg });
       expect(result).toContain("Init things");
     });
   });

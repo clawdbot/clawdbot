@@ -1,3 +1,4 @@
+/** Commands for managing default image model fallbacks. */
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   addFallbackCommand,
@@ -6,6 +7,7 @@ import {
   removeFallbackCommand,
 } from "./fallbacks-shared.js";
 
+/** Lists configured image model fallbacks. */
 export async function modelsImageFallbacksListCommand(
   opts: { json?: boolean; plain?: boolean },
   runtime: RuntimeEnv,
@@ -13,6 +15,7 @@ export async function modelsImageFallbacksListCommand(
   return await listFallbacksCommand({ label: "Image fallbacks", key: "imageModel" }, opts, runtime);
 }
 
+/** Adds an image model fallback. */
 export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: RuntimeEnv) {
   return await addFallbackCommand(
     { label: "Image fallbacks", key: "imageModel", logPrefix: "Image fallbacks" },
@@ -21,6 +24,7 @@ export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: 
   );
 }
 
+/** Removes an image model fallback. */
 export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtime: RuntimeEnv) {
   return await removeFallbackCommand(
     {
@@ -34,6 +38,7 @@ export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtim
   );
 }
 
+/** Clears all image model fallbacks. */
 export async function modelsImageFallbacksClearCommand(runtime: RuntimeEnv) {
   return await clearFallbacksCommand(
     { key: "imageModel", clearedMessage: "Image fallback list cleared." },

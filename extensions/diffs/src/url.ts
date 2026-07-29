@@ -1,6 +1,8 @@
+// Diffs plugin module implements url behavior.
 import type { OpenClawConfig } from "../api.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
+type ViewerBaseUrlFieldName = "baseUrl" | "viewerBaseUrl";
 
 export function buildViewerUrl(params: {
   config: OpenClawConfig;
@@ -20,18 +22,21 @@ export function buildViewerUrl(params: {
   return parsedBase.toString();
 }
 
-export function normalizeViewerBaseUrl(raw: string): string {
+export function normalizeViewerBaseUrl(
+  raw: string,
+  fieldName: ViewerBaseUrlFieldName = "baseUrl",
+): string {
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
-    throw new Error(`Invalid baseUrl: ${raw}`);
+    throw new Error(`Invalid ${fieldName}: ${raw}`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`baseUrl must use http or https: ${raw}`);
+    throw new Error(`${fieldName} must use http or https: ${raw}`);
   }
   if (parsed.search || parsed.hash) {
-    throw new Error(`baseUrl must not include query/hash: ${raw}`);
+    throw new Error(`${fieldName} must not include query/hash: ${raw}`);
   }
   parsed.search = "";
   parsed.hash = "";

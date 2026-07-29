@@ -1,7 +1,10 @@
+// Feishu plugin module implements async behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+
 const RACE_TIMEOUT = Symbol("race-timeout");
 const RACE_ABORT = Symbol("race-abort");
 
-export type RaceWithTimeoutAndAbortResult<T> =
+type RaceWithTimeoutAndAbortResult<T> =
   | { status: "resolved"; value: T }
   | { status: "timeout" }
   | { status: "aborted" };
@@ -26,9 +29,10 @@ export async function raceWithTimeoutAndAbort<T>(
   const contenders: Array<Promise<T | typeof RACE_TIMEOUT | typeof RACE_ABORT>> = [promise];
 
   if (options.timeoutMs !== undefined) {
+    const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, 1);
     contenders.push(
       new Promise((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(RACE_TIMEOUT), options.timeoutMs);
+        timeoutHandle = setTimeout(() => resolve(RACE_TIMEOUT), timeoutMs);
       }),
     );
   }
@@ -59,4 +63,45 @@ export async function raceWithTimeoutAndAbort<T>(
       options.abortSignal?.removeEventListener("abort", abortHandler);
     }
   }
+}
+
+export function waitForAbortableDelay(
+  delayMs: number,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
+  if (abortSignal?.aborted) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+
+    const finish = (value: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (handleAbort) {
+        abortSignal?.removeEventListener("abort", handleAbort);
+      }
+      resolve(value);
+    };
+
+    const handleAbort: (() => void) | undefined = () => {
+      finish(false);
+    };
+
+    abortSignal?.addEventListener("abort", handleAbort, { once: true });
+    if (abortSignal?.aborted) {
+      finish(false);
+      return;
+    }
+
+    timer = setTimeout(() => finish(true), resolveTimerTimeoutMs(delayMs, 1));
+    timer.unref?.();
+  });
 }

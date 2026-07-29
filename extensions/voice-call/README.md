@@ -10,11 +10,9 @@ Providers:
 - **Mock** (dev/no network)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
-Plugin system: `https://docs.openclaw.ai/plugin`
+Plugin system: `https://docs.openclaw.ai/tools/plugin`
 
-## Install (local dev)
-
-### Option A: install via OpenClaw (recommended)
+## Install
 
 ```bash
 openclaw plugins install @openclaw/voice-call
@@ -22,12 +20,13 @@ openclaw plugins install @openclaw/voice-call
 
 Restart the Gateway afterwards.
 
-### Option B: copy into your global extensions folder (dev)
+## Local dev install
 
 ```bash
-mkdir -p ~/.openclaw/extensions
-cp -R extensions/voice-call ~/.openclaw/extensions/voice-call
-cd ~/.openclaw/extensions/voice-call && pnpm install
+PLUGIN_HOME=~/.openclaw/extensions
+mkdir -p "$PLUGIN_HOME"
+cp -R <local-plugin-checkout> "$PLUGIN_HOME/voice-call"
+cd "$PLUGIN_HOME/voice-call" && pnpm install
 ```
 
 ## Config
@@ -39,6 +38,7 @@ Put under `plugins.entries.voice-call.config`:
   provider: "twilio", // or "telnyx" | "plivo" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
+  sessionScope: "per-phone", // or "per-call"
 
   twilio: {
     accountSid: "ACxxxxxxxx",
@@ -73,9 +73,20 @@ Put under `plugins.entries.voice-call.config`:
     defaultMode: "notify", // or "conversation"
   },
 
+  // Optional response agent workspace. Defaults to "main".
+  agentId: "main",
+
   streaming: {
     enabled: true,
+    // optional; if omitted, Voice Call picks the first registered
+    // realtime-transcription provider by autoSelectOrder
+    provider: "<realtime-transcription-provider-id>",
     streamPath: "/voice/stream",
+    providers: {
+      "<realtime-transcription-provider-id>": {
+        // provider-owned options
+      },
+    },
     preStartTimeoutMs: 5000,
     maxPendingConnections: 32,
     maxPendingConnectionsPerIp: 4,
@@ -87,9 +98,15 @@ Put under `plugins.entries.voice-call.config`:
 Notes:
 
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
+- Twilio defaults to US1. For a non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials created in that Region; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
+- Runtime accepts canonical config only. If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
+- `responseModel` is optional. When unset, voice responses use the runtime default model.
+- `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh.
+- `realtime.consultThinkingLevel` is optional. When set, it overrides the thinking level used by the model behind realtime `openclaw_agent_consult` calls.
+- `realtime.consultFastMode` is optional. When set, it toggles fast mode for realtime `openclaw_agent_consult` calls.
 
 ## Stale call reaper
 
@@ -98,7 +115,7 @@ See the plugin docs for recommended ranges and production examples:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration for
+Voice Call uses the core `tts` configuration for
 streaming speech on calls. Override examples and provider caveats live here:
 `https://docs.openclaw.ai/plugins/voice-call#tts-for-calls`
 
@@ -109,6 +126,7 @@ openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
 openclaw voicecall end --call-id <id>
+openclaw voicecall status --json
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
 openclaw voicecall expose --mode funnel
@@ -144,4 +162,4 @@ Actions:
 - While a Twilio stream is active, playback does not fall back to TwiML `<Say>`; stream-TTS failures fail the playback request.
 - Outbound conversation calls suppress barge-in only while the initial greeting is actively speaking, then re-enable normal interruption.
 - Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.
-- Media streaming requires `ws` and OpenAI Realtime API key.
+- Realtime provider selection is generic. Configure `streaming.provider` / `realtime.provider` and put provider-owned options under `providers.<id>`.

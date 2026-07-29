@@ -1,3 +1,4 @@
+// Usage aggregate tests cover token, cost, and latency accumulation.
 import { describe, expect, it } from "vitest";
 import {
   buildUsageAggregateTail,
@@ -120,7 +121,7 @@ describe("shared/usage-aggregates", () => {
     });
 
     expect(tail.latency).toBeUndefined();
-    expect(tail.dailyLatency).toEqual([]);
+    expect(tail.dailyLatency).toStrictEqual([]);
   });
 
   it("normalizes zero-count daily latency entries to zero averages and mins", () => {

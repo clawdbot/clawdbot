@@ -5,7 +5,16 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import {
+  createMessageReceiptFromOutboundResults,
+  defineChannelMessageAdapter,
+  type ChannelMessageSendResult,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { resolveTwitchAccountContext } from "./config.js";
+import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { sendMessageTwitchInternal } from "./send.js";
 import type {
   ChannelOutboundAdapter,
@@ -25,8 +34,19 @@ export const twitchOutbound: ChannelOutboundAdapter = {
   /** Direct delivery mode - messages are sent immediately */
   deliveryMode: "direct",
 
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
+
   /** Twitch chat message limit is 500 characters */
-  textChunkLimit: 500,
+  textChunkLimit: TWITCH_CHAT_MESSAGE_LIMIT,
+
+  /** Strip internal assistant tool-trace scaffolding before delivery */
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
 
   /** Word-boundary chunker with markdown stripping */
   chunker: chunkTextForTwitch,
@@ -42,9 +62,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    */
   resolveTarget: ({ to, allowFrom, mode }) => {
     const trimmed = to?.trim() ?? "";
-    const allowListRaw = (allowFrom ?? [])
-      .map((entry: unknown) => String(entry).trim())
-      .filter(Boolean);
+    const allowListRaw = normalizeStringEntries(allowFrom ?? []);
     const hasWildcard = allowListRaw.includes("*");
     const allowList = allowListRaw
       .filter((entry: string) => entry !== "*")
@@ -113,13 +131,12 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       throw new Error("Outbound delivery aborted");
     }
 
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
-    const account = getAccountConfig(cfg, resolvedAccountId);
+    const resolvedAccountId = accountId ?? resolveTwitchAccountContext(cfg).accountId;
+    const { account, availableAccountIds } = resolveTwitchAccountContext(cfg, resolvedAccountId);
     if (!account) {
-      const availableIds = Object.keys(cfg.channels?.twitch?.accounts ?? {});
       throw new Error(
         `Twitch account not found: ${resolvedAccountId}. ` +
-          `Available accounts: ${availableIds.join(", ") || "none"}`,
+          `Available accounts: ${availableAccountIds.join(", ") || "none"}`,
       );
     }
 
@@ -144,6 +161,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     return {
       channel: "twitch",
       messageId: result.messageId,
+      receipt: result.receipt,
       timestamp: Date.now(),
     };
   },
@@ -185,3 +203,66 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     });
   },
 };
+
+function toTwitchMessageSendResult(
+  result: OutboundDeliveryResult,
+  kind: MessageReceiptPartKind,
+): ChannelMessageSendResult {
+  const receipt =
+    result.receipt ??
+    createMessageReceiptFromOutboundResults({
+      results: result.messageId ? [{ channel: "twitch", messageId: result.messageId }] : [],
+      kind,
+    });
+  return {
+    messageId: result.messageId || receipt.primaryPlatformMessageId,
+    receipt,
+  };
+}
+
+export const twitchMessageAdapter = defineChannelMessageAdapter({
+  id: "twitch",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
+  send: {
+    text: async (ctx) => {
+      if (!twitchOutbound.sendText) {
+        throw new Error("Twitch text sending is not available.");
+      }
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await twitchOutbound.sendText({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toTwitchMessageSendResult(progress, "text"));
+              },
+            }
+          : {}),
+      });
+      return toTwitchMessageSendResult(result, "text");
+    },
+    media: async (ctx) => {
+      if (!twitchOutbound.sendMedia) {
+        throw new Error("Twitch media sending is not available.");
+      }
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await twitchOutbound.sendMedia({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toTwitchMessageSendResult(progress, "media"));
+              },
+            }
+          : {}),
+      });
+      return toTwitchMessageSendResult(result, "media");
+    },
+  },
+});

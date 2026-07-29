@@ -1,7 +1,13 @@
 import Foundation
 
 public enum OpenClawScreenCommand: String, Codable, Sendable {
+    case snapshot = "screen.snapshot"
     case record = "screen.record"
+}
+
+public enum OpenClawScreenSnapshotFormat: String, Codable, Sendable {
+    case jpeg
+    case png
 }
 
 public struct OpenClawScreenRecordParams: Codable, Sendable, Equatable {

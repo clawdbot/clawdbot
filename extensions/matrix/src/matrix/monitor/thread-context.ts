@@ -1,9 +1,8 @@
-import {
-  formatMatrixMessageText,
-  resolveMatrixMessageAttachment,
-  resolveMatrixMessageBody,
-} from "../media-text.js";
+// Matrix plugin module implements thread context behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixClient } from "../sdk.js";
+import { summarizeMatrixMessageContextEvent } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const MAX_TRACKED_THREAD_STARTERS = 256;
@@ -11,45 +10,29 @@ const MAX_THREAD_STARTER_BODY_LENGTH = 500;
 
 type MatrixThreadContext = {
   threadStarterBody?: string;
+  senderId?: string;
+  senderLabel?: string;
+  summary?: string;
 };
-
-function trimMaybeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function truncateThreadStarterBody(value: string): string {
   if (value.length <= MAX_THREAD_STARTER_BODY_LENGTH) {
     return value;
   }
-  return `${value.slice(0, MAX_THREAD_STARTER_BODY_LENGTH - 3)}...`;
+  return `${sliceUtf16Safe(value, 0, MAX_THREAD_STARTER_BODY_LENGTH - 3)}...`;
 }
 
-export function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {
-  const content = event.content as { body?: unknown; filename?: unknown; msgtype?: unknown };
-  const body = formatMatrixMessageText({
-    body: resolveMatrixMessageBody({
-      body: trimMaybeString(content.body),
-      filename: trimMaybeString(content.filename),
-      msgtype: trimMaybeString(content.msgtype),
-    }),
-    attachment: resolveMatrixMessageAttachment({
-      body: trimMaybeString(content.body),
-      filename: trimMaybeString(content.filename),
-      msgtype: trimMaybeString(content.msgtype),
-    }),
-  });
+function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {
+  const body = summarizeMatrixMessageContextEvent(event);
   if (body) {
     return truncateThreadStarterBody(body);
   }
-  const msgtype = trimMaybeString(content.msgtype);
+  const content = event.content as { msgtype?: unknown };
+  const msgtype = normalizeOptionalString(content.msgtype);
   if (msgtype) {
     return `Matrix ${msgtype} message`;
   }
-  const eventType = trimMaybeString(event.type);
+  const eventType = normalizeOptionalString(event.type);
   return eventType ? `Matrix ${eventType} event` : undefined;
 }
 
@@ -94,7 +77,7 @@ export function createMatrixThreadContextResolver(params: {
 
     const rootEvent = await params.client
       .getEvent(input.roomId, input.threadRootId)
-      .catch((err) => {
+      .catch((err: unknown) => {
         params.logVerboseMessage(
           `matrix: failed resolving thread root room=${input.roomId} id=${input.threadRootId}: ${String(err)}`,
         );
@@ -107,17 +90,22 @@ export function createMatrixThreadContextResolver(params: {
     }
 
     const rawEvent = rootEvent as MatrixRawEvent;
-    const senderId = trimMaybeString(rawEvent.sender);
+    const senderId = normalizeOptionalString(rawEvent.sender);
     const senderName =
       senderId &&
       (await params.getMemberDisplayName(input.roomId, senderId).catch(() => undefined));
+    const senderLabel = senderName ?? senderId;
+    const summary = summarizeMatrixThreadStarterEvent(rawEvent);
     return remember(cacheKey, {
       threadStarterBody: formatMatrixThreadStarterBody({
         threadRootId: input.threadRootId,
         senderId,
         senderName,
-        summary: summarizeMatrixThreadStarterEvent(rawEvent),
+        summary,
       }),
+      senderId,
+      senderLabel,
+      summary,
     });
   };
 }

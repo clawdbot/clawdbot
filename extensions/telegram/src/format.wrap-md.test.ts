@@ -1,3 +1,4 @@
+// Telegram tests cover format.wrap md plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
@@ -5,6 +6,27 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "./format.js";
+
+type TelegramChunk = ReturnType<typeof markdownToTelegramChunks>[number];
+
+function expectHtmlChunkLengthsAtMost(chunks: TelegramChunk[], limit: number) {
+  for (const chunk of chunks) {
+    expect(chunk.html.length).toBeLessThanOrEqual(limit);
+  }
+}
+
+function expectNonBlankTextChunks(chunks: TelegramChunk[]) {
+  for (const chunk of chunks) {
+    expect(chunk.text.trim().length).toBeGreaterThan(0);
+  }
+}
+
+function expectHtmlChunksWrappedWith(chunks: TelegramChunk[], prefix: string, suffix: string) {
+  for (const chunk of chunks) {
+    expect(chunk.html.startsWith(prefix)).toBe(true);
+    expect(chunk.html.endsWith(suffix)).toBe(true);
+  }
+}
 
 describe("wrapFileReferencesInHtml", () => {
   it("wraps supported file references and paths", () => {
@@ -63,24 +85,10 @@ describe("wrapFileReferencesInHtml", () => {
     }
   });
 
-  it("de-linkifies auto-linkified anchors for plain files and paths", () => {
+  it("preserves explicit links, including file-style labels", () => {
     const cases = [
-      {
-        input: '<a href="http://README.md">README.md</a>',
-        expected: "<code>README.md</code>",
-      },
-      {
-        input: '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
-        expected: "<code>squad/friday/HEARTBEAT.md</code>",
-      },
-    ] as const;
-    for (const testCase of cases) {
-      expect(wrapFileReferencesInHtml(testCase.input)).toBe(testCase.expected);
-    }
-  });
-
-  it("preserves explicit links where label differs from href", () => {
-    const cases = [
+      '<a href="http://README.md">README.md</a>',
+      '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
       '<a href="http://README.md">click here</a>',
       '<a href="http://other.md">README.md</a>',
     ] as const;
@@ -140,8 +148,18 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
   });
 
   it("preserves explicit markdown links even when href looks like a file ref", () => {
-    const result = markdownToTelegramHtml("[docs](http://README.md)");
-    expect(result).toContain('<a href="http://README.md">docs</a>');
+    expect(markdownToTelegramHtml("[docs](http://README.md)")).toContain(
+      '<a href="http://README.md">docs</a>',
+    );
+    expect(markdownToTelegramHtml("[README.md](https://README.md)")).toContain(
+      '<a href="https://README.md">README.md</a>',
+    );
+  });
+
+  it("keeps plain and authored file-style links distinct in the same message", () => {
+    expect(markdownToTelegramHtml("README.md [README.md](https://README.md)")).toBe(
+      '<code>README.md</code> <a href="https://README.md">README.md</a>',
+    );
   });
 
   it("wraps file ref after real URL in same message", () => {
@@ -154,9 +172,21 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
 describe("markdownToTelegramChunks - file reference wrapping", () => {
   it("wraps file references in chunked output", () => {
     const chunks = markdownToTelegramChunks("Check README.md and backup.sh", 4096);
-    expect(chunks.length).toBeGreaterThan(0);
-    expect(chunks[0].html).toContain("<code>README.md</code>");
-    expect(chunks[0].html).toContain("<code>backup.sh</code>");
+    expect(chunks).toStrictEqual([
+      {
+        html: "Check <code>README.md</code> and <code>backup.sh</code>",
+        text: "Check README.md and backup.sh",
+      },
+    ]);
+  });
+
+  it("preserves authored file-style links in chunked output", () => {
+    expect(markdownToTelegramChunks("README.md [README.md](https://README.md)", 4096)).toEqual([
+      {
+        html: '<code>README.md</code> <a href="https://README.md">README.md</a>',
+        text: "README.md README.md",
+      },
+    ]);
   });
 
   it("keeps rendered html chunks within the provided limit", () => {
@@ -164,7 +194,7 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     const chunks = markdownToTelegramChunks(input, 512);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
-    expect(chunks.every((chunk) => chunk.html.length <= 512)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 512);
   });
 
   it("preserves whitespace when html-limit retry splitting runs", () => {
@@ -172,36 +202,78 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     const chunks = markdownToTelegramChunks(input, 5);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
-    expect(chunks.every((chunk) => chunk.html.length <= 5)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 5);
+  });
+
+  it("prefers word boundaries when escaped html shrinks the retry window", () => {
+    const input = "alpha <<";
+    const chunks = markdownToTelegramChunks(input, 8);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
+    expect(chunks[0]?.text).toBe("alpha ");
+    expectHtmlChunkLengthsAtMost(chunks, 8);
   });
 
   it("prefers word boundaries when html-limit retry splits formatted prose", () => {
     const input = "**Which of these**";
     const chunks = markdownToTelegramChunks(input, 16);
     expect(chunks.map((chunk) => chunk.text)).toEqual(["Which of ", "these"]);
-    expect(chunks.every((chunk) => chunk.html.length <= 16)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 16);
+  });
+
+  it("preserves formatting while splitting at word boundaries", () => {
+    const input = "**alpha <<**";
+    const chunks = markdownToTelegramChunks(input, 13);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("alpha <<");
+    expect(chunks[0]?.text).toBe("alpha ");
+    expectHtmlChunkLengthsAtMost(chunks, 13);
+    expectHtmlChunksWrappedWith(chunks, "<b>", "</b>");
+  });
+
+  it("does not rely on monotonic html length for sliced file refs", () => {
+    const input = "README.md<";
+    const chunks = markdownToTelegramChunks(input, 22);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
+    expect(chunks[0]?.text).toBe("README.md");
+    expect(chunks[0]?.html).toBe("<code>README.md</code>");
+    expectHtmlChunkLengthsAtMost(chunks, 22);
+  });
+
+  it("gracefully returns the original chunk when tag overhead exceeds the limit", () => {
+    const input = "**ab**";
+    const chunks = markdownToTelegramChunks(input, 6);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.text).toBe("ab");
+    expect(chunks[0]?.html).toBe("<b>ab</b>");
   });
 
   it("falls back to in-paren word boundaries when the parenthesis is unbalanced", () => {
     const input = "**foo (bar baz qux quux**";
     const chunks = markdownToTelegramChunks(input, 20);
-    expect(chunks.map((chunk) => chunk.text)).toEqual(["foo", "(bar baz qux ", "quux"]);
-    expect(chunks.every((chunk) => chunk.html.length <= 20)).toBe(true);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["foo ", "(bar baz qux ", "quux"]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("foo (bar baz qux quux");
+    expectHtmlChunkLengthsAtMost(chunks, 20);
+  });
+
+  it("falls back to hard splits when a single word exceeds the limit", () => {
+    const input = "supercalifragilistic";
+    const chunks = markdownToTelegramChunks(input, 8);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["supercal", "ifragili", "stic"]);
+    expectHtmlChunkLengthsAtMost(chunks, 8);
   });
 
   it("does not emit whitespace-only chunks during html-limit retry splitting", () => {
     const input = "**ab  <<**";
     const chunks = markdownToTelegramChunks(input, 11);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe("ab  <<");
-    expect(chunks.every((chunk) => chunk.text.trim().length > 0)).toBe(true);
-    expect(chunks.every((chunk) => chunk.html.length <= 11)).toBe(true);
+    expectNonBlankTextChunks(chunks);
+    expectHtmlChunkLengthsAtMost(chunks, 11);
   });
 
   it("preserves paragraph separators when retry chunking produces whitespace-only spans", () => {
     const input = "ab\n\n<<";
     const chunks = markdownToTelegramChunks(input, 6);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
-    expect(chunks.every((chunk) => chunk.html.length <= 6)).toBe(true);
+    expectHtmlChunkLengthsAtMost(chunks, 6);
   });
 });
 

@@ -1,10 +1,11 @@
+// Matrix plugin module implements thread bindings shared behavior.
 import type {
   BindingTargetKind,
   SessionBindingRecord,
-} from "openclaw/plugin-sdk/thread-bindings-runtime";
-import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/thread-bindings-runtime";
+} from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
-export type MatrixThreadBindingTargetKind = "subagent" | "acp";
+type MatrixThreadBindingTargetKind = "subagent" | "acp";
 
 export type MatrixThreadBindingRecord = {
   accountId: string;
@@ -40,11 +41,12 @@ export type MatrixThreadBindingManager = {
     targetSessionKey: string;
     maxAgeMs: number;
   }) => MatrixThreadBindingRecord[];
+  persist: () => Promise<void>;
   stop: () => void;
 };
 
-export type MatrixThreadBindingManagerCacheEntry = {
-  filePath: string;
+type MatrixThreadBindingManagerCacheEntry = {
+  storageKey: string;
   manager: MatrixThreadBindingManager;
 };
 
@@ -133,6 +135,10 @@ export function listBindingsForAccount(accountId: string): MatrixThreadBindingRe
   return [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()].filter(
     (entry) => entry.accountId === accountId,
   );
+}
+
+export function listAllBindings(): MatrixThreadBindingRecord[] {
+  return [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()];
 }
 
 export function getMatrixThreadBindingManagerEntry(

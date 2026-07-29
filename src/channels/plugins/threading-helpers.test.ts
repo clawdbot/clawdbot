@@ -1,3 +1,4 @@
+// Threading helper tests cover channel thread metadata and reply-thread helper behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -7,45 +8,55 @@ import {
 } from "./threading-helpers.js";
 
 describe("createStaticReplyToModeResolver", () => {
-  it("always returns the configured mode", () => {
-    expect(createStaticReplyToModeResolver("off")({ cfg: {} as OpenClawConfig })).toBe("off");
-    expect(createStaticReplyToModeResolver("all")({ cfg: {} as OpenClawConfig })).toBe("all");
+  it.each(["off", "all"] as const)("always returns the configured mode %s", (mode) => {
+    expect(createStaticReplyToModeResolver(mode)({ cfg: {} as OpenClawConfig })).toBe(mode);
   });
 });
 
 describe("createTopLevelChannelReplyToModeResolver", () => {
-  it("reads the top-level channel config", () => {
-    const resolver = createTopLevelChannelReplyToModeResolver("discord");
-    expect(
-      resolver({
-        cfg: { channels: { discord: { replyToMode: "first" } } } as OpenClawConfig,
-      }),
-    ).toBe("first");
-  });
+  const resolver = createTopLevelChannelReplyToModeResolver("demo-top-level");
 
-  it("falls back to off", () => {
-    const resolver = createTopLevelChannelReplyToModeResolver("discord");
-    expect(resolver({ cfg: {} as OpenClawConfig })).toBe("off");
+  it.each([
+    {
+      name: "reads the top-level channel config",
+      cfg: { channels: { "demo-top-level": { replyToMode: "first" } } } as OpenClawConfig,
+      expected: "first",
+    },
+    {
+      name: "falls back to off",
+      cfg: {} as OpenClawConfig,
+      expected: "off",
+    },
+  ])("$name", ({ cfg, expected }) => {
+    expect(resolver({ cfg })).toBe(expected);
   });
 });
 
 describe("createScopedAccountReplyToModeResolver", () => {
-  it("reads the scoped account reply mode", () => {
-    const resolver = createScopedAccountReplyToModeResolver({
+  function createScopedResolver() {
+    return createScopedAccountReplyToModeResolver({
       resolveAccount: (cfg, accountId) =>
         ((
           cfg.channels as {
-            matrix?: { accounts?: Record<string, { replyToMode?: "off" | "first" | "all" }> };
+            demo?: {
+              accounts?: Record<string, { replyToMode?: "off" | "first" | "all" | "batched" }>;
+            };
           }
-        ).matrix?.accounts?.[accountId?.toLowerCase() ?? "default"] ?? {}) as {
-          replyToMode?: "off" | "first" | "all";
+        ).demo?.accounts?.[accountId?.toLowerCase() ?? "default"] ?? {}) as {
+          replyToMode?: "off" | "first" | "all" | "batched";
         },
       resolveReplyToMode: (account) => account.replyToMode,
     });
+  }
 
+  it.each([
+    { accountId: "assistant", expected: "all" },
+    { accountId: "default", expected: "off" },
+  ] as const)("resolves scoped reply mode for $accountId", ({ accountId, expected }) => {
+    const resolver = createScopedResolver();
     const cfg = {
       channels: {
-        matrix: {
+        demo: {
           accounts: {
             assistant: { replyToMode: "all" },
           },
@@ -53,8 +64,7 @@ describe("createScopedAccountReplyToModeResolver", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolver({ cfg, accountId: "assistant" })).toBe("all");
-    expect(resolver({ cfg, accountId: "default" })).toBe("off");
+    expect(resolver({ cfg, accountId })).toBe(expected);
   });
 
   it("passes chatType through", () => {

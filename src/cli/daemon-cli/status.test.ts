@@ -1,3 +1,4 @@
+// Daemon status tests cover service status gathering and CLI responses.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonStatus } from "./status.gather.js";
@@ -25,7 +26,7 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
-vi.mock("../../terminal/theme.js", () => ({
+vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   colorize: (_rich: boolean, _color: unknown, text: string) => text,
   isRich: () => false,
   theme: { error: "error" },
@@ -74,6 +75,26 @@ describe("runDaemonStatus", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
+    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
+      json: false,
+      deep: false,
+    });
+  });
+
+  it("forwards require-rpc to daemon status gathering", async () => {
+    await runDaemonStatus({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      json: false,
+    });
+
+    expect(gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      deep: false,
+    });
   });
 
   it("rejects require-rpc when probing is disabled", async () => {
@@ -87,6 +108,8 @@ describe("runDaemonStatus", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("--require-rpc cannot be used with --no-probe");
+    expect(runtimeErrors[0]).toBe(
+      "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+    );
   });
 });

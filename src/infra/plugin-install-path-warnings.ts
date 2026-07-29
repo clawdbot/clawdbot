@@ -1,8 +1,10 @@
+// Detects and formats plugin install path warnings.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 
-export type PluginInstallPathIssue = {
+type PluginInstallPathIssue = {
   kind: "custom-path" | "missing-path";
   pluginId: string;
   path: string;
@@ -16,7 +18,7 @@ function resolvePluginInstallCandidatePaths(
   }
 
   return [install.sourcePath, install.installPath]
-    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .map((value) => normalizeOptionalString(value) ?? "")
     .filter(Boolean);
 }
 
@@ -53,7 +55,7 @@ export function formatPluginInstallPathIssue(params: {
   issue: PluginInstallPathIssue;
   pluginLabel: string;
   defaultInstallCommand: string;
-  repoInstallCommand: string;
+  repoInstallCommand?: string | null;
   formatCommand?: (command: string) => string;
 }): string[] {
   const formatCommand = params.formatCommand ?? ((command: string) => command);
@@ -62,12 +64,20 @@ export function formatPluginInstallPathIssue(params: {
       `${params.pluginLabel} is installed from a custom path: ${params.issue.path}`,
       `Main updates will not automatically replace that plugin with the repo's default ${params.pluginLabel} package.`,
       `Reinstall with "${formatCommand(params.defaultInstallCommand)}" when you want to return to the standard ${params.pluginLabel} plugin.`,
-      `If you are intentionally running from a repo checkout, reinstall that checkout explicitly with "${formatCommand(params.repoInstallCommand)}" after updates.`,
+      ...(params.repoInstallCommand
+        ? [
+            `If you are intentionally running from a repo checkout, reinstall that checkout explicitly with "${formatCommand(params.repoInstallCommand)}" after updates.`,
+          ]
+        : []),
     ];
   }
   return [
     `${params.pluginLabel} is installed from a custom path that no longer exists: ${params.issue.path}`,
     `Reinstall with "${formatCommand(params.defaultInstallCommand)}".`,
-    `If you are running from a repo checkout, you can also use "${formatCommand(params.repoInstallCommand)}".`,
+    ...(params.repoInstallCommand
+      ? [
+          `If you are running from a repo checkout, you can also use "${formatCommand(params.repoInstallCommand)}".`,
+        ]
+      : []),
   ];
 }

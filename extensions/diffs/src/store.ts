@@ -1,14 +1,35 @@
+// Diffs plugin module implements store behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { gunzip, gzip } from "node:zlib";
+import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  PluginBlobEntry,
+  PluginBlobEntryInfo,
+  PluginBlobStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { PluginLogger } from "../api.js";
-import type { DiffArtifactContext, DiffArtifactMeta, DiffOutputFormat } from "./types.js";
+import {
+  DIFF_ARTIFACT_ID_PATTERN,
+  DIFF_ARTIFACT_TOKEN_PATTERN,
+  type DiffArtifactBlobMetadata,
+  type DiffArtifactContext,
+  type DiffArtifactMeta,
+  type DiffOutputFormat,
+  type DiffRenderedFileArtifactMetadata,
+  type DiffViewerArtifactMetadata,
+} from "./types.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
 const SWEEP_FALLBACK_AGE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_DECODED_HTML_BYTES = 64 * 1024 * 1024;
+const ARTIFACT_ID_ATTEMPTS = 8;
 const VIEWER_PREFIX = "/plugins/diffs/view";
+const EMPTY_BLOB = new Uint8Array();
 
 type CreateArtifactParams = {
   html: string;
@@ -25,26 +46,44 @@ type CreateStandaloneFileArtifactParams = {
   context?: DiffArtifactContext;
 };
 
-type StandaloneFileMeta = {
-  kind: "standalone_file";
+type DiffStandaloneFileArtifact = {
   id: string;
-  createdAt: string;
-  expiresAt: string;
   filePath: string;
+  expiresAt: string;
   context?: DiffArtifactContext;
 };
 
-type ArtifactMetaFileName = "meta.json" | "file-meta.json";
+type DiffAuthorizedViewer = {
+  artifact: DiffArtifactMeta;
+  html: Uint8Array;
+};
+
+function isBlobLimitError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "PLUGIN_BLOB_LIMIT_EXCEEDED"
+  );
+}
 
 export class DiffArtifactStore {
   private readonly rootDir: string;
+  private readonly blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
   private readonly logger?: PluginLogger;
   private readonly cleanupIntervalMs: number;
+  private readonly renderingFileIds = new Set<string>();
   private cleanupInFlight: Promise<void> | null = null;
   private nextCleanupAt = 0;
 
-  constructor(params: { rootDir: string; logger?: PluginLogger; cleanupIntervalMs?: number }) {
+  constructor(params: {
+    rootDir: string;
+    blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+    logger?: PluginLogger;
+    cleanupIntervalMs?: number;
+  }) {
     this.rootDir = path.resolve(params.rootDir);
+    this.blobStore = params.blobStore;
     this.logger = params.logger;
     this.cleanupIntervalMs =
       params.cleanupIntervalMs === undefined
@@ -53,116 +92,119 @@ export class DiffArtifactStore {
   }
 
   async createArtifact(params: CreateArtifactParams): Promise<DiffArtifactMeta> {
-    await this.ensureRoot();
-
-    const id = crypto.randomBytes(10).toString("hex");
+    const html = Buffer.from(params.html, "utf8");
+    if (html.byteLength > MAX_DECODED_HTML_BYTES) {
+      throw new Error(`Diff viewer HTML exceeds ${MAX_DECODED_HTML_BYTES} bytes.`);
+    }
+    const compressedHtml = await gzipAsync(html);
     const token = crypto.randomBytes(24).toString("hex");
-    const artifactDir = this.artifactDir(id);
-    const htmlPath = path.join(artifactDir, "viewer.html");
     const ttlMs = normalizeTtlMs(params.ttlMs);
-    const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + ttlMs);
-    const meta: DiffArtifactMeta = {
-      id,
-      token,
+    const metadata: DiffViewerArtifactMetadata = {
+      version: 1,
+      kind: "viewer",
+      encoding: "gzip",
+      tokenHash: hashToken(token),
       title: params.title,
       inputKind: params.inputKind,
       fileCount: params.fileCount,
-      createdAt: createdAt.toISOString(),
-      expiresAt: expiresAt.toISOString(),
-      viewerPath: `${VIEWER_PREFIX}/${id}/${token}`,
-      htmlPath,
+      decodedBytes: html.byteLength,
       ...(params.context ? { context: params.context } : {}),
     };
-
-    await fs.mkdir(artifactDir, { recursive: true });
-    await fs.writeFile(htmlPath, params.html, "utf8");
-    await this.writeMeta(meta);
+    const entry = await this.registerUnique(compressedHtml, metadata, ttlMs);
     this.scheduleCleanup();
-    return meta;
+    return viewerEntryToMeta(entry, token);
   }
 
-  async getArtifact(id: string, token: string): Promise<DiffArtifactMeta | null> {
-    const meta = await this.readMeta(id);
-    if (!meta) {
+  async readAuthorizedViewer(id: string, token: string): Promise<DiffAuthorizedViewer | null> {
+    if (!DIFF_ARTIFACT_ID_PATTERN.test(id) || !DIFF_ARTIFACT_TOKEN_PATTERN.test(token)) {
       return null;
     }
-    if (meta.token !== token) {
+    const entry = await this.blobStore.lookup(id);
+    if (!entry) {
+      const expired = await this.blobStore.deleteExpiredKey(id);
+      if (expired) {
+        await this.deleteExpiredFile(expired);
+      }
       return null;
     }
-    if (isExpired(meta)) {
-      await this.deleteArtifact(id);
+    if (!isViewerMetadata(entry.metadata)) {
       return null;
     }
-    return meta;
-  }
-
-  async readHtml(id: string): Promise<string> {
-    const meta = await this.readMeta(id);
-    if (!meta) {
-      throw new Error(`Diff artifact not found: ${id}`);
+    const tokenHash = hashToken(token);
+    if (!safeEqualSecret(tokenHash, entry.metadata.tokenHash)) {
+      return null;
     }
-    const htmlPath = this.normalizeStoredPath(meta.htmlPath, "htmlPath");
-    return await fs.readFile(htmlPath, "utf8");
-  }
-
-  async updateFilePath(id: string, filePath: string): Promise<DiffArtifactMeta> {
-    const meta = await this.readMeta(id);
-    if (!meta) {
-      throw new Error(`Diff artifact not found: ${id}`);
+    const html = await gunzipAsync(entry.bytes, MAX_DECODED_HTML_BYTES);
+    if (html.byteLength !== entry.metadata.decodedBytes) {
+      throw new Error(`Diff artifact ${id} decoded size does not match its metadata.`);
     }
-    const normalizedFilePath = this.normalizeStoredPath(filePath, "filePath");
-    const next: DiffArtifactMeta = {
-      ...meta,
-      filePath: normalizedFilePath,
-      imagePath: normalizedFilePath,
+    return {
+      artifact: viewerEntryToMeta(entry, token),
+      html,
     };
-    await this.writeMeta(next);
-    return next;
-  }
-
-  async updateImagePath(id: string, imagePath: string): Promise<DiffArtifactMeta> {
-    return this.updateFilePath(id, imagePath);
-  }
-
-  allocateFilePath(id: string, format: DiffOutputFormat = "png"): string {
-    return path.join(this.artifactDir(id), `preview.${format}`);
   }
 
   async createStandaloneFileArtifact(
     params: CreateStandaloneFileArtifactParams = {},
-  ): Promise<{ id: string; filePath: string; expiresAt: string; context?: DiffArtifactContext }> {
-    await this.ensureRoot();
-
-    const id = crypto.randomBytes(10).toString("hex");
-    const artifactDir = this.artifactDir(id);
+  ): Promise<DiffStandaloneFileArtifact> {
     const format = params.format ?? "png";
-    const filePath = path.join(artifactDir, `preview.${format}`);
     const ttlMs = normalizeTtlMs(params.ttlMs);
-    const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + ttlMs).toISOString();
-    const meta: StandaloneFileMeta = {
-      kind: "standalone_file",
-      id,
-      createdAt: createdAt.toISOString(),
-      expiresAt,
-      filePath: this.normalizeStoredPath(filePath, "filePath"),
+    const metadata: DiffRenderedFileArtifactMetadata = {
+      version: 1,
+      kind: "rendered_file",
+      format,
       ...(params.context ? { context: params.context } : {}),
     };
 
-    await fs.mkdir(artifactDir, { recursive: true });
-    await this.writeStandaloneMeta(meta);
-    this.scheduleCleanup();
-    return {
-      id,
-      filePath: meta.filePath,
-      expiresAt: meta.expiresAt,
-      ...(meta.context ? { context: meta.context } : {}),
-    };
+    for (let attempt = 0; attempt < ARTIFACT_ID_ATTEMPTS; attempt += 1) {
+      const id = crypto.randomBytes(10).toString("hex");
+      if (!(await this.registerIfAbsentWithCleanup(id, EMPTY_BLOB, metadata, ttlMs))) {
+        continue;
+      }
+      const artifactDir = this.artifactDir(id);
+      try {
+        await fs.mkdir(this.rootDir, { recursive: true });
+        await fs.mkdir(artifactDir);
+        const entry = await this.blobStore.lookup(id);
+        if (!entry || !isRenderedFileMetadata(entry.metadata)) {
+          throw new Error(`Diff file artifact expired before materialization: ${id}`);
+        }
+        this.renderingFileIds.add(id);
+        this.scheduleCleanup();
+        return {
+          id,
+          filePath: path.join(artifactDir, `preview.${format}`),
+          expiresAt: resolveEntryExpiresAt(entry),
+          ...(params.context ? { context: params.context } : {}),
+        };
+      } catch (error) {
+        await this.blobStore.delete(id).catch(() => false);
+        await fs.rm(artifactDir, { recursive: true, force: true }).catch(() => {});
+        if (isFileExists(error)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error("Failed to allocate a unique diff file artifact id.");
   }
 
-  allocateImagePath(id: string, format: DiffOutputFormat = "png"): string {
-    return this.allocateFilePath(id, format);
+  async completeFileArtifact(id: string): Promise<void> {
+    try {
+      const entry = await this.blobStore.lookup(id);
+      if (!entry || !isRenderedFileMetadata(entry.metadata)) {
+        await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
+        throw new Error(`Diff file artifact expired during rendering: ${id}`);
+      }
+    } finally {
+      this.renderingFileIds.delete(id);
+    }
+  }
+
+  async deleteFileArtifact(id: string): Promise<void> {
+    this.renderingFileIds.delete(id);
+    await this.blobStore.delete(id).catch(() => false);
+    await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
   }
 
   scheduleCleanup(): void {
@@ -170,45 +212,83 @@ export class DiffArtifactStore {
   }
 
   async cleanupExpired(): Promise<void> {
-    await this.ensureRoot();
-    const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
-    const now = Date.now();
+    const expired = await this.blobStore.deleteExpired();
+    await Promise.all(expired.map(async (entry) => await this.deleteExpiredFile(entry)));
 
+    const entries = await fs
+      .readdir(this.rootDir, { withFileTypes: true })
+      .catch((error: unknown) => {
+        if (isFileNotFound(error)) {
+          return [];
+        }
+        throw error;
+      });
+    const now = Date.now();
     await Promise.all(
       entries
-        .filter((entry) => entry.isDirectory())
+        .filter((entry) => entry.isDirectory() && DIFF_ARTIFACT_ID_PATTERN.test(entry.name))
         .map(async (entry) => {
-          const id = entry.name;
-          const meta = await this.readMeta(id);
-          if (meta) {
-            if (isExpired(meta)) {
-              await this.deleteArtifact(id);
-            }
+          if (this.renderingFileIds.has(entry.name) || (await this.blobStore.lookup(entry.name))) {
             return;
           }
-
-          const standaloneMeta = await this.readStandaloneMeta(id);
-          if (standaloneMeta) {
-            if (isExpired(standaloneMeta)) {
-              await this.deleteArtifact(id);
-            }
-            return;
-          }
-
-          const artifactPath = this.artifactDir(id);
-          const stat = await fs.stat(artifactPath).catch(() => null);
-          if (!stat) {
-            return;
-          }
-          if (now - stat.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
-            await this.deleteArtifact(id);
+          const artifactDir = this.artifactDir(entry.name);
+          const stats = await fs.stat(artifactDir).catch(() => null);
+          if (stats && now - stats.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
+            await fs.rm(artifactDir, { recursive: true, force: true }).catch(() => {});
           }
         }),
     );
   }
 
-  private async ensureRoot(): Promise<void> {
-    await fs.mkdir(this.rootDir, { recursive: true });
+  private async registerUnique(
+    bytes: Uint8Array,
+    metadata: DiffArtifactBlobMetadata,
+    ttlMs: number,
+  ): Promise<PluginBlobEntry<DiffArtifactBlobMetadata>> {
+    for (let attempt = 0; attempt < ARTIFACT_ID_ATTEMPTS; attempt += 1) {
+      const id = crypto.randomBytes(10).toString("hex");
+      if (!(await this.registerIfAbsentWithCleanup(id, bytes, metadata, ttlMs))) {
+        continue;
+      }
+      const entry = await this.blobStore.lookup(id);
+      if (entry) {
+        return entry;
+      }
+    }
+    throw new Error("Failed to allocate a unique diff artifact id.");
+  }
+
+  private async registerIfAbsentWithCleanup(
+    id: string,
+    bytes: Uint8Array,
+    metadata: DiffArtifactBlobMetadata,
+    ttlMs: number,
+  ): Promise<boolean> {
+    try {
+      return await this.blobStore.registerIfAbsent(id, bytes, metadata, { ttlMs });
+    } catch (error) {
+      if (!isBlobLimitError(error)) {
+        throw error;
+      }
+      // Expired rows retain cleanup metadata and count toward physical fuses.
+      // Claim their cleanup before retrying a write that reached the quota.
+      await this.cleanupExpired();
+      return await this.blobStore.registerIfAbsent(id, bytes, metadata, { ttlMs });
+    }
+  }
+
+  private async deleteExpiredFile(
+    entry: PluginBlobEntryInfo<DiffArtifactBlobMetadata>,
+  ): Promise<void> {
+    if (!isRenderedFileMetadata(entry.metadata) || this.renderingFileIds.has(entry.key)) {
+      return;
+    }
+    // A current row wins over the expired snapshot. This prevents cleanup from
+    // deleting a materialization if an id was replaced after the TTL transaction.
+    if (await this.blobStore.lookup(entry.key)) {
+      return;
+    }
+    await fs.rm(this.artifactDir(entry.key), { recursive: true, force: true }).catch(() => {});
   }
 
   private maybeCleanupExpired(): void {
@@ -219,7 +299,7 @@ export class DiffArtifactStore {
 
     this.nextCleanupAt = now + this.cleanupIntervalMs;
     const cleanupPromise = this.cleanupExpired()
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.nextCleanupAt = 0;
         this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
       })
@@ -233,153 +313,131 @@ export class DiffArtifactStore {
   }
 
   private artifactDir(id: string): string {
-    return this.resolveWithinRoot(id);
-  }
-
-  private async writeMeta(meta: DiffArtifactMeta): Promise<void> {
-    await this.writeJsonMeta(meta.id, "meta.json", meta);
-  }
-
-  private async readMeta(id: string): Promise<DiffArtifactMeta | null> {
-    const parsed = await this.readJsonMeta(id, "meta.json", "diff artifact");
-    if (!parsed) {
-      return null;
+    if (!DIFF_ARTIFACT_ID_PATTERN.test(id)) {
+      throw new Error(`Invalid diff artifact id: ${id}`);
     }
-    return parsed as DiffArtifactMeta;
+    return path.join(this.rootDir, id);
   }
+}
 
-  private async writeStandaloneMeta(meta: StandaloneFileMeta): Promise<void> {
-    await this.writeJsonMeta(meta.id, "file-meta.json", meta);
+function viewerEntryToMeta(
+  entry: PluginBlobEntry<DiffArtifactBlobMetadata>,
+  token: string,
+): DiffArtifactMeta {
+  if (!isViewerMetadata(entry.metadata)) {
+    throw new Error(`Diff artifact ${entry.key} is not a viewer.`);
   }
+  return {
+    id: entry.key,
+    token,
+    createdAt: timestampMsToIsoString(entry.createdAt) ?? "1970-01-01T00:00:00.000Z",
+    expiresAt: resolveEntryExpiresAt(entry),
+    title: entry.metadata.title,
+    inputKind: entry.metadata.inputKind,
+    fileCount: entry.metadata.fileCount,
+    viewerPath: `${VIEWER_PREFIX}/${entry.key}/${token}`,
+    ...(entry.metadata.context ? { context: entry.metadata.context } : {}),
+  };
+}
 
-  private async readStandaloneMeta(id: string): Promise<StandaloneFileMeta | null> {
-    const parsed = await this.readJsonMeta(id, "file-meta.json", "standalone diff");
-    if (!parsed) {
-      return null;
-    }
-    try {
-      const value = parsed as Partial<StandaloneFileMeta>;
-      if (
-        value.kind !== "standalone_file" ||
-        typeof value.id !== "string" ||
-        typeof value.createdAt !== "string" ||
-        typeof value.expiresAt !== "string" ||
-        typeof value.filePath !== "string"
-      ) {
-        return null;
-      }
-      return {
-        kind: value.kind,
-        id: value.id,
-        createdAt: value.createdAt,
-        expiresAt: value.expiresAt,
-        filePath: this.normalizeStoredPath(value.filePath, "filePath"),
-        ...(value.context ? { context: normalizeArtifactContext(value.context) } : {}),
-      };
-    } catch (error) {
-      this.logger?.warn(`Failed to normalize standalone diff metadata for ${id}: ${String(error)}`);
-      return null;
-    }
-  }
+function resolveEntryExpiresAt(entry: { expiresAt?: number }): string {
+  return (
+    timestampMsToIsoString(entry.expiresAt ?? MAX_DATE_TIMESTAMP_MS) ??
+    timestampMsToIsoString(MAX_DATE_TIMESTAMP_MS) ??
+    "1970-01-01T00:00:00.000Z"
+  );
+}
 
-  private metaFilePath(id: string, fileName: ArtifactMetaFileName): string {
-    return path.join(this.artifactDir(id), fileName);
-  }
-
-  private async writeJsonMeta(
-    id: string,
-    fileName: ArtifactMetaFileName,
-    data: unknown,
-  ): Promise<void> {
-    await fs.writeFile(this.metaFilePath(id, fileName), JSON.stringify(data, null, 2), "utf8");
-  }
-
-  private async readJsonMeta(
-    id: string,
-    fileName: ArtifactMetaFileName,
-    context: string,
-  ): Promise<unknown | null> {
-    try {
-      const raw = await fs.readFile(this.metaFilePath(id, fileName), "utf8");
-      return JSON.parse(raw) as unknown;
-    } catch (error) {
-      if (isFileNotFound(error)) {
-        return null;
-      }
-      this.logger?.warn(`Failed to read ${context} metadata for ${id}: ${String(error)}`);
-      return null;
-    }
-  }
-
-  private async deleteArtifact(id: string): Promise<void> {
-    await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
-  }
-
-  private resolveWithinRoot(...parts: string[]): string {
-    const candidate = path.resolve(this.rootDir, ...parts);
-    this.assertWithinRoot(candidate);
-    return candidate;
-  }
-
-  private normalizeStoredPath(rawPath: string, label: string): string {
-    const candidate = path.isAbsolute(rawPath)
-      ? path.resolve(rawPath)
-      : path.resolve(this.rootDir, rawPath);
-    this.assertWithinRoot(candidate, label);
-    return candidate;
-  }
-
-  private assertWithinRoot(candidate: string, label = "path"): void {
-    const relative = path.relative(this.rootDir, candidate);
-    if (
-      relative === "" ||
-      (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-    ) {
-      return;
-    }
-    throw new Error(`Diff artifact ${label} escapes store root: ${candidate}`);
-  }
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
 function normalizeTtlMs(value?: number): number {
-  if (!Number.isFinite(value) || value === undefined) {
-    return DEFAULT_TTL_MS;
-  }
-  const rounded = Math.floor(value);
-  if (rounded <= 0) {
-    return DEFAULT_TTL_MS;
-  }
-  return Math.min(rounded, MAX_TTL_MS);
+  const rounded = value === undefined || !Number.isFinite(value) ? 0 : Math.floor(value);
+  const requestedTtlMs = rounded > 0 ? rounded : DEFAULT_TTL_MS;
+  const remainingDateRangeMs = Math.floor(MAX_DATE_TIMESTAMP_MS - Date.now());
+  return Math.min(requestedTtlMs, MAX_TTL_MS, Math.max(1, remainingDateRangeMs));
 }
 
-function isExpired(meta: { expiresAt: string }): boolean {
-  const expiresAt = Date.parse(meta.expiresAt);
-  if (!Number.isFinite(expiresAt)) {
+function isViewerMetadata(value: unknown): value is DiffViewerArtifactMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const metadata = value as Partial<DiffViewerArtifactMetadata>;
+  return (
+    metadata.version === 1 &&
+    metadata.kind === "viewer" &&
+    metadata.encoding === "gzip" &&
+    typeof metadata.tokenHash === "string" &&
+    /^[0-9a-f]{64}$/u.test(metadata.tokenHash) &&
+    typeof metadata.title === "string" &&
+    (metadata.inputKind === "before_after" || metadata.inputKind === "patch") &&
+    Number.isSafeInteger(metadata.fileCount) &&
+    typeof metadata.fileCount === "number" &&
+    metadata.fileCount >= 0 &&
+    Number.isSafeInteger(metadata.decodedBytes) &&
+    typeof metadata.decodedBytes === "number" &&
+    metadata.decodedBytes >= 0 &&
+    metadata.decodedBytes <= MAX_DECODED_HTML_BYTES &&
+    isArtifactContext(metadata.context)
+  );
+}
+
+function isRenderedFileMetadata(value: unknown): value is DiffRenderedFileArtifactMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const metadata = value as Partial<DiffRenderedFileArtifactMetadata>;
+  return (
+    metadata.version === 1 &&
+    metadata.kind === "rendered_file" &&
+    (metadata.format === "png" || metadata.format === "pdf") &&
+    isArtifactContext(metadata.context)
+  );
+}
+
+function isArtifactContext(value: unknown): value is DiffArtifactContext | undefined {
+  if (value === undefined) {
     return true;
   }
-  return Date.now() >= expiresAt;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const context = value as Record<string, unknown>;
+  const allowed = new Set(["agentId", "sessionId", "messageChannel", "agentAccountId"]);
+  return Object.entries(context).every(
+    ([key, entry]) => allowed.has(key) && (entry === undefined || typeof entry === "string"),
+  );
+}
+
+async function gzipAsync(input: Uint8Array): Promise<Uint8Array> {
+  return await new Promise<Buffer>((resolve, reject) => {
+    gzip(input, (error, result) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
+async function gunzipAsync(input: Uint8Array, maxOutputLength: number): Promise<Uint8Array> {
+  return await new Promise<Buffer>((resolve, reject) => {
+    gunzip(input, { maxOutputLength }, (error, result) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
+function isFileExists(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 function isFileNotFound(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
-function normalizeArtifactContext(value: unknown): DiffArtifactContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const raw = value as Record<string, unknown>;
-  const context = {
-    agentId: normalizeOptionalString(raw.agentId),
-    sessionId: normalizeOptionalString(raw.sessionId),
-    messageChannel: normalizeOptionalString(raw.messageChannel),
-    agentAccountId: normalizeOptionalString(raw.agentAccountId),
-  };
-
-  return Object.values(context).some((entry) => entry !== undefined) ? context : undefined;
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

@@ -1,171 +1,142 @@
-import path from "node:path";
-import { afterEach, beforeEach, expect, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { loadSessionStore } from "../config/sessions.js";
-import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
+/** E2E harness for reply directive behavior tests. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { afterEach, beforeEach, vi } from "vitest";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.test-support.js";
+import {
+  clearSessionAuthProfileOverrideMock,
+  compactEmbeddedAgentSessionMock,
+  loadModelCatalogMock,
+  resolveCommandSecretRefsViaGatewayMock,
+  resolveSessionAuthProfileOverrideMock,
+  runDirectiveBehaviorReplyAgent,
+  runEmbeddedAgentMock,
+  runDirectiveBehaviorPreparedReply,
+  runPreparedReplyMock,
+  runReplyAgentMock,
+} from "./reply.directive.directive-behavior.e2e-mocks.js";
 
-export { loadModelCatalog } from "../agents/model-catalog.js";
-export { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+type PluginProviderRegistration = PluginRegistry["providers"][number];
 
-export const MAIN_SESSION_KEY = "agent:main:main";
-
-export const DEFAULT_TEST_MODEL_CATALOG: Array<{
+const DEFAULT_TEST_MODEL_CATALOG: Array<{
   id: string;
   name: string;
   provider: string;
 }> = [
-  { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
+  { id: "claude-opus-4-6", name: "Opus 4.5", provider: "anthropic" },
   { id: "claude-sonnet-4-1", name: "Sonnet 4.1", provider: "anthropic" },
+  { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+  { id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai" },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", provider: "openai" },
+  { id: "gpt-5.4-nano", name: "GPT-5.4 Nano", provider: "openai" },
+  { id: "gpt-5.4", name: "GPT-5.4 (Codex)", provider: "openai" },
+  { id: "gpt-5.4-pro", name: "GPT-5.4 Pro (Codex)", provider: "openai" },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini (Codex)", provider: "openai" },
   { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
 ];
 
-export type ReplyPayloadText = { text?: string | null } | null | undefined;
+const OPENAI_XHIGH_MODEL_IDS = [
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.2",
+] as const;
 
-export function replyText(res: ReplyPayloadText | ReplyPayloadText[]): string | undefined {
-  if (Array.isArray(res)) {
-    return typeof res[0]?.text === "string" ? res[0]?.text : undefined;
-  }
-  return typeof res?.text === "string" ? res.text : undefined;
-}
+const OPENAI_CODEX_XHIGH_MODEL_IDS = [
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2-codex",
+  "gpt-5.1-codex",
+] as const;
 
-export function replyTexts(res: ReplyPayloadText | ReplyPayloadText[]): string[] {
-  const payloads = Array.isArray(res) ? res : [res];
-  return payloads
-    .map((entry) => (typeof entry?.text === "string" ? entry.text : undefined))
-    .filter((value): value is string => Boolean(value));
-}
-
-export function makeEmbeddedTextResult(text = "done") {
+function createThinkingPolicyProvider(
+  providerId: string,
+  xhighModelIds: readonly string[],
+): ProviderPlugin {
   return {
-    payloads: [{ text }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
+    id: providerId,
+    label: providerId,
+    auth: [],
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId))
+          ? [{ id: "xhigh" as const }]
+          : []),
+      ],
+    }),
   };
 }
 
-export function mockEmbeddedTextResult(text = "done") {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
-}
-
-export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      return await fn(home);
+function createDirectiveBehaviorProviderRegistry(): ReturnType<typeof createEmptyPluginRegistry> {
+  const registry = createEmptyPluginRegistry();
+  const providers: PluginProviderRegistration[] = [
+    {
+      pluginId: "openai",
+      pluginName: "OpenAI Provider",
+      source: "test",
+      provider: createThinkingPolicyProvider("openai", OPENAI_XHIGH_MODEL_IDS),
     },
     {
-      env: {
-        OPENCLAW_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
-        PI_CODING_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
-      },
-      prefix: "openclaw-reply-",
+      pluginId: "openai",
+      pluginName: "OpenAI Provider",
+      source: "test",
+      provider: createThinkingPolicyProvider("openai", OPENAI_CODEX_XHIGH_MODEL_IDS),
     },
-  );
-}
-
-export function sessionStorePath(home: string): string {
-  return path.join(home, "sessions.json");
-}
-
-export function makeWhatsAppDirectiveConfig(
-  home: string,
-  defaults: Record<string, unknown>,
-  extra: Record<string, unknown> = {},
-) {
-  return {
-    agents: {
-      defaults: {
-        workspace: path.join(home, "openclaw"),
-        ...defaults,
-      },
-    },
-    channels: { whatsapp: { allowFrom: ["*"] } },
-    session: { store: sessionStorePath(home) },
-    ...extra,
-  };
-}
-
-export const AUTHORIZED_WHATSAPP_COMMAND = {
-  From: "+1222",
-  To: "+1222",
-  Provider: "whatsapp",
-  SenderE164: "+1222",
-  CommandAuthorized: true,
-} as const;
-
-export function makeElevatedDirectiveConfig(home: string) {
-  return makeWhatsAppDirectiveConfig(
-    home,
-    {
-      model: "anthropic/claude-opus-4-5",
-      elevatedDefault: "on",
-    },
-    {
-      tools: {
-        elevated: {
-          allowFrom: { whatsapp: ["+1222"] },
-        },
-      },
-      channels: { whatsapp: { allowFrom: ["+1222"] } },
-      session: { store: sessionStorePath(home) },
-    },
-  );
-}
-
-export function assertModelSelection(
-  storePath: string,
-  selection: { model?: string; provider?: string } = {},
-) {
-  const store = loadSessionStore(storePath);
-  const entry = store[MAIN_SESSION_KEY];
-  expect(entry).toBeDefined();
-  expect(entry?.modelOverride).toBe(selection.model);
-  expect(entry?.providerOverride).toBe(selection.provider);
-}
-
-export function assertElevatedOffStatusReply(text: string | undefined) {
-  expect(text).toContain("Elevated mode disabled.");
-  const optionsLine = text?.split("\n").find((line) => line.trim().startsWith("⚙️"));
-  expect(optionsLine).toBeTruthy();
-  expect(optionsLine).not.toContain("elevated");
+  ];
+  registry.providers.push(...providers);
+  return registry;
 }
 
 export function installDirectiveBehaviorE2EHooks() {
-  beforeEach(() => {
-    runEmbeddedPiAgentMock.mockReset();
-    vi.mocked(loadModelCatalog).mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
+  beforeEach(async () => {
+    await resetSkillsRefreshForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
+    resetSystemEventsForTest();
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createDirectiveBehaviorProviderRegistry());
+    compactEmbeddedAgentSessionMock.mockReset();
+    compactEmbeddedAgentSessionMock.mockResolvedValue({ payloads: [], meta: {} });
+    runEmbeddedAgentMock.mockReset();
+    loadModelCatalogMock.mockReset();
+    loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
+    resolveCommandSecretRefsViaGatewayMock.mockReset();
+    resolveCommandSecretRefsViaGatewayMock.mockImplementation(async ({ config }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    }));
+    clearSessionAuthProfileOverrideMock.mockReset();
+    clearSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthProfileOverrideMock.mockReset();
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    runReplyAgentMock.mockReset();
+    runReplyAgentMock.mockImplementation(runDirectiveBehaviorReplyAgent);
+    runPreparedReplyMock.mockReset();
+    runPreparedReplyMock.mockImplementation(runDirectiveBehaviorPreparedReply);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetSkillsRefreshForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
+    resetSystemEventsForTest();
+    resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();
   });
-}
-
-export function makeRestrictedElevatedDisabledConfig(home: string) {
-  return {
-    agents: {
-      defaults: {
-        model: "anthropic/claude-opus-4-5",
-        workspace: path.join(home, "openclaw"),
-      },
-      list: [
-        {
-          id: "restricted",
-          tools: {
-            elevated: { enabled: false },
-          },
-        },
-      ],
-    },
-    tools: {
-      elevated: {
-        allowFrom: { whatsapp: ["+1222"] },
-      },
-    },
-    channels: { whatsapp: { allowFrom: ["+1222"] } },
-    session: { store: path.join(home, "sessions.json") },
-  } as const;
 }

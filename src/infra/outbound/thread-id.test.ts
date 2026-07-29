@@ -1,20 +1,18 @@
+// Covers outbound thread/topic id normalization for strings, numbers, and empty
+// route values.
 import { describe, expect, it } from "vitest";
 import { normalizeOutboundThreadId } from "./thread-id.js";
 
 describe("normalizeOutboundThreadId", () => {
-  it("returns undefined for missing values", () => {
-    expect(normalizeOutboundThreadId()).toBeUndefined();
-    expect(normalizeOutboundThreadId(null)).toBeUndefined();
-    expect(normalizeOutboundThreadId("   ")).toBeUndefined();
-  });
-
-  it("normalizes numbers and trims strings", () => {
-    expect(normalizeOutboundThreadId(123.9)).toBe("123");
-    expect(normalizeOutboundThreadId(" 456 ")).toBe("456");
-  });
-
-  it("drops non-finite numeric values", () => {
-    expect(normalizeOutboundThreadId(Number.NaN)).toBeUndefined();
-    expect(normalizeOutboundThreadId(Number.POSITIVE_INFINITY)).toBeUndefined();
+  it.each([
+    { input: undefined, expected: undefined },
+    { input: null, expected: undefined },
+    { input: "   ", expected: undefined },
+    { input: 123.9, expected: "123" },
+    { input: " 456 ", expected: "456" },
+    { input: Number.NaN, expected: undefined },
+    { input: Number.POSITIVE_INFINITY, expected: undefined },
+  ])("normalizes outbound thread id for %j", ({ input, expected }) => {
+    expect(normalizeOutboundThreadId(input)).toBe(expected);
   });
 });

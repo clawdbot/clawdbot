@@ -1,23 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
+/** Resolves preferred provider auth choices from config and plugin metadata. */
+import { normalizeLegacyOnboardAuthChoice } from "../commands/auth-choice-legacy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 
-const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<string, string>> = {
-  chutes: "chutes",
-  "litellm-api-key": "litellm",
-  "custom-api-key": "custom",
-};
-
-function normalizeLegacyAuthChoice(choice: string): string {
-  if (choice === "oauth") {
-    return "setup-token";
-  }
-  if (choice === "claude-cli") {
-    return "setup-token";
-  }
-  if (choice === "codex-cli") {
-    return "openai-codex";
-  }
-  return choice;
+function normalizeLegacyAuthChoice(choice: string, env?: NodeJS.ProcessEnv): string {
+  return normalizeLegacyOnboardAuthChoice(choice, { env }) ?? choice;
 }
 
 export async function resolvePreferredProviderForAuthChoice(params: {
@@ -25,8 +12,9 @@ export async function resolvePreferredProviderForAuthChoice(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
 }): Promise<string | undefined> {
-  const choice = normalizeLegacyAuthChoice(params.choice) ?? params.choice;
+  const choice = normalizeLegacyAuthChoice(params.choice, params.env) ?? params.choice;
   const manifestResolved = resolveManifestProviderAuthChoice(choice, params);
   if (manifestResolved) {
     return manifestResolved.providerId;
@@ -38,8 +26,8 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
+    includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
   });
   const pluginResolved = resolveProviderPluginChoice({
     providers,
@@ -49,5 +37,8 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     return pluginResolved.provider.id;
   }
 
-  return PREFERRED_PROVIDER_BY_AUTH_CHOICE[choice];
+  if (choice === "custom-api-key") {
+    return "custom";
+  }
+  return undefined;
 }

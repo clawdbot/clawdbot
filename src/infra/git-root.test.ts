@@ -1,79 +1,115 @@
+// Covers git root and HEAD path discovery.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { findGitRoot, resolveGitHeadPath } from "./git-root.js";
 
-async function makeTempDir(label: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
+async function expectGitRootResolution(params: {
+  label: string;
+  setup: (
+    temp: string,
+  ) => Promise<{ startPath: string; expectedRoot: string | null; expectedHead: string | null }>;
+}): Promise<void> {
+  await withTempDir({ prefix: `openclaw-${params.label}-` }, async (temp) => {
+    const { startPath, expectedRoot, expectedHead } = await params.setup(temp);
+    expect(findGitRoot(startPath)).toBe(expectedRoot);
+    expect(resolveGitHeadPath(startPath)).toBe(expectedHead);
+  });
 }
 
 describe("git-root", () => {
-  it("finds git root when starting at the repo root itself", async () => {
-    const temp = await makeTempDir("git-root-self");
-    const repoRoot = path.join(temp, "repo");
-    await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
-
-    expect(findGitRoot(repoRoot)).toBe(repoRoot);
-    expect(resolveGitHeadPath(repoRoot)).toBe(path.join(repoRoot, ".git", "HEAD"));
-  });
-
-  it("finds git root and HEAD path when .git is a directory", async () => {
-    const temp = await makeTempDir("git-root-dir");
-    const repoRoot = path.join(temp, "repo");
-    const workspace = path.join(repoRoot, "nested", "workspace");
-    await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
-    await fs.mkdir(workspace, { recursive: true });
-
-    expect(findGitRoot(workspace)).toBe(repoRoot);
-    expect(resolveGitHeadPath(workspace)).toBe(path.join(repoRoot, ".git", "HEAD"));
-  });
-
-  it("resolves HEAD path when .git is a gitdir pointer file", async () => {
-    const temp = await makeTempDir("git-root-file");
-    const repoRoot = path.join(temp, "repo");
-    const workspace = path.join(repoRoot, "nested", "workspace");
-    const gitDir = path.join(repoRoot, ".actual-git");
-    await fs.mkdir(workspace, { recursive: true });
-    await fs.mkdir(gitDir, { recursive: true });
-    await fs.writeFile(path.join(repoRoot, ".git"), "gitdir: .actual-git\n", "utf-8");
-
-    expect(findGitRoot(workspace)).toBe(repoRoot);
-    expect(resolveGitHeadPath(workspace)).toBe(path.join(gitDir, "HEAD"));
-  });
-
-  it("keeps root detection for .git file and skips invalid gitdir content for HEAD lookup", async () => {
-    const temp = await makeTempDir("git-root-invalid-file");
-    const parentRoot = path.join(temp, "repo");
-    const childRoot = path.join(parentRoot, "child");
-    const nested = path.join(childRoot, "nested");
-    await fs.mkdir(path.join(parentRoot, ".git"), { recursive: true });
-    await fs.mkdir(nested, { recursive: true });
-    await fs.writeFile(path.join(childRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
-
-    expect(findGitRoot(nested)).toBe(childRoot);
-    expect(resolveGitHeadPath(nested)).toBe(path.join(parentRoot, ".git", "HEAD"));
+  it.each([
+    {
+      name: "starting at the repo root itself",
+      label: "git-root-self",
+      setup: async (temp: string) => {
+        const repoRoot = path.join(temp, "repo");
+        await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+        return {
+          startPath: repoRoot,
+          expectedRoot: repoRoot,
+          expectedHead: path.join(repoRoot, ".git", "HEAD"),
+        };
+      },
+    },
+    {
+      name: ".git is a directory",
+      label: "git-root-dir",
+      setup: async (temp: string) => {
+        const repoRoot = path.join(temp, "repo");
+        const workspace = path.join(repoRoot, "nested", "workspace");
+        await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+        await fs.mkdir(workspace, { recursive: true });
+        return {
+          startPath: workspace,
+          expectedRoot: repoRoot,
+          expectedHead: path.join(repoRoot, ".git", "HEAD"),
+        };
+      },
+    },
+    {
+      name: ".git is a gitdir pointer file",
+      label: "git-root-file",
+      setup: async (temp: string) => {
+        const repoRoot = path.join(temp, "repo");
+        const workspace = path.join(repoRoot, "nested", "workspace");
+        const gitDir = path.join(repoRoot, ".actual-git");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.mkdir(gitDir, { recursive: true });
+        await fs.writeFile(path.join(repoRoot, ".git"), "gitdir: .actual-git\n", "utf-8");
+        return {
+          startPath: workspace,
+          expectedRoot: repoRoot,
+          expectedHead: path.join(gitDir, "HEAD"),
+        };
+      },
+    },
+    {
+      name: "invalid gitdir content still keeps root detection",
+      label: "git-root-invalid-file",
+      setup: async (temp: string) => {
+        const parentRoot = path.join(temp, "repo");
+        const childRoot = path.join(parentRoot, "child");
+        const nested = path.join(childRoot, "nested");
+        await fs.mkdir(path.join(parentRoot, ".git"), { recursive: true });
+        await fs.mkdir(nested, { recursive: true });
+        await fs.writeFile(path.join(childRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
+        return {
+          startPath: nested,
+          expectedRoot: childRoot,
+          expectedHead: path.join(parentRoot, ".git", "HEAD"),
+        };
+      },
+    },
+    {
+      name: "invalid gitdir content without a parent repo",
+      label: "git-root-invalid-only",
+      setup: async (temp: string) => {
+        const repoRoot = path.join(temp, "repo");
+        const nested = path.join(repoRoot, "nested");
+        await fs.mkdir(nested, { recursive: true });
+        await fs.writeFile(path.join(repoRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
+        return {
+          startPath: nested,
+          expectedRoot: repoRoot,
+          expectedHead: null,
+        };
+      },
+    },
+  ])("resolves git roots when $name", async ({ label, setup }) => {
+    await expectGitRootResolution({ label, setup });
   });
 
   it("respects maxDepth traversal limit", async () => {
-    const temp = await makeTempDir("git-root-depth");
-    const repoRoot = path.join(temp, "repo");
-    const nested = path.join(repoRoot, "a", "b", "c");
-    await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
-    await fs.mkdir(nested, { recursive: true });
+    await withTempDir({ prefix: "openclaw-git-root-depth-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const nested = path.join(repoRoot, "a", "b", "c");
+      await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+      await fs.mkdir(nested, { recursive: true });
 
-    expect(findGitRoot(nested, { maxDepth: 2 })).toBeNull();
-    expect(resolveGitHeadPath(nested, { maxDepth: 2 })).toBeNull();
-  });
-
-  it("returns null for HEAD lookup when only an invalid .git file exists", async () => {
-    const temp = await makeTempDir("git-root-invalid-only");
-    const repoRoot = path.join(temp, "repo");
-    const nested = path.join(repoRoot, "nested");
-    await fs.mkdir(nested, { recursive: true });
-    await fs.writeFile(path.join(repoRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
-
-    expect(findGitRoot(nested)).toBe(repoRoot);
-    expect(resolveGitHeadPath(nested)).toBeNull();
+      expect(findGitRoot(nested, { maxDepth: 2 })).toBeNull();
+      expect(resolveGitHeadPath(nested, { maxDepth: 2 })).toBeNull();
+    });
   });
 });

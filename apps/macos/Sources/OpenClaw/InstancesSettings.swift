@@ -3,13 +3,15 @@ import SwiftUI
 
 struct InstancesSettings: View {
     var store: InstancesStore
+    let isActive: Bool
 
-    init(store: InstancesStore = .shared) {
+    init(store: InstancesStore = .shared, isActive: Bool = true) {
         self.store = store
+        self.isActive = isActive
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             self.header
             if let err = store.lastError {
                 Text("Error: \(err)")
@@ -29,20 +31,36 @@ struct InstancesSettings: View {
             }
             Spacer()
         }
-        .onAppear { self.store.start() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .settingsDetailContent()
+        .onAppear { self.updateActiveWork(active: self.isActive) }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
+        }
         .onDisappear { self.store.stop() }
     }
 
+    private func updateActiveWork(active: Bool) {
+        if active {
+            self.store.start()
+        } else {
+            self.store.stop()
+        }
+    }
+
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text("Connected Instances")
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
                 Text("Latest presence beacons from OpenClaw nodes. Updated periodically.")
-                    .font(.footnote)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+
+            Spacer(minLength: 16)
+
             SettingsRefreshButton(isLoading: self.store.isLoading) {
                 Task { await self.store.refresh() }
             }

@@ -1,23 +1,37 @@
+// Resolves command executables and wrapper policy paths for exec approvals.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
-import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.js";
-import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
-import { expandHomePrefix } from "./home-dir.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
+import {
+  resolveExecutablePath as resolveExecutableCandidatePath,
+  resolveExecutablePathCandidate,
+} from "./executable-path.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
-
-export type CommandResolution = {
+export type ExecutableResolution = {
   rawExecutable: string;
   resolvedPath?: string;
   resolvedRealPath?: string;
   executableName: string;
+};
+
+export type CommandResolution = {
+  execution: ExecutableResolution;
+  policy: ExecutableResolution;
   effectiveArgv?: string[];
   wrapperChain?: string[];
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
+
+function isCommandResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): resolution is CommandResolution {
+  return Boolean(resolution && "execution" in resolution && "policy" in resolution);
+}
 
 function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
@@ -47,8 +61,30 @@ function tryResolveRealpath(filePath: string | undefined): string | undefined {
   }
 }
 
+function buildExecutableResolution(
+  rawExecutable: string,
+  params: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): ExecutableResolution {
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
+    cwd: params.cwd,
+    env: params.env,
+  });
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
+  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
+  return {
+    rawExecutable,
+    resolvedPath,
+    resolvedRealPath,
+    executableName,
+  };
+}
+
 function buildCommandResolution(params: {
   rawExecutable: string;
+  policyRawExecutable?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   effectiveArgv: string[];
@@ -56,22 +92,36 @@ function buildCommandResolution(params: {
   policyBlocked: boolean;
   blockedWrapper?: string;
 }): CommandResolution {
-  const resolvedPath = resolveExecutableCandidatePath(params.rawExecutable, {
-    cwd: params.cwd,
-    env: params.env,
-  });
-  const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : params.rawExecutable;
-  return {
-    rawExecutable: params.rawExecutable,
-    resolvedPath,
-    resolvedRealPath,
-    executableName,
+  const execution = buildExecutableResolution(params.rawExecutable, params);
+  const policy = params.policyRawExecutable
+    ? buildExecutableResolution(params.policyRawExecutable, params)
+    : execution;
+  const resolution: CommandResolution = {
+    execution,
+    policy,
     effectiveArgv: params.effectiveArgv,
     wrapperChain: params.wrapperChain,
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
+  // Compatibility getters for JS/tests while TS callers migrate to explicit targets.
+  return Object.defineProperties(resolution, {
+    rawExecutable: {
+      get: () => execution.rawExecutable,
+    },
+    resolvedPath: {
+      get: () => execution.resolvedPath,
+    },
+    resolvedRealPath: {
+      get: () => execution.resolvedRealPath,
+    },
+    executableName: {
+      get: () => execution.executableName,
+    },
+    policyResolution: {
+      get: () => (policy === execution ? undefined : policy),
+    },
+  });
 }
 
 export function resolveCommandResolution(
@@ -97,8 +147,9 @@ export function resolveCommandResolutionFromArgv(
   argv: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
 ): CommandResolution | null {
-  const plan = resolveDispatchWrapperExecutionPlan(argv);
+  const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
   const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
@@ -106,8 +157,9 @@ export function resolveCommandResolutionFromArgv(
   }
   return buildCommandResolution({
     rawExecutable,
+    policyRawExecutable: plan.policyArgv[0]?.trim(),
     effectiveArgv,
-    wrapperChain: plan.wrappers,
+    wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
     cwd,
@@ -115,8 +167,8 @@ export function resolveCommandResolutionFromArgv(
   });
 }
 
-export function resolveAllowlistCandidatePath(
-  resolution: CommandResolution | null,
+function resolveExecutableCandidatePathFromResolution(
+  resolution: ExecutableResolution | null | undefined,
   cwd?: string,
 ): string | undefined {
   if (!resolution) {
@@ -129,20 +181,209 @@ export function resolveAllowlistCandidatePath(
   if (!raw) {
     return undefined;
   }
-  const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
-  if (!expanded.includes("/") && !expanded.includes("\\")) {
-    return undefined;
+  return resolveExecutablePathCandidate(raw, {
+    cwd,
+    requirePathSeparator: true,
+  });
+}
+
+export function resolveExecutableTrustPath(
+  resolution: ExecutableResolution | null | undefined,
+  cwd?: string,
+): string | undefined {
+  const realPath = resolution?.resolvedRealPath?.trim();
+  if (realPath) {
+    return realPath;
   }
-  if (path.isAbsolute(expanded)) {
-    return expanded;
+  const candidatePath = resolveExecutableCandidatePathFromResolution(resolution, cwd);
+  return tryResolveRealpath(candidatePath) ?? candidatePath;
+}
+
+export function resolveExecutionTargetResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): ExecutableResolution | null {
+  if (!resolution) {
+    return null;
   }
-  const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-  return path.resolve(base, expanded);
+  return isCommandResolution(resolution) ? resolution.execution : resolution;
+}
+
+export function resolvePolicyTargetResolution(
+  resolution: CommandResolution | ExecutableResolution | null,
+): ExecutableResolution | null {
+  if (!resolution) {
+    return null;
+  }
+  return isCommandResolution(resolution) ? resolution.policy : resolution;
+}
+
+export function resolveExecutionTargetCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableCandidatePathFromResolution(
+    isCommandResolution(resolution) ? resolution.execution : resolution,
+    cwd,
+  );
+}
+
+export function resolveExecutionTargetTrustPath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableTrustPath(
+    isCommandResolution(resolution) ? resolution.execution : resolution,
+    cwd,
+  );
+}
+
+export function resolvePolicyTargetCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableCandidatePathFromResolution(
+    isCommandResolution(resolution) ? resolution.policy : resolution,
+    cwd,
+  );
+}
+
+export function resolvePolicyTargetTrustPath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableTrustPath(
+    isCommandResolution(resolution) ? resolution.policy : resolution,
+    cwd,
+  );
+}
+
+export function resolveApprovalAuditCandidatePath(
+  resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetCandidatePath(resolution, cwd);
+}
+
+export function resolveApprovalAuditTrustPath(
+  resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetTrustPath(resolution, cwd);
+}
+
+/** @deprecated Use resolveExecutionTargetCandidatePath. */
+export function resolveAllowlistCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutionTargetCandidatePath(resolution, cwd);
+}
+
+export function resolvePolicyAllowlistCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetCandidatePath(resolution, cwd);
+}
+
+const HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
+
+export function isGeneratedHashedArgPattern(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(HASHED_ARG_PATTERN_PREFIX);
+}
+
+function renderGeneratedArgPatternSubject(argv: string[]): string {
+  const argsSlice = argv.slice(1);
+  return argsSlice.length === 0 ? "\x00\x00" : argsSlice.join("\x00") + "\x00";
+}
+
+function renderGeneratedHashedArgPatternSubject(argv: string[]): string {
+  const argsSlice = argv.slice(1);
+  return `${argsSlice.length}\x00${argsSlice
+    .map((arg) => `${Buffer.byteLength(arg, "utf8")}\x00${arg}\x00`)
+    .join("")}`;
+}
+
+export function buildHashedArgPatternFromArgv(argv: string[]): string {
+  const digest = crypto
+    .createHash("sha256")
+    .update(renderGeneratedHashedArgPatternSubject(argv), "utf8")
+    .digest("hex");
+  return `${HASHED_ARG_PATTERN_PREFIX}${digest}`;
+}
+
+function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
+  if (argPattern.startsWith(HASHED_ARG_PATTERN_PREFIX)) {
+    return argPattern === buildHashedArgPatternFromArgv(argv);
+  }
+  // Patterns built by buildArgPatternFromArgv use \x00 as the argument separator and
+  // always include a trailing \x00 sentinel so that every auto-generated pattern
+  // (including zero-arg "^\x00\x00$" and single-arg "^hello world\x00$") contains at
+  // least one \x00.  This lets matchArgPattern detect the join style unambiguously
+  // via .includes("\x00") without misidentifying anchored hand-authored patterns.
+  // Legacy hand-authored patterns use a plain space and contain no \x00.
+  // When \x00 style is active, a trailing \x00 is appended to the joined args string
+  // to match the sentinel embedded in the pattern.
+  // Every argv token remains authorization-significant: this boundary cannot prove
+  // whether a redirect-shaped token was shell syntax or literal process data.
+  //
+  // Zero args use a double sentinel "\x00\x00" to distinguish [] from [""] — both
+  // join to "" but must match different patterns ("^\x00\x00$" vs "^\x00$").
+  const sep = argPattern.includes("\x00") ? "\x00" : " ";
+  const argsString =
+    sep === "\x00" ? renderGeneratedArgPatternSubject(argv) : argv.slice(1).join(sep);
+  try {
+    const regex = new RegExp(argPattern);
+    if (regex.test(argsString)) {
+      return true;
+    }
+    // On Windows, LLMs may use forward slashes (`C:/path`) or backslashes
+    // (`C:\path`) interchangeably.  Normalize to backslashes and retry so
+    // that an argPattern built from one style still matches the other.
+    // Use the caller-supplied target platform so Linux gateways evaluating
+    // Windows node commands also perform the normalization.
+    const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
+    if (effectivePlatform.startsWith("win")) {
+      const normalized = argsString.replace(/\//g, "\\");
+      if (normalized !== argsString && regex.test(normalized)) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function hasPathSelector(value: string): boolean {
+  return value.includes("/") || value.includes("\\") || value.includes("~");
+}
+
+function matchesExecutableBasenamePattern(
+  pattern: string,
+  resolution: ExecutableResolution,
+): boolean {
+  // Bare command-name allowlist entries are for PATH-resolved commands. A raw
+  // path such as ./rg or /tmp/rg must use a path allowlist entry so a workspace
+  // binary cannot inherit trust from a global command-name entry.
+  if (hasPathSelector(resolution.rawExecutable)) {
+    return false;
+  }
+  const candidates = new Set<string>();
+  if (resolution.executableName) {
+    candidates.add(resolution.executableName);
+  }
+  if (resolution.resolvedPath) {
+    candidates.add(path.basename(resolution.resolvedPath));
+  }
+  return [...candidates].some((candidate) => matchesExecAllowlistPattern(pattern, candidate));
 }
 
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
-  resolution: CommandResolution | null,
+  resolution: ExecutableResolution | null,
+  argv?: string[],
+  platform?: string | null,
 ): ExecAllowlistEntry | null {
   if (!entries.length) {
     return null;
@@ -150,28 +391,48 @@ export function matchAllowlist(
   // A bare "*" wildcard allows any parsed executable command.
   // Check it before the resolvedPath guard so unresolved PATH lookups still
   // match (for example platform-specific executables without known extensions).
-  const bareWild = entries.find((e) => e.pattern?.trim() === "*");
+  const bareWild = entries.find(
+    (e) => e.pattern?.trim() === "*" && !e.argPattern && e.source !== "allow-always",
+  );
   if (bareWild && resolution) {
     return bareWild;
   }
   if (!resolution?.resolvedPath) {
     return null;
   }
-  const resolvedPath = resolution.resolvedPath;
+  const trustPath = resolution.resolvedRealPath?.trim() || resolution.resolvedPath;
+  if (!trustPath) {
+    return null;
+  }
+  let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
     if (!pattern) {
       continue;
     }
-    const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
-    if (!hasPath) {
+    const patternMatches = hasPathSelector(pattern)
+      ? matchesExecAllowlistPattern(pattern, trustPath)
+      : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
+    if (!patternMatches) {
       continue;
     }
-    if (matchesExecAllowlistPattern(pattern, resolvedPath)) {
+    if (!entry.argPattern) {
+      // Old generated allow-always entries were path-only and could authorize
+      // changed argv after upgrade. Manual path-only entries have no source.
+      if (entry.source === "allow-always") {
+        continue;
+      }
+      if (!pathOnlyMatch) {
+        pathOnlyMatch = entry;
+      }
+      continue;
+    }
+    // Entry has argPattern — check argv match.
+    if (argv && matchArgPattern(entry.argPattern, argv, platform)) {
       return entry;
     }
   }
-  return null;
+  return pathOnlyMatch;
 }
 
 export type ExecArgvToken =

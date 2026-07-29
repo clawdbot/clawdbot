@@ -1,3 +1,4 @@
+// Documents model tool-support compatibility defaults.
 import { describe, expect, it } from "vitest";
 import { supportsModelTools } from "./model-tool-support.js";
 

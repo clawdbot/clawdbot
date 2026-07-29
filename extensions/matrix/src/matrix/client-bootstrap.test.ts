@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Matrix tests cover client bootstrap plugin behavior.
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   matrixClientResolverMocks,
@@ -13,6 +14,8 @@ const {
   isBunRuntimeMock,
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
+
+const TEST_CFG = {};
 
 vi.mock("../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
@@ -32,10 +35,15 @@ vi.mock("./client/shared.js", () => ({
   releaseSharedClientInstance: (...args: unknown[]) => releaseSharedClientInstanceMock(...args),
 }));
 
-const { resolveRuntimeMatrixClientWithReadiness, withResolvedRuntimeMatrixClient } =
-  await import("./client-bootstrap.js");
+let resolveRuntimeMatrixClientWithReadiness: typeof import("./client-bootstrap.js").resolveRuntimeMatrixClientWithReadiness;
+let withResolvedRuntimeMatrixClient: typeof import("./client-bootstrap.js").withResolvedRuntimeMatrixClient;
 
 describe("client bootstrap", () => {
+  beforeAll(async () => {
+    ({ resolveRuntimeMatrixClientWithReadiness, withResolvedRuntimeMatrixClient } =
+      await import("./client-bootstrap.js"));
+  });
+
   beforeEach(() => {
     primeMatrixClientResolverMocks({ resolved: {} });
   });
@@ -46,11 +54,12 @@ describe("client bootstrap", () => {
 
   it("releases leased shared clients when readiness setup fails", async () => {
     const sharedClient = createMockMatrixClient();
-    vi.mocked(sharedClient.prepareForOneOff).mockRejectedValue(new Error("prepare failed"));
+    vi.mocked(sharedClient["prepareForOneOff"]).mockRejectedValue(new Error("prepare failed"));
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
 
     await expect(
       resolveRuntimeMatrixClientWithReadiness({
+        cfg: TEST_CFG,
         accountId: "default",
         readiness: "prepared",
       }),
@@ -61,12 +70,13 @@ describe("client bootstrap", () => {
 
   it("releases leased shared clients when the wrapped action throws during readiness", async () => {
     const sharedClient = createMockMatrixClient();
-    vi.mocked(sharedClient.start).mockRejectedValue(new Error("start failed"));
+    vi.mocked(sharedClient["start"]).mockRejectedValue(new Error("start failed"));
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
 
     await expect(
       withResolvedRuntimeMatrixClient(
         {
+          cfg: TEST_CFG,
           accountId: "default",
           readiness: "started",
         },

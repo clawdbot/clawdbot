@@ -3,18 +3,15 @@ summary: "JSON-only LLM tasks for workflows (optional plugin tool)"
 read_when:
   - You want a JSON-only LLM step inside workflows
   - You need schema-validated LLM output for automation
-title: "LLM Task"
+title: "LLM task"
 ---
 
-# LLM Task
+`llm-task` is a bundled **optional plugin tool** that runs a single JSON-only
+LLM call and returns structured output, optionally validated against a JSON
+Schema. It gives workflow engines like Lobster an LLM step without custom
+OpenClaw code per workflow.
 
-`llm-task` is an **optional plugin tool** that runs a JSON-only LLM task and
-returns structured output (optionally validated against JSON Schema).
-
-This is ideal for workflow engines like Lobster: you can add a single LLM step
-without writing custom OpenClaw code for each workflow.
-
-## Enable the plugin
+## Enable
 
 1. Enable the plugin:
 
@@ -28,20 +25,19 @@ without writing custom OpenClaw code for each workflow.
 }
 ```
 
-2. Allowlist the tool (it is registered with `optional: true`):
+2. Allow the tool:
 
 ```json
 {
-  "agents": {
-    "list": [
-      {
-        "id": "main",
-        "tools": { "allow": ["llm-task"] }
-      }
-    ]
+  "tools": {
+    "alsoAllow": ["llm-task"]
   }
 }
 ```
+
+`alsoAllow` adds `llm-task` on top of the active tool profile without
+restricting other core tools. Use `tools.allow` only if you want a restrictive
+allowlist mode instead.
 
 ## Config (optional)
 
@@ -52,10 +48,10 @@ without writing custom OpenClaw code for each workflow.
       "llm-task": {
         "enabled": true,
         "config": {
-          "defaultProvider": "openai-codex",
-          "defaultModel": "gpt-5.4",
+          "defaultProvider": "openai",
+          "defaultModel": "gpt-5.6-sol",
           "defaultAuthProfileId": "main",
-          "allowedModels": ["openai-codex/gpt-5.4"],
+          "allowedModels": ["openai/gpt-5.6-sol"],
           "maxTokens": 800,
           "timeoutMs": 30000
         }
@@ -65,30 +61,50 @@ without writing custom OpenClaw code for each workflow.
 }
 ```
 
-`allowedModels` is an allowlist of `provider/model` strings. If set, any request
-outside the list is rejected.
+`allowedModels` is an allowlist of `provider/model` strings; a request for any
+other model is rejected. All other keys are per-call fallbacks used when the
+tool call omits that parameter.
 
 ## Tool parameters
 
-- `prompt` (string, required)
-- `input` (any, optional)
-- `schema` (object, optional JSON Schema)
-- `provider` (string, optional)
-- `model` (string, optional)
-- `thinking` (string, optional)
-- `authProfileId` (string, optional)
-- `temperature` (number, optional)
-- `maxTokens` (number, optional)
-- `timeoutMs` (number, optional)
-
-`thinking` accepts the standard OpenClaw reasoning presets, such as `low` or `medium`.
+| Parameter       | Type   | Notes                                                                                                                                         |
+| --------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`        | string | Required. Task instruction for the LLM.                                                                                                       |
+| `input`         | any    | Optional payload; serialized to JSON and appended to the prompt.                                                                              |
+| `schema`        | object | Optional JSON Schema the parsed output must validate against.                                                                                 |
+| `provider`      | string | Overrides `defaultProvider` / the agent's default provider.                                                                                   |
+| `model`         | string | Overrides `defaultModel`; accepts bare model ids, aliases, or a `provider/model` ref (a duplicate provider prefix is stripped automatically). |
+| `thinking`      | string | Reasoning level (e.g. `low`, `medium`); must be one supported by the resolved model.                                                          |
+| `authProfileId` | string | Overrides `defaultAuthProfileId`.                                                                                                             |
+| `temperature`   | number | Best-effort; not all providers honor it.                                                                                                      |
+| `maxTokens`     | number | Best-effort cap on output tokens.                                                                                                             |
+| `timeoutMs`     | number | Run timeout; default `30000`.                                                                                                                 |
 
 ## Output
 
-Returns `details.json` containing the parsed JSON (and validates against
-`schema` when provided).
+Returns `details.json` (the parsed, schema-validated JSON) plus `details.provider`
+and `details.model` naming what actually ran.
 
 ## Example: Lobster workflow step
+
+### Important limitation
+
+The example below assumes the **standalone Lobster CLI** is running where
+`openclaw.invoke` already has the correct gateway URL/auth context.
+
+For the bundled **embedded** Lobster runner inside OpenClaw, this nested CLI
+pattern is **not currently reliable**:
+
+```lobster
+openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
+```
+
+Until embedded Lobster has a supported bridge for this flow, prefer either:
+
+- direct `llm-task` tool calls outside Lobster, or
+- Lobster steps that do not rely on nested `openclaw.invoke` calls.
+
+Standalone Lobster CLI example:
 
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
@@ -112,8 +128,16 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 
 ## Safety notes
 
-- The tool is **JSON-only** and instructs the model to output only JSON (no
-  code fences, no commentary).
-- No tools are exposed to the model for this run.
-- Treat output as untrusted unless you validate with `schema`.
-- Put approvals before any side-effecting step (send, post, exec).
+- **JSON-only**: the model is instructed to return only a JSON value, no code
+  fences, no commentary.
+- **No tools**: the underlying run has tools disabled, so the model cannot call
+  out mid-task.
+- Treat output as untrusted unless you validate it with `schema`.
+- Put approvals before any side-effecting step (send, post, exec) that consumes
+  this output.
+
+## Related
+
+- [Thinking levels](/tools/thinking)
+- [Sub-agents](/tools/subagents)
+- [Slash commands](/tools/slash-commands)

@@ -1,3 +1,5 @@
+// Slack type declarations define plugin contracts.
+import type { SlackAppContext } from "./agent-context.js";
 export type SlackFile = {
   id?: string;
   name?: string;
@@ -10,6 +12,7 @@ export type SlackFile = {
 
 export type SlackAttachment = {
   fallback?: string;
+  title?: string;
   text?: string;
   pretext?: string;
   author_name?: string;
@@ -18,6 +21,8 @@ export type SlackAttachment = {
   ts?: string;
   channel_name?: string;
   channel_id?: string;
+  app_unfurl_url?: string;
+  is_app_unfurl?: boolean;
   is_msg_unfurl?: boolean;
   is_share?: boolean;
   image_url?: string;
@@ -25,6 +30,8 @@ export type SlackAttachment = {
   image_height?: number;
   thumb_url?: string;
   files?: SlackFile[];
+  fields?: Array<{ title?: string; value?: string }>;
+  blocks?: unknown[];
   message_blocks?: unknown[];
 };
 
@@ -41,8 +48,16 @@ export type SlackMessageEvent = {
   parent_user_id?: string;
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
+  blocks?: unknown[];
   files?: SlackFile[];
   attachments?: SlackAttachment[];
+  assistant_thread?: Record<string, unknown>;
+  app_context?: SlackAppContext;
+  /**
+   * Set by the thread_ts resolver when Slack supplied parent_user_id but the
+   * parent thread timestamp could not be recovered.
+   */
+  _ambiguousThreadReply?: boolean;
 };
 
 export type SlackAppMentionEvent = {

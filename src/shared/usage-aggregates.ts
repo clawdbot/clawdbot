@@ -1,3 +1,4 @@
+// Usage aggregate helpers accumulate token, cost, and latency usage totals.
 type LatencyTotalsLike = {
   count: number;
   sum: number;
@@ -29,6 +30,7 @@ type LatencyLike = {
 
 type DailyLatencyInput = LatencyLike & { date: string };
 
+/** Merges latency summaries by keeping weighted averages as sum/count accumulator state. */
 export function mergeUsageLatency(
   totals: LatencyTotalsLike,
   latency: LatencyLike | undefined,
@@ -43,6 +45,7 @@ export function mergeUsageLatency(
   totals.p95Max = Math.max(totals.p95Max, latency.p95Ms);
 }
 
+/** Groups daily latency summaries by date while preserving weighted averages for output. */
 export function mergeUsageDailyLatency(
   dailyLatencyMap: Map<string, DailyLatencyLike>,
   dailyLatency?: DailyLatencyInput[] | null,
@@ -65,6 +68,7 @@ export function mergeUsageDailyLatency(
   }
 }
 
+/** Builds deterministic usage aggregate arrays for API responses and UI rendering. */
 export function buildUsageAggregateTail<
   TTotals extends { totalCost: number },
   TDaily extends DailyLike,
@@ -85,6 +89,7 @@ export function buildUsageAggregateTail<
         ? {
             count: params.latencyTotals.count,
             avgMs: params.latencyTotals.sum / params.latencyTotals.count,
+            // Empty aggregates keep Infinity internally so later real samples win min comparisons.
             minMs:
               params.latencyTotals.min === Number.POSITIVE_INFINITY ? 0 : params.latencyTotals.min,
             maxMs: params.latencyTotals.max,

@@ -1,14 +1,18 @@
+// Slack tests cover sent thread cache plugin behavior.
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
+import { setSlackRuntime } from "./runtime.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
+  hasSlackThreadParticipationWithPersistence,
   recordSlackThreadParticipation,
 } from "./sent-thread-cache.js";
 
 describe("slack sent-thread-cache", () => {
   afterEach(() => {
     clearSlackThreadParticipationCache();
+    setSlackRuntime(null as never);
     vi.restoreAllMocks();
   });
 
@@ -87,5 +91,76 @@ describe("slack sent-thread-cache", () => {
 
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000000")).toBe(false);
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.005000")).toBe(true);
+  });
+
+  it("writes and reads persistent thread participation when runtime state is available", async () => {
+    const register = vi.fn().mockResolvedValue(undefined);
+    const lookup = vi.fn().mockResolvedValue({ repliedAt: 123 });
+    const openKeyedStore = vi.fn(() => ({
+      register,
+      lookup,
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    }));
+    setSlackRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_000);
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000002");
+
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
+    expect(register).toHaveBeenCalledWith("A1:C123:1700000000.000002", {
+      repliedAt: 1_711_406_400_000,
+    });
+
+    clearSlackThreadParticipationCache();
+    await expect(
+      hasSlackThreadParticipationWithPersistence({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000002",
+      }),
+    ).resolves.toBe(true);
+    expect(openKeyedStore).toHaveBeenCalledTimes(2);
+    expect(lookup).toHaveBeenCalledWith("A1:C123:1700000000.000002");
+
+    lookup.mockClear();
+    await expect(
+      hasSlackThreadParticipationWithPersistence({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000002",
+      }),
+    ).resolves.toBe(true);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("falls back to in-memory thread participation when persistent state cannot open", async () => {
+    const warn = vi.fn();
+    setSlackRuntime({
+      state: {
+        openKeyedStore: vi.fn(() => {
+          throw new Error("sqlite unavailable");
+        }),
+      },
+      logging: { getChildLogger: () => ({ warn }) },
+    } as never);
+
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000003");
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000003")).toBe(true);
+
+    clearSlackThreadParticipationCache();
+    await expect(
+      hasSlackThreadParticipationWithPersistence({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000003",
+      }),
+    ).resolves.toBe(false);
+    expect(warn).toHaveBeenCalled();
   });
 });

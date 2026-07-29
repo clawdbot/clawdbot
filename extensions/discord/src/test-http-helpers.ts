@@ -1,3 +1,4 @@
+// Discord helper module supports test http helpers behavior.
 export function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }

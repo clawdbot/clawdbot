@@ -1,28 +1,25 @@
 package ai.openclaw.app.node
 
-import android.Manifest
+import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.hasPhotoReadPermission
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import androidx.core.content.ContextCompat
 import androidx.core.graphics.scale
-import ai.openclaw.app.gateway.GatewaySession
-import java.io.ByteArrayOutputStream
-import java.time.Instant
-import kotlin.math.max
-import kotlin.math.roundToInt
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.io.ByteArrayOutputStream
+import java.time.Instant
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 private const val DEFAULT_PHOTOS_LIMIT = 1
 private const val DEFAULT_PHOTOS_MAX_WIDTH = 1600
@@ -30,12 +27,14 @@ private const val DEFAULT_PHOTOS_QUALITY = 0.85
 private const val MAX_TOTAL_BASE64_CHARS = 340 * 1024
 private const val MAX_PER_PHOTO_BASE64_CHARS = 300 * 1024
 
+/** Request shape for photos.latest after defaults and bounds are applied. */
 internal data class PhotosLatestRequest(
   val limit: Int,
   val maxWidth: Int,
   val quality: Double,
 )
 
+/** Encoded photo payload returned to the gateway. */
 internal data class EncodedPhotoPayload(
   val format: String,
   val base64: String,
@@ -44,24 +43,23 @@ internal data class EncodedPhotoPayload(
   val createdAt: String?,
 )
 
+/** Photo access seam for Android MediaStore and tests. */
 internal interface PhotosDataSource {
   fun hasPermission(context: Context): Boolean
 
-  fun latest(context: Context, request: PhotosLatestRequest): List<EncodedPhotoPayload>
+  fun latest(
+    context: Context,
+    request: PhotosLatestRequest,
+  ): List<EncodedPhotoPayload>
 }
 
 private object SystemPhotosDataSource : PhotosDataSource {
-  override fun hasPermission(context: Context): Boolean {
-    val permission =
-      if (Build.VERSION.SDK_INT >= 33) {
-        Manifest.permission.READ_MEDIA_IMAGES
-      } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
-      }
-    return ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
-  }
+  override fun hasPermission(context: Context): Boolean = hasPhotoReadPermission(context)
 
-  override fun latest(context: Context, request: PhotosLatestRequest): List<EncodedPhotoPayload> {
+  override fun latest(
+    context: Context,
+    request: PhotosLatestRequest,
+  ): List<EncodedPhotoPayload> {
     val resolver = context.contentResolver
     val rows = queryLatestRows(resolver, request.limit)
     if (rows.isEmpty()) return emptyList()
@@ -71,17 +69,24 @@ private object SystemPhotosDataSource : PhotosDataSource {
     for (row in rows) {
       if (remainingBudget <= 0) break
       val bitmap = decodeScaledBitmap(resolver, row.uri, request.maxWidth) ?: continue
-      val encoded = encodeJpegUnderBudget(bitmap, request.quality, MAX_PER_PHOTO_BASE64_CHARS) ?: continue
-      if (encoded.base64.length > remainingBudget) break
-      remainingBudget -= encoded.base64.length
-      out +=
-        EncodedPhotoPayload(
-          format = "jpeg",
-          base64 = encoded.base64,
-          width = encoded.width,
-          height = encoded.height,
-          createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() },
-        )
+      try {
+        // Enforce both per-photo and total payload budgets before returning
+        // base64 data through the gateway invoke response.
+        val encoded = encodeJpegUnderBudget(bitmap, request.quality, MAX_PER_PHOTO_BASE64_CHARS)
+        if (encoded == null) continue
+        if (encoded.base64.length > remainingBudget) break
+        remainingBudget -= encoded.base64.length
+        out +=
+          EncodedPhotoPayload(
+            format = "jpeg",
+            base64 = encoded.base64,
+            width = encoded.width,
+            height = encoded.height,
+            createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() },
+          )
+      } finally {
+        bitmap.recycle()
+      }
     }
     return out
   }
@@ -97,7 +102,10 @@ private object SystemPhotosDataSource : PhotosDataSource {
     val height: Int,
   )
 
-  private fun queryLatestRows(resolver: ContentResolver, limit: Int): List<PhotoRow> {
+  private fun queryLatestRows(
+    resolver: ContentResolver,
+    limit: Int,
+  ): List<PhotoRow> {
     val projection =
       arrayOf(
         MediaStore.Images.Media._ID,
@@ -112,29 +120,30 @@ private object SystemPhotosDataSource : PhotosDataSource {
         putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
       }
 
-    resolver.query(
-      MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-      projection,
-      args,
-      null,
-    ).use { cursor ->
-      if (cursor == null) return emptyList()
-      val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-      val takenIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
-      val addedIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-      val rows = mutableListOf<PhotoRow>()
-      while (cursor.moveToNext()) {
-        val id = cursor.getLong(idIndex)
-        val takenMs = cursor.getLong(takenIndex).takeIf { it > 0L }
-        val addedMs = cursor.getLong(addedIndex).takeIf { it > 0L }?.times(1000L)
-        rows +=
-          PhotoRow(
-            uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id),
-            createdAtMs = takenMs ?: addedMs,
-          )
+    resolver
+      .query(
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        projection,
+        args,
+        null,
+      ).use { cursor ->
+        if (cursor == null) return emptyList()
+        val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        val takenIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+        val addedIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+        val rows = mutableListOf<PhotoRow>()
+        while (cursor.moveToNext()) {
+          val id = cursor.getLong(idIndex)
+          val takenMs = cursor.getLong(takenIndex).takeIf { it > 0L }
+          val addedMs = cursor.getLong(addedIndex).takeIf { it > 0L }?.times(1000L)
+          rows +=
+            PhotoRow(
+              uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id),
+              createdAtMs = takenMs ?: addedMs,
+            )
+        }
+        return rows
       }
-      return rows
-    }
   }
 
   private fun decodeScaledBitmap(
@@ -158,11 +167,20 @@ private object SystemPhotosDataSource : PhotosDataSource {
       } ?: return null
 
     if (decoded.width <= maxWidth) return decoded
+    // Decode sampling is power-of-two only; finish with exact scaling when the
+    // sampled bitmap is still wider than the requested max width.
     val targetHeight = max(1, ((decoded.height.toDouble() * maxWidth) / decoded.width).roundToInt())
-    return decoded.scale(maxWidth, targetHeight, true)
+    return try {
+      decoded.scale(maxWidth, targetHeight, true)
+    } finally {
+      decoded.recycle()
+    }
   }
 
-  private fun computeInSampleSize(width: Int, maxWidth: Int): Int {
+  private fun computeInSampleSize(
+    width: Int,
+    maxWidth: Int,
+  ): Int {
     var sample = 1
     var candidate = width
     while (candidate > maxWidth && sample < 64) {
@@ -178,39 +196,48 @@ private object SystemPhotosDataSource : PhotosDataSource {
     maxBase64Chars: Int,
   ): EncodedJpeg? {
     var working = bitmap
-    var jpegQuality = (quality.coerceIn(0.1, 1.0) * 100.0).roundToInt().coerceIn(10, 100)
-    repeat(10) {
-      val out = ByteArrayOutputStream()
-      val ok = working.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
-      if (!ok) return null
-      val bytes = out.toByteArray()
-      val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-      if (base64.length <= maxBase64Chars) {
-        return EncodedJpeg(
-          base64 = base64,
-          width = working.width,
-          height = working.height,
-        )
+    try {
+      var jpegQuality = (quality.coerceIn(0.1, 1.0) * 100.0).roundToInt().coerceIn(10, 100)
+      repeat(10) {
+        val out = ByteArrayOutputStream()
+        val ok = working.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
+        if (!ok) return null
+        val bytes = out.toByteArray()
+        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        if (base64.length <= maxBase64Chars) {
+          return EncodedJpeg(
+            base64 = base64,
+            width = working.width,
+            height = working.height,
+          )
+        }
+        if (jpegQuality > 35) {
+          // Try quality reduction before resizing so small images keep detail.
+          jpegQuality = max(25, jpegQuality - 15)
+          return@repeat
+        }
+        val nextWidth = max(240, (working.width * 0.75f).roundToInt())
+        if (nextWidth >= working.width) return null
+        val nextHeight = max(1, ((working.height.toDouble() * nextWidth) / working.width).roundToInt())
+        val previous = working
+        working = working.scale(nextWidth, nextHeight, true)
+        if (previous !== bitmap) previous.recycle()
       }
-      if (jpegQuality > 35) {
-        jpegQuality = max(25, jpegQuality - 15)
-        return@repeat
-      }
-      val nextWidth = max(240, (working.width * 0.75f).roundToInt())
-      if (nextWidth >= working.width) return null
-      val nextHeight = max(1, ((working.height.toDouble() * nextWidth) / working.width).roundToInt())
-      working = working.scale(nextWidth, nextHeight, true)
+      return null
+    } finally {
+      if (working !== bitmap) working.recycle()
     }
-    return null
   }
 }
 
+/** Handles photos.latest by querying MediaStore and returning bounded JPEG payloads. */
 class PhotosHandler private constructor(
   private val appContext: Context,
   private val dataSource: PhotosDataSource,
 ) {
   constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemPhotosDataSource)
 
+  /** Returns the newest accessible photos as gateway-sized base64 JPEGs. */
   fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -273,6 +300,7 @@ class PhotosHandler private constructor(
     val maxWidthRaw = (params["maxWidth"] as? JsonPrimitive)?.content?.toIntOrNull()
     val qualityRaw = (params["quality"] as? JsonPrimitive)?.content?.toDoubleOrNull()
 
+    // Clamp model-supplied values to protect memory and response-size limits.
     val limit = (limitRaw ?: DEFAULT_PHOTOS_LIMIT).coerceIn(1, 20)
     val maxWidth = (maxWidthRaw ?: DEFAULT_PHOTOS_MAX_WIDTH).coerceIn(240, 4096)
     val quality = (qualityRaw ?: DEFAULT_PHOTOS_QUALITY).coerceIn(0.1, 1.0)
@@ -280,6 +308,7 @@ class PhotosHandler private constructor(
   }
 
   companion object {
+    /** Creates a handler with an injected photo source for parser and payload tests. */
     internal fun forTesting(
       appContext: Context,
       dataSource: PhotosDataSource,

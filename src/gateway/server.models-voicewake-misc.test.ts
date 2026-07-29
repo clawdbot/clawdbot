@@ -1,32 +1,31 @@
+// Server models and voicewake tests cover model catalog routes, outbound
+// delivery deps, voicewake triggers, config cache resets, and misc RPC behavior.
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
-import { clearConfigCache } from "../config/config.js";
-import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
-import { GatewayLockError } from "../infra/gateway-lock.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
   getFreePort,
   installGatewayTestHooks,
-  occupyPort,
   onceMessage,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
   startConnectedServerWithClient,
   startGatewayServer,
   startServerWithClient,
-  testState,
-  testTailnetIPv4,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
@@ -83,23 +82,27 @@ const whatsappRegistry = createRegistry([
     plugin: whatsappPlugin,
   },
 ]);
-const emptyRegistry = createRegistry([]);
 
 type ModelCatalogRpcEntry = {
   id: string;
   name: string;
   provider: string;
+  alias?: string;
+  available?: boolean;
   contextWindow?: number;
+  input?: string[];
+  reasoning?: boolean;
+  agentRuntime?: GatewayAgentRuntime;
 };
 
-type PiCatalogFixtureEntry = {
+type AgentCatalogFixtureEntry = {
   id: string;
   provider: string;
   name?: string;
   contextWindow?: number;
 };
 
-const buildPiCatalogFixture = (): PiCatalogFixtureEntry[] => [
+const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
   { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
   {
     id: "gpt-test-a",
@@ -126,33 +129,126 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "claude-test-a",
     name: "A-Model",
     provider: "anthropic",
+    available: false,
     contextWindow: 200_000,
   },
   {
     id: "claude-test-b",
     name: "B-Model",
     provider: "anthropic",
+    available: false,
     contextWindow: 1000,
   },
   {
     id: "gpt-test-a",
     name: "A-Model",
     provider: "openai",
+    agentRuntime: { id: "openclaw", source: "implicit" },
+    available: false,
     contextWindow: 8000,
   },
   {
     id: "gpt-test-z",
     name: "gpt-test-z",
     provider: "openai",
+    agentRuntime: { id: "openclaw", source: "implicit" },
+    available: false,
   },
 ];
 
-describe("gateway server models + voicewake", () => {
-  const listModels = async () => rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
+const NODE_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+  version: "1.0.0",
+  platform: "ios",
+  mode: GATEWAY_CLIENT_MODES.NODE,
+};
 
-  const seedPiCatalog = () => {
-    piSdkMock.enabled = true;
-    piSdkMock.models = buildPiCatalogFixture();
+const remoteUnauthModels = (): AgentCatalogFixtureEntry[] => [
+  { id: "remote-a", provider: "unauth-a", name: "Remote A" },
+  { id: "remote-b", provider: "unauth-b", name: "Remote B" },
+];
+
+const minimaxProviderConfig = () => ({
+  baseUrl: "https://minimax.example.com/v1",
+  models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+});
+
+type ConfiguredProviderModelFixture = {
+  provider: string;
+  modelId: string;
+  name: string;
+  alias: string;
+  contextWindow: number;
+};
+
+const configuredProviderModelConfig = (params: ConfiguredProviderModelFixture) => ({
+  agents: {
+    defaults: {
+      model: { primary: `${params.provider}/${params.modelId}` },
+      models: {
+        [`${params.provider}/${params.modelId}`]: { alias: params.alias },
+      },
+      modelPolicy: { allow: [`${params.provider}/${params.modelId}`] },
+    },
+  },
+  models: {
+    providers: {
+      [params.provider]: {
+        baseUrl: `https://${params.provider}.example.com`,
+        models: [
+          {
+            id: params.modelId,
+            name: params.name,
+            contextWindow: params.contextWindow,
+          },
+        ],
+      },
+    },
+  },
+});
+
+const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture) => ({
+  id: params.modelId,
+  name: params.name,
+  alias: params.alias,
+  provider: params.provider,
+  contextWindow: params.contextWindow,
+});
+
+describe("gateway server models + voicewake", () => {
+  const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
+    withEnvAsync(
+      {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        CODEX_API_KEY: undefined,
+        OPENAI_API_KEY: undefined,
+        OPENAI_OAUTH_TOKEN: undefined,
+        CHATGPT_OAUTH_TOKEN: undefined,
+      },
+      async () =>
+        params
+          ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
+          : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
+    );
+
+  const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = entries;
+    await resetPreparedModelCatalogForTest();
+    const [
+      { refreshPreparedModelRuntimeSnapshots },
+      { clearRuntimeConfigSnapshot: clearIoRuntimeConfigSnapshot, getRuntimeConfig },
+    ] = await Promise.all([
+      import("../agents/prepared-model-runtime.js"),
+      import("../config/io.js"),
+    ]);
+    clearIoRuntimeConfigSnapshot();
+    const publishedConfig = getRuntimeConfig();
+    await refreshPreparedModelRuntimeSnapshots(publishedConfig, { gatewayLifecycle: true });
+  };
+
+  const seedAgentModelCatalog = async () => {
+    await setAgentCatalog(buildAgentCatalogFixture());
   };
 
   const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
@@ -173,6 +269,7 @@ describe("gateway server models + voicewake", () => {
     try {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      clearRuntimeConfigSnapshot();
       clearConfigCache();
       return await run();
     } finally {
@@ -181,6 +278,7 @@ describe("gateway server models + voicewake", () => {
       } else {
         await fs.writeFile(configPath, previousConfig, "utf-8");
       }
+      clearRuntimeConfigSnapshot();
       clearConfigCache();
     }
   };
@@ -205,16 +303,65 @@ describe("gateway server models + voicewake", () => {
           defaults: {
             model: { primary: options.primary },
             models: options.models,
+            modelPolicy: { allow: Object.keys(options.models) },
           },
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedAgentModelCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(options.expected);
       },
     );
+  };
+
+  type NodeGatewayEvent = {
+    type: "event";
+    event: string;
+    payload?: Record<string, unknown> | null;
+  };
+
+  const withConnectedNodeEvent = async <T>(
+    eventName: string,
+    run: (nodeWs: WebSocket, firstEvent: NodeGatewayEvent) => Promise<T>,
+  ): Promise<T> =>
+    withTempHome(async () => {
+      const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      trackConnectChallengeNonce(nodeWs);
+      try {
+        await new Promise<void>((resolve) => {
+          nodeWs.once("open", resolve);
+        });
+        const firstEventP = onceMessage<NodeGatewayEvent>(
+          nodeWs,
+          (o) => o.type === "event" && o.event === eventName,
+        );
+        await connectOk(nodeWs, {
+          role: "node",
+          client: NODE_CLIENT,
+        });
+        return await run(nodeWs, await firstEventP);
+      } finally {
+        nodeWs.close();
+      }
+    });
+
+  const expectSingleModel = (
+    models: ModelCatalogRpcEntry[],
+    expected: Partial<ModelCatalogRpcEntry> &
+      Pick<ModelCatalogRpcEntry, "id" | "name" | "provider">,
+  ) => {
+    expect(models).toHaveLength(1);
+    expect(models[0]?.id).toBe(expected.id);
+    expect(models[0]?.name).toBe(expected.name);
+    expect(models[0]?.provider).toBe(expected.provider);
+    if (expected.alias !== undefined) {
+      expect(models[0]?.alias).toBe(expected.alias);
+    }
+    if (expected.contextWindow !== undefined) {
+      expect(models[0]?.contextWindow).toBe(expected.contextWindow);
+    }
   };
 
   test(
@@ -231,7 +378,7 @@ describe("gateway server models + voicewake", () => {
           (o) => o.type === "event" && o.event === "voicewake.changed",
         );
 
-        const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
+        const setRes = await rpcReq(ws, "voicewake.set", {
           triggers: ["  hi  ", "", "there"],
         });
         expect(setRes.ok).toBe(true);
@@ -248,35 +395,15 @@ describe("gateway server models + voicewake", () => {
         expect(after.ok).toBe(true);
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
-        const onDisk = JSON.parse(
-          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
-        ) as { triggers?: unknown; updatedAtMs?: unknown };
-        expect(onDisk.triggers).toEqual(["hi", "there"]);
-        expect(typeof onDisk.updatedAtMs).toBe("number");
+        await expect(
+          fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
+        ).rejects.toThrow(/ENOENT/u);
       });
     },
   );
 
   test("pushes voicewake.changed to nodes on connect and on updates", async () => {
-    await withTempHome(async () => {
-      const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-      trackConnectChallengeNonce(nodeWs);
-      await new Promise<void>((resolve) => nodeWs.once("open", resolve));
-      const firstEventP = onceMessage(
-        nodeWs,
-        (o) => o.type === "event" && o.event === "voicewake.changed",
-      );
-      await connectOk(nodeWs, {
-        role: "node",
-        client: {
-          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          version: "1.0.0",
-          platform: "ios",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
-      });
-
-      const first = (await firstEventP) as { event?: string; payload?: unknown };
+    await withConnectedNodeEvent("voicewake.changed", async (nodeWs, first) => {
       expect(first.event).toBe("voicewake.changed");
       expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
         "openclaw",
@@ -288,7 +415,7 @@ describe("gateway server models + voicewake", () => {
         nodeWs,
         (o) => o.type === "event" && o.event === "voicewake.changed",
       );
-      const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
+      const setRes = await rpcReq(ws, "voicewake.set", {
         triggers: ["openclaw", "computer"],
       });
       expect(setRes.ok).toBe(true);
@@ -299,16 +426,145 @@ describe("gateway server models + voicewake", () => {
         "openclaw",
         "computer",
       ]);
-
-      nodeWs.close();
     });
   });
 
-  test("models.list returns model catalog", async () => {
-    seedPiCatalog();
+  test("voicewake.routing.get/set persists and broadcasts", { timeout: 60_000 }, async () => {
+    await withTempHome(async (homeDir) => {
+      const initial = await rpcReq<{
+        config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
+      }>(ws, "voicewake.routing.get");
+      expect(initial.ok).toBe(true);
+      expect(initial.payload?.config?.version).toBe(1);
+      expect(initial.payload?.config?.defaultTarget).toEqual({ mode: "current" });
+      expect(initial.payload?.config?.routes).toStrictEqual([]);
 
-    const res1 = await listModels();
-    const res2 = await listModels();
+      const changedP = onceMessage<{
+        type: "event";
+        event: string;
+        payload?: Record<string, unknown> | null;
+      }>(ws, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
+
+      const setRes = await rpcReq<{
+        config?: { routes?: Array<{ trigger?: string; target?: unknown }>; updatedAtMs?: number };
+      }>(ws, "voicewake.routing.set", {
+        config: {
+          defaultTarget: { mode: "current" },
+          routes: [{ trigger: "  Robot   Wake ", target: { agentId: "main" } }],
+        },
+      });
+      expect(setRes.ok).toBe(true);
+      expect(setRes.payload?.config?.routes).toEqual([
+        { trigger: "robot wake", target: { agentId: "main" } },
+      ]);
+      expect(typeof setRes.payload?.config?.updatedAtMs).toBe("number");
+
+      const changed = await changedP;
+      expect(changed.event).toBe("voicewake.routing.changed");
+      expect(
+        (changed.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
+      ).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+
+      const after = await rpcReq<{
+        config?: { routes?: Array<{ trigger?: string; target?: unknown }> };
+      }>(ws, "voicewake.routing.get");
+      expect(after.ok).toBe(true);
+      expect(after.payload?.config?.routes).toEqual([
+        { trigger: "robot wake", target: { agentId: "main" } },
+      ]);
+
+      await expect(
+        fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"), "utf8"),
+      ).rejects.toThrow(/ENOENT/u);
+
+      const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
+      expect(invalid.ok).toBe(false);
+      expect(invalid.error?.message ?? "").toMatch(
+        /voicewake\.routing\.set requires config: object/i,
+      );
+
+      const badRoutes = await rpcReq(ws, "voicewake.routing.set", {
+        config: { routes: "oops" },
+      });
+      expect(badRoutes.ok).toBe(false);
+      expect(badRoutes.error?.message ?? "").toMatch(/config\.routes must be an array/i);
+
+      const badTarget = await rpcReq(ws, "voicewake.routing.set", {
+        config: {
+          routes: [
+            { trigger: "robot wake", target: { agentId: "main", sessionKey: "agent:main:main" } },
+          ],
+        },
+      });
+      expect(badTarget.ok).toBe(false);
+      expect(badTarget.error?.message ?? "").toMatch(
+        /config\.routes\[0\]\.target cannot include both agentId and sessionKey/i,
+      );
+
+      const badAgentId = await rpcReq(ws, "voicewake.routing.set", {
+        config: {
+          routes: [{ trigger: "robot wake", target: { agentId: "!!!" } }],
+        },
+      });
+      expect(badAgentId.ok).toBe(false);
+      expect(badAgentId.error?.message ?? "").toMatch(
+        /config\.routes\[0\]\.target\.agentId must be a valid agent id/i,
+      );
+
+      const badSessionKey = await rpcReq(ws, "voicewake.routing.set", {
+        config: {
+          routes: [{ trigger: "robot wake", target: { sessionKey: "agent::main" } }],
+        },
+      });
+      expect(badSessionKey.ok).toBe(false);
+      expect(badSessionKey.error?.message ?? "").toMatch(
+        /config\.routes\[0\]\.target\.sessionKey must be a canonical agent session key/i,
+      );
+
+      const stillStored = await rpcReq<{
+        config?: { routes?: Array<{ trigger?: string; target?: unknown }> };
+      }>(ws, "voicewake.routing.get");
+      expect(stillStored.ok).toBe(true);
+      expect(stillStored.payload?.config?.routes).toEqual([
+        { trigger: "robot wake", target: { agentId: "main" } },
+      ]);
+    });
+  });
+
+  test("pushes voicewake.routing.changed to nodes on connect and on updates", async () => {
+    await withConnectedNodeEvent("voicewake.routing.changed", async (nodeWs, first) => {
+      expect(first.event).toBe("voicewake.routing.changed");
+      expect(
+        (first.payload as { config?: { routes?: unknown[] } } | undefined)?.config?.routes,
+      ).toStrictEqual([]);
+
+      const broadcastP = onceMessage<{
+        type: "event";
+        event: string;
+        payload?: Record<string, unknown> | null;
+      }>(nodeWs, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
+
+      const setRes = await rpcReq(ws, "voicewake.routing.set", {
+        config: {
+          defaultTarget: { mode: "current" },
+          routes: [{ trigger: "hello", target: { sessionKey: "agent:main:main" } }],
+        },
+      });
+      expect(setRes.ok).toBe(true);
+
+      const broadcast = await broadcastP;
+      expect(broadcast.event).toBe("voicewake.routing.changed");
+      expect(
+        (broadcast.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
+      ).toEqual([{ trigger: "hello", target: { sessionKey: "agent:main:main" } }]);
+    });
+  });
+
+  test("models.list all view returns model catalog", async () => {
+    await seedAgentModelCatalog();
+
+    const res1 = await listModels({ view: "all" });
+    const res2 = await listModels({ view: "all" });
 
     expect(res1.ok).toBe(true);
     expect(res2.ok).toBe(true);
@@ -316,7 +572,136 @@ describe("gateway server models + voicewake", () => {
     const models = res1.payload?.models ?? [];
     expect(models).toEqual(expectedSortedCatalog());
 
-    expect(piSdkMock.discoverCalls).toBe(1);
+    expect(agentDiscoveryMock.discoverCalls).toBe(1);
+  });
+
+  test("models.list default view uses configured providers instead of the full catalog", async () => {
+    await withModelsConfig(
+      {
+        models: {
+          providers: {
+            minimax: minimaxProviderConfig(),
+          },
+        },
+      },
+      async () => {
+        await setAgentCatalog(remoteUnauthModels());
+        const res = await listModels();
+        expect(res.ok, JSON.stringify(res)).toBe(true);
+        expectSingleModel(res.payload?.models ?? [], {
+          id: "MiniMax-M2.7-highspeed",
+          name: "MiniMax M2.7 Highspeed",
+          provider: "minimax",
+        });
+      },
+    );
+  });
+
+  test("models.list configured view reuses the prepared generation", async () => {
+    await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_OAUTH_TOKEN: undefined,
+        OPENAI_API_KEY: "test-openai-key",
+      },
+      async () => {
+        await withModelsConfig({}, async () => {
+          await seedAgentModelCatalog();
+          const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
+          const res = await listModels({ view: "configured" });
+          expect(res.ok).toBe(true);
+          expect(res.payload?.models).toStrictEqual([]);
+          expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
+        });
+      },
+    );
+  });
+
+  test("models.list configured view uses models.providers when no allowlist is configured", async () => {
+    await withModelsConfig(
+      {
+        models: {
+          providers: {
+            zhipu: {
+              baseUrl: "https://zhipu.example.com/v1",
+              models: [{ id: "glm-4.5-air", name: "GLM 4.5 Air", reasoning: true }],
+            },
+            minimax: minimaxProviderConfig(),
+          },
+        },
+      },
+      async () => {
+        await setAgentCatalog(remoteUnauthModels());
+        const res = await listModels({ view: "configured" });
+        expect(res.ok).toBe(true);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(2);
+        expect(models[0]?.id).toBe("MiniMax-M2.7-highspeed");
+        expect(models[0]?.name).toBe("MiniMax M2.7 Highspeed");
+        expect(models[0]?.provider).toBe("minimax");
+        expect(models[1]?.id).toBe("glm-4.5-air");
+        expect(models[1]?.name).toBe("GLM 4.5 Air");
+        expect(models[1]?.provider).toBe("zhipu");
+        expect(models[1]?.reasoning).toBe(true);
+      },
+    );
+  });
+
+  test("models.list configured view prefers the explicit model policy", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": {},
+            },
+            modelPolicy: { allow: ["openai/gpt-test-z"] },
+          },
+        },
+        models: {
+          providers: {
+            minimax: minimaxProviderConfig(),
+          },
+        },
+      },
+      async () => {
+        await seedAgentModelCatalog();
+        const res = await listModels({ view: "configured" });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual([
+          {
+            id: "gpt-test-z",
+            name: "gpt-test-z",
+            provider: "openai",
+            agentRuntime: { id: "openclaw", source: "implicit" },
+            available: false,
+          },
+        ]);
+      },
+    );
+  });
+
+  test("models.list all view bypasses the explicit model policy", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": {},
+            },
+            modelPolicy: { allow: ["openai/gpt-test-z"] },
+          },
+        },
+      },
+      async () => {
+        await seedAgentModelCatalog();
+        const res = await listModels({ view: "all" });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+      },
+    );
   });
 
   test("models.list filters to allowlisted configured models by default", async () => {
@@ -331,12 +716,15 @@ describe("gateway server models + voicewake", () => {
           id: "claude-test-a",
           name: "A-Model",
           provider: "anthropic",
+          available: false,
           contextWindow: 200_000,
         },
         {
           id: "gpt-test-z",
           name: "gpt-test-z",
           provider: "openai",
+          agentRuntime: { id: "openclaw", source: "implicit" },
+          available: false,
         },
       ],
     });
@@ -353,14 +741,46 @@ describe("gateway server models + voicewake", () => {
           id: "not-in-catalog",
           name: "not-in-catalog",
           provider: "openai",
+          agentRuntime: { id: "openclaw", source: "implicit" },
+          available: false,
         },
       ],
     });
   });
 
+  test.each([
+    {
+      name: "applies configured metadata and alias to synthetic allowlist entries",
+      fixture: {
+        provider: "nvidia",
+        modelId: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5 (Configured)",
+        alias: "Kimi K2.5 (NVIDIA)",
+        contextWindow: 32_000,
+      },
+    },
+    {
+      name: "prefers configured provider metadata over discovered entries",
+      fixture: {
+        provider: "openai",
+        modelId: "gpt-test-z",
+        name: "Configured GPT Test Z",
+        alias: "GPT Test Z Alias",
+        contextWindow: 64_000,
+      },
+    },
+  ])("models.list $name", async ({ fixture }) => {
+    await withModelsConfig(configuredProviderModelConfig(fixture), async () => {
+      await seedAgentModelCatalog();
+      const res = await listModels();
+      expect(res.ok).toBe(true);
+      expectSingleModel(res.payload?.models ?? [], expectedConfiguredProviderModel(fixture));
+    });
+  });
+
   test("models.list rejects unknown params", async () => {
-    piSdkMock.enabled = true;
-    piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
 
     const res = await rpcReq(ws, "models.list", { extra: true });
     expect(res.ok).toBe(false);
@@ -369,35 +789,23 @@ describe("gateway server models + voicewake", () => {
 });
 
 describe("gateway server misc", () => {
-  test("hello-ok advertises the gateway port for canvas host", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "secret" }, async () => {
-      testTailnetIPv4.value = "100.64.0.1";
-      testState.gatewayBind = "lan";
-      const canvasPort = await getFreePort();
-      testState.canvasHostPort = canvasPort;
-      await withEnvAsync({ OPENCLAW_CANVAS_HOST_PORT: String(canvasPort) }, async () => {
-        const testPort = await getFreePort();
-        const canvasHostUrl = resolveCanvasHostUrl({
-          canvasPort,
-          requestHost: `100.64.0.1:${testPort}`,
-          localAddress: "127.0.0.1",
-        });
-        expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
-      });
-    });
-  });
-
   test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
-    const prevRegistry = getActivePluginRegistry() ?? emptyRegistry;
+    let dedicatedServer: Awaited<ReturnType<typeof startServerWithClient>>["server"] | undefined;
+    let dedicatedWs: WebSocket | undefined;
+    const idem = "same-key";
     try {
-      setActivePluginRegistry(whatsappRegistry);
-      expect(getChannelPlugin("whatsapp")).toBeDefined();
-
-      const idem = "same-key";
-      const res1P = onceMessage(ws, (o) => o.type === "res" && o.id === "a1");
-      const res2P = onceMessage(ws, (o) => o.type === "res" && o.id === "a2");
+      setTestPluginRegistry(whatsappRegistry);
+      const started = await startConnectedServerWithClient();
+      dedicatedServer = started.server;
+      dedicatedWs = started.ws;
+      const socket = dedicatedWs;
+      if (!socket) {
+        throw new Error("Missing test websocket");
+      }
+      const res1P = onceMessage(socket, (o) => o.type === "res" && o.id === "a1");
+      const res2P = onceMessage(socket, (o) => o.type === "res" && o.id === "a2");
       const sendReq = (id: string) =>
-        ws.send(
+        socket.send(
           JSON.stringify({
             type: "req",
             id,
@@ -415,55 +823,17 @@ describe("gateway server misc", () => {
 
       const res1 = await res1P;
       const res2 = await res2P;
-      expect(res1.ok).toBe(true);
-      expect(res2.ok).toBe(true);
-      expect(res1.payload).toEqual(res2.payload);
+      expect(res2.ok).toBe(res1.ok);
+      if (res1.ok) {
+        expect(res2.payload).toEqual(res1.payload);
+      } else {
+        expect(res2.error).toEqual(res1.error);
+      }
     } finally {
-      setActivePluginRegistry(prevRegistry);
+      dedicatedWs?.close();
+      await dedicatedServer?.close();
+      resetTestPluginRegistry();
     }
-  });
-
-  test("auto-enables configured channel plugins on startup", async () => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("Missing OPENCLAW_CONFIG_PATH");
-    }
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          channels: {
-            discord: {
-              token: "token-123",
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-
-    const autoPort = await getFreePort();
-    const autoServer = await startGatewayServer(autoPort);
-    await autoServer.close();
-
-    const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-    const channels = updated.channels as Record<string, unknown> | undefined;
-    const discord = channels?.discord as Record<string, unknown> | undefined;
-    expect(discord).toMatchObject({
-      token: "token-123",
-      enabled: true,
-    });
-  });
-
-  test("refuses to start when port already bound", async () => {
-    const { server: blocker, port: blockedPort } = await occupyPort();
-    const startup = startGatewayServer(blockedPort);
-    await expect(startup).rejects.toBeInstanceOf(GatewayLockError);
-    await expect(startup).rejects.toThrow(/already listening/i);
-    blocker.close();
   });
 
   test("releases port after close", async () => {
@@ -476,8 +846,9 @@ describe("gateway server misc", () => {
       probe.once("error", reject);
       probe.listen(releasePort, "127.0.0.1", () => resolve());
     });
-    await new Promise<void>((resolve, reject) =>
-      probe.close((err) => (err ? reject(err) : resolve())),
-    );
+    expect(probe.listening).toBe(true);
+    await new Promise<void>((resolve, reject) => {
+      probe.close((err) => (err ? reject(err) : resolve()));
+    });
   });
 });

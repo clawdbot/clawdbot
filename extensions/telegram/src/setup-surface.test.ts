@@ -1,163 +1,192 @@
+// Telegram tests cover setup surface plugin behavior.
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
+import {
+  buildTelegramDmAccessWarningLines,
+  ensureTelegramDefaultGroupMentionGate,
+  shouldShowTelegramDmAccessWarning,
+  telegramSetupDmPolicy,
+} from "./setup-surface.helpers.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 
-async function runPrepare(cfg: OpenClawConfig, accountId: string) {
-  return await telegramSetupWizard.prepare?.({
-    cfg,
-    accountId,
-    credentialValues: {},
-    runtime: {} as never,
-    prompter: {} as never,
-    options: {},
+describe("Telegram setup promotion contract", () => {
+  it("exposes webhookSecret without widening named-account promotion", () => {
+    expect(telegramSetupAdapter.singleAccountKeysToMove).toEqual(["streaming", "webhookSecret"]);
+    expect(telegramSetupAdapter.namedAccountPromotionKeys).toEqual(["botToken", "tokenFile"]);
   });
-}
+});
 
-async function runFinalize(cfg: OpenClawConfig, accountId: string) {
-  const prompter = {
-    note: vi.fn(async () => undefined),
-  };
-
-  await telegramSetupWizard.finalize?.({
-    cfg,
-    accountId,
-    credentialValues: {},
-    runtime: {} as never,
-    prompter: prompter as never,
-    forceAllowFrom: false,
-  });
-
-  return prompter.note;
-}
-
-function expectPreparedResult(
-  prepared: Awaited<ReturnType<typeof runPrepare>>,
-): { cfg: OpenClawConfig } & Exclude<Awaited<ReturnType<typeof runPrepare>>, void | undefined> {
-  expect(prepared).toBeDefined();
-  if (
-    !prepared ||
-    typeof prepared !== "object" ||
-    !("cfg" in prepared) ||
-    prepared.cfg === undefined
-  ) {
-    throw new Error("Expected prepare result with cfg");
-  }
-  return prepared as { cfg: OpenClawConfig } & Exclude<
-    Awaited<ReturnType<typeof runPrepare>>,
-    void | undefined
-  >;
-}
-
-describe("telegramSetupWizard.prepare", () => {
-  it('adds groups["*"].requireMention=true for fresh setups', async () => {
-    const prepared = expectPreparedResult(
-      await runPrepare(
-        {
-          channels: {
-            telegram: {
-              botToken: "tok",
-            },
+describe("ensureTelegramDefaultGroupMentionGate", () => {
+  it('adds groups["*"].requireMention=true for fresh setups', () => {
+    const cfg = ensureTelegramDefaultGroupMentionGate(
+      {
+        channels: {
+          telegram: {
+            botToken: "tok",
           },
         },
-        DEFAULT_ACCOUNT_ID,
-      ),
+      },
+      DEFAULT_ACCOUNT_ID,
     );
 
-    expect(prepared.cfg.channels?.telegram?.groups).toEqual({
+    expect(cfg.channels?.telegram?.groups).toEqual({
       "*": { requireMention: true },
     });
   });
 
-  it("preserves an explicit wildcard group mention setting", async () => {
-    const prepared = expectPreparedResult(
-      await runPrepare(
-        {
-          channels: {
-            telegram: {
-              botToken: "tok",
-              groups: {
-                "*": { requireMention: false },
-              },
+  it("preserves an explicit wildcard group mention setting", () => {
+    const cfg = ensureTelegramDefaultGroupMentionGate(
+      {
+        channels: {
+          telegram: {
+            botToken: "tok",
+            groups: {
+              "*": { requireMention: false },
             },
           },
         },
-        DEFAULT_ACCOUNT_ID,
-      ),
+      },
+      DEFAULT_ACCOUNT_ID,
     );
 
-    expect(prepared.cfg.channels?.telegram?.groups).toEqual({
+    expect(cfg.channels?.telegram?.groups).toEqual({
       "*": { requireMention: false },
     });
   });
 });
 
-describe("telegramSetupWizard.finalize", () => {
-  it("shows global config commands for the default account", async () => {
-    const note = await runFinalize(
-      {
-        channels: {
-          telegram: {
-            botToken: "tok",
-          },
-        },
-      },
-      DEFAULT_ACCOUNT_ID,
-    );
+describe("telegram DM access warning helpers", () => {
+  it("shows global config commands for the default account", () => {
+    const lines = buildTelegramDmAccessWarningLines(DEFAULT_ACCOUNT_ID);
 
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining('openclaw config set channels.telegram.dmPolicy "allowlist"'),
-      "Telegram DM access warning",
+    expect(lines.join("\n")).toContain(
+      'openclaw config set channels.telegram.dmPolicy "allowlist"',
     );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`openclaw config set channels.telegram.allowFrom '["YOUR_USER_ID"]'`),
-      "Telegram DM access warning",
+    expect(lines.join("\n")).toContain(
+      `openclaw config set channels.telegram.allowFrom '["YOUR_USER_ID"]'`,
     );
   });
 
-  it("shows account-scoped config commands for named accounts", async () => {
-    const note = await runFinalize(
-      {
-        channels: {
-          telegram: {
-            accounts: {
-              alerts: {
-                botToken: "tok",
-              },
+  it("shows account-scoped config commands for named accounts", () => {
+    const lines = buildTelegramDmAccessWarningLines("alerts");
+
+    expect(lines.join("\n")).toContain(
+      'openclaw config set channels.telegram.accounts.alerts.dmPolicy "allowlist"',
+    );
+    expect(lines.join("\n")).toContain(
+      `openclaw config set channels.telegram.accounts.alerts.allowFrom '["YOUR_USER_ID"]'`,
+    );
+  });
+
+  it("skips the warning when an allowFrom entry already exists", () => {
+    expect(
+      shouldShowTelegramDmAccessWarning(
+        {
+          channels: {
+            telegram: {
+              botToken: "tok",
+              allowFrom: ["123"],
             },
           },
         },
-      },
-      "alerts",
-    );
+        DEFAULT_ACCOUNT_ID,
+      ),
+    ).toBe(false);
+  });
+});
 
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'openclaw config set channels.telegram.accounts.alerts.dmPolicy "allowlist"',
-      ),
-      "Telegram DM access warning",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        `openclaw config set channels.telegram.accounts.alerts.allowFrom '["YOUR_USER_ID"]'`,
-      ),
-      "Telegram DM access warning",
-    );
+describe("telegramSetupDmPolicy", () => {
+  installChannelDmPolicyContractSuite({
+    dmPolicy: telegramSetupDmPolicy,
+    cases: [
+      {
+        name: "Telegram named accounts",
+        channel: "telegram",
+        accountId: "alerts",
+        accountConfig: { botToken: "tok" },
+        inheritedAllowFrom: ["123"],
+        defaultAccount: { rootAllowFrom: ["123"] },
+      },
+    ],
+  });
+});
+
+describe("telegramSetupWizard allowFrom", () => {
+  it("accepts numeric sender ids only", async () => {
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be called");
+    });
+    vi.stubGlobal("fetch", globalFetch);
+
+    try {
+      const resolved = await telegramSetupWizard.allowFrom?.resolveEntries({
+        cfg: {},
+        accountId: DEFAULT_ACCOUNT_ID,
+        credentialValues: { token: "tok" },
+        entries: ["@user"],
+      });
+
+      expect(telegramSetupWizard.allowFrom?.message).toBe("Telegram allowFrom (numeric sender id)");
+      expect(telegramSetupWizard.allowFrom?.placeholder).toBe("123456789");
+      expect(resolved).toEqual([{ input: "@user", resolved: false, id: null }]);
+      expect(globalFetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
-  it("skips the warning when an allowFrom entry already exists", async () => {
-    const note = await runFinalize(
-      {
-        channels: {
-          telegram: {
-            botToken: "tok",
-            allowFrom: ["123"],
-          },
-        },
-      },
-      DEFAULT_ACCOUNT_ID,
-    );
+  it("localizes setup wizard allowFrom copy when loaded under zh-CN", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
 
-    expect(note).not.toHaveBeenCalled();
+    try {
+      vi.resetModules();
+      const { telegramSetupWizard: localizedWizard } = await import("./setup-surface.js");
+
+      expect(localizedWizard.allowFrom?.helpTitle).toBe("Telegram 用户 ID");
+      expect(localizedWizard.allowFrom?.message).toBe("Telegram allowFrom（数字发送者 ID）");
+      expect(localizedWizard.allowFrom?.invalidWithoutCredentialNote).toBe(
+        "Telegram allowFrom 需要数字发送者 ID。先给 bot 发一条 DM，然后从日志或 getUpdates 中复制 from.id。",
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
+  it("localizes legacy allowFrom prompt copy", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note = vi.fn(async () => {});
+    const text = vi.fn(async () => "123456789");
+
+    try {
+      await promptTelegramAllowFromForAccount({
+        cfg: {},
+        prompter: { note, text } as never,
+      });
+
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("先给你的 bot 发送 DM"),
+        "Telegram 用户 ID",
+      );
+      expect(text).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Telegram allowFrom（数字发送者 ID）",
+          placeholder: "123456789",
+        }),
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
   });
 });

@@ -1,9 +1,10 @@
+// Msteams tests cover monitor plugin behavior.
 import { once } from "node:events";
 import type { Server } from "node:http";
 import { createConnection, type AddressInfo } from "node:net";
 import express from "express";
 import { describe, expect, it } from "vitest";
-import { applyMSTeamsWebhookTimeouts } from "./monitor.js";
+import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -37,6 +38,21 @@ async function waitForSlowBodySocketClose(port: number, timeoutMs: number): Prom
 }
 
 describe("msteams monitor webhook hardening", () => {
+  it("applies default timeouts and header clamp", async () => {
+    const app = express();
+    const server = app.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      applyMSTeamsWebhookTimeouts(server);
+
+      expect(server.timeout).toBe(30_000);
+      expect(server.requestTimeout).toBe(30_000);
+      expect(server.headersTimeout).toBe(15_000);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("applies explicit webhook timeout values", async () => {
     const app = express();
     const server = app.listen(0, "127.0.0.1");
@@ -51,6 +67,25 @@ describe("msteams monitor webhook hardening", () => {
       expect(server.timeout).toBe(3210);
       expect(server.requestTimeout).toBe(6543);
       expect(server.headersTimeout).toBe(6543);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("clamps headers timeout when explicit value exceeds request timeout", async () => {
+    const app = express();
+    const server = app.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      applyMSTeamsWebhookTimeouts(server, {
+        inactivityTimeoutMs: 12_000,
+        requestTimeoutMs: 9_000,
+        headersTimeoutMs: 15_000,
+      });
+
+      expect(server.timeout).toBe(12_000);
+      expect(server.requestTimeout).toBe(9_000);
+      expect(server.headersTimeout).toBe(9_000);
     } finally {
       await closeServer(server);
     }

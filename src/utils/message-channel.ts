@@ -1,9 +1,4 @@
-import type { ChannelId } from "../channels/plugins/types.js";
-import {
-  CHANNEL_IDS,
-  listChatChannelAliases,
-  normalizeChatChannelId,
-} from "../channels/registry.js";
+// Message channel helpers classify and format channel identifiers.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -11,52 +6,105 @@ import {
   type GatewayClientName,
   normalizeGatewayClientMode,
   normalizeGatewayClientName,
-} from "../gateway/protocol/client-info.js";
-
-export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
-export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
-const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
-
-type PluginRegistryStateLike = {
-  registry?: {
-    channels?: Array<{
-      plugin: {
-        id: string;
-        meta: {
-          aliases?: string[];
-        };
-      };
-    }>;
-  } | null;
-};
-
-const MARKDOWN_CAPABLE_CHANNELS = new Set<string>([
-  "slack",
-  "telegram",
-  "signal",
-  "discord",
-  "googlechat",
-  "tui",
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
+import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
+export {
+  isDeliverableMessageChannel,
+  isGatewayMessageChannel,
+  listDeliverableMessageChannels,
+  normalizeMessageChannel,
+  resolveGatewayMessageChannel,
+  resolveMessageChannel,
+  type DeliverableMessageChannel,
+  type GatewayMessageChannel,
+} from "./message-channel-normalize.js";
+export {
   INTERNAL_MESSAGE_CHANNEL,
-]);
+  isInternalNonDeliveryChannel,
+} from "./message-channel-constants.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
+import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
+/**
+ * Message channel and Gateway client classification helpers.
+ *
+ * This module keeps channel normalization, client identity checks, and markdown
+ * capability lookup in one place for send/render decisions.
+ */
 export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
 export type { GatewayClientName, GatewayClientMode };
-export { normalizeGatewayClientName, normalizeGatewayClientMode };
 
 type GatewayClientInfoLike = {
   mode?: string | null;
   id?: string | null;
 };
 
+/** Return whether a Gateway client is the CLI transport. */
 export function isGatewayCliClient(client?: GatewayClientInfoLike | null): boolean {
   return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
 }
 
-export function isInternalMessageChannel(raw?: string | null): raw is InternalMessageChannel {
+/**
+ * Return whether a Gateway client is an ephemeral control-plane connection.
+ * Test-mode clients stay excluded from this list: suites use them as stand-ins
+ * for real clients and assert presence propagation through the full pipeline.
+ */
+export function isEphemeralGatewayClient(client?: GatewayClientInfoLike | null): boolean {
+  const mode = normalizeGatewayClientMode(client?.mode);
+  return (
+    mode === GATEWAY_CLIENT_MODES.CLI ||
+    mode === GATEWAY_CLIENT_MODES.BACKEND ||
+    mode === GATEWAY_CLIENT_MODES.PROBE
+  );
+}
+
+/** Return whether a client is one of the operator UI clients. */
+export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
+  const clientId = normalizeGatewayClientName(client?.id);
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT ||
+    clientId === GATEWAY_CLIENT_NAMES.TUI
+  );
+}
+
+/** Return whether a client is the browser Control UI. */
+export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
+  const clientId = normalizeGatewayClientName(client?.id);
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT
+  );
+}
+
+/** Return whether a client is the first-party browser side-panel copilot. */
+export function isBrowserCopilotClient(client?: GatewayClientInfoLike | null): boolean {
+  return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT;
+}
+
+/** Return whether a raw channel id resolves to OpenClaw's internal channel. */
+export function isInternalMessageChannel(
+  raw?: string | null,
+): raw is typeof INTERNAL_MESSAGE_CHANNEL {
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
 }
 
+/** Return whether a channel can resolve exec approvals in the originating chat. */
+export function isNativeApprovalChannel(value?: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+  if (value === INTERNAL_MESSAGE_CHANNEL) {
+    return true;
+  }
+  return listBundledChannelCatalogEntries().some(
+    (entry) => entry.id === value && entry.channel.approvalFlags?.includes("native"),
+  );
+}
+
+/** Return whether a Gateway client is the public webchat surface. */
 export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean {
   const mode = normalizeGatewayClientMode(client?.mode);
   if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
@@ -65,106 +113,28 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
 }
 
-export function normalizeMessageChannel(raw?: string | null): string | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === INTERNAL_MESSAGE_CHANNEL) {
-    return INTERNAL_MESSAGE_CHANNEL;
-  }
-  const builtIn = normalizeChatChannelId(normalized);
-  if (builtIn) {
-    return builtIn;
-  }
-  const channels =
-    (
-      globalThis as typeof globalThis & {
-        [REGISTRY_STATE]?: PluginRegistryStateLike;
-      }
-    )[REGISTRY_STATE]?.registry?.channels ?? [];
-  const pluginMatch = channels.find((entry) => {
-    if (entry.plugin.id.toLowerCase() === normalized) {
-      return true;
-    }
-    return (entry.plugin.meta.aliases ?? []).some(
-      (alias) => alias.trim().toLowerCase() === normalized,
-    );
-  });
-  return pluginMatch?.plugin.id ?? normalized;
-}
-
-const listPluginChannelIds = (): string[] => {
-  const channels =
-    (
-      globalThis as typeof globalThis & {
-        [REGISTRY_STATE]?: PluginRegistryStateLike;
-      }
-    )[REGISTRY_STATE]?.registry?.channels ?? [];
-  return channels.map((entry) => entry.plugin.id);
-};
-
-const listPluginChannelAliases = (): string[] => {
-  const channels =
-    (
-      globalThis as typeof globalThis & {
-        [REGISTRY_STATE]?: PluginRegistryStateLike;
-      }
-    )[REGISTRY_STATE]?.registry?.channels ?? [];
-  return channels.flatMap((entry) => entry.plugin.meta.aliases ?? []);
-};
-
-export const listDeliverableMessageChannels = (): ChannelId[] =>
-  Array.from(new Set([...CHANNEL_IDS, ...listPluginChannelIds()]));
-
-export type DeliverableMessageChannel = ChannelId;
-
-export type GatewayMessageChannel = DeliverableMessageChannel | InternalMessageChannel;
-
-export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
-  ...listDeliverableMessageChannels(),
-  INTERNAL_MESSAGE_CHANNEL,
-];
-
-export const listGatewayAgentChannelAliases = (): string[] =>
-  Array.from(new Set([...listChatChannelAliases(), ...listPluginChannelAliases()]));
-
-export type GatewayAgentChannelHint = GatewayMessageChannel | "last";
-
-export const listGatewayAgentChannelValues = (): string[] =>
-  Array.from(
-    new Set([...listGatewayMessageChannels(), "last", ...listGatewayAgentChannelAliases()]),
-  );
-
-export function isGatewayMessageChannel(value: string): value is GatewayMessageChannel {
-  return listGatewayMessageChannels().includes(value as GatewayMessageChannel);
-}
-
-export function isDeliverableMessageChannel(value: string): value is DeliverableMessageChannel {
-  return listDeliverableMessageChannels().includes(value as DeliverableMessageChannel);
-}
-
-export function resolveGatewayMessageChannel(
-  raw?: string | null,
-): GatewayMessageChannel | undefined {
-  const normalized = normalizeMessageChannel(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  return isGatewayMessageChannel(normalized) ? normalized : undefined;
-}
-
-export function resolveMessageChannel(
-  primary?: string | null,
-  fallback?: string | null,
-): string | undefined {
-  return normalizeMessageChannel(primary) ?? normalizeMessageChannel(fallback);
-}
-
+/** Resolve whether a channel can receive markdown without plain-text downgrade. */
 export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   const channel = normalizeMessageChannel(raw);
   if (!channel) {
     return false;
   }
-  return MARKDOWN_CAPABLE_CHANNELS.has(channel);
+  if (channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
+    return true;
+  }
+  const builtInChannel = normalizeChatChannelId(channel);
+  if (builtInChannel) {
+    const builtInMeta = findChatChannelMeta(builtInChannel);
+    if (builtInMeta) {
+      return builtInMeta.markdownCapable === true;
+    }
+    // Catalog metadata covers bundled channels whose runtime plugin is not loaded yet.
+    const catalogMeta = listBundledChannelCatalogEntries().find(
+      (entry) => entry.id === builtInChannel,
+    );
+    if (catalogMeta) {
+      return catalogMeta.channel.markdownCapable === true;
+    }
+  }
+  return getRegisteredChannelPluginMeta(channel)?.markdownCapable === true;
 }

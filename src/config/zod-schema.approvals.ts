@@ -1,4 +1,8 @@
+// Defines command approval Zod schema fragments.
 import { z } from "zod";
+
+/** Native exec approval mode accepted by config. */
+export const NativeExecApprovalEnableModeSchema = z.union([z.boolean(), z.literal("auto")]);
 
 const ExecApprovalForwardTargetSchema = z
   .object({
@@ -23,6 +27,7 @@ const ExecApprovalForwardingSchema = z
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
+    plugin: ExecApprovalForwardingSchema,
   })
   .strict()
   .optional();

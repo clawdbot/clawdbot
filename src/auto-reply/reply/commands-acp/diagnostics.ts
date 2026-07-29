@@ -1,23 +1,44 @@
+// Formats ACP diagnostics and runtime error details for command replies.
+import { formatAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
-import { formatAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../../acp/runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
-import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
-import { loadSessionStore } from "../../../config/sessions.js";
+import { listAcpSessionEntries, readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
+import { resolveAcpInstallCommandHint } from "./install-hints.js";
 import {
   ACP_DOCTOR_USAGE,
   ACP_INSTALL_USAGE,
   ACP_SESSIONS_USAGE,
   formatAcpCapabilitiesText,
-  resolveAcpInstallCommandHint,
-  resolveConfiguredAcpBackendId,
   stopWithText,
 } from "./shared.js";
 import { resolveBoundAcpThreadSessionKey } from "./targets.js";
+
+function isBackendPluginBlockedByAllowlist(params: {
+  cfg: HandleCommandsParams["cfg"];
+  backendId: string;
+}): boolean {
+  const allow = params.cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return false;
+  }
+  const normalizedBackendId = normalizeLowercaseStringOrEmpty(params.backendId);
+  if (!normalizedBackendId) {
+    return false;
+  }
+  return !allow.some(
+    (pluginId) => normalizeLowercaseStringOrEmpty(pluginId) === normalizedBackendId,
+  );
+}
 
 export async function handleAcpDoctorAction(
   params: HandleCommandsParams,
@@ -27,10 +48,10 @@ export async function handleAcpDoctorAction(
     return stopWithText(`⚠️ ${ACP_DOCTOR_USAGE}`);
   }
 
-  const backendId = resolveConfiguredAcpBackendId(params.cfg);
+  const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
-  const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot(params.cfg);
+  const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot();
   const lines = ["ACP doctor:", "-----", `configuredBackend: ${backendId}`];
   lines.push(`activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`);
   lines.push(`runtimeIdleTtlMs: ${managerSnapshot.runtimeCache.idleTtlMs}`);
@@ -52,6 +73,13 @@ export async function handleAcpDoctorAction(
     lines.push(`registeredBackend: ${registeredBackend.id}`);
   } else {
     lines.push("registeredBackend: (none)");
+  }
+  const backendBlockedByAllowlist = isBackendPluginBlockedByAllowlist({
+    cfg: params.cfg,
+    backendId,
+  });
+  if (backendBlockedByAllowlist) {
+    lines.push(`pluginActivation: blocked (${backendId} is missing from plugins.allow)`);
   }
 
   if (registeredBackend?.runtime.doctor) {
@@ -99,9 +127,12 @@ export async function handleAcpDoctorAction(
     });
     lines.push("healthy: no");
     lines.push(formatAcpRuntimeErrorText(acpError));
+    if (backendBlockedByAllowlist) {
+      lines.push(`next: add "${backendId}" to plugins.allow or unset plugins.allow.`);
+    }
     lines.push(`next: ${installHint}`);
     lines.push(`next: openclaw config set plugins.entries.${backendId}.enabled true`);
-    if (backendId.toLowerCase() === "acpx") {
+    if (normalizeLowercaseStringOrEmpty(backendId) === "acpx") {
       lines.push("next: verify acpx is installed (`acpx --help`).");
     }
     return stopWithText(lines.join("\n"));
@@ -115,7 +146,7 @@ export function handleAcpInstallAction(
   if (restTokens.length > 0) {
     return stopWithText(`⚠️ ${ACP_INSTALL_USAGE}`);
   }
-  const backendId = resolveConfiguredAcpBackendId(params.cfg);
+  const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const lines = [
     "ACP install:",
@@ -131,23 +162,21 @@ export function handleAcpInstallAction(
 function formatAcpSessionLine(params: {
   key: string;
   entry: SessionEntry;
+  acp: SessionAcpMeta;
   currentSessionKey?: string;
   threadId?: string;
 }): string {
-  const acp = params.entry.acp;
-  if (!acp) {
-    return "";
-  }
+  const acp = params.acp;
   const marker = params.currentSessionKey === params.key ? "*" : " ";
-  const label = params.entry.label?.trim() || acp.agent;
+  const label = normalizeOptionalString(params.entry.label) || acp.agent;
   const threadText = params.threadId ? `, thread:${params.threadId}` : "";
   return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${threadText}) -> ${params.key}`;
 }
 
-export function handleAcpSessionsAction(
+export async function handleAcpSessionsAction(
   params: HandleCommandsParams,
   restTokens: string[],
-): CommandHandlerResult {
+): Promise<CommandHandlerResult> {
   if (restTokens.length > 0) {
     return stopWithText(ACP_SESSIONS_USAGE);
   }
@@ -157,38 +186,37 @@ export function handleAcpSessionsAction(
     return stopWithText("⚠️ Missing session key.");
   }
 
-  const { storePath } = resolveSessionStorePathForAcp({
-    cfg: params.cfg,
-    sessionKey: currentSessionKey,
-  });
-
-  let store: Record<string, SessionEntry>;
-  try {
-    store = loadSessionStore(storePath);
-  } catch {
-    store = {};
-  }
-
   const bindingContext = resolveAcpCommandBindingContext(params);
   const normalizedChannel = bindingContext.channel;
   const normalizedAccountId = bindingContext.accountId || undefined;
   const bindingService = getSessionBindingService();
+  const currentEntry = params.command.senderIsOwner
+    ? null
+    : readAcpSessionEntry({ cfg: params.cfg, sessionKey: currentSessionKey });
+  const visibleEntries = params.command.senderIsOwner
+    ? await listAcpSessionEntries({ cfg: params.cfg })
+    : currentEntry?.entry && currentEntry.acp
+      ? [currentEntry]
+      : [];
 
-  const rows = Object.entries(store)
-    .filter(([, entry]) => Boolean(entry?.acp))
-    .toSorted(([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))
+  const rows = visibleEntries
+    .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
     .slice(0, 20)
-    .map(([key, entry]) => {
+    .map(({ storeSessionKey, entry, acp }) => {
+      if (!entry || !acp) {
+        return "";
+      }
       const bindingThreadId = bindingService
-        .listBySession(key)
+        .listBySession(storeSessionKey)
         .find(
           (binding) =>
             (!normalizedChannel || binding.conversation.channel === normalizedChannel) &&
             (!normalizedAccountId || binding.conversation.accountId === normalizedAccountId),
         )?.conversation.conversationId;
       return formatAcpSessionLine({
-        key,
+        key: storeSessionKey,
         entry,
+        acp,
         currentSessionKey,
         threadId: bindingThreadId,
       });

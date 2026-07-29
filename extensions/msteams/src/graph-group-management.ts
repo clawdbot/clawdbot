@@ -1,0 +1,152 @@
+// Msteams plugin module implements graph group management behavior.
+import type { OpenClawConfig } from "../runtime-api.js";
+import { findMSTeamsConversationMember } from "./graph-conversation-members.js";
+import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
+import {
+  deleteGraphRequest,
+  escapeOData,
+  patchGraphJson,
+  postGraphJson,
+  resolveGraphToken,
+} from "./graph.js";
+
+// ---------------------------------------------------------------------------
+// Add Participant
+// ---------------------------------------------------------------------------
+
+type AddParticipantMSTeamsParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  userId: string;
+  role?: string;
+};
+
+type AddParticipantMSTeamsResult = {
+  added: { userId: string; chatId: string };
+};
+
+type ConversationMemberRole = "member" | "owner";
+
+function normalizeConversationMemberRole(role: string | undefined): ConversationMemberRole {
+  const normalized = role?.trim().toLowerCase() ?? "";
+  if (!normalized) {
+    return "member";
+  }
+  if (normalized === "member" || normalized === "owner") {
+    return normalized;
+  }
+  throw new Error('MS Teams participant role must be "member" or "owner".');
+}
+
+function resolveConversationMemberRoles(
+  role: string | undefined,
+  kind: "chat" | "channel",
+): ConversationMemberRole[] {
+  const normalized = normalizeConversationMemberRole(role);
+  if (kind === "chat") {
+    // Graph accepts chat additions only as owners; "member" is the public
+    // convenience role and maps to the provider's required representation.
+    return ["owner"];
+  }
+  return normalized === "owner" ? ["owner"] : [];
+}
+
+/**
+ * Add a user to a chat or channel via Graph API.
+ */
+export async function addParticipantMSTeams(
+  params: AddParticipantMSTeamsParams,
+): Promise<AddParticipantMSTeamsResult> {
+  const token = await resolveGraphToken(params.cfg);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const conv = resolveConversationPath(conversationId);
+
+  const body = {
+    "@odata.type": "#microsoft.graph.aadUserConversationMember",
+    roles: resolveConversationMemberRoles(params.role, conv.kind),
+    "user@odata.bind": `https://graph.microsoft.com/v1.0/users('${escapeOData(params.userId)}')`,
+  };
+
+  await postGraphJson<unknown>({
+    token,
+    path: `${conv.basePath}/members`,
+    body,
+  });
+
+  return { added: { userId: params.userId, chatId: conversationId } };
+}
+
+// ---------------------------------------------------------------------------
+// Remove Participant
+// ---------------------------------------------------------------------------
+
+type RemoveParticipantMSTeamsParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  userId: string;
+};
+
+type RemoveParticipantMSTeamsResult = {
+  removed: { userId: string; chatId: string };
+};
+
+/**
+ * Remove a user from a chat or channel via Graph API.
+ * Lists members first to resolve the membership ID, then deletes.
+ */
+export async function removeParticipantMSTeams(
+  params: RemoveParticipantMSTeamsParams,
+): Promise<RemoveParticipantMSTeamsResult> {
+  const token = await resolveGraphToken(params.cfg);
+  const { conversationId, member } = await findMSTeamsConversationMember({
+    token,
+    to: params.to,
+    userId: params.userId,
+  });
+  if (!member?.id) {
+    throw new Error(`User ${params.userId} is not a member of this conversation`);
+  }
+  const conv = resolveConversationPath(conversationId);
+
+  await deleteGraphRequest({
+    token,
+    path: `${conv.basePath}/members/${encodeURIComponent(member.id)}`,
+  });
+
+  return { removed: { userId: params.userId, chatId: conversationId } };
+}
+
+// ---------------------------------------------------------------------------
+// Rename Group
+// ---------------------------------------------------------------------------
+
+type RenameGroupMSTeamsParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  name: string;
+};
+
+type RenameGroupMSTeamsResult = {
+  renamed: { chatId: string; newName: string };
+};
+
+/**
+ * Rename a chat (topic) or channel (displayName) via Graph API.
+ */
+export async function renameGroupMSTeams(
+  params: RenameGroupMSTeamsParams,
+): Promise<RenameGroupMSTeamsResult> {
+  const token = await resolveGraphToken(params.cfg);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const conv = resolveConversationPath(conversationId);
+
+  const body = conv.kind === "chat" ? { topic: params.name } : { displayName: params.name };
+
+  await patchGraphJson<unknown>({
+    token,
+    path: conv.basePath,
+    body,
+  });
+
+  return { renamed: { chatId: conversationId, newName: params.name } };
+}

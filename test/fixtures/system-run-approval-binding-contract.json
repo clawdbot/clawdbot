@@ -49,6 +49,30 @@
       "expected": { "ok": false, "code": "APPROVAL_ENV_MISMATCH" }
     },
     {
+      "name": "binding rejects mismatched Windows-compatible env values",
+      "request": {
+        "host": "node",
+        "command": "cmd.exe /c echo ok",
+        "binding": {
+          "argv": ["cmd.exe", "/c", "echo", "ok"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "ProgramFiles(x86)": "C:\\Program Files (x86)" }
+        }
+      },
+      "invoke": {
+        "argv": ["cmd.exe", "/c", "echo", "ok"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "ProgramFiles(x86)": "D:\\malicious" }
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_ENV_MISMATCH" }
+    },
+    {
       "name": "binding rejects unbound env overrides",
       "request": {
         "host": "node",

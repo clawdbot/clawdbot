@@ -1,150 +1,116 @@
-import {
-  parseBrowserMajorVersion,
-  readBrowserVersion,
-  resolveGoogleChromeExecutableForPlatform,
-} from "../browser/chrome.executables.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { note } from "../terminal/note.js";
+/** Facade-backed doctor checks and cleanup for bundled browser plugin state. */
+import fs from "node:fs";
+import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
+import { resolveConfigDir } from "../utils.js";
 
-const CHROME_MCP_MIN_MAJOR = 144;
-const REMOTE_DEBUGGING_PAGES = [
-  "chrome://inspect/#remote-debugging",
-  "brave://inspect/#remote-debugging",
-  "edge://inspect/#remote-debugging",
-].join(", ");
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-type ExistingSessionProfile = {
-  name: string;
-  userDataDir?: string;
+type BrowserDoctorDeps = {
+  platform?: NodeJS.Platform;
+  noteFn?: typeof note;
+  env?: NodeJS.ProcessEnv;
+  getUid?: () => number;
+  resolveManagedExecutable?: (
+    resolved: unknown,
+    platform: NodeJS.Platform,
+  ) => { path: string } | null;
+  resolveChromeExecutable?: (platform: NodeJS.Platform) => { path: string } | null;
+  readVersion?: (executablePath: string) => string | null;
+  configDir?: string;
+  pathExists?: (targetPath: string) => boolean;
 };
 
-function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[] {
-  const browser = asRecord(cfg.browser);
-  if (!browser) {
-    return [];
-  }
+type BrowserDoctorRepairDeps = {
+  env?: NodeJS.ProcessEnv;
+  configDir?: string;
+  pathExists?: (targetPath: string) => boolean;
+  movePathToTrash?: (targetPath: string) => Promise<string>;
+};
 
-  const profiles = new Map<string, ExistingSessionProfile>();
-  const defaultProfile =
-    typeof browser.defaultProfile === "string" ? browser.defaultProfile.trim() : "";
-  if (defaultProfile === "user") {
-    profiles.set("user", { name: "user" });
-  }
+/** Legacy browser profile paths detected before cleanup moves them aside. */
+export type LegacyClawdBrowserProfileResidue = {
+  legacyProfileDir: string;
+  legacyUserDataDir: string;
+  canonicalUserDataDir: string;
+};
 
-  const configuredProfiles = asRecord(browser.profiles);
-  if (!configuredProfiles) {
-    return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-  }
+type BrowserDoctorSurface = {
+  noteChromeMcpBrowserReadiness: (cfg: OpenClawConfig, deps?: BrowserDoctorDeps) => Promise<void>;
+  detectLegacyClawdBrowserProfileResidue?: (
+    cfg: OpenClawConfig,
+    deps?: BrowserDoctorRepairDeps,
+  ) => LegacyClawdBrowserProfileResidue | null;
+  maybeArchiveLegacyClawdBrowserProfileResidue?: (
+    cfg: OpenClawConfig,
+    deps?: BrowserDoctorRepairDeps,
+  ) => Promise<{ changes: string[]; warnings: string[] }>;
+};
 
-  for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
-    const profile = asRecord(rawProfile);
-    const driver = typeof profile?.driver === "string" ? profile.driver.trim() : "";
-    if (driver === "existing-session") {
-      const userDataDir =
-        typeof profile?.userDataDir === "string" ? profile.userDataDir.trim() : undefined;
-      profiles.set(profileName, { name: profileName, userDataDir: userDataDir || undefined });
-    }
-  }
-
-  return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+function loadBrowserDoctorSurface(): BrowserDoctorSurface {
+  return loadBundledPluginPublicSurfaceModuleSync<BrowserDoctorSurface>({
+    dirName: "browser",
+    artifactBasename: "browser-doctor.js",
+  });
 }
 
-export async function noteChromeMcpBrowserReadiness(
+function mayHaveLegacyClawdBrowserProfileResidue(deps?: BrowserDoctorRepairDeps): boolean {
+  const configDir = deps?.configDir ?? resolveConfigDir(deps?.env ?? process.env);
+  const legacyProfileDir = path.join(configDir, "browser", "clawd");
+  const legacyUserDataDir = path.join(legacyProfileDir, "user-data");
+  const pathExists = deps?.pathExists ?? fs.existsSync;
+  try {
+    return pathExists(legacyProfileDir) || pathExists(legacyUserDataDir);
+  } catch {
+    return true;
+  }
+}
+
+/** Emits browser readiness notes through the bundled browser plugin doctor surface. */
+export async function noteChromeMcpBrowserReadiness(cfg: OpenClawConfig, deps?: BrowserDoctorDeps) {
+  try {
+    await loadBrowserDoctorSurface().noteChromeMcpBrowserReadiness(cfg, deps);
+  } catch (error) {
+    const noteFn = deps?.noteFn ?? note;
+    const message = error instanceof Error ? error.message : String(error);
+    noteFn(`- Browser health check is unavailable: ${message}`, "Browser");
+  }
+}
+
+/** Detects old clawd browser profile residue without loading plugin cleanup when paths are absent. */
+export async function detectLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
-  deps?: {
-    platform?: NodeJS.Platform;
-    noteFn?: typeof note;
-    resolveChromeExecutable?: (platform: NodeJS.Platform) => { path: string } | null;
-    readVersion?: (executablePath: string) => string | null;
-  },
-) {
-  const profiles = collectChromeMcpProfiles(cfg);
-  if (profiles.length === 0) {
-    return;
+  deps?: BrowserDoctorRepairDeps,
+): Promise<LegacyClawdBrowserProfileResidue | null> {
+  if (!mayHaveLegacyClawdBrowserProfileResidue(deps)) {
+    return null;
   }
-
-  const noteFn = deps?.noteFn ?? note;
-  const platform = deps?.platform ?? process.platform;
-  const resolveChromeExecutable =
-    deps?.resolveChromeExecutable ?? resolveGoogleChromeExecutableForPlatform;
-  const readVersion = deps?.readVersion ?? readBrowserVersion;
-  const explicitProfiles = profiles.filter((profile) => profile.userDataDir);
-  const autoConnectProfiles = profiles.filter((profile) => !profile.userDataDir);
-  const profileLabel = profiles.map((profile) => profile.name).join(", ");
-
-  if (autoConnectProfiles.length === 0) {
-    noteFn(
-      [
-        `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,
-        "- These profiles use an explicit Chromium user data directory instead of Chrome's default auto-connect path.",
-        `- Verify the matching Chromium-based browser is version ${CHROME_MCP_MIN_MAJOR}+ on the same host as the Gateway or node.`,
-        `- Enable remote debugging in that browser's inspect page (${REMOTE_DEBUGGING_PAGES}).`,
-        "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
-      ].join("\n"),
-      "Browser",
-    );
-    return;
+  const detect = loadBrowserDoctorSurface().detectLegacyClawdBrowserProfileResidue;
+  if (!detect) {
+    return null;
   }
+  return detect(cfg, deps);
+}
 
-  const chrome = resolveChromeExecutable(platform);
-  const autoProfileLabel = autoConnectProfiles.map((profile) => profile.name).join(", ");
-
-  if (!chrome) {
-    const lines = [
-      `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,
-      `- Google Chrome was not found on this host for auto-connect profile(s): ${autoProfileLabel}. OpenClaw does not bundle Chrome.`,
-      `- Install Google Chrome ${CHROME_MCP_MIN_MAJOR}+ on the same host as the Gateway or node, or set browser.profiles.<name>.userDataDir for a different Chromium-based browser.`,
-      `- Enable remote debugging in the browser inspect page (${REMOTE_DEBUGGING_PAGES}).`,
-      "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
-      "- Docker, headless, and sandbox browser flows stay on raw CDP; this check only applies to host-local Chrome MCP attach.",
-    ];
-    if (explicitProfiles.length > 0) {
-      lines.push(
-        `- Profiles with explicit userDataDir skip Chrome auto-detection: ${explicitProfiles
-          .map((profile) => profile.name)
-          .join(", ")}.`,
-      );
+/** Archives legacy clawd browser profile residue through the browser plugin repair hook. */
+export async function maybeArchiveLegacyClawdBrowserProfileResidue(
+  cfg: OpenClawConfig,
+  deps?: BrowserDoctorRepairDeps,
+): Promise<{ changes: string[]; warnings: string[] }> {
+  if (!mayHaveLegacyClawdBrowserProfileResidue(deps)) {
+    return { changes: [], warnings: [] };
+  }
+  try {
+    const repair = loadBrowserDoctorSurface().maybeArchiveLegacyClawdBrowserProfileResidue;
+    if (!repair) {
+      return { changes: [], warnings: [] };
     }
-    noteFn(lines.join("\n"), "Browser");
-    return;
+    return await repair(cfg, deps);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      changes: [],
+      warnings: [`Browser profile cleanup is unavailable: ${message}`],
+    };
   }
-
-  const versionRaw = readVersion(chrome.path);
-  const major = parseBrowserMajorVersion(versionRaw);
-  const lines = [
-    `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,
-    `- Chrome path: ${chrome.path}`,
-  ];
-
-  if (!versionRaw || major === null) {
-    lines.push(
-      `- Could not determine the installed Chrome version. Chrome MCP requires Google Chrome ${CHROME_MCP_MIN_MAJOR}+ on this host.`,
-    );
-  } else if (major < CHROME_MCP_MIN_MAJOR) {
-    lines.push(
-      `- Detected Chrome ${versionRaw}, which is too old for Chrome MCP existing-session attach. Upgrade to Chrome ${CHROME_MCP_MIN_MAJOR}+.`,
-    );
-  } else {
-    lines.push(`- Detected Chrome ${versionRaw}.`);
-  }
-
-  lines.push(`- Enable remote debugging in the browser inspect page (${REMOTE_DEBUGGING_PAGES}).`);
-  lines.push(
-    "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
-  );
-  if (explicitProfiles.length > 0) {
-    lines.push(
-      `- Profiles with explicit userDataDir still need manual validation of the matching Chromium-based browser: ${explicitProfiles
-        .map((profile) => profile.name)
-        .join(", ")}.`,
-    );
-  }
-
-  noteFn(lines.join("\n"), "Browser");
 }

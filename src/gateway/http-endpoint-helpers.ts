@@ -1,9 +1,21 @@
+// Gateway HTTP endpoint helpers.
+// Wraps common POST JSON method, auth, scope, and body handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
-import { readJsonBodyOrError, sendMethodNotAllowed } from "./http-common.js";
+import {
+  readJsonBodyOrError,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+} from "./http-common.js";
+import {
+  authorizeGatewayHttpRequestOrReply,
+  type AuthorizedGatewayHttpRequest,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
+/** Handles a gateway POST JSON endpoint and returns the parsed body when authorized. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
@@ -14,9 +26,14 @@ export async function handleGatewayPostJsonEndpoint(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
+    resolveOperatorScopes?: (
+      req: IncomingMessage,
+      requestAuth: AuthorizedGatewayHttpRequest,
+    ) => string[];
   },
-): Promise<false | { body: unknown } | undefined> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+): Promise<false | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest } | undefined> {
+  const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname !== opts.pathname) {
     return false;
   }
@@ -26,7 +43,7 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  const authorized = await authorizeGatewayBearerRequestOrReply({
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -34,8 +51,22 @@ export async function handleGatewayPostJsonEndpoint(
     allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!authorized) {
+  if (!requestAuth) {
     return undefined;
+  }
+
+  if (opts.requiredOperatorMethod) {
+    const requestedScopes =
+      opts.resolveOperatorScopes?.(req, requestAuth) ??
+      resolveTrustedHttpOperatorScopes(req, requestAuth);
+    const scopeAuth = authorizeOperatorScopesForMethod(
+      opts.requiredOperatorMethod,
+      requestedScopes,
+    );
+    if (!scopeAuth.allowed) {
+      sendMissingScopeForbidden(res, scopeAuth.missingScope);
+      return undefined;
+    }
   }
 
   const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes);
@@ -43,5 +74,5 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  return { body };
+  return { body, requestAuth };
 }

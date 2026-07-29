@@ -1,42 +1,11 @@
+// Smoke-tests the built plugin loader singleton and bundled plugin runtime overlay.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { installProcessWarningFilter } from "./process-warning-filter.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mjs";
-
-const warningFilterKey = Symbol.for("openclaw.warning-filter");
-
-function installProcessWarningFilter() {
-  if (globalThis[warningFilterKey]?.installed) {
-    return;
-  }
-
-  const originalEmitWarning = process.emitWarning.bind(process);
-  process.emitWarning = (...args) => {
-    const [warningArg, secondArg, thirdArg] = args;
-    const warning =
-      warningArg instanceof Error
-        ? {
-            name: warningArg.name,
-            message: warningArg.message,
-            code: warningArg.code,
-          }
-        : {
-            name: typeof secondArg === "string" ? secondArg : secondArg?.type,
-            message: typeof warningArg === "string" ? warningArg : undefined,
-            code: typeof thirdArg === "string" ? thirdArg : secondArg?.code,
-          };
-
-    if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
-      return;
-    }
-
-    return Reflect.apply(originalEmitWarning, process, args);
-  };
-
-  globalThis[warningFilterKey] = { installed: true };
-}
 
 installProcessWarningFilter();
 
@@ -53,9 +22,14 @@ assert.equal(typeof getPluginCommandSpecs, "function", "getPluginCommandSpecs mi
 assert.equal(typeof matchPluginCommand, "function", "matchPluginCommand missing");
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-smoke-"));
+const pluginId = "build-smoke-plugin";
+const distPluginDir = path.join(repoRoot, "dist", "extensions", pluginId);
+const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", pluginId);
 
 function cleanup() {
   clearPluginCommands();
+  fs.rmSync(distPluginDir, { recursive: true, force: true });
+  fs.rmSync(runtimePluginDir, { recursive: true, force: true });
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 
@@ -69,10 +43,7 @@ process.on("SIGTERM", () => {
   process.exit(143);
 });
 
-const pluginId = "build-smoke-plugin";
-const distPluginDir = path.join(tempRoot, "dist", "extensions", pluginId);
 fs.mkdirSync(distPluginDir, { recursive: true });
-fs.writeFileSync(path.join(tempRoot, "package.json"), '{ "type": "module" }\n', "utf8");
 fs.writeFileSync(
   path.join(distPluginDir, "package.json"),
   JSON.stringify(
@@ -107,8 +78,7 @@ fs.writeFileSync(
 fs.writeFileSync(
   path.join(distPluginDir, "index.js"),
   [
-    "import sdk from 'openclaw/plugin-sdk';",
-    "const { emptyPluginConfigSchema } = sdk;",
+    "import { emptyPluginConfigSchema } from 'openclaw/plugin-sdk/plugin-entry';",
     "",
     "export default {",
     `  id: ${JSON.stringify(pluginId)},`,
@@ -130,12 +100,12 @@ fs.writeFileSync(
   "utf8",
 );
 
-stageBundledPluginRuntime({ repoRoot: tempRoot });
+stageBundledPluginRuntime({ repoRoot });
 
-const runtimeEntryPath = path.join(tempRoot, "dist-runtime", "extensions", pluginId, "index.js");
+const runtimeEntryPath = path.join(runtimePluginDir, "index.js");
 assert.ok(fs.existsSync(runtimeEntryPath), "runtime overlay entry missing");
 assert.equal(
-  fs.existsSync(path.join(tempRoot, "dist-runtime", "plugins", "commands.js")),
+  fs.existsSync(path.join(repoRoot, "dist-runtime", "plugins", "commands.js")),
   false,
   "dist-runtime must not stage a duplicate commands module",
 );
@@ -147,8 +117,7 @@ const registry = loadOpenClawPlugins({
   workspaceDir: tempRoot,
   env: {
     ...process.env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(tempRoot, "dist-runtime", "extensions"),
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
   },
   config: {
     plugins: {
@@ -165,9 +134,10 @@ const record = registry.plugins.find((entry) => entry.id === pluginId);
 assert.ok(record, "smoke plugin missing from registry");
 assert.equal(record.status, "loaded", record.error ?? "smoke plugin failed to load");
 
-assert.deepEqual(getPluginCommandSpecs("telegram"), [
-  { name: "pair", description: "Pair a device", acceptsArgs: true },
-]);
+assert.deepEqual(
+  getPluginCommandSpecs().filter((command) => command.name === "pair"),
+  [{ name: "pair", description: "Pair a device", acceptsArgs: true }],
+);
 
 const match = matchPluginCommand("/pair now");
 assert.ok(match, "canonical built command registry did not receive the command");

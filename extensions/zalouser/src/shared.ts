@@ -1,6 +1,9 @@
-import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelPlugin } from "../runtime-api.js";
-import { buildChannelConfigSchema, formatAllowFromLowercase } from "../runtime-api.js";
+// Zalouser plugin module implements shared behavior.
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -8,9 +11,12 @@ import {
   checkZcaAuthenticated,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
+import type { ChannelPlugin } from "./channel-api.js";
+import { buildChannelConfigSchema, formatAllowFromLowercase } from "./channel-api.js";
 import { ZalouserConfigSchema } from "./config-schema.js";
+import { zalouserDoctor } from "./doctor.js";
 
-export const zalouserMeta = {
+const zalouserMeta: ChannelPlugin<ResolvedZalouserAccount>["meta"] = {
   id: "zalouser",
   label: "Zalo Personal",
   selectionLabel: "Zalo (Personal Account)",
@@ -20,12 +26,12 @@ export const zalouserMeta = {
   aliases: ["zlu"],
   order: 85,
   quickstartAllowFrom: false,
-} satisfies ChannelPlugin<ResolvedZalouserAccount>["meta"];
+};
 
 const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserAccount>({
   sectionKey: "zalouser",
   listAccountIds: listZalouserAccountIds,
-  resolveAccount: (cfg, accountId) => resolveZalouserAccountSync({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveZalouserAccountSync),
   defaultAccountId: resolveDefaultZalouserAccountId,
   clearBaseFields: [
     "profile",
@@ -46,9 +52,19 @@ const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserA
 export function createZalouserPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedZalouserAccount>,
-  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
+  | "id"
+  | "meta"
+  | "setupWizard"
+  | "capabilities"
+  | "doctor"
+  | "reload"
+  | "configSchema"
+  | "config"
+  | "setup"
+  | "setupContract"
 > {
   return {
     id: "zalouser",
@@ -63,18 +79,23 @@ export function createZalouserPluginBase(params: {
       nativeCommands: false,
       blockStreaming: true,
     },
+    doctor: zalouserDoctor,
     reload: { configPrefixes: ["channels.zalouser"] },
     configSchema: buildChannelConfigSchema(ZalouserConfigSchema),
     config: {
       ...zalouserConfigAdapter,
-      isConfigured: async (account) => await checkZcaAuthenticated(account.profile),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: undefined,
-      }),
+      isConfigured: (account) => Boolean(account.profile),
+      isLinked: async (account) =>
+        (await checkZcaAuthenticated(account.profile)) ? "linked" : "not-linked",
+      unconfiguredReason: () => "not configured",
+      unlinkedReason: () => "not authenticated",
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: Boolean(account.profile),
+        }),
     },
     setup: params.setup,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
   };
 }

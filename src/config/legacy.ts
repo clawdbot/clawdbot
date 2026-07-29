@@ -1,7 +1,11 @@
-import { LEGACY_CONFIG_MIGRATIONS } from "./legacy.migrations.js";
-import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
+// Applies legacy config rules during load-time compatibility checks.
+import { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "../commands/doctor/shared/legacy-config-migrations.js";
+import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
 
+export { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
+
+// Legacy checks use raw dotted paths so doctor can report exact config keys.
 function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   let cursor: unknown = root;
   for (const key of path) {
@@ -13,7 +17,13 @@ function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   return cursor;
 }
 
-export function findLegacyConfigIssues(raw: unknown, sourceRaw?: unknown): LegacyConfigIssue[] {
+/** Finds legacy config issues using built-in rules plus optional caller rules. */
+export function findLegacyConfigIssues(
+  raw: unknown,
+  sourceRaw?: unknown,
+  extraRules: LegacyConfigRule[] = [],
+  _touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+): LegacyConfigIssue[] {
   if (!raw || typeof raw !== "object") {
     return [];
   }
@@ -21,7 +31,7 @@ export function findLegacyConfigIssues(raw: unknown, sourceRaw?: unknown): Legac
   const sourceRoot =
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
-  for (const rule of LEGACY_CONFIG_RULES) {
+  for (const rule of [...LEGACY_CONFIG_RULES, ...extraRules]) {
     const cursor = getPathValue(root, rule.path);
     if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
       if (rule.requireSourceLiteral) {
@@ -37,22 +47,4 @@ export function findLegacyConfigIssues(raw: unknown, sourceRaw?: unknown): Legac
     }
   }
   return issues;
-}
-
-export function applyLegacyMigrations(raw: unknown): {
-  next: Record<string, unknown> | null;
-  changes: string[];
-} {
-  if (!raw || typeof raw !== "object") {
-    return { next: null, changes: [] };
-  }
-  const next = structuredClone(raw) as Record<string, unknown>;
-  const changes: string[] = [];
-  for (const migration of LEGACY_CONFIG_MIGRATIONS) {
-    migration.apply(next, changes);
-  }
-  if (changes.length === 0) {
-    return { next: null, changes: [] };
-  }
-  return { next, changes };
 }

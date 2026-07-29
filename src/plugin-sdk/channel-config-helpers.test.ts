@@ -1,5 +1,12 @@
+/**
+ * Tests channel config helper authorization and write-scope behavior.
+ */
 import { describe, expect, it } from "vitest";
+import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
+  adaptScopedAccountAccessor,
+  authorizeConfigWrite,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
@@ -8,32 +15,267 @@ import {
   createTopLevelChannelConfigAdapter,
   createTopLevelChannelConfigBase,
   createHybridChannelConfigBase,
+  ensureOpenDmPolicyAllowFromWildcard,
   mapAllowFromEntries,
+  normalizeChannelDmPolicy,
+  normalizeLegacyDmAliases,
+  resolveChannelDmAccess,
+  resolveChannelDmAllowFrom,
+  resolveChannelDmPolicy,
+  resolveChannelConfigWrites,
   resolveOptionalConfigString,
+  setCanonicalDmAllowFrom,
 } from "./channel-config-helpers.js";
 
-describe("mapAllowFromEntries", () => {
-  it("coerces allowFrom entries to strings", () => {
-    expect(mapAllowFromEntries(["user", 42])).toEqual(["user", "42"]);
-  });
+const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
-  it("returns empty list for missing input", () => {
-    expect(mapAllowFromEntries(undefined)).toEqual([]);
+function createConfigWritesCfg() {
+  return {
+    channels: {
+      telegram: {
+        configWrites: true,
+        accounts: {
+          Work: { configWrites: false },
+        },
+      },
+    },
+  };
+}
+
+function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
+  const channelAdapter = adapter as {
+    resolveAllowFrom?: (params: { cfg: object; accountId: string }) => unknown;
+    resolveDefaultTo?: (params: { cfg: object; accountId: string }) => unknown;
+    setAccountEnabled?: (params: { cfg: object; accountId: string; enabled: boolean }) => {
+      channels?: {
+        demo?: unknown;
+      };
+    };
+  };
+
+  expect(channelAdapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
+  expect(channelAdapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
+  expect(
+    channelAdapter.setAccountEnabled?.({
+      cfg: {},
+      accountId: "default",
+      enabled: true,
+    })?.channels?.demo,
+  ).toEqual({ enabled: true });
+}
+
+type DemoDmAccount = {
+  accountId?: string | null;
+  dmPolicy?: string;
+  allowFrom?: string[];
+};
+
+type DemoDmPolicy = ReturnType<ReturnType<typeof createDemoDmSecurityResolver>>;
+type ExpectedDemoDmPolicy = Omit<DemoDmPolicy, "normalizeEntry">;
+
+function createDemoDmSecurityResolver(
+  params: {
+    inheritSharedDefaultsFromDefaultAccount?: boolean;
+  } = {},
+) {
+  return createScopedDmSecurityResolver<DemoDmAccount>({
+    channelKey: "demo",
+    resolvePolicy: (account) => account.dmPolicy,
+    resolveAllowFrom: (account) => account.allowFrom,
+    policyPathSuffix: "dmPolicy",
+    normalizeEntry: (raw) => raw.toLowerCase(),
+    ...params,
+  });
+}
+
+function expectDemoDmPolicy(policy: DemoDmPolicy, expected: ExpectedDemoDmPolicy) {
+  const { normalizeEntry, ...rest } = policy;
+
+  expect(rest).toEqual(expected);
+  expect(normalizeEntry).toBeTypeOf("function");
+  if (typeof normalizeEntry !== "function") {
+    throw new Error("expected normalizeEntry to be a function");
+  }
+  expect(normalizeEntry("OWNER")).toBe("owner");
+}
+
+describe("mapAllowFromEntries", () => {
+  it.each([
+    {
+      name: "coerces allowFrom entries to strings",
+      input: ["user", 42],
+      expected: ["user", "42"],
+    },
+    {
+      name: "returns empty list for missing input",
+      input: undefined,
+      expected: [],
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(mapAllowFromEntries(input)).toEqual(expected);
   });
 });
 
 describe("resolveOptionalConfigString", () => {
-  it("trims and returns string values", () => {
-    expect(resolveOptionalConfigString("  room:123  ")).toBe("room:123");
+  it.each([
+    {
+      name: "trims and returns string values",
+      input: "  room:123  ",
+      expected: "room:123",
+    },
+    {
+      name: "coerces numeric values",
+      input: 123,
+      expected: "123",
+    },
+    {
+      name: "returns undefined for empty string values",
+      input: "   ",
+      expected: undefined,
+    },
+    {
+      name: "returns undefined for missing values",
+      input: undefined,
+      expected: undefined,
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(resolveOptionalConfigString(input)).toBe(expected);
+  });
+});
+
+describe("channel DM access helpers", () => {
+  it("re-exports centralized DM access helpers from the SDK entrypoint", () => {
+    const entry = { dm: { policy: "allowlist", allowFrom: ["U1"] } };
+    const changes: string[] = [];
+
+    expect(normalizeChannelDmPolicy("allowlist")).toBe("allowlist");
+    expect(
+      resolveChannelDmPolicy({
+        account: entry,
+      }),
+    ).toBe("allowlist");
+    expect(
+      resolveChannelDmAllowFrom({
+        account: entry,
+      }),
+    ).toEqual(["U1"]);
+
+    setCanonicalDmAllowFrom({
+      entry,
+      mode: "topOnly",
+      allowFrom: ["U2"],
+      pathPrefix: "channels.demo",
+      changes,
+      reason: "normalized by SDK helper",
+    });
+
+    expect(entry).toEqual({ dm: { policy: "allowlist" }, allowFrom: ["U2"] });
+    expect(changes).toEqual([
+      "- channels.demo.dm.allowFrom: removed after moving allowlist to channels.demo.allowFrom",
+      "- channels.demo.allowFrom: normalized by SDK helper",
+    ]);
   });
 
-  it("coerces numeric values", () => {
-    expect(resolveOptionalConfigString(123)).toBe("123");
+  it("resolves account legacy allowFrom before inherited root allowFrom", () => {
+    expect(
+      resolveChannelDmAccess({
+        account: { dm: { allowFrom: ["account-legacy"] } },
+        parent: { allowFrom: ["root"] },
+      }),
+    ).toEqual({ allowFrom: ["account-legacy"], dmPolicy: undefined });
   });
 
-  it("returns undefined for empty values", () => {
-    expect(resolveOptionalConfigString("   ")).toBeUndefined();
-    expect(resolveOptionalConfigString(undefined)).toBeUndefined();
+  it("keeps nested-only channels on dm.allowFrom", () => {
+    const entry = { dmPolicy: "open", allowFrom: ["matrix:@owner"] };
+    const changes: string[] = [];
+
+    ensureOpenDmPolicyAllowFromWildcard({
+      entry,
+      mode: "nestedOnly",
+      pathPrefix: "channels.matrix",
+      changes,
+    });
+
+    expect(entry).toEqual({ dm: { policy: "open", allowFrom: ["matrix:@owner", "*"] } });
+    expect(changes).toEqual([
+      '- channels.matrix.dm.policy: set to "open" (migrated from channels.matrix.dmPolicy)',
+      "- channels.matrix.allowFrom: removed after moving allowlist to channels.matrix.dm.allowFrom",
+      '- channels.matrix.dm.allowFrom: added "*" (required by dmPolicy="open")',
+    ]);
+  });
+
+  it("migrates top-canonical legacy dm aliases", () => {
+    const changes: string[] = [];
+    const result = normalizeLegacyDmAliases({
+      entry: { dm: { policy: "allowlist", allowFrom: ["U1"] } },
+      pathPrefix: "channels.slack",
+      changes,
+    });
+
+    expect(result.entry).toEqual({ dmPolicy: "allowlist", allowFrom: ["U1"] });
+    expect(changes).toEqual([
+      "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
+      "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
+      "Removed empty channels.slack.dm after migration.",
+    ]);
+  });
+});
+
+describe("config write helpers", () => {
+  it("matches account ids case-insensitively", () => {
+    expect(
+      resolveChannelConfigWrites({
+        cfg: createConfigWritesCfg(),
+        channelId: "telegram",
+        accountId: "work",
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks account-scoped writes when the configured account key differs only by case", () => {
+    expect(
+      authorizeConfigWrite({
+        cfg: createConfigWritesCfg(),
+        target: {
+          kind: "account",
+          scope: { channelId: "telegram", accountId: "work" },
+        },
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "target-disabled",
+      blockedScope: {
+        kind: "target",
+        scope: { channelId: "telegram", accountId: "work" },
+      },
+    });
+  });
+});
+
+describe("adaptScopedAccountAccessor", () => {
+  it("binds positional callback args into the shared account context object", () => {
+    const accessor = adaptScopedAccountAccessor(({ cfg, accountId }) => ({
+      channel: cfg.channels?.demo,
+      accountId: accountId ?? "default",
+    }));
+
+    expect(
+      accessor(
+        {
+          channels: {
+            demo: {
+              enabled: true,
+            },
+          },
+        },
+        "alt",
+      ),
+    ).toEqual({
+      channel: {
+        enabled: true,
+      },
+      accountId: "alt",
+    });
   });
 });
 
@@ -86,7 +328,7 @@ describe("createScopedChannelConfigBase", () => {
       sectionKey: "demo",
       listAccountIds: () => ["default", "alt"],
       resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token"],
     });
 
@@ -119,7 +361,7 @@ describe("createScopedChannelConfigBase", () => {
       sectionKey: "demo",
       listAccountIds: () => ["default", "alt"],
       resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: [],
       allowTopLevel: false,
     });
@@ -173,7 +415,7 @@ describe("createScopedChannelConfigAdapter", () => {
         allowFrom: accountId ? [accountId] : ["fallback"],
         defaultTo: " room:123 ",
       }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token"],
       resolveAllowFrom: (account) => account.allowFrom,
       formatAllowFrom: (allowFrom) => allowFrom.map((entry) => String(entry).toUpperCase()),
@@ -186,33 +428,40 @@ describe("createScopedChannelConfigAdapter", () => {
       allowFrom: ["alt"],
       defaultTo: " room:123 ",
     });
-    expect(adapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
-    expect(adapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
-    expect(
-      adapter.setAccountEnabled!({
-        cfg: {},
-        accountId: "default",
-        enabled: true,
-      }).channels?.demo,
-    ).toEqual({ enabled: true });
+    expectAdapterAllowFromAndDefaultTo(adapter);
+  });
+
+  it("keeps read-only accessors on the accessor resolver", () => {
+    const adapter = createScopedChannelConfigAdapter<
+      { accountId: string; token: string },
+      { allowFrom: string[]; defaultTo: string }
+    >({
+      sectionKey: "demo",
+      listAccountIds: () => ["default"],
+      resolveAccount: () => {
+        throw new Error("runtime account resolver should not run for read-only accessors");
+      },
+      resolveAccessorAccount: ({ accountId }) => ({
+        allowFrom: [accountId ?? "default"],
+        defaultTo: " room:123 ",
+      }),
+      defaultAccountId: resolveDefaultAccountId,
+      clearBaseFields: ["token"],
+      resolveAllowFrom: (account) => account.allowFrom,
+      formatAllowFrom: (allowFrom) => allowFrom.map((entry) => String(entry)),
+      resolveDefaultTo: (account) => account.defaultTo,
+    });
+
+    expect(adapter.resolveAllowFrom?.({ cfg: {}, accountId: "default" })).toEqual(["default"]);
+    expect(adapter.resolveDefaultTo?.({ cfg: {}, accountId: "default" })).toBe("room:123");
   });
 });
 
 describe("createScopedDmSecurityResolver", () => {
   it("builds account-aware DM policy payloads", () => {
-    const resolveDmPolicy = createScopedDmSecurityResolver<{
-      accountId?: string | null;
-      dmPolicy?: string;
-      allowFrom?: string[];
-    }>({
-      channelKey: "demo",
-      resolvePolicy: (account) => account.dmPolicy,
-      resolveAllowFrom: (account) => account.allowFrom,
-      policyPathSuffix: "dmPolicy",
-      normalizeEntry: (raw) => raw.toLowerCase(),
-    });
+    const resolveDmPolicy = createDemoDmSecurityResolver();
 
-    expect(
+    expectDemoDmPolicy(
       resolveDmPolicy({
         cfg: {
           channels: {
@@ -230,14 +479,88 @@ describe("createScopedDmSecurityResolver", () => {
           allowFrom: ["Owner"],
         },
       }),
-    ).toEqual({
-      policy: "allowlist",
-      allowFrom: ["Owner"],
-      policyPath: "channels.demo.accounts.alt.dmPolicy",
-      allowFromPath: "channels.demo.accounts.alt.",
-      approveHint: "Approve via: openclaw pairing list demo / openclaw pairing approve demo <code>",
-      normalizeEntry: expect.any(Function),
+      {
+        policy: "allowlist",
+        allowFrom: ["Owner"],
+        policyPath: "channels.demo.accounts.alt.dmPolicy",
+        allowFromPath: "channels.demo.accounts.alt.",
+        approveHint: formatPairingApproveHint("demo"),
+      },
+    );
+  });
+
+  it("uses accounts.default paths when named accounts inherit shared defaults", () => {
+    const resolveDmPolicy = createDemoDmSecurityResolver({
+      inheritSharedDefaultsFromDefaultAccount: true,
     });
+
+    expectDemoDmPolicy(
+      resolveDmPolicy({
+        cfg: {
+          channels: {
+            demo: {
+              accounts: {
+                default: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["Owner"],
+                },
+                alt: {},
+              },
+            },
+          },
+        },
+        accountId: "alt",
+        account: {
+          accountId: "alt",
+          dmPolicy: "allowlist",
+          allowFrom: ["Owner"],
+        },
+      }),
+      {
+        policy: "allowlist",
+        allowFrom: ["Owner"],
+        policyPath: "channels.demo.accounts.default.dmPolicy",
+        allowFromPath: "channels.demo.accounts.default.",
+        approveHint: formatPairingApproveHint("demo"),
+      },
+    );
+  });
+
+  it("ignores accounts.default paths unless the channel opts into shared default-account inheritance", () => {
+    const resolveDmPolicy = createDemoDmSecurityResolver();
+
+    expectDemoDmPolicy(
+      resolveDmPolicy({
+        cfg: {
+          channels: {
+            demo: {
+              dmPolicy: "pairing",
+              allowFrom: ["*"],
+              accounts: {
+                default: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["Owner"],
+                },
+                alt: {},
+              },
+            },
+          },
+        },
+        accountId: "alt",
+        account: {
+          accountId: "alt",
+          dmPolicy: "pairing",
+          allowFrom: ["*"],
+        },
+      }),
+      {
+        policy: "pairing",
+        allowFrom: ["*"],
+        policyPath: "channels.demo.dmPolicy",
+        allowFromPath: "channels.demo.",
+        approveHint: formatPairingApproveHint("demo"),
+      },
+    );
   });
 });
 
@@ -341,7 +664,7 @@ describe("createHybridChannelConfigBase", () => {
       sectionKey: "demo",
       listAccountIds: () => ["default", "alt"],
       resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token"],
     });
 
@@ -383,7 +706,7 @@ describe("createHybridChannelConfigBase", () => {
       sectionKey: "demo",
       listAccountIds: () => ["default", "alt"],
       resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token", "name"],
       preserveSectionOnDefaultDelete: true,
     });
@@ -427,7 +750,7 @@ describe("createHybridChannelConfigAdapter", () => {
         allowFrom: [accountId ?? "default"],
         defaultTo: " room:123 ",
       }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token"],
       preserveSectionOnDefaultDelete: true,
       resolveAllowFrom: (account) => account.allowFrom,
@@ -435,15 +758,7 @@ describe("createHybridChannelConfigAdapter", () => {
       resolveDefaultTo: (account) => account.defaultTo,
     });
 
-    expect(adapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
-    expect(adapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
-    expect(
-      adapter.setAccountEnabled!({
-        cfg: {},
-        accountId: "default",
-        enabled: true,
-      }).channels?.demo,
-    ).toEqual({ enabled: true });
+    expectAdapterAllowFromAndDefaultTo(adapter);
     expect(
       adapter.deleteAccount!({
         cfg: {

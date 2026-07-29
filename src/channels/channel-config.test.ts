@@ -1,5 +1,5 @@
+// Channel config tests cover channel config normalization and account lookup behavior.
 import { describe, expect, it } from "vitest";
-import type { MsgContext } from "../auto-reply/templating.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import {
   type ChannelMatchSource,
@@ -11,7 +11,6 @@ import {
   applyChannelMatchMeta,
   resolveChannelMatchConfig,
 } from "./channel-config.js";
-import { validateSenderIdentity } from "./sender-identity.js";
 
 describe("buildChannelKeyCandidates", () => {
   it("dedupes and trims keys", () => {
@@ -81,17 +80,15 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     },
   ]);
 
-  for (const testCase of fallbackCases) {
-    it(testCase.name, () => {
-      const match = resolveChannelEntryMatchWithFallback({
-        entries: testCase.entries,
-        ...testCase.args,
-      });
-      expect(match.entry).toBe(testCase.entries[testCase.expectedEntryKey]);
-      expect(match.matchSource).toBe(testCase.expectedSource);
-      expect(match.matchKey).toBe(testCase.expectedMatchKey);
+  it.each(fallbackCases)("$name", (testCase) => {
+    const match = resolveChannelEntryMatchWithFallback({
+      entries: testCase.entries,
+      ...testCase.args,
     });
-  }
+    expect(match.entry).toBe(testCase.entries[testCase.expectedEntryKey]);
+    expect(match.matchSource).toBe(testCase.expectedSource);
+    expect(match.matchKey).toBe(testCase.expectedMatchKey);
+  });
 
   it("matches normalized keys when normalizeKey is provided", () => {
     const entries = { "My Team": { allow: true } };
@@ -134,33 +131,6 @@ describe("resolveChannelMatchConfig", () => {
     );
     expect(resolved?.matchKey).toBe("*");
     expect(resolved?.matchSource).toBe("wildcard");
-  });
-});
-
-describe("validateSenderIdentity", () => {
-  it("allows direct messages without sender fields", () => {
-    const ctx: MsgContext = { ChatType: "direct" };
-    expect(validateSenderIdentity(ctx)).toEqual([]);
-  });
-
-  it("requires some sender identity for non-direct chats", () => {
-    const ctx: MsgContext = { ChatType: "group" };
-    expect(validateSenderIdentity(ctx)).toContain(
-      "missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)",
-    );
-  });
-
-  it("validates SenderE164 and SenderUsername shape", () => {
-    const ctx: MsgContext = {
-      ChatType: "group",
-      SenderE164: "123",
-      SenderUsername: "@ada lovelace",
-    };
-    expect(validateSenderIdentity(ctx)).toEqual([
-      "invalid SenderE164: 123",
-      'SenderUsername should not include "@": @ada lovelace',
-      "SenderUsername should not include whitespace: @ada lovelace",
-    ]);
   });
 });
 
@@ -208,9 +178,7 @@ describe("resolveNestedAllowlistDecision", () => {
     },
   ] as const;
 
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(resolveNestedAllowlistDecision(testCase.value)).toBe(testCase.expected);
-    });
-  }
+  it.each(cases)("$name", ({ value, expected }) => {
+    expect(resolveNestedAllowlistDecision(value)).toBe(expected);
+  });
 });

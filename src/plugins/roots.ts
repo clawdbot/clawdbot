@@ -1,4 +1,6 @@
+// Resolves plugin root directories for bundled and installed plugins.
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
@@ -8,7 +10,7 @@ export type PluginSourceRoots = {
   workspace?: string;
 };
 
-export type PluginCacheInputs = {
+type PluginCacheInputs = {
   roots: PluginSourceRoots;
   loadPaths: string[];
 };
@@ -25,7 +27,7 @@ export function resolvePluginSourceRoots(params: {
   return { stock, global, workspace };
 }
 
-// Shared env-aware cache inputs for discovery, manifest, and loader caches.
+// Shared env-aware key inputs for plugin loader registry reuse.
 export function resolvePluginCacheInputs(params: {
   workspaceDir?: string;
   loadPaths?: string[];
@@ -37,10 +39,8 @@ export function resolvePluginCacheInputs(params: {
     env,
   });
   // Preserve caller order because load-path precedence follows input order.
-  const loadPaths = (params.loadPaths ?? [])
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => resolveUserPath(entry, env));
+  const loadPaths = normalizeStringEntries(
+    (params.loadPaths ?? []).filter((entry): entry is string => typeof entry === "string"),
+  ).map((entry) => resolveUserPath(entry, env));
   return { roots, loadPaths };
 }

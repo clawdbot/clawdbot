@@ -1,0 +1,18 @@
+{
+  "id": "browser",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": ["browser"]
+  },
+  "contracts": {
+    "tools": ["browser"]
+  },
+  "commandAliases": [{ "name": "browser" }],
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

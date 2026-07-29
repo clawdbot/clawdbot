@@ -1,71 +1,451 @@
-import { afterEach, describe, expect, it } from "vitest";
+/** Covers plugin runtime registration API behavior and registry mutation guards. */
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
+  getActivePluginGatewayCommandRegistry,
+  getActivePluginHttpRouteRegistryVersion,
+  getActivePluginRegistryVersion,
+  getActivePluginRegistry,
+  getActivePluginSessionExtensionRegistry,
+  listImportedRuntimePluginIds,
+  pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
+  recordImportedPluginId,
+  releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
+
+function createRegistryWithRoute(path: string) {
+  const registry = createEmptyPluginRegistry();
+  registry.httpRoutes.push({
+    path,
+    auth: "plugin",
+    match: path === "/plugins/diffs" ? "prefix" : "exact",
+    handler: () => true,
+    pluginId: path === "/plugins/diffs" ? "diffs" : "demo",
+    source: "test",
+  });
+  return registry;
+}
+
+function createRegistryWithSessionExtension(pluginId = "demo-plugin", namespace = "demo") {
+  const registry = createEmptyPluginRegistry();
+  registry.sessionExtensions.push({
+    pluginId,
+    extension: {
+      namespace,
+      description: "Demo session extension",
+    },
+    source: "test",
+  });
+  return registry;
+}
+
+function createRuntimeRegistryPair() {
+  return {
+    startupRegistry: createEmptyPluginRegistry(),
+    laterRegistry: createEmptyPluginRegistry(),
+  };
+}
+
+function expectRegistryVersions(params: { active: number; routes: number }) {
+  expect(getActivePluginRegistryVersion()).toBe(params.active);
+  expect(getActivePluginHttpRouteRegistryVersion()).toBe(params.routes);
+}
+
+function expectActiveRouteRegistryResolution(params: {
+  pinnedRegistry: ReturnType<typeof createEmptyPluginRegistry>;
+  explicitRegistry: ReturnType<typeof createEmptyPluginRegistry>;
+  expectedRegistry: "pinned" | "explicit";
+}) {
+  setActivePluginRegistry(params.pinnedRegistry);
+  pinActivePluginHttpRouteRegistry(params.pinnedRegistry);
+
+  expect(resolveActivePluginHttpRouteRegistry(params.explicitRegistry)).toBe(
+    params.expectedRegistry === "pinned" ? params.pinnedRegistry : params.explicitRegistry,
+  );
+}
+
+function expectPinnedRouteRegistry(
+  startupRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  laterRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+) {
+  setActivePluginRegistry(startupRegistry);
+  pinActivePluginHttpRouteRegistry(startupRegistry);
+  setActivePluginRegistry(laterRegistry);
+  expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
+}
+
+function expectRouteRegistryState(params: { setup: () => void; assert: () => void }) {
+  params.setup();
+  params.assert();
+}
+
+async function waitForCleanupSignal(signal: Promise<void>, label: string): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 describe("plugin runtime route registry", () => {
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     releasePinnedPluginHttpRouteRegistry();
+    releasePinnedPluginSessionExtensionRegistry();
     resetPluginRuntimeStateForTest();
   });
 
-  it("keeps the pinned route registry when the active plugin registry changes", () => {
-    const startupRegistry = createEmptyPluginRegistry();
-    const laterRegistry = createEmptyPluginRegistry();
+  it("stays empty until a caller explicitly installs or requires a registry", () => {
+    resetPluginRuntimeStateForTest();
+
+    expect(getActivePluginRegistry()).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "keeps the pinned route registry when the active plugin registry changes",
+      run: () => {
+        const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+        expectPinnedRouteRegistry(startupRegistry, laterRegistry);
+      },
+    },
+    {
+      name: "tracks route registry repins separately from the active registry version",
+      run: () => {
+        const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+        const repinnedRegistry = createEmptyPluginRegistry();
+
+        setActivePluginRegistry(startupRegistry);
+        pinActivePluginHttpRouteRegistry(laterRegistry);
+
+        const activeVersionBeforeRepin = getActivePluginRegistryVersion();
+        const routeVersionBeforeRepin = getActivePluginHttpRouteRegistryVersion();
+
+        pinActivePluginHttpRouteRegistry(repinnedRegistry);
+
+        expectRegistryVersions({
+          active: activeVersionBeforeRepin,
+          routes: routeVersionBeforeRepin + 1,
+        });
+      },
+    },
+  ] as const)("$name", ({ run }) => {
+    expectRouteRegistryState({
+      setup: () => {},
+      assert: run,
+    });
+  });
+
+  it("keeps pinned route registries live until they are released", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
 
     setActivePluginRegistry(startupRegistry);
     pinActivePluginHttpRouteRegistry(startupRegistry);
     setActivePluginRegistry(laterRegistry);
 
     expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(false);
+
+    releasePinnedPluginHttpRouteRegistry(startupRegistry);
+
+    expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(laterRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
   });
 
-  it("falls back to the provided registry when the pinned route registry has no routes", () => {
+  it("keeps pinned session extension registries across active registry churn", () => {
+    const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
+    expect(
+      getActivePluginSessionExtensionRegistry()?.sessionExtensions.map((entry) => entry.pluginId),
+    ).toEqual(["startup"]);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(false);
+  });
+
+  it("releases pinned session extension registries back to the active registry", () => {
+    const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    releasePinnedPluginSessionExtensionRegistry(startupRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(laterRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
+  });
+
+  it("keeps empty pinned session extension registries authoritative over active extensions", () => {
     const startupRegistry = createEmptyPluginRegistry();
-    const explicitRegistry = createEmptyPluginRegistry();
-    explicitRegistry.httpRoutes.push({
-      path: "/demo",
-      auth: "plugin",
-      match: "exact",
-      handler: () => true,
-      pluginId: "demo",
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
+    expect(getActivePluginSessionExtensionRegistry()?.sessionExtensions).toHaveLength(0);
+  });
+
+  it("resolves the gateway command registry from pinned startup surfaces before active churn", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+    startupRegistry.commands.push({
+      pluginId: "startup",
+      command: {
+        name: "startup",
+        description: "Startup command",
+        handler: () => ({}),
+      },
       source: "test",
     });
 
     setActivePluginRegistry(startupRegistry);
-    pinActivePluginHttpRouteRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
 
-    expect(resolveActivePluginHttpRouteRegistry(explicitRegistry)).toBe(explicitRegistry);
+    expect(getActivePluginGatewayCommandRegistry()).toBe(startupRegistry);
   });
 
-  it("prefers the pinned route registry when it already owns routes", () => {
-    const startupRegistry = createEmptyPluginRegistry();
-    const explicitRegistry = createEmptyPluginRegistry();
-    startupRegistry.httpRoutes.push({
-      path: "/bluebubbles-webhook",
-      auth: "plugin",
-      match: "exact",
-      handler: () => true,
-      pluginId: "bluebubbles",
-      source: "test",
-    });
-    explicitRegistry.httpRoutes.push({
-      path: "/plugins/diffs",
-      auth: "plugin",
-      match: "prefix",
-      handler: () => true,
-      pluginId: "diffs",
+  it("falls through from an empty pinned startup registry to the active command surface", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+    laterRegistry.commands.push({
+      pluginId: "later",
+      command: {
+        name: "later",
+        description: "Later command",
+        handler: () => ({}),
+      },
       source: "test",
     });
 
     setActivePluginRegistry(startupRegistry);
-    pinActivePluginHttpRouteRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
 
-    expect(resolveActivePluginHttpRouteRegistry(explicitRegistry)).toBe(startupRegistry);
+    expect(getActivePluginGatewayCommandRegistry()).toBe(laterRegistry);
+  });
+
+  it("prefers channel-pinned command registries over route-only pins", () => {
+    const routeRegistry = createRegistryWithRoute("/demo");
+    const channelRegistry = createEmptyPluginRegistry();
+    channelRegistry.commands.push({
+      pluginId: "channel",
+      command: {
+        name: "channel",
+        description: "Channel command",
+        handler: () => ({}),
+      },
+      source: "test",
+    });
+
+    setActivePluginRegistry(routeRegistry);
+    pinActivePluginHttpRouteRegistry(routeRegistry);
+    pinActivePluginChannelRegistry(channelRegistry);
+
+    expect(getActivePluginGatewayCommandRegistry()).toBe(channelRegistry);
+  });
+
+  it.each([
+    {
+      name: "keeps an explicitly pinned empty route registry authoritative",
+      pinnedRegistry: createEmptyPluginRegistry(),
+      explicitRegistry: createRegistryWithRoute("/demo"),
+      expected: "pinned",
+    },
+    {
+      name: "prefers the pinned route registry when it already owns routes",
+      pinnedRegistry: createRegistryWithRoute("/imessage-webhook"),
+      explicitRegistry: createRegistryWithRoute("/plugins/diffs"),
+      expected: "pinned",
+    },
+  ] as const)("$name", ({ pinnedRegistry, explicitRegistry, expected }) => {
+    expectActiveRouteRegistryResolution({
+      pinnedRegistry,
+      explicitRegistry,
+      expectedRegistry: expected,
+    });
+  });
+});
+
+const makeRoute = (path: string): PluginHttpRouteRegistration => ({
+  path,
+  handler: () => {},
+  auth: "gateway",
+  match: "exact",
+});
+
+describe("setActivePluginRegistry", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("does not carry forward httpRoutes when new registry has none", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    const fakeRoute = makeRoute("/test");
+    oldRegistry.httpRoutes.push(fakeRoute);
+    setActivePluginRegistry(oldRegistry);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+
+    const newRegistry = createEmptyPluginRegistry();
+    expect(newRegistry.httpRoutes).toHaveLength(0);
+    setActivePluginRegistry(newRegistry);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(0);
+  });
+
+  it("does not carry forward when new registry already has routes", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    oldRegistry.httpRoutes.push(makeRoute("/old"));
+    setActivePluginRegistry(oldRegistry);
+
+    const newRegistry = createEmptyPluginRegistry();
+    const newRoute = makeRoute("/new");
+    newRegistry.httpRoutes.push(newRoute);
+    setActivePluginRegistry(newRegistry);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+    expect(getActivePluginRegistry()?.httpRoutes[0]).toEqual(newRoute);
+  });
+
+  it("does not carry forward when same registry is set again", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.httpRoutes.push(makeRoute("/test"));
+    setActivePluginRegistry(registry);
+    setActivePluginRegistry(registry);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+  });
+
+  it("does not treat bundle-only loaded entries as imported runtime plugins", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "bundle-only",
+        name: "Bundle Only",
+        source: "/tmp/bundle",
+        origin: "bundled",
+        format: "bundle",
+        configSchema: true,
+      }),
+      createPluginRecord({
+        id: "runtime-plugin",
+        name: "Runtime Plugin",
+        source: "/tmp/runtime",
+        format: "openclaw",
+        configSchema: true,
+      }),
+    );
+
+    setActivePluginRegistry(registry);
+
+    expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
+  });
+
+  it.each([
+    {
+      name: "same active registry is refreshed",
+      refresh: (nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) => {
+        setActivePluginRegistry(nextRegistry);
+      },
+    },
+    {
+      name: "active registry advances again",
+      refresh: () => {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      },
+    },
+  ] as const)("continues cleanup when the $name", async ({ refresh }) => {
+    let releaseFirstCleanup: (() => void) | undefined;
+    let markFirstCleanupStarted: (() => void) | undefined;
+    let markSecondCleanupCalled: (() => void) | undefined;
+    const firstCleanupStarted = new Promise<void>((resolve) => {
+      markFirstCleanupStarted = resolve;
+    });
+    const secondCleanupCalled = new Promise<void>((resolve) => {
+      markSecondCleanupCalled = resolve;
+    });
+    if (!markFirstCleanupStarted || !markSecondCleanupCalled) {
+      throw new Error("Expected cleanup signal callbacks to be initialized");
+    }
+    const notifyFirstCleanupStarted = markFirstCleanupStarted;
+    const notifySecondCleanupCalled = markSecondCleanupCalled;
+    const previous = createEmptyPluginRegistry();
+    previous.plugins.push(
+      createPluginRecord({
+        id: "cleanup-refresh-race",
+        name: "Cleanup Refresh Race",
+        status: "loaded",
+      }),
+    );
+    previous.runtimeLifecycles = [
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "first-cleanup",
+          async cleanup() {
+            notifyFirstCleanupStarted();
+            await new Promise<void>((resolve) => {
+              releaseFirstCleanup = resolve;
+            });
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "second-cleanup",
+          cleanup() {
+            notifySecondCleanupCalled();
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+    ];
+    const next = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(previous);
+    setActivePluginRegistry(next);
+    await waitForCleanupSignal(firstCleanupStarted, "first cleanup start");
+
+    refresh(next);
+    if (!releaseFirstCleanup) {
+      throw new Error("Expected first cleanup release callback to be initialized");
+    }
+    releaseFirstCleanup();
+
+    await waitForCleanupSignal(secondCleanupCalled, "second cleanup");
+  });
+
+  it("includes plugin ids imported before registration failed", () => {
+    recordImportedPluginId("broken-plugin");
+
+    expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
   });
 });

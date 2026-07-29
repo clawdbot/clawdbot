@@ -1,32 +1,55 @@
+// Tlon plugin module implements media behavior.
 import { randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
-import { getDefaultSsrFPolicy } from "../urbit/context.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import {
+  readRemoteMediaBuffer,
+  MAX_IMAGE_BYTES,
+  saveRemoteMedia,
+} from "openclaw/plugin-sdk/media-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 
-// Default to OpenClaw workspace media directory
-const DEFAULT_MEDIA_DIR = path.join(homedir(), ".openclaw", "workspace", "media", "inbound");
+const MAX_IMAGES_PER_MESSAGE = 8;
 
-export interface ExtractedImage {
+interface ExtractedImage {
   url: string;
   alt?: string;
 }
 
-export interface DownloadedMedia {
+interface DownloadedMedia {
   localPath: string;
   contentType: string;
   originalUrl: string;
+}
+
+type TlonInboundMedia = { path: string; contentType: string };
+
+/** Keeps Tlon's shipped path-duplicating prompt bytes paired with ordered facts. */
+export function buildTlonInboundMediaPrompt(
+  messageText: string,
+  attachments: readonly TlonInboundMedia[],
+): { body: string; media: TlonInboundMedia[] } {
+  const media = attachments.map((attachment) => ({ ...attachment }));
+  if (media.length === 0) {
+    return { body: messageText, media };
+  }
+  const mediaLines = media
+    .map(
+      (attachment) =>
+        `[media attached: ${attachment.path} (${attachment.contentType}) | ${attachment.path}]`,
+    )
+    .join("\n");
+  return { body: `${mediaLines}\n${messageText}`, media };
 }
 
 /**
  * Extract image blocks from Tlon message content.
  * Returns array of image URLs found in the message.
  */
-export function extractImageBlocks(content: unknown): ExtractedImage[] {
+function extractImageBlocks(content: unknown): ExtractedImage[] {
   if (!content || !Array.isArray(content)) {
     return [];
   }
@@ -39,6 +62,9 @@ export function extractImageBlocks(content: unknown): ExtractedImage[] {
         url: verse.block.image.src,
         alt: verse.block.image.alt,
       });
+      if (images.length >= MAX_IMAGES_PER_MESSAGE) {
+        break;
+      }
     }
   }
 
@@ -49,10 +75,7 @@ export function extractImageBlocks(content: unknown): ExtractedImage[] {
  * Download a media file from URL to local storage.
  * Returns the local path where the file was saved.
  */
-export async function downloadMedia(
-  url: string,
-  mediaDir: string = DEFAULT_MEDIA_DIR,
-): Promise<DownloadedMedia | null> {
+async function downloadMedia(url: string, mediaDir?: string): Promise<DownloadedMedia | null> {
   try {
     // Validate URL is http/https before fetching
     const parsedUrl = new URL(url);
@@ -61,77 +84,61 @@ export async function downloadMedia(
       return null;
     }
 
-    // Ensure media directory exists
-    await mkdir(mediaDir, { recursive: true });
-
-    // Fetch with SSRF protection
-    // Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
-    const { response, release } = await fetchWithSsrFGuard({
+    const fetchOptions = {
       url,
-      init: { method: "GET" },
-      policy: getDefaultSsrFPolicy(),
-      auditContext: "tlon-media-download",
-    });
+      maxBytes: MAX_IMAGE_BYTES,
+      ...TLON_MEDIA_FETCH_TIMEOUTS,
+      ssrfPolicy: undefined,
+      requestInit: { method: "GET" },
+    };
 
-    try {
-      if (!response.ok) {
-        console.error(`[tlon-media] Failed to fetch ${url}: ${response.status}`);
-        return null;
-      }
-
-      // Determine content type and extension
-      const contentType = response.headers.get("content-type") || "application/octet-stream";
-      const ext = getExtensionFromContentType(contentType) || getExtensionFromUrl(url) || "bin";
-
-      // Generate unique filename
-      const filename = `${randomUUID()}.${ext}`;
-      const localPath = path.join(mediaDir, filename);
-
-      // Stream to file
-      const body = response.body;
-      if (!body) {
-        console.error(`[tlon-media] No response body for ${url}`);
-        return null;
-      }
-
-      const writeStream = createWriteStream(localPath);
-      await pipeline(Readable.fromWeb(body as any), writeStream);
-
+    if (!mediaDir) {
+      const saved = await saveRemoteMedia(fetchOptions);
       return {
-        localPath,
-        contentType,
+        localPath: saved.path,
+        contentType: saved.contentType ?? "application/octet-stream",
         originalUrl: url,
       };
-    } finally {
-      await release();
     }
-  } catch (error: any) {
-    console.error(`[tlon-media] Error downloading ${url}: ${error?.message ?? String(error)}`);
+
+    const fetched = await readRemoteMediaBuffer(fetchOptions);
+    await mkdir(mediaDir, { recursive: true });
+    const ext =
+      getExtensionFromFileName(fetched.fileName) ||
+      getExtensionFromContentType(fetched.contentType ?? "") ||
+      getExtensionFromUrl(url) ||
+      "bin";
+    const localPath = path.join(mediaDir, `${randomUUID()}.${ext}`);
+    await writeFile(localPath, fetched.buffer);
+
+    return {
+      localPath,
+      contentType: fetched.contentType ?? "application/octet-stream",
+      originalUrl: url,
+    };
+  } catch (error: unknown) {
+    console.error(`[tlon-media] Error downloading ${url}: ${formatErrorMessage(error)}`);
     return null;
   }
 }
 
+function getExtensionFromFileName(fileName?: string): string | null {
+  if (!fileName) {
+    return null;
+  }
+  const ext = path.extname(fileName).replace(/^\./, "");
+  return ext || null;
+}
+
 function getExtensionFromContentType(contentType: string): string | null {
-  const map: Record<string, string> = {
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/png": "png",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/svg+xml": "svg",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "audio/mpeg": "mp3",
-    "audio/ogg": "ogg",
-  };
-  return map[contentType.split(";")[0].trim()] ?? null;
+  return extensionForMime(contentType)?.replace(/^\./u, "") ?? null;
 }
 
 function getExtensionFromUrl(url: string): string | null {
   try {
     const pathname = new URL(url).pathname;
     const match = pathname.match(/\.([a-z0-9]+)$/i);
-    return match ? match[1].toLowerCase() : null;
+    return match ? normalizeLowercaseStringOrEmpty(match[1]) : null;
   } catch {
     return null;
   }

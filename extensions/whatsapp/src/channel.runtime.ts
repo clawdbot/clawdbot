@@ -1,8 +1,18 @@
+// Whatsapp plugin module implements channel behavior.
+import {
+  startWebLoginWithQr as startWebLoginWithQrImpl,
+  waitForWebLogin as waitForWebLoginImpl,
+} from "../login-qr-runtime.js";
 import { getActiveWebListener as getActiveWebListenerImpl } from "./active-listener.js";
 import {
   getWebAuthAgeMs as getWebAuthAgeMsImpl,
   logWebSelfId as logWebSelfIdImpl,
   logoutWeb as logoutWebImpl,
+  readWebAuthSnapshot as readWebAuthSnapshotImpl,
+  readWebAuthState as readWebAuthStateImpl,
+  readWebAuthExistsBestEffort as readWebAuthExistsBestEffortImpl,
+  readWebAuthExistsForDecision as readWebAuthExistsForDecisionImpl,
+  readWebAuthSnapshotBestEffort as readWebAuthSnapshotBestEffortImpl,
   readWebSelfId as readWebSelfIdImpl,
   webAuthExists as webAuthExistsImpl,
 } from "./auth-store.js";
@@ -14,20 +24,18 @@ type GetActiveWebListener = typeof import("./active-listener.js").getActiveWebLi
 type GetWebAuthAgeMs = typeof import("./auth-store.js").getWebAuthAgeMs;
 type LogWebSelfId = typeof import("./auth-store.js").logWebSelfId;
 type LogoutWeb = typeof import("./auth-store.js").logoutWeb;
+type ReadWebAuthSnapshot = typeof import("./auth-store.js").readWebAuthSnapshot;
+type ReadWebAuthState = typeof import("./auth-store.js").readWebAuthState;
+type ReadWebAuthExistsBestEffort = typeof import("./auth-store.js").readWebAuthExistsBestEffort;
+type ReadWebAuthExistsForDecision = typeof import("./auth-store.js").readWebAuthExistsForDecision;
+type ReadWebAuthSnapshotBestEffort = typeof import("./auth-store.js").readWebAuthSnapshotBestEffort;
 type ReadWebSelfId = typeof import("./auth-store.js").readWebSelfId;
 type WebAuthExists = typeof import("./auth-store.js").webAuthExists;
 type LoginWeb = typeof import("./login.js").loginWeb;
-type StartWebLoginWithQr = typeof import("./login-qr.js").startWebLoginWithQr;
-type WaitForWebLogin = typeof import("./login-qr.js").waitForWebLogin;
+type StartWebLoginWithQr = typeof import("../login-qr-runtime.js").startWebLoginWithQr;
+type WaitForWebLogin = typeof import("../login-qr-runtime.js").waitForWebLogin;
 type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
 type MonitorWebChannel = typeof import("./auto-reply/monitor.js").monitorWebChannel;
-
-let loginQrPromise: Promise<typeof import("./login-qr.js")> | null = null;
-
-function loadWhatsAppLoginQr() {
-  loginQrPromise ??= import("./login-qr.js");
-  return loginQrPromise;
-}
 
 export function getActiveWebListener(
   ...args: Parameters<GetActiveWebListener>
@@ -47,6 +55,36 @@ export function logoutWeb(...args: Parameters<LogoutWeb>): ReturnType<LogoutWeb>
   return logoutWebImpl(...args);
 }
 
+export function readWebAuthSnapshot(
+  ...args: Parameters<ReadWebAuthSnapshot>
+): ReturnType<ReadWebAuthSnapshot> {
+  return readWebAuthSnapshotImpl(...args);
+}
+
+export function readWebAuthState(
+  ...args: Parameters<ReadWebAuthState>
+): ReturnType<ReadWebAuthState> {
+  return readWebAuthStateImpl(...args);
+}
+
+export function readWebAuthExistsBestEffort(
+  ...args: Parameters<ReadWebAuthExistsBestEffort>
+): ReturnType<ReadWebAuthExistsBestEffort> {
+  return readWebAuthExistsBestEffortImpl(...args);
+}
+
+export function readWebAuthExistsForDecision(
+  ...args: Parameters<ReadWebAuthExistsForDecision>
+): ReturnType<ReadWebAuthExistsForDecision> {
+  return readWebAuthExistsForDecisionImpl(...args);
+}
+
+export function readWebAuthSnapshotBestEffort(
+  ...args: Parameters<ReadWebAuthSnapshotBestEffort>
+): ReturnType<ReadWebAuthSnapshotBestEffort> {
+  return readWebAuthSnapshotBestEffortImpl(...args);
+}
+
 export function readWebSelfId(...args: Parameters<ReadWebSelfId>): ReturnType<ReadWebSelfId> {
   return readWebSelfIdImpl(...args);
 }
@@ -62,15 +100,13 @@ export function loginWeb(...args: Parameters<LoginWeb>): ReturnType<LoginWeb> {
 export async function startWebLoginWithQr(
   ...args: Parameters<StartWebLoginWithQr>
 ): ReturnType<StartWebLoginWithQr> {
-  const { startWebLoginWithQr } = await loadWhatsAppLoginQr();
-  return await startWebLoginWithQr(...args);
+  return await startWebLoginWithQrImpl(...args);
 }
 
 export async function waitForWebLogin(
   ...args: Parameters<WaitForWebLogin>
 ): ReturnType<WaitForWebLogin> {
-  const { waitForWebLogin } = await loadWhatsAppLoginQr();
-  return await waitForWebLogin(...args);
+  return await waitForWebLoginImpl(...args);
 }
 
 export const whatsappSetupWizard: WhatsAppSetupWizard = { ...whatsappSetupWizardImpl };

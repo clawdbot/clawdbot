@@ -1,27 +1,30 @@
+// Register configure tests cover configure command registration and option wiring.
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerConfigureCommand } from "./register.configure.js";
 
-const configureCommandFromSectionsArgMock = vi.fn();
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const mocks = vi.hoisted(() => ({
+  configureCommandFromSectionsArgMock: vi.fn(),
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
+}));
 
-vi.mock("../../commands/configure.js", () => ({
+const { configureCommandFromSectionsArgMock, runtime } = mocks;
+
+vi.mock("../../commands/configure.shared.js", () => ({
   CONFIGURE_WIZARD_SECTIONS: ["auth", "channels", "gateway", "agent"],
-  configureCommandFromSectionsArg: configureCommandFromSectionsArgMock,
+}));
+
+vi.mock("../../commands/configure.commands.js", () => ({
+  configureCommandFromSectionsArg: mocks.configureCommandFromSectionsArgMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtime,
+  defaultRuntime: mocks.runtime,
 }));
-
-let registerConfigureCommand: typeof import("./register.configure.js").registerConfigureCommand;
-
-beforeAll(async () => {
-  ({ registerConfigureCommand } = await import("./register.configure.js"));
-});
 
 describe("registerConfigureCommand", () => {
   async function runCli(args: string[]) {

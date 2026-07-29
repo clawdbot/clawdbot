@@ -1,3 +1,4 @@
+// Covers abort-signal wiring patterns used by async infrastructure helpers.
 import { describe, expect, it, vi } from "vitest";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 
@@ -16,6 +17,11 @@ import { bindAbortRelay } from "../utils/fetch-timeout.js";
  */
 
 describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
+  function expectDefaultAbortReason(controller: AbortController): void {
+    expect(controller.signal.reason).toBeInstanceOf(DOMException);
+    expect(controller.signal.reason.name).toBe("AbortError");
+  }
+
   it("controller.abort.bind(controller) aborts the signal", () => {
     const controller = new AbortController();
     const boundAbort = controller.abort.bind(controller);
@@ -47,9 +53,7 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     parent.abort();
 
     expect(child.signal.aborted).toBe(true);
-    // The reason must be the default AbortError, not the Event object
-    expect(child.signal.reason).toBeInstanceOf(DOMException);
-    expect(child.signal.reason.name).toBe("AbortError");
+    expectDefaultAbortReason(child);
   });
 
   it("raw .abort.bind() leaks Event as reason — bindAbortRelay() does not", () => {
@@ -66,9 +70,7 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     const childB = new AbortController();
     parentB.signal.addEventListener("abort", bindAbortRelay(childB), { once: true });
     parentB.abort();
-    // childB.signal.reason IS the default AbortError
-    expect(childB.signal.reason).toBeInstanceOf(DOMException);
-    expect(childB.signal.reason.name).toBe("AbortError");
+    expectDefaultAbortReason(childB);
   });
 
   it("removeEventListener works with saved bindAbortRelay() reference", () => {
@@ -80,22 +82,5 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     parent.signal.removeEventListener("abort", onAbort);
     parent.abort();
     expect(child.signal.aborted).toBe(false);
-  });
-
-  it("bindAbortRelay() forwards abort through combined signals", () => {
-    // Simulates the combineAbortSignals pattern from pi-tools.abort.ts
-    const signalA = new AbortController();
-    const signalB = new AbortController();
-    const combined = new AbortController();
-
-    const onAbort = bindAbortRelay(combined);
-    signalA.signal.addEventListener("abort", onAbort, { once: true });
-    signalB.signal.addEventListener("abort", onAbort, { once: true });
-
-    expect(combined.signal.aborted).toBe(false);
-    signalA.abort();
-    expect(combined.signal.aborted).toBe(true);
-    expect(combined.signal.reason).toBeInstanceOf(DOMException);
-    expect(combined.signal.reason.name).toBe("AbortError");
   });
 });

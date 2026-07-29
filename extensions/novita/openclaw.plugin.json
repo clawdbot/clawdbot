@@ -1,0 +1,209 @@
+{
+  "id": "novita",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["novita", "novita-ai", "novitaai"],
+  "providerAuthAliases": {
+    "novita-ai": "novita",
+    "novitaai": "novita"
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "novita-native",
+      "hosts": ["api.novita.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "novita": {
+        "family": "novita"
+      },
+      "novita-ai": {
+        "family": "novita"
+      },
+      "novitaai": {
+        "family": "novita"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "novita",
+        "envVars": ["NOVITA_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "novita",
+      "method": "api-key",
+      "choiceId": "novita-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "NovitaAI API key",
+      "choiceHint": "OpenAI-compatible NovitaAI endpoint",
+      "groupId": "novita",
+      "groupLabel": "NovitaAI",
+      "groupHint": "OpenAI-compatible NovitaAI endpoint",
+      "optionKey": "novitaApiKey",
+      "cliFlag": "--novita-api-key",
+      "cliOption": "--novita-api-key <key>",
+      "cliDescription": "NovitaAI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "aliases": {
+      "novita-ai": {
+        "provider": "novita"
+      },
+      "novitaai": {
+        "provider": "novita"
+      }
+    },
+    "providers": {
+      "novita": {
+        "baseUrl": "https://api.novita.ai/openai/v1",
+        "api": "openai-completions",
+        "defaultModel": "deepseek/deepseek-v4-pro",
+        "models": [
+          {
+            "id": "moonshotai/kimi-k3",
+            "name": "Kimi K3",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": {
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "moonshotai/kimi-k2.7-code",
+            "name": "Kimi K2.7 Code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.95,
+              "output": 4,
+              "cacheRead": 0.19,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "minimax/minimax-m3",
+            "name": "MiniMax M3",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.06,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zai-org/glm-5.2",
+            "name": "GLM-5.2",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 1.4,
+              "output": 4.4,
+              "cacheRead": 0.26,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek/deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 393216,
+            "cost": {
+              "input": 1.6,
+              "output": 3.2,
+              "cacheRead": 0.135,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek/deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 393216,
+            "cost": {
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.028,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "qwen/qwen3.7-max",
+            "name": "Qwen3.7-Max",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 1.25,
+              "output": 3.75,
+              "cacheRead": 0.25,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "minimax/minimax-m2.7",
+            "name": "MiniMax M2.7",
+            "status": "deprecated",
+            "replacedBy": "minimax/minimax-m3",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 204800,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.06,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "novita": "refreshable"
+    }
+  }
+}

@@ -1,28 +1,29 @@
+// Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatTokenK, loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
-  writeConfigFile: vi.fn(),
+  replaceConfigFile: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
-  writeConfigFile: (...args: unknown[]) => mocks.writeConfigFile(...args),
+  replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
 }));
-
-import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
 describe("models/shared", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockClear();
-    mocks.writeConfigFile.mockClear();
+    mocks.replaceConfigFile.mockClear();
   });
 
   it("returns config when snapshot is valid", async () => {
     const cfg = { providers: {} } as unknown as OpenClawConfig;
     mocks.readConfigFileSnapshot.mockResolvedValue({
       valid: true,
+      runtimeConfig: cfg,
       config: cfg,
     });
 
@@ -45,19 +46,75 @@ describe("models/shared", () => {
     const cfg = { update: { channel: "stable" } } as unknown as OpenClawConfig;
     mocks.readConfigFileSnapshot.mockResolvedValue({
       valid: true,
+      hash: "config-1",
+      sourceConfig: cfg,
       config: cfg,
     });
-    mocks.writeConfigFile.mockResolvedValue(undefined);
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
 
     await updateConfig((current) => ({
       ...current,
       update: { channel: "beta" },
     }));
 
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        update: { channel: "beta" },
-      }),
-    );
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    expect(replaceParams?.nextConfig.update).toEqual({ channel: "beta" });
+    expect(replaceParams?.baseHash).toBe("config-1");
+  });
+
+  it("updateConfig exposes runtime config without writing runtime defaults", async () => {
+    const sourceConfig = {
+      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      hash: "config-2",
+      sourceConfig,
+      runtimeConfig,
+      config: runtimeConfig,
+    });
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+
+    await updateConfig((current, context) => {
+      expect(current).toEqual(sourceConfig);
+      expect(context.runtimeConfig).toEqual(runtimeConfig);
+      return current;
+    });
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    expect(replaceParams?.nextConfig).toEqual(sourceConfig);
+    expect(replaceParams?.baseHash).toBe("config-2");
+  });
+
+  describe("formatTokenK", () => {
+    // Token context windows are decimal, so round windows must not shrink
+    // (regression: /1024 rendered 200000 as "195k" instead of "200k").
+    it("renders round token context windows in decimal K", () => {
+      expect(formatTokenK(200_000)).toBe("200k");
+      expect(formatTokenK(128_000)).toBe("128k");
+      expect(formatTokenK(1_000_000)).toBe("1000k");
+      expect(formatTokenK(195_000)).toBe("195k");
+    });
+
+    it("passes small counts through and switches to K at 1000", () => {
+      expect(formatTokenK(999)).toBe("999");
+      expect(formatTokenK(1_000)).toBe("1k");
+    });
+
+    it("returns a dash for missing or non-finite values", () => {
+      expect(formatTokenK(undefined)).toBe("-");
+      expect(formatTokenK(null)).toBe("-");
+      expect(formatTokenK(0)).toBe("-");
+      expect(formatTokenK(Number.NaN)).toBe("-");
+    });
   });
 });

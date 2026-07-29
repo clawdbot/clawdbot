@@ -1,4 +1,9 @@
+// Interactive updater entrypoint: resolves current install/channel state, prompts for
+// a target channel, then delegates the actual mutation to the non-interactive updater.
 import { confirm, isCancel } from "@clack/prompts";
+import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
+import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   formatUpdateChannelLabel,
@@ -7,9 +12,6 @@ import {
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
-import { selectStyled } from "../../terminal/prompt-select-styled.js";
-import { stylePromptMessage } from "../../terminal/prompt-style.js";
-import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
 import {
   isEmptyDir,
@@ -21,10 +23,11 @@ import {
 } from "./shared.js";
 import { updateCommand } from "./update-command.js";
 
+/** Run the TTY-only update wizard and preserve `updateCommand` as the single update executor. */
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
     defaultRuntime.error(
-      "Update wizard requires a TTY. Use `openclaw update --channel <stable|beta|dev>` instead.",
+      "Update wizard requires a TTY. Use `openclaw update --channel <stable|extended-stable|beta|dev>` instead.",
     );
     defaultRuntime.exit(1);
     return;
@@ -75,6 +78,11 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         value: "stable",
         label: "Stable",
         hint: "Tagged releases (npm latest)",
+      },
+      {
+        value: "extended-stable",
+        label: "Extended Stable",
+        hint: "Monthly supported release (npm extended-stable)",
       },
       {
         value: "beta",
@@ -141,7 +149,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   try {
     await updateCommand({
       channel: requestedChannel ?? undefined,
-      restart: Boolean(restart),
+      restart,
       timeout: opts.timeout,
     });
   } catch (err) {

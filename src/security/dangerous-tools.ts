@@ -1,5 +1,5 @@
 // Shared tool-risk constants.
-// Keep these centralized so gateway HTTP restrictions, security audits, and ACP prompts don't drift.
+// Keep these centralized so gateway HTTP restrictions and security audits don't drift.
 
 /**
  * Tools denied via Gateway HTTP `POST /tools/invoke` by default.
@@ -7,33 +7,64 @@
  * or interactive flows that don't make sense over a non-interactive HTTP surface.
  */
 export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
+  // Direct command execution — immediate RCE surface
+  "exec",
+  // Arbitrary child process creation — immediate RCE surface
+  "spawn",
+  // Shell command execution — immediate RCE surface
+  "shell",
+  // Arbitrary file mutation on the host
+  "fs_write",
+  // Arbitrary file deletion on the host
+  "fs_delete",
+  // Arbitrary file move/rename on the host
+  "fs_move",
+  // Patch application can rewrite arbitrary files
+  "apply_patch",
+  // Agent-owned host terminal — interactive RCE surface
+  "terminal",
   // Session orchestration — spawning agents remotely is RCE
   "sessions_spawn",
   // Cross-session injection — message injection across sessions
   "sessions_send",
+  // External conversation discovery and delivery use server-held channel credentials
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
   // Persistent automation control plane — can create/update/remove scheduled runs
   "cron",
-  // Gateway control plane — prevents gateway reconfiguration via HTTP
+  // Gateway config can expose secrets and host topology
   "gateway",
-  // Interactive setup — requires terminal QR scan, hangs on HTTP
-  "whatsapp_login",
+  // Node command relay can reach system.run on paired hosts
+  "nodes",
+  // Desktop control on a paired Mac (pointer/keyboard) and screen reads
+  "computer",
+  // Android AccessibilityService reads and cross-app UI control
+  "mobile_ui",
+  "openclaw",
 ] as const;
 
 /**
- * ACP tools that should always require explicit user approval.
- * ACP is an automation surface; we never want "silent yes" for mutating/execution tools.
+ * Sensitive control-plane tools. `cron` can persist automation; `gateway`
+ * exposes configuration and schema details even though its agent actions are read-only.
  */
-export const DANGEROUS_ACP_TOOL_NAMES = [
-  "exec",
-  "spawn",
-  "shell",
-  "sessions_spawn",
-  "sessions_send",
-  "gateway",
-  "fs_write",
-  "fs_delete",
-  "fs_move",
-  "apply_patch",
-] as const;
+export const GATEWAY_CONTROL_PLANE_TOOLS = ["cron", "gateway"] as const;
 
-export const DANGEROUS_ACP_TOOLS = new Set<string>(DANGEROUS_ACP_TOOL_NAMES);
+/**
+ * Core tools that require sender owner identity on Gateway-scoped surfaces.
+ * `gateway.tools.allow` can remove the default HTTP deny only for owner/trusted-operator
+ * callers; non-owner identity-bearing callers must not receive server-credential wrappers.
+ */
+export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
+  ...GATEWAY_CONTROL_PLANE_TOOLS,
+  "sessions",
+  "screen",
+  "terminal",
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
+  "nodes",
+  "computer",
+  "mobile_ui",
+  "openclaw",
+] as const;

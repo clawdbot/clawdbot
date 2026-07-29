@@ -1,9 +1,10 @@
+// Telegram tests cover account inspect plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { withEnv } from "../../../test/helpers/extensions/env.js";
 import { inspectTelegramAccount } from "./account-inspect.js";
 
 describe("inspectTelegramAccount SecretRef resolution", () => {
@@ -80,6 +81,73 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
     });
   });
 
+  it("matches runtime token lookup for account keys that need full normalization", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            "Carey Notifications": {
+              botToken: "123:token",
+              reactionLevel: "ack",
+            },
+          },
+        },
+      },
+    };
+
+    const account = inspectTelegramAccount({
+      cfg,
+      accountId: "carey-notifications",
+    });
+
+    expect(account.accountId).toBe("carey-notifications");
+    expect(account.configured).toBe(true);
+    expect(account.tokenSource).toBe("config");
+    expect(account.tokenStatus).toBe("available");
+    expect(account.config.reactionLevel).toBe("ack");
+  });
+
+  it("routes omitted-account inspection through the configured defaultAccount (#61012)", () => {
+    withEnv({ TELEGRAM_BOT_TOKEN: "123:env" }, () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            botToken: "123:channel",
+            defaultAccount: "ops",
+            accounts: {
+              ops: { botToken: "123:ops" },
+            },
+          },
+        },
+      };
+
+      const account = inspectTelegramAccount({ cfg });
+      expect(account.accountId).toBe("ops");
+      expect(account.tokenSource).toBe("config");
+      expect(account.token).toBe("123:ops");
+    });
+  });
+
+  it("blocks channel-token fallback for unknown scoped accounts in multi-account config", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "123:channel",
+          accounts: {
+            work: { botToken: "123:work" },
+          },
+        },
+      },
+    };
+
+    const account = inspectTelegramAccount({ cfg, accountId: "unknown" });
+
+    expect(account.accountId).toBe("unknown");
+    expect(account.configured).toBe(false);
+    expect(account.tokenSource).toBe("none");
+    expect(account.tokenStatus).toBe("missing");
+  });
+
   it.runIf(process.platform !== "win32")(
     "treats symlinked token files as configured_unavailable",
     () => {
@@ -101,6 +169,14 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
       expect(account.tokenSource).toBe("tokenFile");
       expect(account.tokenStatus).toBe("configured_unavailable");
       expect(account.token).toBe("");
+      expect(account.credentialDiagnostics).toEqual([
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.telegram.tokenFile",
+          reason: "symlink",
+        },
+      ]);
+      expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(tokenLink);
       fs.rmSync(dir, { recursive: true, force: true });
     },
   );

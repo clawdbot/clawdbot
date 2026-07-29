@@ -1,28 +1,39 @@
+// Nostr plugin module implements channel behavior.
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   createScopedDmSecurityResolver,
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
 } from "openclaw/plugin-sdk/extension-shared";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
+  type ChannelOutboundAdapter,
   type ChannelPlugin,
-} from "../runtime-api.js";
+} from "./channel-api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
-import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
-import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import {
+  getActiveNostrBuses,
+  nostrOutboundAdapter,
+  nostrPairingTextAdapter,
+  startNostrGatewayAccount,
+} from "./gateway.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
-import { getNostrRuntime } from "./runtime.js";
 import { resolveNostrOutboundSessionRoute } from "./session-route.js";
-import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";
+import { nostrSetupAdapter, nostrSetupContract, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
   resolveDefaultNostrAccountId,
@@ -30,11 +41,21 @@ import {
   type ResolvedNostrAccount,
 } from "./types.js";
 
-// Store active bus handles per account
-const activeBuses = new Map<string, NostrBusHandle>();
+const NOSTR_TARGET_HINT = "<npub|hex pubkey|nostr:npub...>";
 
-// Store metrics snapshots per account (for status reporting)
-const metricsSnapshots = new Map<string, MetricsSnapshot>();
+function stripNostrTargetPrefix(target: string): string {
+  return target.trim().replace(/^nostr:/i, "");
+}
+
+function normalizeNostrTarget(target: string): string {
+  const cleaned = stripNostrTargetPrefix(target);
+  try {
+    return normalizePubkey(cleaned);
+  } catch {
+    // Invalid prefixed tokens must stay distinct from "*" so formatting cannot widen access.
+    return target.trim();
+  }
+}
 
 const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount>({
   channelKey: "nostr",
@@ -43,13 +64,7 @@ const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount
   policyPathSuffix: "dmPolicy",
   defaultPolicy: "pairing",
   approveHint: formatPairingApproveHint("nostr"),
-  normalizeEntry: (raw) => {
-    try {
-      return normalizePubkey(raw.replace(/^nostr:/i, "").trim());
-    } catch {
-      return raw.trim();
-    }
-  },
+  normalizeEntry: normalizeNostrTarget,
 });
 
 const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccount>({
@@ -69,266 +84,126 @@ const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccou
   ],
   resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
-    allowFrom
-      .map((entry) => String(entry).trim())
-      .filter(Boolean)
+    normalizeStringEntries(allowFrom)
       .map((entry) => {
         if (entry === "*") {
           return "*";
         }
-        try {
-          return normalizePubkey(entry);
-        } catch {
-          return entry;
-        }
+        return normalizeNostrTarget(entry);
       })
       .filter(Boolean),
 });
 
-export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
+const nostrMessageAdapter = createChannelMessageAdapterFromOutbound({
   id: "nostr",
-  meta: {
-    id: "nostr",
-    label: "Nostr",
-    selectionLabel: "Nostr",
-    docsPath: "/channels/nostr",
-    docsLabel: "nostr",
-    blurb: "Decentralized DMs via Nostr relays (NIP-04)",
-    order: 100,
-  },
-  capabilities: {
-    chatTypes: ["direct"], // DMs only for MVP
-    media: false, // No media for MVP
-  },
-  reload: { configPrefixes: ["channels.nostr"] },
-  configSchema: buildChannelConfigSchema(NostrConfigSchema),
-  setup: nostrSetupAdapter,
-  setupWizard: nostrSetupWizard,
+  outbound: nostrOutboundAdapter,
+});
 
-  config: {
-    ...nostrConfigAdapter,
-    isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      publicKey: account.publicKey,
-    }),
-  },
-
-  pairing: {
-    idLabel: "nostrPubkey",
-    normalizeAllowEntry: (entry) => {
-      try {
-        return normalizePubkey(entry.replace(/^nostr:/i, ""));
-      } catch {
-        return entry;
-      }
-    },
-    notifyApproval: async ({ id }) => {
-      // Get the default account's bus and send approval message
-      const bus = activeBuses.get(DEFAULT_ACCOUNT_ID);
-      if (bus) {
-        await bus.sendDm(id, "Your pairing request has been approved!");
-      }
-    },
-  },
-
-  security: {
-    resolveDmPolicy: resolveNostrDmPolicy,
-  },
-
-  messaging: {
-    normalizeTarget: (target) => {
-      // Strip nostr: prefix if present
-      const cleaned = target.replace(/^nostr:/i, "").trim();
-      try {
-        return normalizePubkey(cleaned);
-      } catch {
-        return cleaned;
-      }
-    },
-    targetResolver: {
-      looksLikeId: (input) => {
-        const trimmed = input.trim();
-        return trimmed.startsWith("npub1") || /^[0-9a-fA-F]{64}$/.test(trimmed);
-      },
-      hint: "<npub|hex pubkey|nostr:npub...>",
-    },
-    resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
-  },
-
-  outbound: {
-    deliveryMode: "direct",
-    textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId }) => {
-      const core = getNostrRuntime();
-      const aid = accountId ?? DEFAULT_ACCOUNT_ID;
-      const bus = activeBuses.get(aid);
-      if (!bus) {
-        throw new Error(`Nostr bus not running for account ${aid}`);
-      }
-      const tableMode = core.channel.text.resolveMarkdownTableMode({
-        cfg,
-        channel: "nostr",
-        accountId: aid,
-      });
-      const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
-      const normalizedTo = normalizePubkey(to);
-      await bus.sendDm(normalizedTo, message);
-      return attachChannelToResult("nostr", {
-        to: normalizedTo,
-        messageId: `nostr-${Date.now()}`,
-      });
-    },
-  },
-
-  status: {
-    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
-    buildChannelSummary: ({ snapshot }) =>
-      buildPassiveChannelStatusSummary(snapshot, {
-        publicKey: snapshot.publicKey ?? null,
-      }),
-    buildAccountSnapshot: ({ account, runtime }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      publicKey: account.publicKey,
-      profile: account.profile,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      ...buildTrafficStatusSummary(runtime),
-    }),
-  },
-
-  gateway: {
-    startAccount: async (ctx) => {
-      const account = ctx.account;
-      ctx.setStatus({
-        accountId: account.accountId,
-        publicKey: account.publicKey,
-      });
-      ctx.log?.info(
-        `[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`,
-      );
-
-      if (!account.configured) {
-        throw new Error("Nostr private key not configured");
-      }
-
-      const runtime = getNostrRuntime();
-
-      // Track bus handle for metrics callback
-      let busHandle: NostrBusHandle | null = null;
-
-      const bus = await startNostrBus({
-        accountId: account.accountId,
-        privateKey: account.privateKey,
-        relays: account.relays,
-        onMessage: async (senderPubkey, text, reply) => {
-          ctx.log?.debug?.(
-            `[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`,
-          );
-
-          // Forward to OpenClaw's message pipeline
-          await (
-            runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
-          ).handleInboundMessage?.({
-            channel: "nostr",
-            accountId: account.accountId,
-            senderId: senderPubkey,
-            chatType: "direct",
-            chatId: senderPubkey, // For DMs, chatId is the sender's pubkey
-            text,
-            reply: async (responseText: string) => {
-              await reply(responseText);
-            },
-          });
-        },
-        onError: (error, context) => {
-          ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
-        },
-        onConnect: (relay) => {
-          ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
-        },
-        onDisconnect: (relay) => {
-          ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
-        },
-        onEose: (relays) => {
-          ctx.log?.debug?.(`[${account.accountId}] EOSE received from relays: ${relays}`);
-        },
-        onMetric: (event: MetricEvent) => {
-          // Log significant metrics at appropriate levels
-          if (event.name.startsWith("event.rejected.")) {
-            ctx.log?.debug?.(
-              `[${account.accountId}] Metric: ${event.name} ${JSON.stringify(event.labels)}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.open") {
-            ctx.log?.warn?.(
-              `[${account.accountId}] Circuit breaker opened for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.close") {
-            ctx.log?.info?.(
-              `[${account.accountId}] Circuit breaker closed for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.error") {
-            ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
-          }
-          // Update cached metrics snapshot
-          if (busHandle) {
-            metricsSnapshots.set(account.accountId, busHandle.getMetrics());
-          }
-        },
-      });
-
-      busHandle = bus;
-
-      // Store the bus handle
-      activeBuses.set(account.accountId, bus);
-
-      ctx.log?.info(
-        `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
-      );
-
-      // Return cleanup function
+const nostrPluginOutboundAdapter: ChannelOutboundAdapter = {
+  ...nostrOutboundAdapter,
+  resolveTarget: ({ to }) => {
+    const trimmed = to?.trim() ?? "";
+    if (!trimmed) {
       return {
-        stop: () => {
-          bus.close();
-          activeBuses.delete(account.accountId);
-          metricsSnapshots.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
-        },
+        ok: false,
+        error: missingTargetError("Nostr", NOSTR_TARGET_HINT),
       };
-    },
+    }
+    const normalized = normalizeNostrTarget(trimmed);
+    try {
+      return { ok: true, to: normalizePubkey(normalized) };
+    } catch {
+      return {
+        ok: false,
+        error: new Error("Nostr target must be a 64-character hex pubkey or npub value"),
+      };
+    }
   },
 };
 
-/**
- * Get metrics snapshot for a Nostr account.
- * Returns undefined if account is not running.
- */
-export function getNostrMetrics(
-  accountId: string = DEFAULT_ACCOUNT_ID,
-): MetricsSnapshot | undefined {
-  const bus = activeBuses.get(accountId);
-  if (bus) {
-    return bus.getMetrics();
-  }
-  return metricsSnapshots.get(accountId);
-}
-
-/**
- * Get all active Nostr bus handles.
- * Useful for debugging and status reporting.
- */
-export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
-  return new Map(activeBuses);
-}
+export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChannelPlugin({
+  base: {
+    id: "nostr",
+    meta: {
+      id: "nostr",
+      label: "Nostr",
+      selectionLabel: "Nostr",
+      docsPath: "/channels/nostr",
+      docsLabel: "nostr",
+      blurb: "Decentralized DMs via Nostr relays (NIP-04)",
+      order: 100,
+    },
+    capabilities: {
+      chatTypes: ["direct"], // DMs only for MVP
+      media: false, // No media for MVP
+    },
+    reload: { configPrefixes: ["channels.nostr"] },
+    configSchema: buildChannelConfigSchema(NostrConfigSchema),
+    setup: nostrSetupAdapter,
+    setupContract: nostrSetupContract,
+    setupWizard: nostrSetupWizard,
+    config: {
+      ...nostrConfigAdapter,
+      isConfigured: (account) => account.configured,
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: account.configured,
+          extra: {
+            publicKey: account.publicKey,
+          },
+        }),
+    },
+    messaging: {
+      targetPrefixes: ["nostr"],
+      normalizeTarget: normalizeNostrTarget,
+      targetResolver: {
+        looksLikeId: (input, normalized) => {
+          const trimmed = normalized?.trim() || stripNostrTargetPrefix(input);
+          return (
+            trimmed.startsWith("npub1") ||
+            trimmed.startsWith("NPUB1") ||
+            /^[0-9a-fA-F]{64}$/.test(trimmed)
+          );
+        },
+        hint: NOSTR_TARGET_HINT,
+      },
+      resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
+    },
+    message: nostrMessageAdapter,
+    status: {
+      ...createComputedAccountStatusAdapter<ResolvedNostrAccount>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
+        buildChannelSummary: ({ snapshot }) =>
+          buildPassiveChannelStatusSummary(snapshot, {
+            publicKey: snapshot.publicKey ?? null,
+          }),
+        resolveAccountSnapshot: ({ account, runtime }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          extra: {
+            publicKey: account.publicKey,
+            profile: account.profile,
+            ...buildTrafficStatusSummary(runtime),
+          },
+        }),
+      }),
+    },
+    gateway: {
+      startAccount: startNostrGatewayAccount,
+    },
+  },
+  pairing: {
+    text: nostrPairingTextAdapter,
+  },
+  security: {
+    resolveDmPolicy: resolveNostrDmPolicy,
+  },
+  outbound: nostrPluginOutboundAdapter,
+});
 
 /**
  * Publish a profile (kind:0) for a Nostr account.
@@ -338,12 +213,13 @@ export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
  * @throws Error if account is not running
  */
 export async function publishNostrProfile(
-  accountId: string = DEFAULT_ACCOUNT_ID,
+  accountId: string | undefined,
   profile: NostrProfile,
 ): Promise<ProfilePublishResult> {
-  const bus = activeBuses.get(accountId);
+  const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+  const bus = getActiveNostrBuses().get(resolvedAccountId);
   if (!bus) {
-    throw new Error(`Nostr bus not running for account ${accountId}`);
+    throw new Error(`Nostr bus not running for account ${resolvedAccountId}`);
   }
   return bus.publishProfile(profile);
 }
@@ -358,7 +234,7 @@ export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_I
   lastPublishedEventId: string | null;
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
 } | null> {
-  const bus = activeBuses.get(accountId);
+  const bus = getActiveNostrBuses().get(accountId);
   if (!bus) {
     return null;
   }

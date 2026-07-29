@@ -8,6 +8,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { FeishuBlockTable, FeishuDocxBlock } from "./docx-types.js";
 
 // ============ Table Utilities ============
 
@@ -33,11 +34,34 @@ const DEFAULT_TABLE_WIDTH = 730; // Approximate Feishu page content width
  * @param tableBlockId - The block_id of the table block
  * @returns Array of column widths in pixels
  */
-export function calculateAdaptiveColumnWidths(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  blocks: any[],
-  tableBlockId: string,
-): number[] {
+function normalizeChildBlockIds(children: string[] | string | undefined): string[] {
+  if (Array.isArray(children)) {
+    return children;
+  }
+  return typeof children === "string" ? [children] : [];
+}
+
+function omitParentId(block: FeishuDocxBlock): FeishuDocxBlock {
+  const cleanBlock = { ...block };
+  delete cleanBlock.parent_id;
+  return cleanBlock;
+}
+
+function createDescendantTable(
+  table: FeishuBlockTable,
+  adaptiveWidths: number[] | undefined,
+): FeishuBlockTable {
+  const { row_size, column_size } = table.property || {};
+  return {
+    property: {
+      row_size,
+      column_size,
+      ...(adaptiveWidths?.length ? { column_width: adaptiveWidths } : {}),
+    },
+  };
+}
+
+function calculateAdaptiveColumnWidths(blocks: FeishuDocxBlock[], tableBlockId: string): number[] {
   // Find the table block
   const tableBlock = blocks.find((b) => b.block_id === tableBlockId && b.block_type === 31);
 
@@ -46,28 +70,30 @@ export function calculateAdaptiveColumnWidths(
   }
 
   const { row_size, column_size, column_width: originalWidths } = tableBlock.table.property;
+  if (!row_size || !column_size) {
+    return [];
+  }
 
   // Use original total width from Convert API, or fall back to default
   const totalWidth =
     originalWidths && originalWidths.length > 0
       ? originalWidths.reduce((a: number, b: number) => a + b, 0)
       : DEFAULT_TABLE_WIDTH;
-  const cellIds: string[] = tableBlock.children || [];
+  const cellIds = normalizeChildBlockIds(tableBlock.children);
 
   // Build block lookup map
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const blockMap = new Map<string, any>();
+  const blockMap = new Map<string, FeishuDocxBlock>();
   for (const block of blocks) {
-    blockMap.set(block.block_id, block);
+    if (block.block_id) {
+      blockMap.set(block.block_id, block);
+    }
   }
 
   // Extract text content from a table cell
   function getCellText(cellId: string): string {
     const cell = blockMap.get(cellId);
-    if (!cell?.children) return "";
-
     let text = "";
-    const childIds = Array.isArray(cell.children) ? cell.children : [cell.children];
+    const childIds = normalizeChildBlockIds(cell?.children);
 
     for (const childId of childIds) {
       const child = blockMap.get(childId);
@@ -85,13 +111,13 @@ export function calculateAdaptiveColumnWidths(
   // Calculate weighted length (CJK chars count as 2)
   // CJK (Chinese/Japanese/Korean) characters render ~2x wider than ASCII
   function getWeightedLength(text: string): number {
-    return [...text].reduce((sum, char) => {
+    return Array.from(text).reduce((sum, char) => {
       return sum + (char.charCodeAt(0) > 255 ? 2 : 1);
     }, 0);
   }
 
   // Find max content length per column
-  const maxLengths: number[] = new Array(column_size).fill(0);
+  const maxLengths = Array.from({ length: column_size }, () => 0);
 
   for (let row = 0; row < row_size; row++) {
     for (let col = 0; col < column_size; col++) {
@@ -100,7 +126,7 @@ export function calculateAdaptiveColumnWidths(
       if (cellId) {
         const content = getCellText(cellId);
         const length = getWeightedLength(content);
-        maxLengths[col] = Math.max(maxLengths[col], length);
+        maxLengths[col] = Math.max(maxLengths[col] ?? 0, length);
       }
     }
   }
@@ -114,7 +140,7 @@ export function calculateAdaptiveColumnWidths(
       MIN_COLUMN_WIDTH,
       Math.min(MAX_COLUMN_WIDTH, Math.floor(totalWidth / column_size)),
     );
-    return new Array(column_size).fill(equalWidth);
+    return Array.from({ length: column_size }, () => equalWidth);
   }
 
   // Calculate proportional widths
@@ -131,15 +157,23 @@ export function calculateAdaptiveColumnWidths(
   while (remaining > 0) {
     // Find columns that can still grow (not at max)
     const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);
-    if (growable.length === 0) break;
+    if (growable.length === 0) {
+      break;
+    }
 
     // Distribute evenly among growable columns
     const perColumn = Math.floor(remaining / growable.length);
-    if (perColumn === 0) break;
+    if (perColumn === 0) {
+      break;
+    }
 
     for (const i of growable) {
-      const add = Math.min(perColumn, MAX_COLUMN_WIDTH - widths[i]);
-      widths[i] += add;
+      const width = widths[i];
+      if (width === undefined) {
+        continue;
+      }
+      const add = Math.min(perColumn, MAX_COLUMN_WIDTH - width);
+      widths[i] = width + add;
       remaining -= add;
     }
   }
@@ -158,20 +192,18 @@ export function calculateAdaptiveColumnWidths(
  * @param blocks - Array of blocks from Convert API
  * @returns Cleaned blocks ready for Descendant API
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function cleanBlocksForDescendant(blocks: any[]): any[] {
+export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxBlock[] {
   // Pre-calculate adaptive widths for all tables
   const tableWidths = new Map<string, number[]>();
   for (const block of blocks) {
-    if (block.block_type === 31) {
+    if (block.block_type === 31 && block.block_id) {
       const widths = calculateAdaptiveColumnWidths(blocks, block.block_id);
       tableWidths.set(block.block_id, widths);
     }
   }
 
   return blocks.map((block) => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { parent_id: _parentId, ...cleanBlock } = block;
+    const cleanBlock = omitParentId(block);
 
     // Fix: Convert API sometimes returns children as string for TableCell
     if (cleanBlock.block_type === 32 && typeof cleanBlock.children === "string") {
@@ -180,18 +212,8 @@ export function cleanBlocksForDescendant(blocks: any[]): any[] {
 
     // Clean table blocks
     if (cleanBlock.block_type === 31 && cleanBlock.table) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { cells: _cells, ...tableWithoutCells } = cleanBlock.table;
-      const { row_size, column_size } = tableWithoutCells.property || {};
-      const adaptiveWidths = tableWidths.get(block.block_id);
-
-      cleanBlock.table = {
-        property: {
-          row_size,
-          column_size,
-          ...(adaptiveWidths?.length && { column_width: adaptiveWidths }),
-        },
-      };
+      const adaptiveWidths = block.block_id ? tableWidths.get(block.block_id) : undefined;
+      cleanBlock.table = createDescendantTable(cleanBlock.table, adaptiveWidths);
     }
 
     return cleanBlock;
@@ -204,7 +226,7 @@ export async function insertTableRow(
   client: Lark.Client,
   docToken: string,
   blockId: string,
-  rowIndex: number = -1,
+  rowIndex = -1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -220,7 +242,7 @@ export async function insertTableColumn(
   client: Lark.Client,
   docToken: string,
   blockId: string,
-  columnIndex: number = -1,
+  columnIndex = -1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -237,7 +259,7 @@ export async function deleteTableRows(
   docToken: string,
   blockId: string,
   rowStart: number,
-  rowCount: number = 1,
+  rowCount = 1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -254,7 +276,7 @@ export async function deleteTableColumns(
   docToken: string,
   blockId: string,
   columnStart: number,
-  columnCount: number = 1,
+  columnCount = 1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },

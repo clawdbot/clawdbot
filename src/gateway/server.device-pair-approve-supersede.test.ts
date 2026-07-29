@@ -1,53 +1,46 @@
+/**
+ * Tests device-pair approval superseding behavior in the gateway server.
+ */
 import { describe, expect, test } from "vitest";
-import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import {
-  connectOk,
-  installGatewayTestHooks,
-  rpcReq,
-  startServerWithClient,
-} from "./test-helpers.js";
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
+import { installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 describe("gateway device.pair.approve superseded request ids", () => {
   test("rejects approving a superseded request id", async () => {
-    const started = await startServerWithClient("secret");
+    const first = await requestDevicePairing({
+      deviceId: "supersede-device-1",
+      publicKey: "supersede-public-key",
+      role: "node",
+      scopes: ["node.exec"],
+    });
+    const second = await requestDevicePairing({
+      deviceId: "supersede-device-1",
+      publicKey: "supersede-public-key",
+      role: "operator",
+      scopes: ["operator.admin"],
+    });
 
-    try {
-      const first = await requestDevicePairing({
-        deviceId: "supersede-device-1",
-        publicKey: "supersede-public-key",
-        role: "node",
-        scopes: ["node.exec"],
-      });
-      const second = await requestDevicePairing({
-        deviceId: "supersede-device-1",
-        publicKey: "supersede-public-key",
-        role: "operator",
-        scopes: ["operator.admin"],
-      });
+    expect(second.request.requestId).not.toBe(first.request.requestId);
 
-      expect(second.request.requestId).not.toBe(first.request.requestId);
-      await connectOk(started.ws);
+    const staleApprove = await approveDevicePairing(first.request.requestId, {
+      callerScopes: ["operator.admin"],
+    });
+    expect(staleApprove).toBeNull();
 
-      const staleApprove = await rpcReq(started.ws, "device.pair.approve", {
-        requestId: first.request.requestId,
-      });
-      expect(staleApprove.ok).toBe(false);
-      expect(staleApprove.error?.message).toBe("unknown requestId");
+    const latestApprove = await approveDevicePairing(second.request.requestId, {
+      callerScopes: ["operator.admin"],
+    });
+    expect(latestApprove?.status).toBe("approved");
 
-      const latestApprove = await rpcReq(started.ws, "device.pair.approve", {
-        requestId: second.request.requestId,
-      });
-      expect(latestApprove.ok).toBe(true);
-
-      const paired = await getPairedDevice("supersede-device-1");
-      expect(paired?.role).toBe("operator");
-      expect(paired?.scopes).toEqual(["operator.admin"]);
-    } finally {
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
+    const paired = await getPairedDevice("supersede-device-1");
+    expect(paired?.roles).toContain("node");
+    expect(paired?.roles).toContain("operator");
+    expect(paired?.scopes).toContain("operator.admin");
   });
 });

@@ -1,16 +1,31 @@
+// Telegram helper module supports directory config behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-core";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  listInspectedDirectoryEntriesFromSources,
-  type DirectoryConfigParams,
-} from "openclaw/plugin-sdk/directory-runtime";
-import { inspectTelegramAccount, type InspectedTelegramAccount } from "./account-inspect.js";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createResolvedDirectoryEntriesLister } from "openclaw/plugin-sdk/directory-config-runtime";
+import { mergeTelegramAccountConfig } from "./account-config.js";
+import { resolveDefaultTelegramAccountSelection } from "./account-selection.js";
 
-export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  return listInspectedDirectoryEntriesFromSources({
-    ...params,
+type TelegramDirectoryAccount = {
+  config: TelegramAccountConfig;
+};
+
+function resolveTelegramDirectoryAccount(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+): TelegramDirectoryAccount {
+  const resolvedAccountId = accountId?.trim()
+    ? normalizeAccountId(accountId)
+    : resolveDefaultTelegramAccountSelection(cfg).accountId;
+  return {
+    config: mergeTelegramAccountConfig(cfg, resolvedAccountId),
+  };
+}
+
+export const listTelegramDirectoryPeersFromConfig =
+  createResolvedDirectoryEntriesLister<TelegramDirectoryAccount>({
     kind: "user",
-    inspectAccount: (cfg, accountId) =>
-      inspectTelegramAccount({ cfg, accountId }) as InspectedTelegramAccount | null,
+    resolveAccount: (cfg, accountId) => resolveTelegramDirectoryAccount(cfg, accountId),
     resolveSources: (account) => [
       mapAllowFromEntries(account.config.allowFrom),
       Object.keys(account.config.dms ?? {}),
@@ -26,15 +41,11 @@ export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConf
       return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
     },
   });
-}
 
-export async function listTelegramDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  return listInspectedDirectoryEntriesFromSources({
-    ...params,
+export const listTelegramDirectoryGroupsFromConfig =
+  createResolvedDirectoryEntriesLister<TelegramDirectoryAccount>({
     kind: "group",
-    inspectAccount: (cfg, accountId) =>
-      inspectTelegramAccount({ cfg, accountId }) as InspectedTelegramAccount | null,
+    resolveAccount: (cfg, accountId) => resolveTelegramDirectoryAccount(cfg, accountId),
     resolveSources: (account) => [Object.keys(account.config.groups ?? {})],
     normalizeId: (entry) => entry.trim() || null,
   });
-}

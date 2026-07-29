@@ -1,3 +1,4 @@
+// Whatsapp tests cover group members plugin behavior.
 import { describe, expect, it } from "vitest";
 import { formatGroupMembers, noteGroupMember } from "./group-members.js";
 

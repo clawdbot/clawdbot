@@ -1,115 +1,65 @@
-## Summary
+<!--
+Optional linked context:
+Add a visible `Closes #<issue-number>` or `Related: #<issue-number>` line
+below this comment.
 
-Describe the problem and fix in 2–5 bullets:
+Required PR title:
+type: user-facing description
+Use a parenthesized scope only when it adds clarity:
+fix(auth): login redirect loops when session cookie is expired
 
-- Problem:
-- Why it matters:
-- What changed:
-- What did NOT change (scope boundary):
+Types: feat, fix, improve, refactor, docs, chore.
+For fixes, describe the user-visible symptom and trigger:
+fix: task list fails to load when user has no environments
+Avoid implementation details such as:
+fix: add null check to task query
+-->
 
-## Change Type (select all)
+<details>
+<summary>Additional instructions</summary>
 
-- [ ] Bug fix
-- [ ] Feature
-- [ ] Refactor required for the fix
-- [ ] Docs
-- [ ] Security hardening
-- [ ] Chore/infra
+**MUST:** Keep **Allow edits from maintainers** enabled for this PR so maintainers
+can help update the branch when needed.
 
-## Scope (select all touched areas)
+</details>
 
-- [ ] Gateway / orchestration
-- [ ] Skills / tool execution
-- [ ] Auth / tokens
-- [ ] Memory / storage
-- [ ] Integrations
-- [ ] API / contracts
-- [ ] UI / DX
-- [ ] CI/CD / infra
+## What Problem This Solves
 
-## Linked Issue/PR
+<!--
+Describe the concrete user, product, or operational problem.
+For fixes, begin with:
+"Fixes an issue where users <do X> would <experience Y> when <condition>."
+or:
+"Resolves a problem where..."
 
-- Closes #
-- Related #
+Name the affected UI surface or workflow. Do not describe the code-level cause here.
+-->
 
-## User-visible / Behavior Changes
+## Why This Change Was Made
 
-List user-visible changes (including defaults/config).  
-If none, write `None`.
+<!--
+In one or two sentences, explain the complete shipped solution, key design
+decisions, and relevant boundaries or non-goals. Include implementation detail
+only when it helps reviewers understand user-visible behavior or risk.
+Avoid file-by-file narration.
+-->
 
-## Security Impact (required)
+## User Impact
 
-- New permissions/capabilities? (`Yes/No`)
-- Secrets/tokens handling changed? (`Yes/No`)
-- New/changed network calls? (`Yes/No`)
-- Command/tool execution surface changed? (`Yes/No`)
-- Data access scope changed? (`Yes/No`)
-- If any `Yes`, explain risk + mitigation:
-
-## Repro + Verification
-
-### Environment
-
-- OS:
-- Runtime/container:
-- Model/provider:
-- Integration/channel (if any):
-- Relevant config (redacted):
-
-### Steps
-
-1.
-2.
-3.
-
-### Expected
-
--
-
-### Actual
-
--
+<!--
+State what users, operators, or developers can now do or expect. Lead with the
+concrete benefit and use user-facing language. If there is no user-visible
+impact, say so plainly.
+-->
 
 ## Evidence
 
-Attach at least one:
+<!--
+Show the most useful proof that this change works. Screenshots, screencasts,
+terminal output, focused tests, CI results, live observations, redacted logs,
+and artifact links are all useful. Include before/after evidence for visual
+changes when it clarifies the result.
 
-- [ ] Failing test/log before + passing after
-- [ ] Trace/log snippets
-- [ ] Screenshot/recording
-- [ ] Perf numbers (if relevant)
-
-## Human Verification (required)
-
-What you personally verified (not just CI), and how:
-
-- Verified scenarios:
-- Edge cases checked:
-- What you did **not** verify:
-
-## Review Conversations
-
-- [ ] I replied to or resolved every bot review conversation I addressed in this PR.
-- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.
-
-If a bot review conversation is addressed by this PR, resolve that conversation yourself. Do not leave bot review conversation cleanup for maintainers.
-
-## Compatibility / Migration
-
-- Backward compatible? (`Yes/No`)
-- Config/env changes? (`Yes/No`)
-- Migration needed? (`Yes/No`)
-- If yes, exact upgrade steps:
-
-## Failure Recovery (if this breaks)
-
-- How to disable/revert this change quickly:
-- Files/config to restore:
-- Known bad symptoms reviewers should watch for:
-
-## Risks and Mitigations
-
-List only real risks for this PR. Add/remove entries as needed. If none, write `None`.
-
-- Risk:
-  - Mitigation:
+Reviewers will inspect the code, tests, and CI. Use this section to make the
+validation easy to understand, not to restate the diff.
+-->

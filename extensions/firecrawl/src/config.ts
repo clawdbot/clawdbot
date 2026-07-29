@@ -1,23 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeSecretInput } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+// Firecrawl helper module supports config behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
+import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-fetch";
+import { resolveSecretInputString, normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
-export const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;
-export const DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS = 60;
-export const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
-
-type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : undefined
-  : undefined;
-
-type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { fetch?: infer Fetch }
-    ? Fetch
-    : undefined
-  : undefined;
+const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;
+const DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS = 60;
+const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
+const FIRECRAWL_API_KEY_ENV_VAR = "FIRECRAWL_API_KEY";
 
 type FirecrawlSearchConfig =
   | {
@@ -32,6 +23,13 @@ type PluginEntryConfig =
         apiKey?: unknown;
         baseUrl?: string;
       };
+      webFetch?: {
+        apiKey?: unknown;
+        baseUrl?: string;
+        onlyMainContent?: boolean;
+        maxAgeMs?: number;
+        timeoutSeconds?: number;
+      };
     }
   | undefined;
 
@@ -45,73 +43,94 @@ type FirecrawlFetchConfig =
     }
   | undefined;
 
-function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  return search as WebSearchConfig;
-}
-
-function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
-  const fetch = cfg?.tools?.web?.fetch;
-  if (!fetch || typeof fetch !== "object") {
-    return undefined;
-  }
-  return fetch as WebFetchConfig;
-}
-
-export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig {
+function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig {
   const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const pluginWebSearch = pluginConfig?.webSearch;
   if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
     return pluginWebSearch;
   }
-  const search = resolveSearchConfig(cfg);
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  const firecrawl = "firecrawl" in search ? search.firecrawl : undefined;
-  if (!firecrawl || typeof firecrawl !== "object") {
-    return undefined;
-  }
-  return firecrawl as FirecrawlSearchConfig;
+  return undefined;
 }
 
-export function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig {
-  const fetch = resolveFetchConfig(cfg);
-  if (!fetch || typeof fetch !== "object") {
-    return undefined;
+function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig {
+  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
+  const pluginWebFetch = pluginConfig?.webFetch;
+  if (pluginWebFetch && typeof pluginWebFetch === "object" && !Array.isArray(pluginWebFetch)) {
+    return pluginWebFetch;
   }
-  const firecrawl = "firecrawl" in fetch ? fetch.firecrawl : undefined;
-  if (!firecrawl || typeof firecrawl !== "object") {
-    return undefined;
-  }
-  return firecrawl as FirecrawlFetchConfig;
+  return undefined;
 }
 
-function normalizeConfiguredSecret(value: unknown, path: string): string | undefined {
-  return normalizeSecretInput(
-    normalizeResolvedSecretInputString({
-      value,
-      path,
-    }),
-  );
+type ConfiguredSecretResolution =
+  | { status: "available"; value: string }
+  | { status: "missing" }
+  | { status: "blocked" };
+
+function resolveConfiguredSecret(
+  value: unknown,
+  path: string,
+  cfg?: OpenClawConfig,
+): ConfiguredSecretResolution {
+  const resolved = resolveSecretInputString({
+    value,
+    path,
+    defaults: cfg?.secrets?.defaults,
+    mode: "inspect",
+  });
+  if (resolved.status === "available") {
+    const normalized = normalizeSecretInput(resolved.value);
+    return normalized ? { status: "available", value: normalized } : { status: "missing" };
+  }
+  if (resolved.status === "missing") {
+    return { status: "missing" };
+  }
+  if (resolved.ref.source !== "env") {
+    return { status: "blocked" };
+  }
+  const envVarName = resolved.ref.id.trim();
+  if (envVarName !== FIRECRAWL_API_KEY_ENV_VAR) {
+    return { status: "blocked" };
+  }
+  if (
+    !canResolveEnvSecretRefInReadOnlyPath({
+      cfg,
+      provider: resolved.ref.provider,
+      id: envVarName,
+    })
+  ) {
+    return { status: "blocked" };
+  }
+  const envValue = normalizeSecretInput(process.env[envVarName]);
+  return envValue ? { status: "available", value: envValue } : { status: "missing" };
 }
 
 export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
+  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const search = resolveFirecrawlSearchConfig(cfg);
-  const fetch = resolveFirecrawlFetchConfig(cfg);
-  return (
-    normalizeConfiguredSecret(
-      search?.apiKey,
-      "plugins.entries.firecrawl.config.webSearch.apiKey",
-    ) ||
-    normalizeConfiguredSecret(search?.apiKey, "tools.web.search.firecrawl.apiKey") ||
-    normalizeConfiguredSecret(fetch?.apiKey, "tools.web.fetch.firecrawl.apiKey") ||
-    normalizeSecretInput(process.env.FIRECRAWL_API_KEY) ||
-    undefined
-  );
+  const configuredCandidates: Array<{ value: unknown; path: string }> = [
+    {
+      value: pluginConfig?.webFetch?.apiKey,
+      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
+    },
+    {
+      value: search?.apiKey,
+      path: "plugins.entries.firecrawl.config.webSearch.apiKey",
+    },
+  ];
+  let blockedConfiguredSecret = false;
+  for (const candidate of configuredCandidates) {
+    const resolved = resolveConfiguredSecret(candidate.value, candidate.path, cfg);
+    if (resolved.status === "available") {
+      return resolved.value;
+    }
+    if (resolved.status === "blocked") {
+      blockedConfiguredSecret = true;
+    }
+  }
+  if (blockedConfiguredSecret) {
+    return undefined;
+  }
+  return normalizeSecretInput(process.env[FIRECRAWL_API_KEY_ENV_VAR]) || undefined;
 }
 
 export function resolveFirecrawlBaseUrl(cfg?: OpenClawConfig): string {
@@ -155,23 +174,13 @@ export function resolveFirecrawlScrapeTimeoutSeconds(
   cfg?: OpenClawConfig,
   override?: number,
 ): number {
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
   const fetch = resolveFirecrawlFetchConfig(cfg);
-  if (
-    typeof fetch?.timeoutSeconds === "number" &&
-    Number.isFinite(fetch.timeoutSeconds) &&
-    fetch.timeoutSeconds > 0
-  ) {
-    return Math.floor(fetch.timeoutSeconds);
-  }
-  return DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS;
+  return resolvePositiveTimeoutSeconds(
+    override,
+    resolvePositiveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS),
+  );
 }
 
 export function resolveFirecrawlSearchTimeoutSeconds(override?: number): number {
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS;
+  return resolvePositiveTimeoutSeconds(override, DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS);
 }

@@ -1,9 +1,10 @@
+// Irc tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildIrcAllowlistCandidates,
   normalizeIrcAllowEntry,
   normalizeIrcMessagingTarget,
-  resolveIrcAllowlistMatch,
+  resolveIrcOutboundSessionRoute,
 } from "./normalize.js";
 
 describe("irc normalize", () => {
@@ -11,6 +12,48 @@ describe("irc normalize", () => {
     expect(normalizeIrcMessagingTarget("irc:channel:openclaw")).toBe("#openclaw");
     expect(normalizeIrcMessagingTarget("user:alice")).toBe("alice");
     expect(normalizeIrcMessagingTarget("\n")).toBeUndefined();
+  });
+
+  it("builds canonical channel and direct session routes", () => {
+    const cfg = { session: { dmScope: "per-channel-peer" as const } };
+    expect(
+      resolveIrcOutboundSessionRoute({
+        cfg,
+        agentId: "main",
+        target: "irc:channel:openclaw",
+      }),
+    ).toMatchObject({
+      sessionKey: "agent:main:irc:group:#openclaw",
+      peer: { kind: "group", id: "#openclaw" },
+      chatType: "group",
+      recipientSessionExact: false,
+      to: "#openclaw",
+    });
+    expect(
+      resolveIrcOutboundSessionRoute({ cfg, agentId: "main", target: "user:alice" }),
+    ).toMatchObject({
+      sessionKey: "agent:main:irc:direct:alice",
+      peer: { kind: "direct", id: "alice" },
+      chatType: "direct",
+      recipientSessionExact: "direct-alias",
+      to: "alice",
+    });
+    expect(resolveIrcOutboundSessionRoute({ cfg, agentId: "main", target: "\n" })).toBeNull();
+  });
+
+  it("collapses direct aliases to the configured shared main session", () => {
+    expect(
+      resolveIrcOutboundSessionRoute({
+        cfg: { session: { dmScope: "main", mainKey: "work" } },
+        agentId: "ops",
+        target: "user:alice",
+      }),
+    ).toMatchObject({
+      sessionKey: "agent:ops:work",
+      baseSessionKey: "agent:ops:work",
+      recipientSessionExact: "direct-alias",
+      chatType: "direct",
+    });
   });
 
   it("normalizes allowlist entries", () => {
@@ -32,24 +75,5 @@ describe("irc normalize", () => {
     expect(buildIrcAllowlistCandidates(message)).toContain("alice!ident@example.org");
     expect(buildIrcAllowlistCandidates(message)).not.toContain("alice");
     expect(buildIrcAllowlistCandidates(message, { allowNameMatching: true })).toContain("alice");
-    expect(
-      resolveIrcAllowlistMatch({
-        allowFrom: ["alice!ident@example.org"],
-        message,
-      }).allowed,
-    ).toBe(true);
-    expect(
-      resolveIrcAllowlistMatch({
-        allowFrom: ["alice"],
-        message,
-      }).allowed,
-    ).toBe(false);
-    expect(
-      resolveIrcAllowlistMatch({
-        allowFrom: ["alice"],
-        message,
-        allowNameMatching: true,
-      }).allowed,
-    ).toBe(true);
   });
 });

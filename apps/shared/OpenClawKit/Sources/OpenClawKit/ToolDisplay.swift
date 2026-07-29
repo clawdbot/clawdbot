@@ -14,13 +14,6 @@ public struct ToolDisplaySummary: Sendable, Equatable {
         if let detail, !detail.isEmpty { parts.append(detail) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
-
-    public var summaryLine: String {
-        if let detailLine {
-            return "\(self.emoji) \(self.label): \(detailLine)"
-        }
-        return "\(self.emoji) \(self.label)"
-    }
 }
 
 public enum ToolDisplayRegistry {
@@ -130,44 +123,7 @@ public enum ToolDisplayRegistry {
                     "messageId",
                 ],
                 actions: nil),
-            tools: [
-                "bash": ToolDisplaySpec(
-                    emoji: "🛠️",
-                    title: "Bash",
-                    label: nil,
-                    detailKeys: ["command"],
-                    actions: nil),
-                "read": ToolDisplaySpec(
-                    emoji: "📖",
-                    title: "Read",
-                    label: nil,
-                    detailKeys: ["path"],
-                    actions: nil),
-                "write": ToolDisplaySpec(
-                    emoji: "✍️",
-                    title: "Write",
-                    label: nil,
-                    detailKeys: ["path"],
-                    actions: nil),
-                "edit": ToolDisplaySpec(
-                    emoji: "📝",
-                    title: "Edit",
-                    label: nil,
-                    detailKeys: ["path"],
-                    actions: nil),
-                "attach": ToolDisplaySpec(
-                    emoji: "📎",
-                    title: "Attach",
-                    label: nil,
-                    detailKeys: ["path", "url", "fileName"],
-                    actions: nil),
-                "process": ToolDisplaySpec(
-                    emoji: "🧰",
-                    title: "Process",
-                    label: nil,
-                    detailKeys: ["sessionId"],
-                    actions: nil),
-            ])
+            tools: nil)
     }
 
     private static func titleFromName(_ name: String) -> String {

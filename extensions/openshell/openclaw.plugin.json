@@ -1,30 +1,49 @@
 {
   "id": "openshell",
+  "activation": {
+    "onStartup": true
+  },
   "name": "OpenShell Sandbox",
-  "description": "Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution.",
+  "description": "OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["mirror", "remote"]
+      },
       "command": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "gateway": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "gatewayEndpoint": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
+      },
+      "workspace": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 19,
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
       },
       "from": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "policy": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "providers": {
         "type": "array",
         "items": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         }
       },
       "gpu": {
@@ -34,21 +53,28 @@
         "type": "boolean"
       },
       "remoteWorkspaceDir": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "remoteAgentWorkspaceDir": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "timeoutSeconds": {
         "type": "number",
-        "minimum": 1
+        "minimum": 1,
+        "maximum": 2147000
       }
     }
   },
   "uiHints": {
+    "mode": {
+      "label": "Mode",
+      "help": "Sandbox mode. Use mirror for the default local-workspace flow or remote for a fully remote workspace."
+    },
     "command": {
       "label": "OpenShell Command",
-      "help": "Path or command name for the openshell CLI."
+      "help": "Path or command name for the NVIDIA OpenShell CLI."
     },
     "gateway": {
       "label": "Gateway Name",
@@ -57,6 +83,10 @@
     "gatewayEndpoint": {
       "label": "Gateway Endpoint",
       "help": "Optional OpenShell gateway endpoint passed as --gateway-endpoint."
+    },
+    "workspace": {
+      "label": "OpenShell Workspace",
+      "help": "Existing OpenShell control-plane workspace for sandboxes, providers, policies, and inference routes. When unset, preserves the OpenShell CLI's ambient workspace selection."
     },
     "from": {
       "label": "Sandbox Source",

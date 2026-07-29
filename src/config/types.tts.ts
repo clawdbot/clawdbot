@@ -1,5 +1,4 @@
-import type { SecretInput } from "./types.secrets.js";
-
+// Defines text-to-speech configuration types.
 export type TtsProvider = string;
 
 export type TtsMode = "final" | "all";
@@ -25,76 +24,44 @@ export type TtsModelOverrideConfig = {
   allowSeed?: boolean;
 };
 
+export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
+
+export type TtsPersonaFallbackPolicy = "preserve-persona" | "provider-defaults" | "fail";
+
+export type TtsPersonaConfig = {
+  label?: string;
+  description?: string;
+  /** Preferred provider for this persona. Explicit provider prefs still win. */
+  provider?: TtsProvider;
+  fallbackPolicy?: TtsPersonaFallbackPolicy;
+  /** Provider-specific persona bindings keyed by speech provider id. */
+  providers?: TtsProviderConfigMap;
+};
+
+export type ResolvedTtsPersona = TtsPersonaConfig & {
+  id: string;
+};
+
 export type TtsConfig = {
   /** Auto-TTS mode (preferred). */
   auto?: TtsAutoMode;
-  /** Legacy: enable auto-TTS when `auto` is not set. */
+  /** @deprecated Use auto. */
   enabled?: boolean;
   /** Apply TTS to final replies only or to all replies (tool/block/final). */
   mode?: TtsMode;
   /** Primary TTS provider (fallbacks are automatic). */
   provider?: TtsProvider;
+  /** Active TTS persona id. */
+  persona?: string;
+  /** Named TTS personas. */
+  personas?: Record<string, TtsPersonaConfig>;
   /** Optional model override for TTS auto-summary (provider/model or alias). */
   summaryModel?: string;
   /** Allow the model to override TTS parameters. */
   modelOverrides?: TtsModelOverrideConfig;
-  /** ElevenLabs configuration. */
-  elevenlabs?: {
-    apiKey?: SecretInput;
-    baseUrl?: string;
-    voiceId?: string;
-    modelId?: string;
-    seed?: number;
-    applyTextNormalization?: "auto" | "on" | "off";
-    languageCode?: string;
-    voiceSettings?: {
-      stability?: number;
-      similarityBoost?: number;
-      style?: number;
-      useSpeakerBoost?: boolean;
-      speed?: number;
-    };
-  };
-  /** OpenAI configuration. */
-  openai?: {
-    apiKey?: SecretInput;
-    baseUrl?: string;
-    model?: string;
-    voice?: string;
-    /** Playback speed (0.25–4.0, default 1.0). */
-    speed?: number;
-    /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
-    instructions?: string;
-  };
-  /** Legacy alias for Microsoft speech configuration. */
-  edge?: {
-    /** Explicitly allow Microsoft speech usage (no API key required). */
-    enabled?: boolean;
-    voice?: string;
-    lang?: string;
-    outputFormat?: string;
-    pitch?: string;
-    rate?: string;
-    volume?: string;
-    saveSubtitles?: boolean;
-    proxy?: string;
-    timeoutMs?: number;
-  };
-  /** Preferred alias for Microsoft speech configuration. */
-  microsoft?: {
-    enabled?: boolean;
-    voice?: string;
-    lang?: string;
-    outputFormat?: string;
-    pitch?: string;
-    rate?: string;
-    volume?: string;
-    saveSubtitles?: boolean;
-    proxy?: string;
-    timeoutMs?: number;
-  };
+  /** Provider-specific TTS settings keyed by speech provider id. */
+  providers?: TtsProviderConfigMap;
   /** Optional path for local TTS user preferences JSON. */
-  prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */
   maxTextLength?: number;
   /** API request timeout (ms). */

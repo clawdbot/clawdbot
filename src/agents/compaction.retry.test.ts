@@ -1,20 +1,24 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import * as piCodingAgent from "@mariozechner/pi-coding-agent";
+// Covers retry behavior around compaction summary generation.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { generateSummary, type ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
+import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retryAsync } from "../infra/retry.js";
 
-// Mock the external generateSummary function
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof piCodingAgent>();
-  return {
-    ...actual,
-    generateSummary: vi.fn(),
-  };
-});
+vi.mock("openclaw/plugin-sdk/agent-sessions", { spy: true });
 
-const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
+const mockGenerateSummary = vi.mocked(generateSummary);
+type MockGenerateSummaryCompat = (
+  currentMessages: AgentMessage[],
+  model: NonNullable<ExtensionContext["model"]>,
+  reserveTokens: number,
+  apiKey: string,
+  headers: Record<string, string> | undefined,
+  signal?: AbortSignal,
+  customInstructions?: string,
+  previousSummary?: string,
+) => Promise<string>;
+const mockGenerateSummaryCompat = mockGenerateSummary as unknown as MockGenerateSummaryCompat;
 
 describe("compaction retry integration", () => {
   beforeEach(() => {
@@ -36,7 +40,7 @@ describe("compaction retry integration", () => {
       content: [{ type: "text", text: "Test response" }],
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {
         input: 0,
         output: 0,
@@ -56,8 +60,10 @@ describe("compaction retry integration", () => {
   } as unknown as NonNullable<ExtensionContext["model"]>;
 
   const invokeGenerateSummary = (signal = new AbortController().signal) =>
-    mockGenerateSummary(testMessages, testModel, 1000, "test-api-key", signal);
+    mockGenerateSummaryCompat(testMessages, testModel, 1000, "test-api-key", undefined, signal);
 
+  // This tests the retry helper with the same label/options used by compaction
+  // without invoking real provider calls.
   const runSummaryRetry = (options: Parameters<typeof retryAsync>[1]) =>
     retryAsync(() => invokeGenerateSummary(), options);
 
@@ -108,7 +114,8 @@ describe("compaction retry integration", () => {
       }),
     ).rejects.toThrow("aborted");
 
-    // Should NOT retry on user cancellation (AbortError filtered by shouldRetry)
+    // User cancellation is terminal; retrying would continue work the caller
+    // explicitly aborted.
     expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
   });
 
@@ -150,7 +157,7 @@ describe("compaction retry integration", () => {
 
     expect(result).toBe("Success on 3rd attempt");
     expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
-    // First retry: 500ms, second retry: 1000ms
+    // First retry: 500ms, second retry: 1000ms.
     expect(delays[0]).toBe(500);
     expect(delays[1]).toBe(1000);
 

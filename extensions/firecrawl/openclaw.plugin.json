@@ -1,7 +1,15 @@
 {
   "id": "firecrawl",
-  "providerAuthEnvVars": {
-    "firecrawl": ["FIRECRAWL_API_KEY"]
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "firecrawl",
+        "envVars": ["FIRECRAWL_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {
@@ -13,7 +21,22 @@
     "webSearch.baseUrl": {
       "label": "Firecrawl Search Base URL",
       "help": "Firecrawl Search base URL override."
+    },
+    "webFetch.apiKey": {
+      "label": "Firecrawl Fetch API Key",
+      "help": "Optional for hosted keyless scraping; add a key for higher limits (fallback: FIRECRAWL_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "fc-..."
+    },
+    "webFetch.baseUrl": {
+      "label": "Firecrawl Fetch Base URL",
+      "help": "Firecrawl Fetch base URL override."
     }
+  },
+  "contracts": {
+    "webFetchProviders": ["firecrawl"],
+    "webSearchProviders": ["firecrawl", "firecrawl-free"],
+    "tools": ["firecrawl_search", "firecrawl_scrape"]
   },
   "configSchema": {
     "type": "object",
@@ -28,6 +51,27 @@
           },
           "baseUrl": {
             "type": "string"
+          }
+        }
+      },
+      "webFetch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "onlyMainContent": {
+            "type": "boolean"
+          },
+          "maxAgeMs": {
+            "type": "number"
+          },
+          "timeoutSeconds": {
+            "type": "number"
           }
         }
       }

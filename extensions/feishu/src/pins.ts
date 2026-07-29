@@ -1,8 +1,9 @@
+// Feishu plugin module implements pins behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
-export type FeishuPin = {
+type FeishuPin = {
   messageId: string;
   chatId?: string;
   operatorId?: string;
@@ -37,7 +38,7 @@ export async function createPinFeishu(params: {
   messageId: string;
   accountId?: string;
 }): Promise<FeishuPin | null> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -57,7 +58,7 @@ export async function removePinFeishu(params: {
   messageId: string;
   accountId?: string;
 }): Promise<void> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -80,7 +81,7 @@ export async function listPinsFeishu(params: {
   pageToken?: string;
   accountId?: string;
 }): Promise<{ chatId: string; pins: FeishuPin[]; hasMore: boolean; pageToken?: string }> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }

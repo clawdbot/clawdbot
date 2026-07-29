@@ -1,36 +1,50 @@
+// Whatsapp API module exposes the plugin public contract.
+export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
+export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
+export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
-  buildChannelConfigSchema,
-  createActionGate,
-  DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
-  getChatChannelMeta,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
+} from "./config-accessors.js";
+export {
+  createActionGate,
   jsonResult,
-  normalizeE164,
   readReactionParams,
   readStringParam,
-  resolveWhatsAppGroupIntroHint,
+  ToolAuthorizationError,
+} from "openclaw/plugin-sdk/channel-actions";
+export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
+export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
+
+export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-  resolveWhatsAppOutboundTarget,
-  ToolAuthorizationError,
-  WhatsAppConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "../../../src/plugin-sdk/whatsapp-core.js";
-
+} from "./group-policy.js";
+export { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
+export { createWhatsAppOutboundBase } from "./outbound-base.js";
 export {
-  createWhatsAppOutboundBase,
   isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
   looksLikeWhatsAppTargetId,
   normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
-  resolveWhatsAppHeartbeatRecipients,
-  resolveWhatsAppMentionStripRegexes,
-  type ChannelMessageActionName,
-  type DmPolicy,
-  type GroupPolicy,
-  type WhatsAppAccountConfig,
-} from "../../../src/plugin-sdk/whatsapp-shared.js";
+} from "./normalize-target.js";
+export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
+export { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 
-export { monitorWebChannel } from "./channel.runtime.js";
+export type OpenClawConfig = RuntimeOpenClawConfig;
+export type { WhatsAppAccountConfig } from "./account-types.js";
+
+type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
+
+export async function monitorWebChannel(
+  ...args: Parameters<MonitorWebChannel>
+): ReturnType<MonitorWebChannel> {
+  const { monitorWebChannel: monitorWebChannelLocal } = await loadWhatsAppChannelRuntime();
+  return await monitorWebChannelLocal(...args);
+}

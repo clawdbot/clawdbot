@@ -1,3 +1,4 @@
+// Feishu plugin module implements card ux approval behavior.
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
 
@@ -21,7 +22,7 @@ export function createApprovalCard(params: {
   return {
     schema: "2.0",
     config: {
-      wide_screen_mode: true,
+      width_mode: "fill",
     },
     header: {
       title: {

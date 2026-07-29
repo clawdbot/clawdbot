@@ -1,20 +1,25 @@
-import { createHash, randomBytes } from "node:crypto";
-import { createServer } from "node:http";
-import { isWSL2Sync } from "openclaw/plugin-sdk/infra-runtime";
+// Google plugin module implements oauth.flow behavior.
+import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
+import {
+  generateOAuthState,
+  parseOAuthCallbackInput,
+  waitForLocalOAuthCallback,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { AUTH_URL, REDIRECT_URI, SCOPES } from "./oauth.shared.js";
+
+export { generateOAuthState };
 
 export function shouldUseManualOAuthFlow(isRemote: boolean): boolean {
   return isRemote || isWSL2Sync();
 }
 
 export function generatePkce(): { verifier: string; challenge: string } {
-  const verifier = randomBytes(32).toString("hex");
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
-  return { verifier, challenge };
+  return generateHexPkceVerifierChallenge();
 }
 
-export function buildAuthUrl(challenge: string, verifier: string): string {
+export function buildAuthUrl(challenge: string, state: string): string {
   const { clientId } = resolveOAuthClientConfig();
   const params = new URLSearchParams({
     client_id: clientId,
@@ -23,7 +28,7 @@ export function buildAuthUrl(challenge: string, verifier: string): string {
     scope: SCOPES.join(" "),
     code_challenge: challenge,
     code_challenge_method: "S256",
-    state: verifier,
+    state,
     access_type: "offline",
     prompt: "consent",
   });
@@ -32,121 +37,28 @@ export function buildAuthUrl(challenge: string, verifier: string): string {
 
 export function parseCallbackInput(
   input: string,
-  expectedState: string,
 ): { code: string; state: string } | { error: string } {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return { error: "No input provided" };
-  }
-
-  try {
-    const url = new URL(trimmed);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state") ?? expectedState;
-    if (!code) {
-      return { error: "Missing 'code' parameter in URL" };
-    }
-    if (!state) {
-      return { error: "Missing 'state' parameter. Paste the full URL." };
-    }
-    return { code, state };
-  } catch {
-    if (!expectedState) {
-      return { error: "Paste the full redirect URL, not just the code." };
-    }
-    return { code: trimmed, state: expectedState };
-  }
+  return parseOAuthCallbackInput(input, {
+    missingState: "Missing 'state' parameter. Paste the full URL.",
+    invalidInput: "Paste the full redirect URL, not just the code.",
+  });
 }
 
 export async function waitForLocalCallback(params: {
   expectedState: string;
   timeoutMs: number;
   onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }): Promise<{ code: string; state: string }> {
-  const port = 8085;
-  const hostname = "localhost";
-  const expectedPath = "/oauth2callback";
-
-  return new Promise<{ code: string; state: string }>((resolve, reject) => {
-    let timeout: NodeJS.Timeout | null = null;
-    const server = createServer((req, res) => {
-      try {
-        const requestUrl = new URL(req.url ?? "/", `http://${hostname}:${port}`);
-        if (requestUrl.pathname !== expectedPath) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Not found");
-          return;
-        }
-
-        const error = requestUrl.searchParams.get("error");
-        const code = requestUrl.searchParams.get("code")?.trim();
-        const state = requestUrl.searchParams.get("state")?.trim();
-
-        if (error) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end(`Authentication failed: ${error}`);
-          finish(new Error(`OAuth error: ${error}`));
-          return;
-        }
-
-        if (!code || !state) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Missing code or state");
-          finish(new Error("Missing OAuth code or state"));
-          return;
-        }
-
-        if (state !== params.expectedState) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Invalid state");
-          finish(new Error("OAuth state mismatch"));
-          return;
-        }
-
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(
-          "<!doctype html><html><head><meta charset='utf-8'/></head>" +
-            "<body><h2>Gemini CLI OAuth complete</h2>" +
-            "<p>You can close this window and return to OpenClaw.</p></body></html>",
-        );
-
-        finish(undefined, { code, state });
-      } catch (err) {
-        finish(err instanceof Error ? err : new Error("OAuth callback failed"));
-      }
-    });
-
-    const finish = (err?: Error, result?: { code: string; state: string }) => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      try {
-        server.close();
-      } catch {
-        // ignore close errors
-      }
-      if (err) {
-        reject(err);
-      } else if (result) {
-        resolve(result);
-      }
-    };
-
-    server.once("error", (err) => {
-      finish(err instanceof Error ? err : new Error("OAuth callback server error"));
-    });
-
-    server.listen(port, hostname, () => {
-      params.onProgress?.(`Waiting for OAuth callback on ${REDIRECT_URI}…`);
-    });
-
-    timeout = setTimeout(() => {
-      finish(new Error("OAuth callback timeout"));
-    }, params.timeoutMs);
+  return await waitForLocalOAuthCallback({
+    expectedState: params.expectedState,
+    timeoutMs: params.timeoutMs,
+    port: 8085,
+    callbackPath: "/oauth2callback",
+    redirectUri: REDIRECT_URI,
+    successTitle: "Gemini CLI OAuth complete",
+    progressMessage: `Waiting for OAuth callback on ${REDIRECT_URI}…`,
+    onProgress: params.onProgress,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }

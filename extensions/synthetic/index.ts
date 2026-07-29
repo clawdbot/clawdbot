@@ -1,52 +1,25 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
+// Synthetic plugin entrypoint registers its OpenClaw integration.
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applySyntheticConfig, SYNTHETIC_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildSyntheticProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "synthetic";
 
-export default definePluginEntry({
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Synthetic Provider",
   description: "Bundled Synthetic provider plugin",
-  register(api) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Synthetic",
-      docsPath: "/providers/synthetic",
-      envVars: ["SYNTHETIC_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: PROVIDER_ID,
-          methodId: "api-key",
-          label: "Synthetic API key",
-          hint: "Anthropic-compatible (multi-model)",
-          optionKey: "syntheticApiKey",
-          flagName: "--synthetic-api-key",
-          envVar: "SYNTHETIC_API_KEY",
-          promptMessage: "Enter Synthetic API key",
-          defaultModel: SYNTHETIC_DEFAULT_MODEL_REF,
-          expectedProviders: ["synthetic"],
-          applyConfig: (cfg) => applySyntheticConfig(cfg),
-          wizard: {
-            choiceId: "synthetic-api-key",
-            choiceLabel: "Synthetic API key",
-            groupId: "synthetic",
-            groupLabel: "Synthetic",
-            groupHint: "Anthropic-compatible (multi-model)",
-          },
-        }),
-      ],
-      catalog: {
-        order: "simple",
-        run: (ctx) =>
-          buildSingleProviderApiKeyCatalog({
-            ctx,
-            providerId: PROVIDER_ID,
-            buildProvider: buildSyntheticProvider,
-          }),
-      },
-    });
+  manifest,
+  provider: {
+    label: "Synthetic",
+    docsPath: "/providers/synthetic",
+    manifestAuth: {
+      defaultModel: SYNTHETIC_DEFAULT_MODEL_REF,
+      applyConfig: applySyntheticConfig,
+    },
+    catalog: {
+      buildProvider: buildSyntheticProvider,
+    },
   },
 });

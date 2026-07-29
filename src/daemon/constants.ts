@@ -1,25 +1,25 @@
+/** Cross-platform daemon service names, labels, and profile-aware descriptions. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 // Default service labels (canonical + legacy compatibility)
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
-export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
-export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
+const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
 export const GATEWAY_SERVICE_KIND = "gateway";
-export const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
-export const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
-export const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
+export const GATEWAY_SERVICE_RUNTIME_PID_ENV = "OPENCLAW_GATEWAY_SERVICE_PID";
+const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
+const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
+const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
 export const NODE_SERVICE_MARKER = "openclaw";
 export const NODE_SERVICE_KIND = "node";
 export const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
-export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS: string[] = [];
-export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [
-  "clawdbot-gateway",
-  "moltbot-gateway",
-];
-export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
+export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = ["clawdbot-gateway"];
 
-export function normalizeGatewayProfile(profile?: string): string | null {
+function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
+  if (!trimmed || normalizeLowercaseStringOrEmpty(trimmed) === "default") {
+    // The default profile keeps the historical unqualified service names.
     return null;
   }
   return trimmed;
@@ -59,10 +59,7 @@ export function resolveGatewayWindowsTaskName(profile?: string): string {
   return `OpenClaw Gateway (${normalized})`;
 }
 
-export function formatGatewayServiceDescription(params?: {
-  profile?: string;
-  version?: string;
-}): string {
+function formatGatewayServiceDescription(params?: { profile?: string; version?: string }): string {
   const profile = normalizeGatewayProfile(params?.profile);
   const version = params?.version?.trim();
   const parts: string[] = [];

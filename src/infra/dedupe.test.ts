@@ -1,3 +1,4 @@
+// Covers process-local dedupe cache behavior.
 import { describe, expect, it } from "vitest";
 import { createDedupeCache } from "./dedupe.js";
 
@@ -32,6 +33,11 @@ describe("createDedupeCache", () => {
     expect(cache.peek("a", 500)).toBe(true);
     expect(cache.peek("b", 500)).toBe(false);
     expect(cache.peek("c", 500)).toBe(true);
+
+    expect(cache.check("b", 600)).toBe(false);
+    expect(cache.peek("a", 700)).toBe(false);
+    expect(cache.peek("b", 700)).toBe(true);
+    expect(cache.peek("c", 700)).toBe(true);
   });
 
   it("clears itself when maxSize floors to zero", () => {

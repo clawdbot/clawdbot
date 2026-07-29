@@ -7,17 +7,22 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.CancellationSignal
 import androidx.core.content.ContextCompat
-import java.time.Instant
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.suspendCancellableCoroutine
+import java.time.Instant
+import java.time.format.DateTimeFormatter
 
-class LocationCaptureManager(private val context: Context) {
-  data class Payload(val payloadJson: String)
+/**
+ * Android LocationManager-backed capture used by gateway location commands.
+ */
+class LocationCaptureManager(
+  private val context: Context,
+) {
+  data class Payload(
+    val payloadJson: String,
+  )
 
   suspend fun getLocation(
     desiredProviders: List<String>,
@@ -33,6 +38,7 @@ class LocationCaptureManager(private val context: Context) {
         throw IllegalStateException("LOCATION_UNAVAILABLE: no location providers enabled")
       }
 
+      // Prefer a recent cached fix before waking GPS/network providers.
       val cached = bestLastKnown(manager, desiredProviders, maxAgeMs)
       val location =
         cached ?: requestCurrent(manager, desiredProviders, timeoutMs)
@@ -79,6 +85,7 @@ class LocationCaptureManager(private val context: Context) {
     val candidates =
       providers.mapNotNull { provider -> manager.getLastKnownLocation(provider) }
     val freshest = candidates.maxByOrNull { it.time } ?: return null
+    // maxAgeMs is a caller contract; stale cached fixes force a live provider request.
     if (maxAgeMs != null && now - freshest.time > maxAgeMs) return null
     return freshest
   }
@@ -100,18 +107,17 @@ class LocationCaptureManager(private val context: Context) {
     val resolved =
       providers.firstOrNull { manager.isProviderEnabled(it) }
         ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no providers available")
-    return withTimeout(timeoutMs.coerceAtLeast(1)) {
-      suspendCancellableCoroutine { cont ->
-        val signal = CancellationSignal()
-        cont.invokeOnCancellation { signal.cancel() }
-        manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
-          if (location != null) {
-            cont.resume(location)
-          } else {
-            cont.resumeWithException(IllegalStateException("LOCATION_UNAVAILABLE: no fix"))
+    // getCurrentLocation can return null; the handler maps timeout/null fixes to gateway error shapes.
+    val location =
+      withTimeout(timeoutMs.coerceAtLeast(1)) {
+        suspendCancellableCoroutine<Location?> { cont ->
+          val signal = CancellationSignal()
+          cont.invokeOnCancellation { signal.cancel() }
+          manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
+            cont.resume(location) { _, _, _ -> }
           }
         }
       }
-    }
+    return location ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no fix")
   }
 }
