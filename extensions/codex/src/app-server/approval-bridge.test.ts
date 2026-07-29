@@ -2468,6 +2468,23 @@ describe("Codex app-server approval bridge", () => {
     await expect(pending).rejects.toThrow("approval expired or not found");
   });
 
+  it("coerces a non-Error abort reason through the shared toErrorObject", async () => {
+    // Keep the gateway wait pending so the pre-aborted signal wins the race.
+    mockCallGatewayTool.mockImplementationOnce(() => new Promise(() => {}));
+    const controller = new AbortController();
+    controller.abort({ code: 500, status: "server_error" });
+
+    const thrown = await waitForPluginApprovalDecision({
+      approvalId: "plugin:approval-non-error-abort",
+      signal: controller.signal,
+    }).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe("Non-Error rejection");
+    expect((thrown as Error & { code?: unknown; status?: unknown }).code).toBe(500);
+    expect((thrown as Error & { code?: unknown; status?: unknown }).status).toBe("server_error");
+  });
+
   it("preserves an accepted approval expiry as timed out", async () => {
     const params = createParams();
     const onNativeToolFailureDisposition = vi.fn();
