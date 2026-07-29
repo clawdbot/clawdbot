@@ -70,6 +70,10 @@ function candidate(
         },
       },
       skills: { workshop: { autonomous: { mode: "propose" } } },
+      // Only the OpenAI provider plugin is needed. A cold unrestricted load
+      // compiles all bundled extensions and runs provider discovery inside the
+      // review lane, which can exceed the lane's no-progress watchdog.
+      plugins: { allow: ["openai"] },
     },
     transcript: formatSkillExperienceReviewTranscript(messages),
     modelIterations: 10,
@@ -79,12 +83,20 @@ function candidate(
 
 describeLive("skill experience review live OpenAI eval", () => {
   beforeAll(async () => {
+    // Full home isolation: the embedded review resolves the shared-main auth
+    // store via HOME, and a real ~/.openclaw with pending doctor migration
+    // must never leak into (or fail) this live run.
     testState = await createOpenClawTestState({
-      layout: "state-only",
+      layout: "home",
       prefix: "openclaw-live-skill-review-state-",
     });
     workspaceDir = await tempDirs.make("openclaw-live-skill-review-workspace-");
-  });
+    // Warm the plugin runtime outside the review lane: the first load compiles
+    // extensions synchronously and can exceed the lane's no-progress watchdog
+    // on a loaded machine.
+    const { ensureRuntimePluginsLoaded } = await import("../../agents/runtime-plugins.js");
+    ensureRuntimePluginsLoaded({ config: candidate("warmup", []).config ?? {}, workspaceDir });
+  }, 600_000);
 
   afterAll(async () => {
     await testState.cleanup();
