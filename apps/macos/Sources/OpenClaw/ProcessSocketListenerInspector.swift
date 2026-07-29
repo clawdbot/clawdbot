@@ -21,8 +21,9 @@ enum ProcessSocketListenerInspector {
             }
             guard populatedBytes > 0 else { return false }
 
+            let populatedByteCount = Int(populatedBytes)
             let descriptorStride = MemoryLayout<proc_fdinfo>.stride
-            let descriptorCount = min(capacity, Int(populatedBytes) / descriptorStride)
+            let descriptorCount = min(capacity, populatedByteCount / descriptorStride)
             for descriptor in descriptors.prefix(descriptorCount)
                 where descriptor.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET)
             {
@@ -33,7 +34,7 @@ enum ProcessSocketListenerInspector {
 
             // A full result may be truncated. Grow and rescan so listeners with
             // high-numbered descriptors are not reported as absent.
-            guard populatedBytes >= descriptors.count * descriptorStride else { return false }
+            guard populatedByteCount >= descriptors.count * descriptorStride else { return false }
             guard capacity < capacityLimit else { return false }
             capacity = min(capacity * 2, capacityLimit)
         }
@@ -64,7 +65,7 @@ enum ProcessSocketListenerInspector {
                 buffer.baseAddress,
                 Int32(buffer.count))
         }
-        guard populatedBytes == MemoryLayout<socket_fdinfo>.stride,
+        guard Int(populatedBytes) == MemoryLayout<socket_fdinfo>.stride,
               socket.psi.soi_kind == SOCKINFO_TCP,
               socket.psi.soi_proto.pri_tcp.tcpsi_state == TSI_S_LISTEN
         else {
