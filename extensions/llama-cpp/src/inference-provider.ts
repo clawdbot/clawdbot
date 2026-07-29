@@ -1,12 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type {
-  ChatHistoryItem,
-  ChatModelFunctions,
-  Llama,
-  LlamaContext,
-  LlamaContextSequence,
-  LlamaModel,
-} from "node-llama-cpp";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type {
   AssistantMessage,
@@ -24,7 +16,14 @@ import {
 } from "./defaults.js";
 import {
   formatLlamaCppSetupError,
+  type ChatHistoryItem,
+  type ChatModelFunctions,
   importNodeLlamaCpp,
+  type Llama,
+  type LlamaContext,
+  type LlamaContextSequence,
+  type LlamaJsonSchemaInput,
+  type LlamaModel,
   type NodeLlamaCppModule,
 } from "./node-llama.runtime.js";
 
@@ -35,8 +34,6 @@ type LoadedModel = {
   context: LlamaContext;
   sequence: LlamaContextSequence;
 };
-
-type LlamaJsonSchemaInput = Parameters<Llama["createGrammarForJsonSchema"]>[0];
 
 // Process-owned, single-slot cache. A model/context pair lives until another
 // model replaces it or the process exits, bounding resident model memory.
