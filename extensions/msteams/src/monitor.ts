@@ -175,7 +175,7 @@ export async function monitorMSTeamsProvider(
 
   if (configuredGroupAllowFrom == null && groupAllowFrom) {
     // Group fallback must include users resolved from the DM list without admitting DM chats.
-    groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions: allowFrom });
+    groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions: allowFrom ?? [] });
   }
 
   msteamsCfg = {
