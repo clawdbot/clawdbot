@@ -323,7 +323,7 @@ NODE
       ui_success() { :; }
       ui_error() { printf 'error:%s\\n' "$*"; }
       git() {
-        if [[ "$1" == "-C" && "$3" == "rev-parse" ]]; then
+        if [[ "$1" == "--git-dir=$repo/.git" && "$2" == "--work-tree=$repo" && "$3" == "rev-parse" ]]; then
           return 0
         fi
         if [[ "$1" == "-C" && "$3" == "status" ]]; then
