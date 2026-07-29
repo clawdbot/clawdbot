@@ -783,6 +783,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.mappings[].name": "Hook Mapping Name",
   "hooks.mappings[].agentId": "Hook Mapping Agent ID",
   "hooks.mappings[].sessionKey": "Hook Mapping Session Key",
+  "hooks.mappings[].sessionMode": "Hook Mapping Session Mode",
   "hooks.mappings[].messageTemplate": "Hook Mapping Message Template",
   "hooks.mappings[].textTemplate": "Hook Mapping Text Template",
   "hooks.mappings[].deliver": "Hook Mapping Deliver Reply",

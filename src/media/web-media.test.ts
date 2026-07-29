@@ -68,15 +68,19 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  resetPluginRuntimeStateForTest();
-  if (fixtureRoot) {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  }
-  if (stateDir) {
-    await fs.rm(path.join(stateDir, "canvas", "documents", "cv_test"), {
-      recursive: true,
-      force: true,
-    });
+  try {
+    resetPluginRuntimeStateForTest();
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+    if (stateDir) {
+      await fs.rm(path.join(stateDir, "canvas", "documents", "cv_test"), {
+        recursive: true,
+        force: true,
+      });
+    }
+  } finally {
+    vi.resetModules();
   }
 });
 

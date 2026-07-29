@@ -151,6 +151,7 @@ describe("gateway hooks helpers", () => {
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.value.sessionKey).toBeUndefined();
+      expect(ok.value.sessionMode).toBe("isolated");
       expect(ok.value.channel).toBe("last");
       expect(ok.value.name).toBe("Hook");
       expect(ok.value.deliver).toBe(true);
@@ -205,6 +206,20 @@ describe("gateway hooks helpers", () => {
 
     const bad = normalizeAgentPayload({ message: "yo", channel: "sms" });
     expect(bad.ok).toBe(false);
+
+    const persistent = normalizeAgentPayload({
+      message: "remember",
+      sessionMode: "persistent",
+    });
+    expect(persistent.ok).toBe(true);
+    if (persistent.ok) {
+      expect(persistent.value.sessionMode).toBe("persistent");
+    }
+
+    expect(normalizeAgentPayload({ message: "yo", sessionMode: "shared" })).toEqual({
+      ok: false,
+      error: "sessionMode must be isolated or persistent",
+    });
   });
 
   test("normalizeAgentPayload binds delivery only to a concrete channel and recipient", () => {
