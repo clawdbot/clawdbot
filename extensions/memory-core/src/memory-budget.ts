@@ -16,6 +16,10 @@
 
 const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)]+)\)\s*$/;
 
+const PROMOTION_SUBSECTION_HEADING_RE = /^### (?:Global|Project: .+?)\s*$/;
+
+const ATX_HEADING_RE = /^#{1,6} /;
+
 /**
  * Default budget for MEMORY.md content on disk, in characters. Chosen to
  * stay safely below the bootstrap injection cap (~12KB per file at the
@@ -64,7 +68,9 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
   };
 
   for (const line of lines) {
-    if (line.startsWith("## ")) {
+    const continuesPromotionBody =
+      currentKind === "promotion" && PROMOTION_SUBSECTION_HEADING_RE.test(line);
+    if (ATX_HEADING_RE.test(line) && !continuesPromotionBody) {
       flush();
       const match = PROMOTION_SECTION_HEADING_RE.exec(line);
       if (match) {
@@ -104,7 +110,7 @@ type CompactMemoryResult = {
  *
  * Guarantees:
  * - Non-promotion content (user-authored markdown, the file header, any
- *   `##` heading not matching the promotion pattern) is preserved.
+ *   heading of any level not matching the promotion pattern) is preserved.
  * - Promotion sections are dropped in ascending date order (oldest first).
  * - If `existingMemory + newSection` already fits the budget, the existing
  *   memory is returned unchanged.

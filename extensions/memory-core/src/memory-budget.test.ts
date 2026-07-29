@@ -8,6 +8,25 @@ function promotionSection(date: string, sizeChars: number): string {
   return `${heading}${padding}`;
 }
 
+function projectGroupedSection(date: string): string {
+  return [
+    "",
+    `## Promoted From Short-Term Memory (${date})`,
+    "",
+    "### Global",
+    "",
+    "<!-- openclaw-memory-promotion:memory/short-term.md#global -->",
+    `- ${"g".repeat(120)} [score=0.900 signals=4 recalls=4 avg=0.900 source=memory/short-term.md:1-2]`,
+    "",
+    "### Project: alpha",
+    "",
+    "<!-- openclaw-memory-promotion:memory/short-term.md#alpha -->",
+    `- ${"a".repeat(120)} [score=0.900 signals=4 recalls=4 avg=0.900 source=memory/short-term.md:3-4]`,
+    "",
+    "",
+  ].join("\n");
+}
+
 describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression for #73691)", () => {
   it("returns existing memory unchanged when total fits the budget", () => {
     const existing = "# Long-Term Memory\n\nSome content.\n";
@@ -166,6 +185,52 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(
       result.compacted.length + newSection.length + headerOverhead + trailingNewline,
     ).toBeLessThanOrEqual(budget);
+  });
+
+  it("preserves a user `###` section written under a promotion section", () => {
+    const existing =
+      `${promotionSection("2026-04-10", 400)}\n` +
+      "### Correction (added by me)\nThe prod DB is db-2.corp.example, NOT db-1.\n\n" +
+      promotionSection("2026-04-20", 400);
+    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 900,
+    });
+    expect(result.droppedDates).toContain("2026-04-10");
+    expect(result.compacted).toContain("### Correction (added by me)");
+    expect(result.compacted).toContain("The prod DB is db-2.corp.example, NOT db-1.");
+  });
+
+  it("preserves a user `#` section written after the only promotion section", () => {
+    const existing =
+      `# Long-Term Memory\n\n${promotionSection("2026-04-10", 800)}\n` +
+      "# My Notes\n\nKeep this paragraph.\n";
+    const newSection = `\n${promotionSection("2026-04-29", 600)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 800,
+    });
+    expect(result.droppedDates).toContain("2026-04-10");
+    expect(result.compacted).toContain("# My Notes");
+    expect(result.compacted).toContain("Keep this paragraph.");
+    expect(result.compacted).toContain("# Long-Term Memory");
+  });
+
+  it("drops a multi-project promotion section whole, including its `###` project subheadings", () => {
+    const existing = `${projectGroupedSection("2026-04-10")}\n${projectGroupedSection("2026-04-20")}`;
+    const newSection = `\n${projectGroupedSection("2026-04-29")}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 700,
+    });
+    expect(result.droppedDates).toEqual(["2026-04-10", "2026-04-20"]);
+    expect(result.compacted).not.toContain("### Project: alpha");
+    expect(result.compacted).not.toContain("### Global");
+    expect(result.compacted).not.toContain("openclaw-memory-promotion");
   });
 
   it("exposes a sane default budget below the bootstrap injection cap", () => {
