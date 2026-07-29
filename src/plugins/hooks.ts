@@ -156,9 +156,16 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   after_compaction: 30_000,
   skill_changed: 30_000,
   skill_proposal_changed: 30_000,
+  // Shutdown hooks share the Gateway's five-second teardown budget. They fail
+  // open after logging so one plugin cannot consume the process watchdog.
+  gateway_stop: 5_000,
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   before_agent_run: 15_000,
+  // Policy hooks fail closed in the global runner. A bounded timeout turns a
+  // stalled policy process into a denial instead of freezing the operation.
+  before_install: 15_000,
+  before_tool_call: 15_000,
   // Terminal finalization hooks sit on the runner's completion path. A hung
   // handler must not freeze final delivery or keep compaction retry recovery
   // unresolved; timeout fail-opens with the original final answer.

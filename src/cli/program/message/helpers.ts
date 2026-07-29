@@ -27,7 +27,6 @@ export type MessageCliHelpers = {
   runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
 };
 
-const GATEWAY_STOP_TIMEOUT_MS = 2500;
 const ACTIONS_WITHOUT_STOP_HOOKS = new Set(["read"]);
 const ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD = new Set(["broadcast"]);
 const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_NAMES);
@@ -75,25 +74,11 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
 }
 
 async function runPluginStopHooks(): Promise<void> {
-  let timeout: NodeJS.Timeout | null = null;
-  const hookRun = runGlobalGatewayStopSafely({
+  await runGlobalGatewayStopSafely({
     event: { reason: "cli message action complete" },
     ctx: {},
     onError: (err) => defaultRuntime.error(danger(`gateway_stop hook failed: ${String(err)}`)),
   });
-  const bounded = new Promise<"timeout">((resolve) => {
-    timeout = setTimeout(() => resolve("timeout"), GATEWAY_STOP_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-  const result = await Promise.race([hookRun.then(() => "done" as const), bounded]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  if (result === "timeout") {
-    defaultRuntime.error(
-      danger(`gateway_stop hook exceeded ${GATEWAY_STOP_TIMEOUT_MS}ms; continuing`),
-    );
-  }
 }
 
 function resolveScopedMessageChannel(opts: Record<string, unknown>): string | undefined {
