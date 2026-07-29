@@ -465,6 +465,24 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
+  it("bounds gateway_stop hooks so message actions still exit", async () => {
+    vi.useFakeTimers();
+    try {
+      hasHooksMock.mockReturnValueOnce(true);
+      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => {}));
+      const runMessageAction = createRunMessageAction();
+
+      const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");
+      await vi.advanceTimersByTimeAsync(2500);
+      await pending;
+
+      expect(errorMock).toHaveBeenCalledWith("gateway_stop hook exceeded 2500ms; continuing");
+      expect(exitMock).toHaveBeenCalledWith(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("calls exit(1) when message delivery fails", async () => {
     messageCommandMock.mockRejectedValueOnce(new Error("send failed"));
     await runSendAction();
