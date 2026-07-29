@@ -355,7 +355,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         adapterFactories,
         channelId: "matrix",
-        outputDir: path.join(outputDir, "flow", "matrix-isolated"),
+        outputDir: path.join(outputDir, "flow", "matrix-isolated-1"),
         scenarioIds: ["matrix-restart-resume"],
       }),
     );
@@ -370,7 +370,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         adapterFactories,
         channelId: "matrix",
-        outputDir: path.join(outputDir, "flow", "matrix-shared"),
+        outputDir: path.join(outputDir, "flow", "matrix-isolated-2"),
         scenarioIds: ["thread-isolation"],
       }),
     );
