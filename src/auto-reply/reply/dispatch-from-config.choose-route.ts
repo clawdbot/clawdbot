@@ -466,6 +466,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
             () =>
               hookRunner.runBeforeDispatch(
                 {
+                  messageId: state.hookContext.messageId,
                   content: state.hookContext.content,
                   body: state.hookContext.bodyForAgent ?? state.hookContext.body,
                   channel: state.hookContext.channelId,
@@ -480,6 +481,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   timestamp: state.hookContext.timestamp,
                 },
                 {
+                  messageId: state.hookContext.messageId,
                   channelId: state.hookContext.channelId,
                   accountId: state.hookContext.accountId,
                   conversationId: state.inboundClaimContext.conversationId,

@@ -148,6 +148,8 @@ describe("before_dispatch hook", () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();
     const ctx = createHookCtx({
+      MessageSid: "discord-message-456",
+      MessageSidFull: "  ",
       ReplyToId: "discord-reply-123",
       ReplyToIdFull: "discord:channel-1:discord-reply-123",
       ReplyToBody: "the quoted parent message",
@@ -163,6 +165,7 @@ describe("before_dispatch hook", () => {
     ) as
       | [
           {
+            messageId?: unknown;
             replyToId?: unknown;
             replyToIdFull?: unknown;
             replyToBody?: unknown;
@@ -170,6 +173,7 @@ describe("before_dispatch hook", () => {
             replyToIsQuote?: unknown;
           },
           {
+            messageId?: unknown;
             replyToId?: unknown;
             replyToIdFull?: unknown;
             replyToBody?: unknown;
@@ -179,6 +183,7 @@ describe("before_dispatch hook", () => {
         ]
       | undefined;
     expect(beforeDispatchCall?.[0]).toMatchObject({
+      messageId: "discord-message-456",
       replyToId: "discord-reply-123",
       replyToIdFull: "discord:channel-1:discord-reply-123",
       replyToBody: "the quoted parent message",
@@ -186,6 +191,7 @@ describe("before_dispatch hook", () => {
       replyToIsQuote: true,
     });
     expect(beforeDispatchCall?.[1]).toMatchObject({
+      messageId: "discord-message-456",
       replyToId: "discord-reply-123",
       replyToIdFull: "discord:channel-1:discord-reply-123",
       replyToBody: "the quoted parent message",
