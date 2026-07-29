@@ -42,11 +42,17 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
 >;
+type PlaybackModeForSourceResolver = (
+  ...args: Parameters<
+    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
+  >
+) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
 
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
 const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
+const resolvePlaybackModeForSourceMock = vi.hoisted(() => vi.fn<PlaybackModeForSourceResolver>());
 const resolvePlaybackTranscodeMock = vi.hoisted(() =>
   vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
 );
@@ -54,12 +60,16 @@ vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
 }));
 vi.mock("../media/media-probe.js", () => ({
-  probeMediaFileDescriptor: probeMediaFileDescriptorMock,
+  probePlaybackMediaFileDescriptor: probeMediaFileDescriptorMock,
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
+  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
+    actual.resolvePlaybackMode(params.mimeType, actual.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  );
   return {
     ...actual,
+    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
     resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
   };
 });
@@ -74,6 +84,7 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
   probeMediaFileDescriptorMock.mockReset();
   probeMediaFileDescriptorMock.mockResolvedValue({});
+  resolvePlaybackModeForSourceMock.mockClear();
   resolvePlaybackTranscodeMock.mockReset();
   resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });

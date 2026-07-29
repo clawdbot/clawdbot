@@ -18,15 +18,15 @@ import { resolveStateDir } from "../config/paths.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
+import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
 import {
   createImageProcessor,
   getImageMetadata,
   readImageProbeFromHeader,
 } from "../media/media-services.js";
 import {
-  PLAYBACK_TRANSCODE_POLICY,
   replacePlaybackFileExtension,
-  resolvePlaybackMode,
+  resolvePlaybackModeForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
@@ -682,15 +682,14 @@ function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind 
   return kind === "image" || kind === "audio" || kind === "video" ? kind : null;
 }
 
-function buildManagedMediaBlock(record: ManagedImageRecord): ManagedMediaBlock {
+function buildManagedMediaBlock(
+  record: ManagedImageRecord,
+  playback?: "native" | "transcode",
+): ManagedMediaBlock {
   const kind = resolveManagedRecordKind(record);
   if (!kind) {
     throw new Error("Managed media record has an unsupported content type");
   }
-  const playback =
-    kind === "audio" || kind === "video"
-      ? resolvePlaybackMode(record.original.contentType, PLAYBACK_TRANSCODE_POLICY[kind])
-      : undefined;
   const fullUrl = buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full");
   return {
     type: kind,
@@ -1303,7 +1302,23 @@ export async function createManagedOutgoingMediaBlocks(params: {
         },
       };
       insertManagedImageRecord(record, stateDir);
-      const block = buildManagedMediaBlock(record);
+      let playback: "native" | "transcode" | undefined;
+      if (mediaKind === "audio" || mediaKind === "video") {
+        const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
+        try {
+          const probe = await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind);
+          playback = await resolvePlaybackModeForSource({
+            sourcePath: opened.realPath,
+            sourceStat: opened.stat,
+            mimeType: savedOriginalContentType,
+            kind: mediaKind,
+            probe,
+          });
+        } finally {
+          await opened.handle.close().catch(() => {});
+        }
+      }
+      const block = buildManagedMediaBlock(record, playback);
       const durationMs = asNonNegativeFiniteNumber(attachmentMetadata?.durationMs);
       const width = asNonNegativeFiniteNumber(attachmentMetadata?.width);
       const height = asNonNegativeFiniteNumber(attachmentMetadata?.height);

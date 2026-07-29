@@ -26,15 +26,14 @@ import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import { probeMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
+import { probePlaybackMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
 import {
   resolveMediaReferenceLocalPath,
   resolveMediaReferenceLocalPathInfo,
 } from "../media/media-reference.js";
 import {
-  PLAYBACK_TRANSCODE_POLICY,
   replacePlaybackFileExtension,
-  resolvePlaybackMode,
+  resolvePlaybackModeForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
@@ -572,13 +571,27 @@ async function resolveAssistantMediaAvailability(
         // Availability is authoritative; optional metadata remains best-effort.
       }
       const mediaKind = kindFromMime(mimeType);
-      const probe =
+      const playbackProbe =
         mediaKind === "audio" || mediaKind === "video"
-          ? await probeMediaFileDescriptor(opened.handle.fd, mediaKind)
-          : {};
+          ? await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind)
+          : null;
+      const probe: MediaProbeResult = playbackProbe
+        ? {
+            ...(playbackProbe.durationMs ? { durationMs: playbackProbe.durationMs } : {}),
+            ...(playbackProbe.width && playbackProbe.height
+              ? { width: playbackProbe.width, height: playbackProbe.height }
+              : {}),
+          }
+        : {};
       const playback =
         mimeType && (mediaKind === "audio" || mediaKind === "video")
-          ? resolvePlaybackMode(mimeType, PLAYBACK_TRANSCODE_POLICY[mediaKind])
+          ? await resolvePlaybackModeForSource({
+              sourcePath: opened.realPath,
+              sourceStat: opened.stat,
+              mimeType,
+              kind: mediaKind,
+              probe: playbackProbe,
+            })
           : undefined;
       return {
         available: true,

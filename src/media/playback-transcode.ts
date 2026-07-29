@@ -1,6 +1,6 @@
 // Playback transcode policy and lazy media-store cache ownership.
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
@@ -9,6 +9,7 @@ import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
+import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
 import { getMediaDir } from "./store.js";
 
 type PlaybackMediaKind = Extract<MediaKind, "audio" | "video">;
@@ -16,6 +17,7 @@ type PlaybackMode = "native" | "transcode";
 
 type PlaybackPolicyEntry = {
   nativeMimeTypes: readonly string[];
+  codecProbeInputFormats: Readonly<Record<string, string>>;
   transcodeInputFormats: Readonly<Record<string, string>>;
   target: {
     contentType: string;
@@ -40,6 +42,11 @@ export const PLAYBACK_TRANSCODE_POLICY = {
       "audio/x-m4a",
       "audio/x-wav",
     ],
+    codecProbeInputFormats: {
+      "audio/m4a": "mov",
+      "audio/mp4": "mov",
+      "audio/x-m4a": "mov",
+    },
     transcodeInputFormats: {
       "audio/aiff": "aiff",
       "audio/amr": "amr",
@@ -57,6 +64,9 @@ export const PLAYBACK_TRANSCODE_POLICY = {
   },
   video: {
     nativeMimeTypes: ["video/mp4"],
+    codecProbeInputFormats: {
+      "video/mp4": "mov",
+    },
     transcodeInputFormats: {
       "video/avi": "avi",
       "video/flv": "flv",
@@ -82,6 +92,16 @@ type PlaybackSourceIdentity = {
   ino: number;
 };
 
+type PlaybackSourceStat = Omit<PlaybackSourceIdentity, "path">;
+
+type PlaybackSourceParams = {
+  sourcePath: string;
+  sourceStat: PlaybackSourceStat;
+  mimeType: string;
+  kind: PlaybackMediaKind;
+  probe?: PlaybackMediaProbeResult | null;
+};
+
 type PlaybackTranscodeResolution =
   | { kind: "passthrough" }
   | { kind: "preparing" }
@@ -93,17 +113,31 @@ type PlaybackTranscodeResolution =
       extension: `.${string}`;
     };
 
-type PlaybackJob = {
-  state: "running" | "ready" | "failed";
-};
+type PlaybackInspection =
+  | { mode: "native" }
+  | { mode: "fallback" }
+  | {
+      mode: "transcode";
+      durationMs: number;
+      audioStreamIndex?: number;
+      videoStreamIndex?: number;
+    };
 
 const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
+const PLAYBACK_TRANSCODE_CACHE_VERSION = "v2";
 const MAX_PLAYBACK_TRANSCODE_JOBS = 2;
 const PLAYBACK_TRANSCODE_MAX_ALLOC_BYTES = 256 * 1024 * 1024;
 const PLAYBACK_TRANSCODE_MAX_DURATION_SECS = 20 * 60;
 const PLAYBACK_TRANSCODE_MAX_INPUT_PIXELS = 4096 * 4096;
 const PLAYBACK_TRANSCODE_THREADS = 2;
-const playbackJobs = new Map<string, PlaybackJob>();
+const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
+const MAX_PLAYBACK_TRANSCODE_FAILURES = 32;
+const MAX_PLAYBACK_INSPECTIONS = 32;
+const MAX_PLAYBACK_INSPECTION_JOBS = 2;
+const playbackJobs = new Map<string, true>();
+const playbackFailures = new Map<string, number>();
+const playbackInspections = new Map<string, PlaybackInspection>();
+const playbackInspectionJobs = new Map<string, Promise<PlaybackInspection>>();
 
 /** Hashes the immutable source identity used by playback cache file names. */
 function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string {
@@ -119,6 +153,32 @@ function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string
       ]),
     )
     .digest("hex");
+}
+
+async function readPlaybackSourceBounded(
+  handle: Pick<FileHandle, "read">,
+  expectedSize: number,
+  maxBytes: number,
+): Promise<Buffer> {
+  const maxReadBytes = Math.min(maxBytes + 1, expectedSize + 1);
+  const buffer = Buffer.allocUnsafe(maxReadBytes);
+  let totalBytes = 0;
+  while (totalBytes < maxReadBytes) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      totalBytes,
+      maxReadBytes - totalBytes,
+      totalBytes,
+    );
+    if (bytesRead === 0) {
+      break;
+    }
+    totalBytes += bytesRead;
+  }
+  if (totalBytes > maxBytes || totalBytes !== expectedSize) {
+    throw new Error("Playback source changed during bounded read");
+  }
+  return buffer.subarray(0, totalBytes);
 }
 
 /** Returns whether a sniffed audio/video type needs the cross-client playback target. */
@@ -139,7 +199,213 @@ export function resolvePlaybackMode(
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.playbackTranscodeTestApi")] = {
     createPlaybackTranscodeCacheKey,
+    readPlaybackSourceBounded,
   };
+}
+
+function playbackSourceIdentity(params: PlaybackSourceParams): PlaybackSourceIdentity {
+  return { path: params.sourcePath, ...params.sourceStat };
+}
+
+function playbackSourceIdentityMatches(
+  source: PlaybackSourceIdentity,
+  opened: { realPath: string; stat: PlaybackSourceStat },
+): boolean {
+  return (
+    opened.realPath === source.path &&
+    opened.stat.size === source.size &&
+    opened.stat.mtimeMs === source.mtimeMs &&
+    opened.stat.ctimeMs === source.ctimeMs &&
+    opened.stat.dev === source.dev &&
+    opened.stat.ino === source.ino
+  );
+}
+
+function setBoundedMapEntry<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: number): void {
+  map.delete(key);
+  while (map.size >= maxEntries) {
+    const oldestKey = map.keys().next().value as K | undefined;
+    if (oldestKey === undefined) {
+      break;
+    }
+    map.delete(oldestKey);
+  }
+  map.set(key, value);
+}
+
+function readPlaybackInspection(cacheKey: string): PlaybackInspection | undefined {
+  const inspection = playbackInspections.get(cacheKey);
+  if (inspection) {
+    setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_INSPECTIONS);
+  }
+  return inspection;
+}
+
+function playbackInspectionCacheKey(params: {
+  sourceCacheKey: string;
+  kind: PlaybackMediaKind;
+  mimeType: string;
+}): string {
+  return `${params.sourceCacheKey}:${params.kind}:${normalizeMimeType(params.mimeType) ?? "unknown"}`;
+}
+
+async function probePlaybackSource(
+  source: PlaybackSourceIdentity,
+  kind: PlaybackMediaKind,
+): Promise<PlaybackMediaProbeResult | null> {
+  const opened = await openLocalFileSafely({ filePath: source.path }).catch(() => null);
+  if (!opened) {
+    return null;
+  }
+  try {
+    if (!playbackSourceIdentityMatches(source, opened)) {
+      return null;
+    }
+    return await probePlaybackMediaFileDescriptor(opened.handle.fd, kind);
+  } finally {
+    await opened.handle.close().catch(() => {});
+  }
+}
+
+function hasNativePlaybackCodecs(
+  kind: PlaybackMediaKind,
+  probe: PlaybackMediaProbeResult,
+): boolean | undefined {
+  if (kind === "audio") {
+    if (probe.audioStreamIndex === undefined) {
+      return undefined;
+    }
+    const codec = probe.audioCodec;
+    return codec ? codec === "aac" || codec === "mp3" || codec === "pcm_s16le" : undefined;
+  }
+  if (!probe.videoCodec || probe.videoStreamIndex === undefined) {
+    return undefined;
+  }
+  if (probe.videoCodec !== "h264") {
+    return false;
+  }
+  if (!probe.videoProfile || !probe.videoPixelFormat) {
+    return undefined;
+  }
+  const portableProfile =
+    probe.videoProfile === "baseline" ||
+    probe.videoProfile === "constrained baseline" ||
+    probe.videoProfile === "main" ||
+    probe.videoProfile === "high";
+  const portablePixelFormat =
+    probe.videoPixelFormat === "yuv420p" || probe.videoPixelFormat === "yuvj420p";
+  if (!portableProfile || !portablePixelFormat) {
+    return false;
+  }
+  if (probe.audioStreamIndex === undefined) {
+    return probe.audioCodec ? undefined : true;
+  }
+  return probe.audioCodec ? probe.audioCodec === "aac" || probe.audioCodec === "mp3" : undefined;
+}
+
+async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<PlaybackInspection> {
+  const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
+  const containerMode = resolvePlaybackMode(params.mimeType, policy);
+  if (!containerMode) {
+    return { mode: "fallback" };
+  }
+  const source = playbackSourceIdentity(params);
+  const sourceCacheKey = createPlaybackTranscodeCacheKey(source);
+  const cacheKey = playbackInspectionCacheKey({
+    sourceCacheKey,
+    kind: params.kind,
+    mimeType: params.mimeType,
+  });
+  const cached = readPlaybackInspection(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const computeInspection = async (): Promise<PlaybackInspection> => {
+    const mimeType = normalizeMimeType(params.mimeType);
+    const needsCodecProbe = Boolean(mimeType && policy.codecProbeInputFormats[mimeType]);
+    if (containerMode === "native" && !needsCodecProbe) {
+      const inspection = { mode: "native" } as const;
+      setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_INSPECTIONS);
+      return inspection;
+    }
+
+    const probe =
+      params.probe !== undefined ? params.probe : await probePlaybackSource(source, params.kind);
+    if (containerMode === "native") {
+      const nativeCodecs = probe ? hasNativePlaybackCodecs(params.kind, probe) : undefined;
+      if (nativeCodecs === true) {
+        const inspection = { mode: "native" } as const;
+        setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_INSPECTIONS);
+        return inspection;
+      }
+      if (nativeCodecs === undefined) {
+        return { mode: "native" };
+      }
+    }
+
+    if (source.size > maxBytesForKind(params.kind)) {
+      return { mode: "fallback" };
+    }
+
+    const maxDurationMs = PLAYBACK_TRANSCODE_MAX_DURATION_SECS * 1000;
+    const primaryStreamIndex =
+      params.kind === "audio" ? probe?.audioStreamIndex : probe?.videoStreamIndex;
+    if (!probe?.durationMs || primaryStreamIndex === undefined) {
+      return { mode: "fallback" };
+    }
+    const inspection: PlaybackInspection =
+      probe.durationMs <= maxDurationMs
+        ? {
+            mode: "transcode",
+            durationMs: probe.durationMs,
+            ...(probe.audioStreamIndex !== undefined
+              ? { audioStreamIndex: probe.audioStreamIndex }
+              : {}),
+            ...(probe.videoStreamIndex !== undefined
+              ? { videoStreamIndex: probe.videoStreamIndex }
+              : {}),
+          }
+        : { mode: "fallback" };
+    setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_INSPECTIONS);
+    return inspection;
+  };
+  if (params.probe !== undefined) {
+    return await computeInspection();
+  }
+  const existingJob = playbackInspectionJobs.get(cacheKey);
+  if (existingJob) {
+    return await existingJob;
+  }
+  if (playbackInspectionJobs.size >= MAX_PLAYBACK_INSPECTION_JOBS) {
+    return { mode: "fallback" };
+  }
+
+  const inspectionJob = computeInspection();
+  playbackInspectionJobs.set(cacheKey, inspectionJob);
+  try {
+    return await inspectionJob;
+  } finally {
+    playbackInspectionJobs.delete(cacheKey);
+  }
+}
+
+/** Resolves source-aware playback metadata and caches codec classification by file identity. */
+export async function resolvePlaybackModeForSource(
+  params: PlaybackSourceParams,
+): Promise<PlaybackMode | undefined> {
+  const containerMode = resolvePlaybackMode(
+    params.mimeType,
+    PLAYBACK_TRANSCODE_POLICY[params.kind],
+  );
+  if (!containerMode) {
+    return undefined;
+  }
+  const inspection = await inspectPlaybackSource(params);
+  return inspection.mode === "transcode"
+    ? "transcode"
+    : inspection.mode === "native"
+      ? "native"
+      : undefined;
 }
 
 /** Replaces the original container suffix for a transcoded response filename. */
@@ -153,7 +419,7 @@ function playbackCacheRelativePath(
   cacheKey: string,
   extension: `.${string}`,
 ): `${typeof PLAYBACK_TRANSCODE_SUBDIR}/${string}` {
-  return `${PLAYBACK_TRANSCODE_SUBDIR}/${cacheKey}${extension}`;
+  return `${PLAYBACK_TRANSCODE_SUBDIR}/${PLAYBACK_TRANSCODE_CACHE_VERSION}-${cacheKey}${extension}`;
 }
 
 async function resolveCachedPlaybackPath(params: {
@@ -189,12 +455,32 @@ function makePlaybackInputFileName(sourcePath: string, mimeType: string): string
   return `input${extension}`;
 }
 
+function resolvePlaybackInputFormat(
+  policy: PlaybackPolicyEntry,
+  mimeType: string,
+): string | undefined {
+  const normalized = normalizeMimeType(mimeType);
+  return normalized
+    ? (policy.transcodeInputFormats[normalized] ?? policy.codecProbeInputFormats[normalized])
+    : undefined;
+}
+
+function playbackDurationsMatch(sourceDurationMs: number, outputDurationMs: number): boolean {
+  const toleranceMs = Math.min(2000, Math.max(1000, Math.ceil(sourceDurationMs * 0.02)));
+  return (
+    outputDurationMs <= PLAYBACK_TRANSCODE_MAX_DURATION_SECS * 1000 &&
+    Math.abs(outputDurationMs - sourceDurationMs) <= toleranceMs
+  );
+}
+
 function buildPlaybackFfmpegArgs(params: {
+  audioStreamIndex?: number;
   inputPath: string;
   inputFormat: string;
   kind: PlaybackMediaKind;
   maxOutputBytes: number;
   outputPath: string;
+  videoStreamIndex?: number;
 }): string[] {
   const common = [
     "-hide_banner",
@@ -221,10 +507,13 @@ function buildPlaybackFfmpegArgs(params: {
     "-1",
   ];
   if (params.kind === "audio") {
+    if (params.audioStreamIndex === undefined) {
+      throw new Error("Playback audio stream is missing");
+    }
     return [
       ...common,
       "-map",
-      "0:a:0",
+      `0:${params.audioStreamIndex}`,
       "-vn",
       "-sn",
       "-dn",
@@ -243,12 +532,14 @@ function buildPlaybackFfmpegArgs(params: {
       params.outputPath,
     ];
   }
+  if (params.videoStreamIndex === undefined) {
+    throw new Error("Playback video stream is missing");
+  }
   return [
     ...common,
     "-map",
-    "0:v:0",
-    "-map",
-    "0:a:0?",
+    `0:${params.videoStreamIndex}`,
+    ...(params.audioStreamIndex === undefined ? [] : ["-map", `0:${params.audioStreamIndex}`]),
     "-sn",
     "-dn",
     "-t",
@@ -276,29 +567,32 @@ function buildPlaybackFfmpegArgs(params: {
 }
 
 async function transcodePlaybackSource(params: {
+  audioStreamIndex?: number;
   source: PlaybackSourceIdentity;
   mimeType: string;
   kind: PlaybackMediaKind;
   cacheKey: string;
   maxBytes: number;
+  sourceDurationMs: number;
+  videoStreamIndex?: number;
 }): Promise<void> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   const opened = await openLocalFileSafely({ filePath: params.source.path });
   try {
-    const identityMatches =
-      opened.realPath === params.source.path &&
-      opened.stat.size === params.source.size &&
-      opened.stat.mtimeMs === params.source.mtimeMs &&
-      opened.stat.ctimeMs === params.source.ctimeMs &&
-      opened.stat.dev === params.source.dev &&
-      opened.stat.ino === params.source.ino;
-    if (!identityMatches) {
+    if (!playbackSourceIdentityMatches(params.source, opened)) {
       throw new Error("Playback source changed before transcode");
     }
-    const sourceBuffer = await opened.handle.readFile();
+    const sourceBuffer = await readPlaybackSourceBounded(
+      opened.handle,
+      params.source.size,
+      params.maxBytes,
+    );
+    const postReadStat = await opened.handle.stat();
     if (
-      sourceBuffer.byteLength !== params.source.size ||
-      sourceBuffer.byteLength > params.maxBytes
+      !playbackSourceIdentityMatches(params.source, {
+        realPath: opened.realPath,
+        stat: postReadStat,
+      })
     ) {
       throw new Error("Playback source changed during transcode read");
     }
@@ -314,22 +608,41 @@ async function transcodePlaybackSource(params: {
           sourceBuffer,
         );
         const outputPath = workspace.path(`output${policy.target.extension}`);
-        const inputFormat = policy.transcodeInputFormats[normalizeMimeType(params.mimeType) ?? ""];
+        const inputFormat = resolvePlaybackInputFormat(policy, params.mimeType);
         if (!inputFormat) {
           throw new Error("Playback transcode input format is not allowed");
         }
         await runFfmpeg(
           buildPlaybackFfmpegArgs({
+            ...(params.audioStreamIndex !== undefined
+              ? { audioStreamIndex: params.audioStreamIndex }
+              : {}),
             inputPath,
             inputFormat,
             kind: params.kind,
             maxOutputBytes: params.maxBytes,
             outputPath,
+            ...(params.videoStreamIndex !== undefined
+              ? { videoStreamIndex: params.videoStreamIndex }
+              : {}),
           }),
         );
         const outputStat = await fs.stat(outputPath);
         if (!outputStat.isFile() || outputStat.size === 0 || outputStat.size > params.maxBytes) {
           throw new Error("Playback transcode output exceeds its media limit");
+        }
+        const outputHandle = await fs.open(outputPath, "r");
+        let outputProbe: PlaybackMediaProbeResult | null;
+        try {
+          outputProbe = await probePlaybackMediaFileDescriptor(outputHandle.fd, params.kind);
+        } finally {
+          await outputHandle.close().catch(() => {});
+        }
+        if (
+          !outputProbe?.durationMs ||
+          !playbackDurationsMatch(params.sourceDurationMs, outputProbe.durationMs)
+        ) {
+          throw new Error("Playback transcode output duration does not match its source");
         }
         return await fs.readFile(outputPath);
       },
@@ -352,57 +665,22 @@ async function transcodePlaybackSource(params: {
 }
 
 function makePlaybackJobRoom(): boolean {
-  if (playbackJobs.size < MAX_PLAYBACK_TRANSCODE_JOBS) {
-    return true;
-  }
-  for (const [cacheKey, job] of playbackJobs) {
-    if (job.state !== "running") {
-      playbackJobs.delete(cacheKey);
-      return true;
-    }
-  }
-  return false;
+  return playbackJobs.size < MAX_PLAYBACK_TRANSCODE_JOBS;
 }
 
 /** Resolves a native, pending, cached, or failed playback rendition without blocking on ffmpeg. */
-export async function resolvePlaybackTranscode(params: {
-  sourcePath: string;
-  sourceStat: {
-    size: number;
-    mtimeMs: number;
-    ctimeMs: number;
-    dev: number;
-    ino: number;
-  };
-  mimeType: string;
-  kind: PlaybackMediaKind;
-}): Promise<PlaybackTranscodeResolution> {
+export async function resolvePlaybackTranscode(
+  params: PlaybackSourceParams,
+): Promise<PlaybackTranscodeResolution> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
-  const playbackMode = resolvePlaybackMode(params.mimeType, policy);
-  if (playbackMode === "native") {
-    return { kind: "passthrough" };
-  }
-  if (playbackMode !== "transcode") {
+  if (!resolvePlaybackMode(params.mimeType, policy)) {
     return { kind: "fallback" };
   }
   const maxBytes = maxBytesForKind(params.kind);
-  if (params.sourceStat.size > maxBytes) {
-    return { kind: "fallback" };
-  }
-  const mimeType = normalizeMimeType(params.mimeType);
-  if (!mimeType || !policy.transcodeInputFormats[mimeType]) {
-    return { kind: "fallback" };
-  }
-  const source = {
-    path: params.sourcePath,
-    size: params.sourceStat.size,
-    mtimeMs: params.sourceStat.mtimeMs,
-    ctimeMs: params.sourceStat.ctimeMs,
-    dev: params.sourceStat.dev,
-    ino: params.sourceStat.ino,
-  };
+  const source = playbackSourceIdentity(params);
   const cacheKey = createPlaybackTranscodeCacheKey(source);
   const target = policy.target;
+  const operationKey = playbackCacheRelativePath(cacheKey, target.extension);
   const cachedPath = await resolveCachedPlaybackPath({
     cacheKey,
     extension: target.extension,
@@ -417,34 +695,55 @@ export async function resolvePlaybackTranscode(params: {
     };
   }
 
-  const existingJob = playbackJobs.get(cacheKey);
-  if (existingJob?.state === "running") {
-    return { kind: "preparing" };
+  const inspection = await inspectPlaybackSource(params);
+  if (inspection.mode === "native") {
+    return { kind: "passthrough" };
   }
-  if (existingJob?.state === "failed") {
+  if (inspection.mode === "fallback") {
     return { kind: "fallback" };
   }
-  if (existingJob?.state === "ready") {
-    playbackJobs.delete(cacheKey);
+
+  if (playbackJobs.has(operationKey)) {
+    return { kind: "preparing" };
+  }
+  const failedAtMs = playbackFailures.get(operationKey);
+  if (failedAtMs !== undefined) {
+    if (Date.now() - failedAtMs < PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS) {
+      return { kind: "fallback" };
+    }
+    playbackFailures.delete(operationKey);
   }
   if (!makePlaybackJobRoom()) {
     return { kind: "preparing" };
   }
 
-  const job: PlaybackJob = { state: "running" };
-  playbackJobs.set(cacheKey, job);
+  playbackJobs.set(operationKey, true);
   void transcodePlaybackSource({
+    ...(inspection.audioStreamIndex !== undefined
+      ? { audioStreamIndex: inspection.audioStreamIndex }
+      : {}),
     source,
     mimeType: params.mimeType,
     kind: params.kind,
     cacheKey,
     maxBytes,
+    sourceDurationMs: inspection.durationMs,
+    ...(inspection.videoStreamIndex !== undefined
+      ? { videoStreamIndex: inspection.videoStreamIndex }
+      : {}),
   }).then(
     () => {
-      job.state = "ready";
+      playbackJobs.delete(operationKey);
+      playbackFailures.delete(operationKey);
     },
     () => {
-      job.state = "failed";
+      playbackJobs.delete(operationKey);
+      setBoundedMapEntry(
+        playbackFailures,
+        operationKey,
+        Date.now(),
+        MAX_PLAYBACK_TRANSCODE_FAILURES,
+      );
     },
   );
   return { kind: "preparing" };

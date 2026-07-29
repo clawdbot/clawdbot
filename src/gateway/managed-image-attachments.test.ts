@@ -25,6 +25,11 @@ import {
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
 >;
+type PlaybackModeForSourceResolver = (
+  ...args: Parameters<
+    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
+  >
+) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
@@ -33,6 +38,8 @@ const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const resolveSessionHistoryTranscriptPathMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
+const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
+const resolvePlaybackModeForSourceMock = vi.fn<PlaybackModeForSourceResolver>();
 const resolvePlaybackTranscodeMock = vi.fn(
   async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" }),
 );
@@ -62,10 +69,18 @@ vi.mock("./session-transcript-readers.js", () => ({
   }),
 }));
 
+vi.mock("../media/media-probe.js", () => ({
+  probePlaybackMediaFileDescriptor: probePlaybackMediaFileDescriptorMock,
+}));
+
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
+  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
+    actual.resolvePlaybackMode(params.mimeType, actual.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  );
   return {
     ...actual,
+    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
     resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
   };
 });
