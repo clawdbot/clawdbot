@@ -1,13 +1,22 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import { icons } from "../../components/icons.ts";
 import {
   hasProviderBrandIcon,
   renderProviderBrandIcon,
   renderProviderFallbackIcon,
 } from "../../components/provider-icon.ts";
+import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/model-setup.css";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
+import {
+  focusSelectedManualProvider,
+  handleManualProviderKeydown,
+  handleManualProviderSelect,
+  type WebAwesomeSelectEvent,
+} from "./provider-picker.ts";
 import type {
   ModelSetupActivationState,
   ModelSetupPageState,
@@ -15,10 +24,12 @@ import type {
   ModelSetupWizardState,
 } from "./state.ts";
 import { activationTargetId } from "./state.ts";
+import { renderModelSetupSuccessDialog } from "./success-dialog.ts";
 import { renderModelSetupWizard } from "./wizard-view.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
+type ManualProvider = SystemAgentSetupDetectResult["manualProviders"][number];
 type SetupIconEntry = {
   brandId?: string;
   label: string;
@@ -88,6 +99,7 @@ type ModelSetupViewProps = {
   onMoreSignInToggle: (open: boolean) => void;
   onIconError: (iconUrl: string) => void;
   onOpenChat: () => void;
+  onSuccessClose: () => void;
   onWizardValueChange: (value: unknown) => void;
   onWizardAnswer: (value: unknown, includeValue?: boolean) => void;
   onWizardCancel: () => void;
@@ -120,36 +132,13 @@ function failureLabel(status: string): string {
   return labels[status] ?? labels.unknown!;
 }
 
-function renderSuccess(
-  activation: Extract<ModelSetupActivationState, { phase: "success" }>,
-  onOpenChat: () => void,
-  firstRun: boolean,
-) {
-  return html`
-    <div class="model-setup__success" role="status">
-      <div>
-        <strong>${t("modelSetup.success.title")}</strong>
-        <div>
-          ${activation.latencyMs === undefined
-            ? activation.modelRef
-            : t("modelSetup.success.detail", {
-                modelRef: activation.modelRef,
-                latencyMs: String(activation.latencyMs),
-              })}
-        </div>
-        ${activation.warning
-          ? html`<div class="model-setup__success-warning">${activation.warning}</div>`
-          : nothing}
-      </div>
-      <button type="button" class="btn primary" @click=${onOpenChat}>
-        ${t(firstRun ? "modelSetup.success.continueSetup" : "modelSetup.success.openChat")}
-      </button>
-    </div>
-  `;
-}
-
 function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
-  if (result.candidates.length === 0) {
+  // The current connection already owns verification and status. Keep the
+  // existing-model candidate only for older Gateways that lack that surface.
+  const candidates = result.configuredModel
+    ? result.candidates.filter((candidate) => candidate.kind !== "existing-model")
+    : result.candidates;
+  if (candidates.length === 0) {
     return nothing;
   }
   return html`
@@ -158,7 +147,7 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
         <h2>${t("modelSetup.candidates.title")}</h2>
       </div>
       <div class="model-setup__rows">
-        ${result.candidates.map((candidate) => {
+        ${candidates.map((candidate) => {
           const testing =
             props.activation.phase === "testing" &&
             props.activation.targetId === activationTargetId(candidate.kind, candidate.modelRef);
@@ -440,13 +429,102 @@ function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetec
                 ?disabled=${props.actionsDisabled}
                 @click=${() => props.onStartPrepare(option)}
               >
-                ${t("modelSetup.prepare.button")}
+                ${option.id === "ollama"
+                  ? t("modelSetup.prepare.ollamaButton")
+                  : t("modelSetup.prepare.button")}
               </button>
             </div>
           `,
         )}
       </div>
     </section>
+  `;
+}
+
+function manualProviderName(provider: ManualProvider): string {
+  return provider.groupLabel?.trim() || provider.label;
+}
+
+function manualProviderMethod(provider: ManualProvider): string | undefined {
+  const method = provider.label.trim();
+  return method === manualProviderName(provider) ? undefined : method;
+}
+
+function renderManualProviderPicker(
+  props: ModelSetupViewProps,
+  result: SystemAgentSetupDetectResult,
+  provider: ManualProvider | undefined,
+) {
+  const providerMethod = provider ? manualProviderMethod(provider) : undefined;
+  const triggerLabel = provider
+    ? [manualProviderName(provider), providerMethod].filter(Boolean).join(", ")
+    : t("modelSetup.manual.selectProvider");
+  return html`
+    <wa-dropdown
+      class="model-setup-provider-select"
+      placement="bottom-start"
+      aria-label=${t("modelSetup.manual.provider")}
+      @wa-select=${(event: WebAwesomeSelectEvent) =>
+        handleManualProviderSelect(event, props.manualProviderId, props.onManualProviderChange)}
+      @wa-after-show=${focusSelectedManualProvider}
+      @keydown=${handleManualProviderKeydown}
+    >
+      <button
+        slot="trigger"
+        type="button"
+        class="model-setup-provider-select__trigger"
+        aria-label=${`${t("modelSetup.manual.provider")}: ${triggerLabel}`}
+        ?disabled=${props.actionsDisabled || result.manualProviders.length === 0}
+      >
+        ${provider
+          ? renderProviderIcon(props, provider, "model-setup__icon--picker")
+          : html`<span class="model-setup-provider-select__placeholder-icon" aria-hidden="true">
+              ${icons.key}
+            </span>`}
+        <span class="model-setup-provider-select__copy">
+          <strong>
+            ${provider ? manualProviderName(provider) : t("modelSetup.manual.selectProvider")}
+          </strong>
+          ${provider
+            ? providerMethod
+              ? html`<span>${providerMethod}</span>`
+              : nothing
+            : html`<span>${t("modelSetup.manual.selectProviderHint")}</span>`}
+        </span>
+        <span class="model-setup-provider-select__chevron" aria-hidden="true">
+          ${icons.chevronDown}
+        </span>
+      </button>
+      ${result.manualProviders.map((entry) => {
+        const selected = entry.id === props.manualProviderId;
+        const entryMethod = manualProviderMethod(entry);
+        const accessibleLabel = [manualProviderName(entry), entryMethod, entry.hint]
+          .filter(Boolean)
+          .join(", ");
+        return html`
+          <wa-dropdown-item
+            class="model-setup-provider-select__option"
+            data-manual-provider=${entry.id}
+            ?data-selected=${selected}
+            aria-label=${accessibleLabel}
+            .value=${entry.id}
+            type="checkbox"
+            .checked=${selected}
+            ?disabled=${props.actionsDisabled}
+            ${ref((element) => syncDropdownItemRadio(element, selected))}
+          >
+            <span slot="icon">
+              ${renderProviderIcon(props, entry, "model-setup__icon--picker")}
+            </span>
+            <span class="model-setup-provider-select__copy">
+              <strong>${manualProviderName(entry)}</strong>
+              ${entryMethod ? html`<span>${entryMethod}</span>` : nothing}
+              ${entry.hint ? html`<small>${entry.hint}</small>` : nothing}
+            </span>
+          </wa-dropdown-item>
+        `;
+      })}
+    </wa-dropdown>
   `;
 }
 
@@ -464,31 +542,16 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
         <h2>${t("modelSetup.manual.title")}</h2>
       </div>
       <div class="model-setup__manual">
-        <label class="field">
+        <div class="field">
           <span>${t("modelSetup.manual.provider")}</span>
-          <div class="model-setup__manual-provider">
-            ${provider ? renderProviderIcon(props, provider) : nothing}
-            <select
-              ?disabled=${props.actionsDisabled}
-              @change=${(event: Event) =>
-                props.onManualProviderChange((event.currentTarget as HTMLSelectElement).value)}
-            >
-              <option value="" ?selected=${!props.manualProviderId}>
-                ${t("modelSetup.manual.selectProvider")}
-              </option>
-              ${result.manualProviders.map(
-                (entry) => html`
-                  <option value=${entry.id} ?selected=${entry.id === props.manualProviderId}>
-                    ${entry.label}
-                  </option>
-                `,
-              )}
-            </select>
-          </div>
-        </label>
-        ${provider?.hint ? html`<div class="muted">${provider.hint}</div>` : nothing}
+          ${renderManualProviderPicker(props, result, provider)}
+        </div>
         <label class="field">
-          <span>${t("modelSetup.manual.accessValue")}</span>
+          <span>
+            ${provider
+              ? t("modelSetup.manual.accessValueFor", { provider: manualProviderName(provider) })
+              : t("modelSetup.manual.accessValue")}
+          </span>
           <input
             class="input"
             type="password"
@@ -500,6 +563,10 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
               props.onManualApiKeyChange((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
+        <div class="model-setup__manual-help">
+          ${icons.shieldCheck}
+          <span>${t("modelSetup.manual.verifyHint")}</span>
+        </div>
         ${props.manualError
           ? html`<div class="callout danger" role="alert">${props.manualError}</div>`
           : nothing}
@@ -519,7 +586,9 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
           ?disabled=${props.actionsDisabled || !props.manualProviderId}
           @click=${props.onManualConnect}
         >
-          ${testing ? t("modelSetup.candidates.testingButton") : t("modelSetup.manual.connect")}
+          ${testing
+            ? t("modelSetup.candidates.testingButton")
+            : t("modelSetup.manual.connectAndVerify")}
         </button>
       </div>
     </section>
@@ -527,9 +596,6 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
 }
 
 function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
-  if (props.activation.phase === "success") {
-    return renderSuccess(props.activation, props.onOpenChat, props.firstRun);
-  }
   const current = result.configuredModel
     ? renderCurrentConnection(props, result.configuredModel)
     : nothing;
@@ -600,5 +666,13 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       onCancel: props.onWizardCancel,
       onClose: props.onWizardClose,
     })}
+    ${props.activation.phase === "success"
+      ? renderModelSetupSuccessDialog(
+          props.activation,
+          props.onOpenChat,
+          props.onSuccessClose,
+          props.firstRun,
+        )
+      : nothing}
   `;
 }

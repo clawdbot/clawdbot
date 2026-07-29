@@ -597,6 +597,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         }
         this.context.navigate("chat");
       },
+      onSuccessClose: () => {
+        this.activationState = { phase: "idle" };
+        void this.detect();
+      },
       onWizardValueChange: (value) => (this.wizardValue = value),
       onWizardAnswer: (value, includeValue) => void this.wizard.answer(value, includeValue),
       onWizardCancel: () => void this.wizard.cancel(),

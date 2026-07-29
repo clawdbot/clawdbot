@@ -436,7 +436,7 @@ describe("ModelSetupPage catalog icons", () => {
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
 
     await vi.waitFor(() => {
-      expect(page.textContent).toContain("Your AI is ready");
+      expect(page.textContent).toContain("Connection verified");
       expect(page.textContent).toContain("config.get failed after model commit");
     });
   });
