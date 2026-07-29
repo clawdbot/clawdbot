@@ -1542,6 +1542,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
     expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toMatchObject({
       authProfileMode: "api_key",
+      preparedModelRuntime: expect.objectContaining({
+        configuredRuntimeModels: [],
+        inlineProviderModels: [],
+      }),
     });
   });
 
