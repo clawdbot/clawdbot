@@ -15,7 +15,7 @@ struct GatewayConnectFailureBackoff {
     }
 
     mutating func record(error: Error, pendingDeviceTokenRetry: Bool) {
-        guard !(error is CancellationError) else { return }
+        guard !Self.isCancellation(error) else { return }
         let delayMs = pendingDeviceTokenRetry ? min(self.milliseconds, 250) : self.milliseconds
         let clock = ContinuousClock()
         self.retryNotBefore = clock.now.advanced(by: .milliseconds(Int64(delayMs.rounded(.up))))
@@ -25,6 +25,13 @@ struct GatewayConnectFailureBackoff {
     mutating func reset() {
         self.milliseconds = 500
         self.retryNotBefore = nil
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain &&
+            nsError.code == URLError.Code.cancelled.rawValue
     }
 }
 
