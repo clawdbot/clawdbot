@@ -1209,12 +1209,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         !embeddingBootstrapKeywordOnly &&
         preflight.shouldInitializeProvider &&
         !this.provider &&
-        this.providerLifecycle.mode === "degraded" &&
-        this.providerLifecycle.providerId !== this.settings.provider
+        (this.providerLifecycle.mode === "pending" ||
+          (this.providerLifecycle.mode === "degraded" &&
+            this.providerLifecycle.providerId !== this.settings.provider))
       ) {
         // A failed fallback must yield ownership back to the configured primary.
-        // Retrying the degraded fallback here can strand a valid existing index.
+        // Reinitialize it before identity validation; leaving the lifecycle pending
+        // makes a valid existing index look mismatched and drops keyword results.
         this.resetProviderInitializationForRetry();
+        await this.ensureProviderInitialized();
       }
       this.assertRequiredProviderAvailable("search");
       if (
