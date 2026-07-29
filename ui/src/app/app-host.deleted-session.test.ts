@@ -108,6 +108,19 @@ describe("OpenClaw shell deleted-session recovery", () => {
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
   });
 
+  it("does not replace a main route with the same deleted main session", () => {
+    const { replace, setSessionKey, shell } = createSessionRecoveryShell({
+      activeSessionKey: mainKey,
+      deletedSessionKeys: [mainKey],
+      sessionKeys: [mainKey],
+    });
+
+    shell.replaceChatWithCurrentSession();
+
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
   it("keeps a resolvable active session when a different chat route is not found", () => {
     const existingKey = "agent:main:existing-thread";
     const { replace, setSessionKey, shell } = createSessionRecoveryShell({

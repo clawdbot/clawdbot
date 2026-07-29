@@ -1078,6 +1078,11 @@ class OpenClawShell extends OpenClawLightDomElement {
               hello: context.gateway.snapshot.hello,
             }),
           });
+    // Gateway rejects deletion of a live main session. If an orphaned event
+    // still names that fallback, replacing the same route would retry forever.
+    if (sessionWasDeleted && replacementSessionKey === sessionKey) {
+      return;
+    }
     if (replacementSessionKey !== sessionKey) {
       // Commit the replacement to both selection owners before navigating;
       // otherwise a stale Gateway snapshot restores the deleted key and loops.
