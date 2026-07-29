@@ -64,14 +64,12 @@ function sessionsList(toolOverrides?: Record<string, unknown>) {
 function configResponse(servers: Record<string, unknown>, webSearch = true) {
   const config = {
     mcp: { servers },
-    ...(webSearch
+    plugins: webSearch
       ? {
-          plugins: {
-            entries: { brave: { enabled: true, config: { webSearch: { apiKey: "redacted" } } } },
-          },
-          tools: { web: { search: { provider: "brave" } } },
+          entries: { brave: { enabled: true, config: { webSearch: { apiKey: "redacted" } } } },
         }
-      : {}),
+      : undefined,
+    tools: { web: { search: webSearch ? { provider: "brave" } : { enabled: false } } },
   };
   return {
     raw: JSON.stringify(config),
@@ -310,13 +308,12 @@ describeControlUiE2e("Control UI composer capability menu", () => {
     }
   });
 
-  it("blocks capability mutations until the authoritative session row loads", async () => {
+  it("blocks capability mutations until the session row and runtime config load", async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.list"],
+      deferredMethods: ["sessions.list", "config.get"],
       methodResponses: {
-        "config.get": configResponse({ github: { url: "https://mcp.example.test" } }),
         "skills.status": {
           workspaceDir: "/tmp/openclaw-e2e/workspace",
           managedSkillsDir: "/tmp/openclaw-e2e/skills",
@@ -327,7 +324,10 @@ describeControlUiE2e("Control UI composer capability menu", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("sessions.list");
+      await Promise.all([
+        gateway.waitForRequest("sessions.list"),
+        gateway.waitForRequest("config.get"),
+      ]);
       const composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const webSearch = menu.getByRole("menuitemcheckbox", { name: "Web search" });
@@ -342,15 +342,22 @@ describeControlUiE2e("Control UI composer capability menu", () => {
 
       await gateway.resolveDeferred(
         "sessions.list",
-        sessionsList({ mcpToolsDeny: { notion: ["delete_page"] } }),
+        sessionsList({
+          mcpToolsDeny: { notion: ["delete_page"] },
+          webSearch: true,
+        }),
       );
+      await expect.poll(() => webSearch.isDisabled()).toBe(true);
+      await expect.poll(() => webSearch.getAttribute("title")).toBe("Loading…");
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+
+      await gateway.resolveDeferred("config.get", configResponse({}, false));
       await expect.poll(() => webSearch.isDisabled()).toBe(false);
       await webSearch.click();
       await expect
         .poll(() => latestToolOverrides(gateway))
         .toEqual({
           mcpToolsDeny: { notion: ["delete_page"] },
-          webSearch: false,
         });
     } finally {
       await context.close();

@@ -168,10 +168,10 @@ export class ChatComposerCapabilityHost {
     const runtimeConfig = context.runtimeConfig.state.configSnapshot?.runtimeConfig ?? null;
     const access = readGatewayOperatorAccess(context.gateway.snapshot);
     const gatewayAvailable = state.connected && Boolean(state.client);
-    const sessionAvailable = gatewayAvailable && session !== undefined;
+    const capabilitiesReady = gatewayAvailable && session !== undefined && runtimeConfig !== null;
     const mutationBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
-      : !sessionAvailable
+      : !capabilitiesReady
         ? t("common.loading")
         : !access.canWrite
           ? t("chat.composer.menu.readOnlyBlocked")

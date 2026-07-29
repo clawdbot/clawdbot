@@ -5,7 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
-function createContext(configSnapshot: ConfigSnapshot): ApplicationContext {
+function createContext(configSnapshot: ConfigSnapshot | null): ApplicationContext {
   return {
     gateway: { snapshot: { hello: null } },
     navigate: vi.fn(),
@@ -26,16 +26,21 @@ function createState(): ChatPageHost {
 }
 
 describe("ChatComposerCapabilityHost", () => {
-  it("blocks session mutations until the authoritative row has loaded", () => {
+  it("blocks session mutations until the row and runtime config have loaded", () => {
     const host = new ChatComposerCapabilityHost(vi.fn());
-    const context = createContext({ runtimeConfig: {} });
+    const context = createContext(null);
     const state = createState();
+    const session = { key: "main" } as GatewaySessionRow;
 
     expect(host.props(context, state, undefined, "main").mutationBlockedReason).toBe("Loading…");
-    expect(
-      host.props(context, state, { key: "main" } as GatewaySessionRow, "main")
-        .mutationBlockedReason,
-    ).toBeNull();
+    expect(host.props(context, state, session, "main").mutationBlockedReason).toBe("Loading…");
+
+    context.runtimeConfig.state.configSnapshot = {
+      runtimeConfig: { tools: { web: { search: { enabled: false } } } },
+    };
+    const props = host.props(context, state, session, "main");
+    expect(props.mutationBlockedReason).toBeNull();
+    expect(props.webSearchBaseEnabled).toBe(false);
   });
 
   it("derives capability defaults from the active runtime snapshot", () => {
