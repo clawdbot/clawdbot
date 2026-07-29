@@ -2293,7 +2293,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       successfulInstall({
         pluginId: "wecom",
         npmSpec: "@wecom/wecom-openclaw-plugin",
-        version: "2026.4.23",
+        version: "2026.7.2",
         resolution: {
           integrity: "sha512-third-party",
         },
@@ -2305,7 +2305,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         pluginId: "wecom",
         meta: { label: "WeCom" },
         install: {
-          npmSpec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+          npmSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
         },
       },
     ]);
@@ -2322,12 +2322,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
     const installArg = mockCallArg(mocks.installPluginFromNpmSpec);
     expectRecordFields(installArg, {
-      spec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+      spec: "@wecom/wecom-openclaw-plugin@2026.7.2",
       expectedPluginId: "wecom",
     });
     expect(installArg).not.toHaveProperty("trustedSourceLinkedOfficialInstall", true);
     expect(result.changes).toEqual([
-      'Installed missing configured plugin "wecom" from @wecom/wecom-openclaw-plugin@2026.4.23.',
+      'Installed missing configured plugin "wecom" from @wecom/wecom-openclaw-plugin@2026.7.2.',
     ]);
   });
 
