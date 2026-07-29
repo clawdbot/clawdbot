@@ -534,6 +534,14 @@ Query-string tokens are rejected.
 
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
 
+    Hook delivery is bound before the isolated run is scheduled:
+
+    - Omit both `channel` and `to` to run completion-only; the result is surfaced through the hook completion event.
+    - While delivery is enabled, supplying only one of `channel` or `to` fails the request with `400` and schedules no run.
+    - Announce delivery requires a concrete channel; webhook hooks never inherit the main session's `last` channel or recipient.
+    - Setting `deliver: false` keeps the run completion-only and ignores any delivery destination.
+    - Supplying both a concrete `channel` and `to` enables direct announce delivery.
+
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
     Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms.

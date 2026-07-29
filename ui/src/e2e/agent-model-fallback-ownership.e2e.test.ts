@@ -114,7 +114,7 @@ describeControlUiE2e("Control UI agent model fallback ownership", () => {
         )
         .toBe("writer");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/writer/tools");
-      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page.getByRole("tab", { name: "Overview", exact: true }).click();
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe("/settings/agents/writer/overview");

@@ -12,6 +12,7 @@ import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-subscrib
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
+import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type CliToolResult = {
@@ -108,6 +109,9 @@ export function createCliEventHandlers(params: {
     recordToolResult(event);
     params.toolTracking.handleCliToolResult(event);
     if (emitLiveEvents) {
+      const resultContentSource = context.resultContentSourceByToolName?.get(
+        stripOpenClawMcpToolPrefix(event.name),
+      );
       emitAgentEvent({
         runId: runParams.runId,
         stream: "tool",
@@ -117,6 +121,7 @@ export function createCliEventHandlers(params: {
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: sanitizeToolResult(event.result),
+          ...(resultContentSource ? { resultContentSource } : {}),
         },
       });
     }

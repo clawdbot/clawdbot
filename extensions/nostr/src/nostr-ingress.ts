@@ -19,11 +19,6 @@ import {
 import { getNostrRuntime } from "./runtime.js";
 
 const NOSTR_INGRESS_POLL_INTERVAL_MS = 500;
-const NOSTR_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const NOSTR_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const NOSTR_INGRESS_COMPLETED_MAX_ENTRIES = 100_000;
-const NOSTR_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const NOSTR_INGRESS_FAILED_MAX_ENTRIES = 100_000;
 const NOSTR_INGRESS_APPEND_RETRY_MS = [0, 100, 300] as const;
 
 type PreparedNostrAdmission = {
@@ -160,11 +155,8 @@ export function createNostrIngress(options: {
     deliver: (event, lifecycle) => options.deliver(event, lifecycle),
     pollIntervalMs: options.pollIntervalMs ?? NOSTR_INGRESS_POLL_INTERVAL_MS,
     retention: {
-      pruneIntervalMs: NOSTR_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: NOSTR_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: NOSTR_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: NOSTR_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: NOSTR_INGRESS_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 100_000,
+      failedMaxEntries: 100_000,
     },
     drain: {
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,

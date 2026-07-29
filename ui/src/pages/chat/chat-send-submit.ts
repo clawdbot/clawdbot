@@ -303,53 +303,56 @@ export async function handleSendChat(
     if (parsed?.command.executeLocal && !forwardModelCommand) {
       const shouldQueueCommand = shouldQueueLocalSlashCommand(parsed.command.key);
       if (shouldQueueCommand) {
-        if (messageOverride == null) {
-          recordNonTranscriptInputHistory(host, message);
-          host.chatMessage = "";
-          resetChatInputHistoryNavigation(host);
-        }
-        const queued = enqueueChatMessage(
-          host,
-          message,
-          undefined,
-          isChatResetCommand(message),
-          {
-            args: parsed.args,
-            name: parsed.command.key,
-          },
-          resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
-        );
-        if (queued) {
-          queued.sendState = reconnectSafeQueuedSendState(host);
-        }
-        if (!queued) {
-          return;
-        }
-        if (!admitQueuedMessageForSession(host, host.sessionKey, queued)) {
-          removeQueuedMessageWithoutReleasing(host, queued.id);
+        const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
+        await withChatSubmitGuard(host, submitKey, async () => {
           if (messageOverride == null) {
-            host.chatMessage = previousDraft;
-            host.chatAttachments = attachmentsToSend;
+            recordNonTranscriptInputHistory(host, message);
+            host.chatMessage = "";
+            resetChatInputHistoryNavigation(host);
           }
-          setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-          return;
-        }
-        if (host.connected && host.client && !isChatBusy(host)) {
-          const outbox = listStoredChatOutboxes(host).find((candidate) =>
-            candidate.queue.some((entry) => entry.id === queued.id),
+          const queued = enqueueChatMessage(
+            host,
+            message,
+            undefined,
+            isChatResetCommand(message),
+            {
+              args: parsed.args,
+              name: parsed.command.key,
+            },
+            resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
           );
-          if (outbox) {
-            await scheduleStoredChatOutboxDrain(
-              host,
-              outbox,
-              chatOutboxDrainDependencies,
-              queued.id,
-              {
-                routingSessionKey: host.sessionKey,
-              },
-            );
+          if (queued) {
+            queued.sendState = reconnectSafeQueuedSendState(host);
           }
-        }
+          if (!queued) {
+            return;
+          }
+          if (!admitQueuedMessageForSession(host, host.sessionKey, queued)) {
+            removeQueuedMessageWithoutReleasing(host, queued.id);
+            if (messageOverride == null) {
+              host.chatMessage = previousDraft;
+              host.chatAttachments = attachmentsToSend;
+            }
+            setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+            return;
+          }
+          if (host.connected && host.client && !isChatBusy(host)) {
+            const outbox = listStoredChatOutboxes(host).find((candidate) =>
+              candidate.queue.some((entry) => entry.id === queued.id),
+            );
+            if (outbox) {
+              await scheduleStoredChatOutboxDrain(
+                host,
+                outbox,
+                chatOutboxDrainDependencies,
+                queued.id,
+                {
+                  routingSessionKey: host.sessionKey,
+                },
+              );
+            }
+          }
+        });
         return;
       }
       const waitsForPicker = parsed.command.key === "redirect";

@@ -134,7 +134,7 @@ no route-specific URL parameters.
 | Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`           |
 | Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                 |
 | Connection          | `/settings/connection`      | -                         | Shared settings parameters below                 |
-| General settings    | `/settings/general`         | `/config`                 | Shared settings parameters below                 |
+| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language               |
 | Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                 |
 | Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                 |
 | Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                 |
@@ -169,6 +169,10 @@ no route-specific URL parameters.
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
+
+The retired General route and its `/config` alias are replaced once with
+`/settings/appearance?section=__appearance__#settings-language`. The historical
+`#settings-general-model` target instead lands on the Models behavior section.
 
 Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
 with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or

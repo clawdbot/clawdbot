@@ -18,8 +18,6 @@ const LINE_WEBHOOK_DRAIN_INTERVAL_MS = 500;
 const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
 const LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS = 5_000;
-const LINE_WEBHOOK_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
-const LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES = 4096;
 
 type LineWebhookSpoolPayload = {
   version: number;
@@ -258,10 +256,8 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     pollIntervalMs: LINE_WEBHOOK_DRAIN_INTERVAL_MS,
     retention: {
       pruneIntervalMs: 0,
-      completedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
-      completedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
-      failedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
-      failedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
+      completedMaxEntries: 4096,
+      failedMaxEntries: 4096,
     },
     appendRetryDelaysMs: [0],
     // The monitor carries active deliveries across pumps and applies startLimit before each claim.

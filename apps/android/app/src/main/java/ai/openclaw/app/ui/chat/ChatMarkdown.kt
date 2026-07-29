@@ -763,7 +763,7 @@ internal fun parseChatMarkdownBlocks(text: String): List<ChatMarkdownRenderBlock
   var node = document.firstChild
   while (node != null) {
     val current = node
-    if (current is HtmlBlock && DisclosureTokenizer.startsWithCandidateLine(current.literal.orEmpty())) {
+    if (current is HtmlBlock && tokenizer.shouldTokenize(current.literal.orEmpty())) {
       tokens += tokenizer.tokenize(current.literal.orEmpty())
     } else {
       tokens += DisclosureToken.Block(ChatMarkdownRenderBlock.CommonMark(current))
@@ -869,6 +869,8 @@ private class DisclosureTokenizer {
   }
 
   private val balanceStack = mutableListOf<BalanceFrame>()
+
+  fun shouldTokenize(source: String): Boolean = balanceStack.isNotEmpty() || startsWithCandidateLine(source)
 
   fun tokenize(source: String): List<DisclosureToken> {
     val lines = source.split('\n')

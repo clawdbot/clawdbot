@@ -3685,48 +3685,10 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.agent-tabs {
+.agent-file-tabs {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--border);
-}
-
-.agent-tab {
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  background: transparent;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.agent-tab:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.agent-tab.active {
-  background: var(--accent-subtle);
-  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
-  color: var(--accent);
-}
-
-.agent-tab-count {
-  margin-left: 4px;
-  font-size: 12px; /* was 10px */
-  font-weight: 700;
-  opacity: 0.7;
-}
-
-.agent-tab--missing {
-  opacity: 0.5;
+  align-items: flex-end;
+  gap: var(--space-2);
 }
 
 .agent-tab-add {
@@ -3742,15 +3704,6 @@ td.data-table-key-col {
 .agent-tab-add:hover {
   color: var(--text);
   border-color: var(--accent);
-}
-
-.agent-tab-badge {
-  margin-left: 4px;
-  font-size: 12px; /* was 9px */
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--warn);
-  opacity: 0.8;
 }
 
 .agent-identity-editor {

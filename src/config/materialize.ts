@@ -25,25 +25,25 @@ type MaterializationProfile = {
   normalizePaths: boolean;
 };
 
+// Snapshot and load must materialize identically: prepared-runtime exact-config
+// resolution compares the startup-published (snapshot) config against the reply-path
+// (load) config, and any divergence permanently fails that resolve for affected configs.
+const FULL_MATERIALIZATION_PROFILE: MaterializationProfile = {
+  includeCompactionDefaults: true,
+  includeContextPruningDefaults: true,
+  includeLoggingDefaults: true,
+  normalizePaths: true,
+};
+
 const MATERIALIZATION_PROFILES: Record<ConfigMaterializationMode, MaterializationProfile> = {
-  load: {
-    includeCompactionDefaults: true,
-    includeContextPruningDefaults: true,
-    includeLoggingDefaults: true,
-    normalizePaths: true,
-  },
+  load: FULL_MATERIALIZATION_PROFILE,
   missing: {
     includeCompactionDefaults: true,
     includeContextPruningDefaults: true,
     includeLoggingDefaults: false,
     normalizePaths: false,
   },
-  snapshot: {
-    includeCompactionDefaults: false,
-    includeContextPruningDefaults: false,
-    includeLoggingDefaults: true,
-    normalizePaths: true,
-  },
+  snapshot: FULL_MATERIALIZATION_PROFILE,
 };
 
 export function asResolvedSourceConfig(config: OpenClawConfig): ResolvedSourceConfig {

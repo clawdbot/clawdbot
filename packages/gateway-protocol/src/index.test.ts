@@ -19,9 +19,11 @@ import {
   validateSessionsCompanionAskParams,
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
+  validateSessionsCreateParams,
   validateSessionsObserverVisibilityParams,
   validateSessionsPatchParams,
   validateSessionsSearchParams,
+  validateSessionsSendParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
@@ -923,6 +925,43 @@ describe("validateChatSendParams", () => {
       expect(validateChatSendParams({ ...base, queueMode })).toBe(true);
     }
     expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
+  });
+
+  it("accepts typed attachment metadata and legacy extra fields", () => {
+    const attachments = [
+      {
+        type: "audio",
+        mimeType: "audio/mpeg",
+        fileName: "theme.mp3",
+        content: "YXVkaW8=",
+        sizeBytes: 5,
+        durationMs: 1_250,
+        width: 0,
+        height: 0,
+        legacyPayload: { source: "older-client" },
+      },
+      { legacyBlob: { opaque: true } },
+    ];
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-attachments",
+      attachments,
+    };
+
+    expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateSessionsCreateParams({ key: "agent:main:main", message: "hello", attachments }),
+    ).toBe(true);
+    expect(
+      validateSessionsSendParams({ key: "agent:main:main", message: "hello", attachments }),
+    ).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        attachments: [{ type: "audio", content: new Uint8Array([1, 2, 3]) }],
+      }),
+    ).toBe(true);
   });
 });
 

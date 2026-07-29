@@ -5,10 +5,7 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import {
-  agentToolResultMiddlewareRegistrationCoversTool,
-  normalizeAgentToolResultMiddlewareRuntimes,
-} from "./agent-tool-result-middleware.js";
+import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
@@ -26,7 +23,6 @@ import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-provider
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
-import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type {
   AnyAgentTool,
   AgentHarness,
@@ -240,34 +236,14 @@ export function createCapturedPluginRegistration(params?: {
           options?: AgentToolResultMiddlewareOptions,
         ) {
           const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
-          const matcher = normalizePluginToolMatcher(options?.matcher);
-          const scopedHandler: AgentToolResultMiddleware = (event, ctx) => {
-            if (
-              !agentToolResultMiddlewareRegistrationCoversTool(
-                registration,
-                ctx.runtime,
-                event.toolName,
-              )
-            ) {
-              return;
-            }
-            return handler(event, ctx);
-          };
-          const registration: PluginAgentToolResultMiddlewareRegistration = {
+          agentToolResultMiddlewares.push({
             pluginId,
             pluginName,
             rawHandler: handler,
-            handler: scopedHandler,
+            handler,
             runtimes,
-            scopes: [
-              {
-                runtimes,
-                ...(matcher ? { matcher } : {}),
-              },
-            ],
             source: pluginSource,
-          };
-          agentToolResultMiddlewares.push(registration);
+          });
         },
         registerCliBackend(backend: CliBackendPlugin) {
           cliBackends.push(backend);
@@ -321,8 +297,7 @@ export function createCapturedPluginRegistration(params?: {
           sessionExtensions.push(extension);
         },
         registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
-          const matcher = normalizePluginToolMatcher(policy.matcher);
-          trustedToolPolicies.push({ ...policy, ...(matcher ? { matcher } : {}) });
+          trustedToolPolicies.push(policy);
         },
         registerToolMetadata(metadata: PluginToolMetadataRegistration) {
           toolMetadata.push(metadata);

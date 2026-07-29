@@ -14,6 +14,7 @@ import {
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
+  parkCurrentLaunchAgentForMaintenance,
   parseLaunchctlPrint,
   parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
@@ -56,6 +57,9 @@ const state = vi.hoisted(() => ({
   cleanupProtectedPids: [] as Array<number | undefined>,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
+  scheduleDetachedLaunchdMaintenancePark: vi.fn<
+    (_params: unknown) => { ok: true; value: Promise<boolean> } | { ok: false; error: string }
+  >(() => ({ ok: true, value: Promise.resolve(true) })),
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
     (_params: unknown) => { ok: true; value: Promise<boolean> } | { ok: false; error: string }
   >(() => ({ ok: true, value: Promise.resolve(true) })),
@@ -327,6 +331,8 @@ vi.mock("./exec-file.js", () => ({
 }));
 
 vi.mock("./launchd-restart-handoff.js", () => ({
+  scheduleDetachedLaunchdMaintenancePark: (params: unknown) =>
+    launchdRestartHandoffState.scheduleDetachedLaunchdMaintenancePark(params),
   scheduleDetachedLaunchdRestartHandoff: (params: unknown) =>
     launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff(params),
 }));
@@ -454,6 +460,11 @@ beforeEach(() => {
   formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
+    ok: true,
+    value: Promise.resolve(true),
+  });
+  launchdRestartHandoffState.scheduleDetachedLaunchdMaintenancePark.mockReset();
+  launchdRestartHandoffState.scheduleDetachedLaunchdMaintenancePark.mockReturnValue({
     ok: true,
     value: Promise.resolve(true),
   });
@@ -1585,6 +1596,76 @@ describe("launchd install", () => {
     );
 
     expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("disables the current LaunchAgent before scheduling maintenance bootout", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.disableCode = 0;
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
+      },
+      async () => {
+        await expect(parkCurrentLaunchAgentForMaintenance({ env })).resolves.toBe(true);
+      },
+    );
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    expect(state.launchctlCalls).toEqual([["disable", `${domain}/ai.openclaw.gateway`]]);
+    expect(launchdRestartHandoffState.scheduleDetachedLaunchdMaintenancePark).toHaveBeenCalledWith({
+      env,
+      waitForPid: process.pid,
+    });
+  });
+
+  it("does not park an external LaunchAgent", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+      },
+      async () => {
+        await expect(parkCurrentLaunchAgentForMaintenance({ env })).resolves.toBe(false);
+      },
+    );
+
+    expect(state.launchctlCalls).toEqual([]);
+    expect(
+      launchdRestartHandoffState.scheduleDetachedLaunchdMaintenancePark,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("re-enables the LaunchAgent when the maintenance handoff cannot spawn", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.disableCode = 0;
+    launchdRestartHandoffState.scheduleDetachedLaunchdMaintenancePark.mockReturnValueOnce({
+      ok: true,
+      value: Promise.resolve(false),
+    });
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
+      },
+      async () => {
+        await expect(parkCurrentLaunchAgentForMaintenance({ env })).rejects.toThrow(
+          "helper failed to spawn; restored launchd enable state",
+        );
+      },
+    );
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    expect(state.launchctlCalls).toEqual([
+      ["disable", `${domain}/ai.openclaw.gateway`],
+      ["enable", `${domain}/ai.openclaw.gateway`],
+    ]);
   });
 
   it("refuses in-band LaunchAgent stop when XPC_SERVICE_NAME is inherited", async () => {

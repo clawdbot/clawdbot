@@ -11,12 +11,6 @@ export type PairingQrExpiryNotice = {
   title: string;
   reason: string;
 };
-type PairingQrExpiryRefreshTimer = {
-  expiresAtMs: number;
-  onRequestUpdate: () => void;
-  timer: ReturnType<typeof setTimeout>;
-};
-const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 
 export type ImageBlock = {
   url: string;
@@ -48,7 +42,7 @@ export type RenderableImageBlock = ImageBlock & {
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 
-type ChatMediaResourceKind = "assistant-attachment" | "managed-image";
+type ChatMediaResourceKind = "assistant-attachment" | "managed-image" | "pairing-qr";
 
 export type ChatMediaResource<Value> = {
   kind: ChatMediaResourceKind;
@@ -530,41 +524,30 @@ function resolveNearestFuturePairingQrExpiresAtMs(
   return nearestExpiresAtMs;
 }
 
-function clearPairingQrExpiryRefreshTimer(messageKey: string) {
-  const existing = pairingQrExpiryRefreshTimers.get(messageKey);
-  if (!existing) {
-    return;
-  }
-  clearTimeout(existing.timer);
-  pairingQrExpiryRefreshTimers.delete(messageKey);
-}
-
 export function schedulePairingQrExpiryRefresh(
   messageKey: string,
   message: unknown,
   onRequestUpdate: (() => void) | undefined,
 ) {
-  const nowMs = Date.now();
-  const expiresAtMs = resolveNearestFuturePairingQrExpiresAtMs(message, nowMs);
-  const existing = pairingQrExpiryRefreshTimers.get(messageKey);
-  if (!expiresAtMs || !onRequestUpdate) {
-    if (existing) {
-      clearPairingQrExpiryRefreshTimer(messageKey);
+  if (!onRequestUpdate) {
+    return;
+  }
+  const refreshAt = resolveNearestFuturePairingQrExpiresAtMs(message);
+  if (refreshAt === undefined) {
+    const subscriber = chatMediaSubscribers.get(onRequestUpdate);
+    const resourceKey = chatMediaResourceKey("pairing-qr", messageKey);
+    const resource = subscriber?.resources.get(resourceKey);
+    if (subscriber && resource) {
+      subscriber.resources.delete(resourceKey);
+      detachChatMediaResourceSubscriber(resource, onRequestUpdate);
+      pruneChatMediaSubscriber(onRequestUpdate, subscriber);
     }
     return;
   }
-  if (existing?.expiresAtMs === expiresAtMs && existing.onRequestUpdate === onRequestUpdate) {
-    return;
-  }
-  clearPairingQrExpiryRefreshTimer(messageKey);
-  const timer = setTimeout(
-    () => {
-      pairingQrExpiryRefreshTimers.delete(messageKey);
-      onRequestUpdate();
-    },
-    Math.max(0, expiresAtMs - nowMs),
+  const resource = observeChatMediaResource<void>("pairing-qr", messageKey, onRequestUpdate);
+  scheduleChatMediaResourceRefresh(resource, refreshAt, () =>
+    notifyChatMediaResourceSubscribers(resource),
   );
-  pairingQrExpiryRefreshTimers.set(messageKey, { expiresAtMs, onRequestUpdate, timer });
 }
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {

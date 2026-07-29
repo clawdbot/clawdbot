@@ -42,6 +42,7 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
+import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import { rememberCommittedSqliteTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
 import {
   advanceTranscriptMutationAtInTransaction,
@@ -51,8 +52,8 @@ import {
 import {
   appendTranscriptEventInTransaction,
   ensureTranscriptHeader,
-  readActiveTranscriptAppendParentId,
   readMessageIdempotencyKey,
+  readTranscriptIdentityByEventId,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
@@ -656,6 +657,16 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage> & { messageAlreadyRedacted?: boolean },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
+  // Idempotent replays return the stored row with its persisted parent so callers
+  // adopt the durable tree instead of re-deriving one from a stale snapshot.
+  const existingAppendResult = (found: { message: unknown; messageId: string }) => ({
+    appended: false as const,
+    effectiveParentId:
+      readTranscriptIdentityByEventId(database, resolved.sessionId, found.messageId)?.parentId ??
+      null,
+    message: found.message as TMessage,
+    messageId: found.messageId,
+  });
   const idempotencyKey = readMessageIdempotencyKey(options.message);
   if (idempotencyKey && options.idempotencyLookup !== "caller-checked") {
     const existing = readTranscriptMessageByScopedIdempotencyKey(
@@ -665,11 +676,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
-      };
+      return existingAppendResult(existing);
     }
   }
 
@@ -686,10 +693,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
     ? prepared
     : redactTranscriptMessageForStorage(prepared, options);
   ensureTranscriptHeader(database, resolved, options.cwd, now);
-  const parentId =
-    options.parentId === undefined
-      ? readActiveTranscriptAppendParentId(database, resolved.sessionId)
-      : options.parentId;
+  const parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
   const event = {
     type: "message",
     id: messageId,
@@ -710,21 +714,13 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
-      };
+      return existingAppendResult(existing);
     }
   }
   if (!appended) {
     const existing = readTranscriptMessageByEventId(database, resolved, messageId);
     if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
-      };
+      return existingAppendResult(existing);
     }
   }
   if (!appended) {
@@ -732,6 +728,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
   }
   return {
     appended: true,
+    effectiveParentId: parentId ?? null,
     message: finalMessage,
     messageId,
   };

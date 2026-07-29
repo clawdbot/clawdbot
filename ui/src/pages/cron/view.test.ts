@@ -383,10 +383,8 @@ describe("cron view list pane", () => {
     expect(tasks.querySelector(".cron-table")).not.toBeNull();
     expect(tasks.querySelector(".cron-activity")).toBeNull();
     tasks
-      .querySelector("wa-tab-group")
-      ?.dispatchEvent(
-        new CustomEvent("wa-tab-show", { detail: { name: "activity" }, bubbles: true }),
-      );
+      .querySelector('[data-test-id="cron-list-tab-activity"]')
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     expect(onListTabChange).toHaveBeenCalledWith("activity");
 
     const activity = renderView({ listTab: "activity" });
@@ -394,20 +392,18 @@ describe("cron view list pane", () => {
     expect(activity.querySelector(".cron-activity")).not.toBeNull();
   });
 
-  it("configures manual Web Awesome list tabs", () => {
+  it("renders shared manual list tabs with active state and selection", () => {
     const onListTabChange = vi.fn();
     const container = renderView({ onListTabChange });
     document.body.append(container);
-    const group = getElement(container, ".cron-toolbar > wa-tab-group", HTMLElement);
+    const group = getElement(container, ".cron-list-hub-tabs", HTMLElement);
     const tasks = getElement(container, '[data-test-id="cron-list-tab-tasks"]', HTMLElement);
     const activity = getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement);
 
     expect(group.getAttribute("activation")).toBe("manual");
-    expect((tasks as HTMLElement & { active: boolean }).active).toBe(true);
-    expect((activity as HTMLElement & { active: boolean }).active).toBe(false);
-    group.dispatchEvent(
-      new CustomEvent("wa-tab-show", { detail: { name: "activity" }, bubbles: true }),
-    );
+    expect(tasks.getAttribute("aria-selected")).toBe("true");
+    expect(activity.getAttribute("aria-selected")).toBe("false");
+    activity.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
 
     expect(onListTabChange).toHaveBeenCalledWith("activity");
     expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
@@ -983,12 +979,14 @@ describe("cron view editor", () => {
     }
     expect(onRemove).toHaveBeenCalledWith(job);
 
+    expect(
+      container
+        .querySelector('[data-test-id="cron-detail-tab-settings"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
     container
       .querySelector('[data-test-id="cron-detail-tab-history"]')
-      ?.closest("wa-tab-group")
-      ?.dispatchEvent(
-        new CustomEvent("wa-tab-show", { detail: { name: "history" }, bubbles: true }),
-      );
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     expect(onDetailTabChange).toHaveBeenCalledWith("history");
   });
 

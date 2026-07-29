@@ -99,7 +99,7 @@ describe("normalizeInitialApplicationLocation", () => {
 
   it("does not wait for gateway defaults on an explicit startup route", async () => {
     const subscribe = vi.fn(() => () => undefined);
-    const location = { pathname: "/settings/general", search: "", hash: "" };
+    const location = { pathname: "/settings/appearance", search: "", hash: "" };
 
     await expect(
       resolveInitialApplicationLocation({

@@ -3,6 +3,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { VERSION } from "../version.js";
@@ -180,6 +181,45 @@ function primeBravePluginRecordUpdate(config: OpenClawConfig) {
     outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
   });
   return { previousRecords, nextRecords };
+}
+
+async function expectSkippedClawHubPluginUpdate(params: {
+  code: ClawHubTrustErrorCode;
+  message: string;
+  expectedLog: string;
+  spec?: string;
+}): Promise<void> {
+  const config = {
+    plugins: {
+      installs: {
+        demo: {
+          source: "clawhub",
+          spec: params.spec ?? "clawhub:@openclaw/plugin-demo",
+          clawhubPackage: "@openclaw/plugin-demo",
+        },
+      },
+    },
+  } as OpenClawConfig;
+  loadConfig.mockReturnValue(config);
+  setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+  updateNpmInstalledPlugins.mockResolvedValue({
+    outcomes: [
+      {
+        pluginId: "demo",
+        status: "skipped",
+        code: params.code,
+        message: params.message,
+      },
+    ],
+    changed: false,
+    config,
+  });
+  updateNpmInstalledHookPacks.mockResolvedValue({ outcomes: [], changed: false, config });
+
+  await expect(runPluginsCommand(["plugins", "update", "demo"])).rejects.toThrow("__exit__:1");
+
+  expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+  expect(runtimeLogs.at(-1)).toContain(params.expectedLog);
 }
 
 describe("plugins cli update", () => {
@@ -1363,120 +1403,31 @@ describe("plugins cli update", () => {
   });
 
   it("exits non-zero when a ClawHub update is skipped for missing risk acknowledgement", async () => {
-    const cfg = {
-      plugins: {
-        installs: {
-          demo: {
-            source: "clawhub",
-            spec: "clawhub:@openclaw/plugin-demo@1.0.0",
-            clawhubPackage: "@openclaw/plugin-demo",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    loadConfig.mockReturnValue(cfg);
-    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "skipped",
-          code: CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED,
-          message:
-            "Skipped demo ClawHub update: Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning. Existing installed plugin left unchanged.",
-        },
-      ],
-      changed: false,
-      config: cfg,
+    await expectSkippedClawHubPluginUpdate({
+      code: CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED,
+      spec: "clawhub:@openclaw/plugin-demo@1.0.0",
+      message:
+        "Skipped demo ClawHub update: Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning. Existing installed plugin left unchanged.",
+      expectedLog: "--acknowledge-clawhub-risk",
     });
-    updateNpmInstalledHookPacks.mockResolvedValue({
-      outcomes: [],
-      changed: false,
-      config: cfg,
-    });
-
-    await expect(runPluginsCommand(["plugins", "update", "demo"])).rejects.toThrow("__exit__:1");
-
-    expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-    expect(runtimeLogs.at(-1)).toContain("--acknowledge-clawhub-risk");
   });
 
   it("exits non-zero when a ClawHub update is skipped because the target release is blocked", async () => {
-    const cfg = {
-      plugins: {
-        installs: {
-          demo: {
-            source: "clawhub",
-            spec: "clawhub:@openclaw/plugin-demo",
-            clawhubPackage: "@openclaw/plugin-demo",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    loadConfig.mockReturnValue(cfg);
-    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "skipped",
-          code: "clawhub_download_blocked",
-          message:
-            "Skipped demo ClawHub update: ClawHub blocked this release; update was not started. Existing installed plugin left unchanged.",
-        },
-      ],
-      changed: false,
-      config: cfg,
+    await expectSkippedClawHubPluginUpdate({
+      code: "clawhub_download_blocked",
+      message:
+        "Skipped demo ClawHub update: ClawHub blocked this release; update was not started. Existing installed plugin left unchanged.",
+      expectedLog: "ClawHub blocked this release",
     });
-    updateNpmInstalledHookPacks.mockResolvedValue({
-      outcomes: [],
-      changed: false,
-      config: cfg,
-    });
-
-    await expect(runPluginsCommand(["plugins", "update", "demo"])).rejects.toThrow("__exit__:1");
-
-    expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-    expect(runtimeLogs.at(-1)).toContain("ClawHub blocked this release");
   });
 
   it("exits non-zero when a ClawHub update is skipped because security data is unavailable", async () => {
-    const cfg = {
-      plugins: {
-        installs: {
-          demo: {
-            source: "clawhub",
-            spec: "clawhub:@openclaw/plugin-demo",
-            clawhubPackage: "@openclaw/plugin-demo",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    loadConfig.mockReturnValue(cfg);
-    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "skipped",
-          code: "clawhub_security_unavailable",
-          message:
-            'Skipped demo ClawHub update: ClawHub security data for "@openclaw/plugin-demo@1.1.0" is unavailable, so OpenClaw left the existing installed plugin unchanged. Try again later or choose a different version.',
-        },
-      ],
-      changed: false,
-      config: cfg,
+    await expectSkippedClawHubPluginUpdate({
+      code: "clawhub_security_unavailable",
+      message:
+        'Skipped demo ClawHub update: ClawHub security data for "@openclaw/plugin-demo@1.1.0" is unavailable, so OpenClaw left the existing installed plugin unchanged. Try again later or choose a different version.',
+      expectedLog: "security data",
     });
-    updateNpmInstalledHookPacks.mockResolvedValue({
-      outcomes: [],
-      changed: false,
-      config: cfg,
-    });
-
-    await expect(runPluginsCommand(["plugins", "update", "demo"])).rejects.toThrow("__exit__:1");
-
-    expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-    expect(runtimeLogs.at(-1)).toContain("security data");
   });
 
   it("exits non-zero when a hook pack update reports an error", async () => {

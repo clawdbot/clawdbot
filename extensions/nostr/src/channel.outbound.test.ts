@@ -126,6 +126,52 @@ describe("nostr outbound cfg threading", () => {
     expect(sanitizeText({ text, payload: { text } })).toBe(expected);
   });
 
+  it.each([
+    {
+      name: "preserves a short reply as one encrypted message",
+      text: "Hello from Nostr.",
+      expectedChunkCount: 1,
+      joinWith: "",
+    },
+    {
+      name: "splits long replies at word boundaries",
+      text: `${"word ".repeat(1_200)}final`,
+      expectedChunkCount: 2,
+      joinWith: " ",
+    },
+    {
+      name: "preserves newline-delimited reply order",
+      text: `${"line\n".repeat(1_200)}final`,
+      expectedChunkCount: 2,
+      joinWith: "\n",
+    },
+    {
+      name: "hard-splits an uninterrupted oversized reply",
+      text: "x".repeat(8_001),
+      expectedChunkCount: 3,
+      joinWith: "",
+    },
+    {
+      name: "preserves Unicode when an odd prefix shifts the chunk boundary",
+      text: `a${"😀".repeat(2_500)}`,
+      expectedChunkCount: 2,
+      joinWith: "",
+    },
+  ])("$name", ({ text, expectedChunkCount, joinWith }) => {
+    const outbound = nostrPlugin.outbound;
+    const textChunkLimit = outbound?.textChunkLimit;
+    expect(textChunkLimit).toBe(4_000);
+    expect(outbound?.chunker).toBeTypeOf("function");
+    if (!outbound?.chunker || textChunkLimit === undefined) {
+      throw new Error("Expected Nostr outbound text chunking");
+    }
+
+    const chunks = outbound.chunker(text, textChunkLimit);
+    expect(chunks).toHaveLength(expectedChunkCount);
+    expect(chunks.every((chunk) => chunk.length <= textChunkLimit)).toBe(true);
+    expect(chunks.join(joinWith)).toBe(text);
+  });
+
   it("converts tables before projecting markdown to Nostr plain text", async () => {
     const { resolveMarkdownTableMode, convertMarkdownTables } = installOutboundRuntime(
       vi.fn((text: string) => (text === "***" ? text : "**Table:** [docs](https://example.com)")),

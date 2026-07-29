@@ -29,7 +29,10 @@ import {
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
-import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
+import {
+  scheduleDetachedLaunchdMaintenancePark,
+  scheduleDetachedLaunchdRestartHandoff,
+} from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -1092,6 +1095,50 @@ export async function stopLaunchAgent({
 
   await assertGatewayPortReleasedAfterStop(serviceEnv);
   stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
+}
+
+export async function parkCurrentLaunchAgentForMaintenance(
+  params: {
+    env?: GatewayServiceEnv;
+  } = {},
+): Promise<boolean> {
+  const serviceEnv = params.env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  if (
+    !isCurrentProcessLaunchdServiceLabel(label, process.env, {
+      allowConfiguredLabelFallback: false,
+    })
+  ) {
+    return false;
+  }
+  const serviceTarget = `${domain}/${label}`;
+  // Disable before exit so KeepAlive cannot spawn a replacement before the
+  // detached handoff can boot the current job out of launchd.
+  const disable = await execLaunchctl(["disable", serviceTarget]);
+  if (disable.code !== 0) {
+    throw new Error(
+      `launchctl disable failed while parking ${serviceTarget}: ${formatLaunchctlResultDetail(disable)}`,
+    );
+  }
+  const handoff = scheduleDetachedLaunchdMaintenancePark({
+    env: serviceEnv,
+    waitForPid: process.pid,
+  });
+  const handoffError = !handoff.ok
+    ? handoff.error
+    : (await handoff.value)
+      ? undefined
+      : "helper failed to spawn";
+  if (handoffError) {
+    const rollback = await execLaunchctl(["enable", serviceTarget]);
+    const rollbackDetail =
+      rollback.code === 0
+        ? "restored launchd enable state"
+        : `launchctl enable rollback failed: ${formatLaunchctlResultDetail(rollback)}`;
+    throw new Error(`launchd maintenance park handoff failed: ${handoffError}; ${rollbackDetail}`);
+  }
+  return true;
 }
 
 async function writeLaunchAgentPlist({

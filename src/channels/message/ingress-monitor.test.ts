@@ -3,6 +3,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { sleep } from "../../utils/sleep.js";
 import {
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
   createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
@@ -46,6 +47,15 @@ function createMonitor(
     | {
         admissionMode?: "durable-after-stop";
         deferredClaims?: "wait-on-stop" | "settle-on-abort" | "manual";
+        retention?:
+          | "standard"
+          | Partial<{
+              pruneIntervalMs: number;
+              completedTtlMs: number;
+              completedMaxEntries: number;
+              failedTtlMs: number;
+              failedMaxEntries: number;
+            }>;
         waitForDeliveryIdleBeforeRepump?: boolean;
         waitForDeliveryIdleOnStop?: boolean;
       },
@@ -113,6 +123,29 @@ describe("channel ingress monitor", () => {
       reason: "invalid-event",
       message: "invalid",
     });
+  });
+
+  it("applies standard retention with explicit per-channel overrides", async () => {
+    for (const [retention, completedMaxEntries] of [
+      ["standard", 20_000],
+      [{ completedMaxEntries: 1_000 }, 1_000],
+    ] as const) {
+      await withQueue(async (queue) => {
+        const prune = vi.spyOn(queue, "prune");
+        const monitor = createMonitor(queue, vi.fn(), { retention });
+        monitor.start();
+        await monitor.waitForIdle();
+
+        expect(prune).toHaveBeenCalledWith({
+          completedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.completedTtlMs,
+          completedMaxEntries,
+          failedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedTtlMs,
+          failedMaxEntries: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedMaxEntries,
+          now: expect.any(Number),
+        });
+        await monitor.stop();
+      });
+    }
   });
 
   it("adopts terminal no-dispatch events", async () => {

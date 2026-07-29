@@ -1,16 +1,12 @@
 import path from "node:path";
-import {
-  normalizeStringEntries,
-  uniqueValues,
-} from "@openclaw/normalization-core/string-normalization";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
-  agentToolResultMiddlewareRegistrationCoversTool,
-  appendAgentToolResultMiddlewareScope,
   normalizeAgentToolResultMiddlewareRuntimeIds,
   normalizeAgentToolResultMiddlewareRuntimes,
 } from "./agent-tool-result-middleware.js";
@@ -26,16 +22,12 @@ import {
   type PluginRegistryState,
   type PluginTypedHookPolicy,
 } from "./registry-state.js";
-import type {
-  PluginAgentToolResultMiddlewareRegistration,
-  PluginRecord,
-} from "./registry-types.js";
+import type { PluginRecord } from "./registry-types.js";
 import {
   findUndeclaredPluginToolNames,
   normalizePluginToolContractNames,
   normalizePluginToolNames,
 } from "./tool-contracts.js";
-import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
   DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
@@ -187,7 +179,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       return;
     }
     const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
-    const matcher = normalizePluginToolMatcher(options?.matcher);
     if (runtimes.length === 0) {
       pushDiagnostic({
         level: "error",
@@ -223,16 +214,11 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      appendAgentToolResultMiddlewareScope(existing, { runtimes, matcher });
+      existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
       return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
-      if (
-        !agentToolResultMiddlewareRegistrationCoversTool(registration, ctx.runtime, event.toolName)
-      ) {
-        return;
-      }
       try {
         // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
         return await withTimeout(
@@ -247,17 +233,15 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         throw error;
       }
     };
-    const registration: PluginAgentToolResultMiddlewareRegistration = {
+    registry.agentToolResultMiddlewares.push({
       pluginId: record.id,
       pluginName: record.name,
       rawHandler: handler,
       handler: safeHandler,
       runtimes,
-      scopes: [{ runtimes, ...(matcher ? { matcher } : {}) }],
       source: record.source,
       rootDir: record.rootDir,
-    };
-    registry.agentToolResultMiddlewares.push(registration);
+    });
   };
 
   const registerTool = (
@@ -479,29 +463,12 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       effectiveHookName === "before_agent_reply"
         ? normalizeEligibleTriggers(opts?.eligibleTriggers)
         : undefined;
-    const matcher =
-      effectiveHookName === "before_tool_call" || effectiveHookName === "after_tool_call"
-        ? normalizePluginToolMatcher(opts?.matcher)
-        : undefined;
-    if (
-      opts?.matcher &&
-      effectiveHookName !== "before_tool_call" &&
-      effectiveHookName !== "after_tool_call"
-    ) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${effectiveHookName}" ignores tool matcher`,
-      });
-    }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
       ...(opts?.registrationId ? { registrationId: opts.registrationId } : {}),
       hookName: effectiveHookName,
       handler: effectiveHandler,
-      ...(matcher ? { matcher } : {}),
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),

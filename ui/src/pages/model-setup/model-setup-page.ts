@@ -8,9 +8,10 @@ import type {
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -33,6 +34,8 @@ import {
 import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 import type { ModelSetupWizardStartMethod } from "./wizard-runner.ts";
+
+const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
@@ -268,6 +271,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     return new Set(
       [
         ...result.candidates,
+        ...(result.unavailableCandidates ?? []),
         ...result.manualProviders,
         ...(result.authOptions ?? []),
         ...(result.recommendedInstalls ?? []),
@@ -461,6 +465,24 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     );
   }
 
+  private selectManualProvider(providerId: string): void {
+    if (providerId !== this.manualProviderId) {
+      this.manualApiKey = "";
+    }
+    this.manualProviderId = providerId;
+    this.manualError = null;
+  }
+
+  private async useManualProvider(providerId: string): Promise<void> {
+    this.selectManualProvider(providerId);
+    await this.updateComplete;
+    const input = this.renderRoot.querySelector<HTMLInputElement>(
+      '.model-setup__manual input[type="password"]',
+    );
+    input?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    input?.focus();
+  }
+
   private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
     const result = await this.detect();
     if (!result) {
@@ -531,10 +553,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.wizardMode = "prepare";
         void this.wizard.start(option.id, "openclaw.setup.prepare.start");
       },
-      onManualProviderChange: (providerId) => {
-        this.manualProviderId = providerId;
-        this.manualError = null;
-      },
+      onManualProviderChange: (providerId) => this.selectManualProvider(providerId),
+      onUseManualProvider: (providerId) => void this.useManualProvider(providerId),
       onManualApiKeyChange: (apiKey) => {
         this.manualApiKey = apiKey;
         this.manualError = null;
@@ -556,7 +576,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     });
     return html`
       <section class="content-header">
-        <div class="page-title">${titleForRoute("model-setup")}</div>
+        <div>
+          <div class="page-title">${titleForRoute("model-setup")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("model-setup")}
+            ${renderDocsLink(MODEL_SETUP_DOCS_URL, t("common.learnMore"))}
+          </div>
+        </div>
       </section>
       ${renderSettingsWorkspace(body)}
     `;

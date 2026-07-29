@@ -58,6 +58,7 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { findOpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -474,7 +475,9 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 }
 
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
-  return isInvalidConfigError(err) ? EXIT_CONFIG_ERROR : 1;
+  return isInvalidConfigError(err) || findOpenClawAgentDatabaseMediaMigrationRequiredError(err)
+    ? EXIT_CONFIG_ERROR
+    : 1;
 }
 
 function normalizeGatewayHealthProbeHost(host: string): string {
@@ -1216,6 +1219,20 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
     if (isInvalidConfigError(err)) {
       throw err;
+    }
+    if (findOpenClawAgentDatabaseMediaMigrationRequiredError(err)) {
+      try {
+        const { parkCurrentLaunchAgentForMaintenance } = await import("../../daemon/launchd.js");
+        if (await parkCurrentLaunchAgentForMaintenance()) {
+          gatewayLog.error(
+            `gateway requires offline media migration; parked the managed LaunchAgent. Run ${formatCliCommand("openclaw doctor --fix")} to repair and restart it.`,
+          );
+        }
+      } catch (parkError) {
+        gatewayLog.error(
+          `failed to park the managed LaunchAgent after migration-required startup: ${formatErrorMessage(parkError)}`,
+        );
+      }
     }
     await maybeWriteGatewayStartupFailureBundle(err);
     defaultRuntime.error(

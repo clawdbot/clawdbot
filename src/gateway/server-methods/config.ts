@@ -1,9 +1,5 @@
 // Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -46,6 +42,7 @@ import {
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
+import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   isRetryableSecretDegradationReason,
@@ -56,7 +53,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
 import { diffConfigPaths } from "../config-diff.js";
-import { createConfigGetResponse } from "../config-get-response.js";
+import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
   formatControlPlaneActor,
@@ -82,14 +79,13 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
-const CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS = 5_000;
 // ui.prefs is the cross-device Control UI preference surface documented in docs/web/control-ui.md.
 // Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
 // every other path keeps strict document CAS.
 const HASHLESS_PATCH_LWW_PATH_PREFIXES = ["ui.prefs"] as const;
 
 let configSchemaResponseCache: {
-  expiresAtMs: number;
+  pluginRegistryVersion: number;
   response: ConfigSchemaResponse;
 } | null = null;
 
@@ -655,6 +651,7 @@ function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapsh
 
 export function clearConfigSchemaResponseCacheForTests() {
   configSchemaResponseCache = null;
+  invalidateConfigGetResponseCache();
 }
 
 export function loadConfigSchemaResponseForTests(): ConfigSchemaResponse {
@@ -749,32 +746,17 @@ function respondConfigPatchNoop(params: {
 }
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
-  const now = asDateTimestampMs(Date.now());
-  const cachedExpiresAt =
-    configSchemaResponseCache === null
-      ? undefined
-      : asDateTimestampMs(configSchemaResponseCache.expiresAtMs);
+  const pluginRegistryVersion = getActivePluginRegistryVersion();
   if (
     configSchemaResponseCache &&
-    now !== undefined &&
-    cachedExpiresAt !== undefined &&
-    cachedExpiresAt > now
+    configSchemaResponseCache.pluginRegistryVersion === pluginRegistryVersion
   ) {
     return configSchemaResponseCache.response;
   }
-  if (configSchemaResponseCache) {
-    configSchemaResponseCache = null;
-  }
 
-  // Plugin schema loading is process-local; short caching avoids repeated UI lookups per render.
+  // Plugin schema metadata is process-stable until config write or registry activation.
   const response = loadGatewayRuntimeConfigSchema();
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS);
-  if (expiresAtMs !== undefined) {
-    configSchemaResponseCache = {
-      expiresAtMs,
-      response,
-    };
-  }
+  configSchemaResponseCache = { pluginRegistryVersion, response };
   return response;
 }
 
@@ -839,13 +821,18 @@ function diffConfigLeafPaths(prev: unknown, next: unknown, prefix = ""): string[
 }
 
 export const configHandlers: GatewayRequestHandlers = {
-  "config.get": async ({ params, respond }) => {
+  "config.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
-    const schema = loadSchemaWithPlugins();
-    respond(true, createConfigGetResponse(snapshot, schema.uiHints), undefined);
+    respond(
+      true,
+      await readConfigGetResponse({
+        getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
+        loadUiHints: () => loadSchemaWithPlugins().uiHints,
+      }),
+      undefined,
+    );
   },
   "config.schema": ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {

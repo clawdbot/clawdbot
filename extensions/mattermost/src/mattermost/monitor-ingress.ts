@@ -18,11 +18,6 @@ import {
 
 const MATTERMOST_INGRESS_PAYLOAD_VERSION = 1;
 const MATTERMOST_INGRESS_POLL_INTERVAL_MS = 1_000;
-const MATTERMOST_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const MATTERMOST_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
 export type MattermostIngressLifecycle = {
   abortSignal: AbortSignal;
@@ -206,13 +201,7 @@ export function createMattermostIngressMonitor(options: {
     pollIntervalMs: options.pollIntervalMs ?? MATTERMOST_INGRESS_POLL_INTERVAL_MS,
     // Preserve Mattermost's existing one-drain-at-a-time delivery cycle.
     waitForDeliveryIdleBeforeRepump: true,
-    retention: {
-      pruneIntervalMs: MATTERMOST_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: MATTERMOST_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: MATTERMOST_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: MATTERMOST_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: MATTERMOST_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    retention: "standard",
     drain: {
       resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
       ...(options.adoptionStallTimeoutMs === undefined

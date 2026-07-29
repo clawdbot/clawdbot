@@ -144,6 +144,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.websiteDataStore = dataStore
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        config.preferences.tabFocusesLinks = true
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         config.userContentController = WKUserContentController()
         let linkMessageHandler = DashboardLinkMessageHandler()
@@ -1006,12 +1007,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return sourceIsLinkBrowser ? .openTab(url) : .openExternal(url)
     }
 
-    func windowWillClose(_: Notification) {
-        self.webView.stopLoading()
-        self.closeLinkBrowser(focusDashboard: false)
-        self.onClosed?()
-    }
-
     private func showLoadFailure(_ error: Error) {
         let nsError = error as NSError
         // A cancelled provisional navigation never commits, so the prior
@@ -1040,6 +1035,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 }
 
 extension DashboardWindowController {
+    func windowWillClose(_: Notification) {
+        self.webView.stopLoading()
+        self.closeLinkBrowser(focusDashboard: false)
+        self.onClosed?()
+    }
+
     func webView(
         _ webView: WKWebView,
         requestMediaCapturePermissionFor origin: WKSecurityOrigin,
@@ -1397,6 +1398,11 @@ extension DashboardWindowController {
             self.linkBrowser._testAllWebViews.contains {
                 $0.configuration.preferences.javaScriptCanOpenWindowsAutomatically
             }
+    }
+
+    var _testAllWebViewsEnableTabNavigation: Bool {
+        self.webView.configuration.preferences.tabFocusesLinks &&
+            self.linkBrowser._testAllWebViews.allSatisfy(\.configuration.preferences.tabFocusesLinks)
     }
 
     var _testLinkBrowserWidth: CGFloat {

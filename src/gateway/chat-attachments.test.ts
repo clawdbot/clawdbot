@@ -164,6 +164,7 @@ describe("persistInboundImagesForTranscript", () => {
           mediaRef: "media://inbound/offloaded",
           id: "offloaded",
           path: "/media/inbound/offloaded.png",
+          kind: "image",
           mimeType: "image/png",
           label: "offloaded.png",
           sizeBytes: 2_100_000,
@@ -172,6 +173,7 @@ describe("persistInboundImagesForTranscript", () => {
           mediaRef: "media://inbound/report",
           id: "report",
           path: "/media/inbound/report.pdf",
+          kind: "document",
           mimeType: "application/pdf",
           label: "report.pdf",
           sizeBytes: 100,
@@ -516,6 +518,39 @@ describe("parseMessageWithAttachments validation errors", () => {
     }
   });
 
+  it.each([
+    {
+      kind: "audio",
+      mimeType: "audio/mpeg",
+      fileName: "voice.mp3",
+      content: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+    },
+    {
+      kind: "video",
+      mimeType: "video/mp4",
+      fileName: "clip.mp4",
+      content: Buffer.from([
+        0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32,
+      ]).toString("base64"),
+    },
+  ])("surfaces structured inbound $kind facts", async ({ kind, mimeType, fileName, content }) => {
+    const parsed = await parseMessageWithAttachments(
+      "play this",
+      [{ type: kind, mimeType, fileName, content, durationMs: 1_500 }],
+      { log: { warn: () => {} } },
+    );
+
+    expect(parsed.offloadedRefs).toEqual([
+      expect.objectContaining({
+        kind,
+        mimeType,
+        label: fileName,
+        durationMs: 1_500,
+        mediaRef: expect.stringMatching(/^media:\/\/inbound\//u),
+      }),
+    ]);
+  });
+
   it("keeps image sniff fallback for generic image attachments", async () => {
     const { parsed, logs } = await parseWithWarnings("see this", [
       pngAttachment({ type: "file", mimeType: "application/octet-stream", fileName: "dot" }),
@@ -543,6 +578,9 @@ describe("parseMessageWithAttachments validation errors", () => {
           path: offloaded.path,
           url: offloaded.mediaRef,
           contentType: "image/png",
+          kind: "image",
+          fileName: "dot.png",
+          sizeBytes: 68,
         },
       ]);
       expect(infos[0]).toMatch(/Offloaded image for text-only model/i);

@@ -33,6 +33,8 @@ import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.gateway.GatewayLoadedImage
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -296,6 +298,7 @@ fun ChatScreen(
   val micCooldown by viewModel.micCooldown.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val talkModeListening by viewModel.talkModeListening.collectAsState()
+  val inlineMediaPlaybackBlocked = messageSpeechState != null || talkModeEnabled || talkModeListening
   val thinkingSupported =
     chatThinkingSupported(
       selection = thinkingLevelSelection,
@@ -743,8 +746,10 @@ fun ChatScreen(
       },
       speechState = messageSpeechState,
       onToggleListen = viewModel::toggleChatMessageSpeech,
+      inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
       resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
       loadImageArtifact = viewModel::loadChatImageArtifact,
+      loadMediaArtifact = viewModel::loadChatMediaArtifact,
       modifier = Modifier.weight(1f),
     )
 
@@ -1263,8 +1268,10 @@ private fun ChatMessageList(
   onForkMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  inlineMediaPlaybackBlocked: Boolean,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
+  loadMediaArtifact: suspend (String, GatewayMediaKind) -> GatewayLoadedMedia?,
   modifier: Modifier = Modifier,
 ) {
   val baseTimeline =
@@ -1338,9 +1345,11 @@ private fun ChatMessageList(
               onForkMessage = onForkMessage,
               speechState = speechState,
               onToggleListen = onToggleListen,
+              inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
               loadImageArtifact = loadImageArtifact,
+              loadMediaArtifact = loadMediaArtifact,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -1382,9 +1391,11 @@ private fun ChatMessageList(
               onForkMessage = onForkMessage,
               speechState = null,
               onToggleListen = onToggleListen,
+              inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
               loadImageArtifact = loadImageArtifact,
+              loadMediaArtifact = loadMediaArtifact,
             )
           ChatTimelineItem.Thinking -> {
             val run = workingRun
@@ -1632,9 +1643,11 @@ private fun ChatBubble(
   onForkMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  inlineMediaPlaybackBlocked: Boolean,
   inlineWidgetResolverReady: Boolean,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
+  loadMediaArtifact: suspend (String, GatewayMediaKind) -> GatewayLoadedMedia?,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -1650,7 +1663,7 @@ private fun ChatBubble(
           visible
         }
         "canvas" -> normalizedRole == "assistant" && part.widget != null
-        else -> part.isAudioAttachment()
+        else -> part.isAudioAttachment() || part.isVideoAttachment()
       }
     }
   val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)
@@ -1716,7 +1729,19 @@ private fun ChatBubble(
             when {
               part.type == "text" && !collapsibleUserText -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
               part.type == "text" -> Unit
-              part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
+              part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
+                ChatAudioPlayerCard(
+                  content = part,
+                  playbackBlocked = inlineMediaPlaybackBlocked,
+                  loadMedia = loadMediaArtifact,
+                )
+              part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
+                ChatVideoPlayerCard(
+                  content = part,
+                  playbackBlocked = inlineMediaPlaybackBlocked,
+                  loadMedia = loadMediaArtifact,
+                )
+              part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
               part.type == "image" ->
                 if (!part.base64.isNullOrBlank()) {
                   ChatBase64Image(
