@@ -163,7 +163,9 @@ harness report those facts; Codex also reports its exact model-iteration count.
 Other CLI-backed runtimes fail closed until they provide the same runtime facts.
 
 Deterministic correction capture and `/learn` do not depend on delayed review and
-continue to work on those runtimes.
+continue to work on those runtimes. In `auto` mode, a runtime that does not report
+actual Workshop availability leaves deterministic captures pending instead of
+applying them.
 
 ## Cost and privacy
 

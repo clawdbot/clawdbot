@@ -42,6 +42,7 @@ type SkillResearchAgentContext = {
   sessionKey?: string;
   trigger?: string;
   workspaceDir?: string;
+  skillWorkshopAvailable?: boolean;
 };
 
 const log = createSubsystemLogger("skills/research");
@@ -429,7 +430,10 @@ export async function runSkillResearchAutoCapture(params: {
         log.info(
           `skill research auto-capture queued workshop proposal ${result.record.target.skillKey}`,
         );
-        if (workshopConfig.autonomous.mode === "auto") {
+        if (
+          workshopConfig.autonomous.mode === "auto" &&
+          params.ctx.skillWorkshopAvailable === true
+        ) {
           await autoApplySkillProposal({
             workspaceDir,
             ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),

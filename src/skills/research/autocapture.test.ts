@@ -70,7 +70,12 @@ describe("skill research auto-capture", () => {
           },
         ],
       },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config: {
         skills: {
           workshop: {
@@ -112,7 +117,12 @@ describe("skill research auto-capture", () => {
           },
         ],
       },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
     });
 
     const proposals = await listSkillProposals({ workspaceDir });
@@ -147,7 +157,12 @@ describe("skill research auto-capture", () => {
           },
         ],
       },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     });
 
@@ -208,6 +223,34 @@ describe("skill research auto-capture", () => {
     await consumeSessionSkillSuggestion({ agentId: "main", sessionKey: SESSION_KEY });
     await runSkillResearchAutoCapture({ event, ctx, config });
     expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
+  });
+
+  it("leaves an auto capture pending when the originating run lacked Workshop access", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+        ],
+      },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: false,
+      },
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals[0]).toMatchObject({
+      status: "pending",
+    });
   });
 
   it.each([
@@ -739,12 +782,22 @@ describe("skill research auto-capture", () => {
 
     await runSkillResearchAutoCapture({
       event: { success: true, messages: [first] },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config,
     });
     await runSkillResearchAutoCapture({
       event: { success: true, messages: [first, second] },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config,
     });
 
@@ -776,12 +829,22 @@ describe("skill research auto-capture", () => {
 
     await runSkillResearchAutoCapture({
       event: { success: true, messages: [first] },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config,
     });
     await runSkillResearchAutoCapture({
       event: { success: true, messages: [first, second] },
-      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      ctx: {
+        workspaceDir,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+        skillWorkshopAvailable: true,
+      },
       config,
     });
 
