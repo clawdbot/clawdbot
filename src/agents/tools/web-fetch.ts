@@ -677,11 +677,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     throw new Error("Invalid URL: must be http or https");
   }
   const headersCacheKey = resolveFetchHeadersCacheKey(params.headers);
-  // Discriminators for the network-reachability inputs that already partitioned
-  // this cache, plus the operator header set. Extraction-shaping config such as
-  // userAgent, readability, and maxResponseBytes is still not discriminated, so a
-  // change there can serve a payload cached under the previous setting. Order is
-  // part of the key format; appending keeps existing entries addressable.
+  // Append the operator header set after the existing cache discriminators so
+  // requests without custom headers keep their current cache key.
   const cacheDiscriminators = [
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
