@@ -191,6 +191,9 @@ class ChatMarkdownTest {
     listOf(
       "<details>\n<summary>X</summary>\n<pre>\n</details>\n</pre>\n</details>" to "</details>",
       "<details>\n<summary>X</summary>\n<!--\n</details>\n-->\n</details>" to "</details>",
+      "<details>\n<summary>X</summary>\n<?pi\n<details>\n?>\n</details>" to "<details>",
+      "<details>\n<summary>X</summary>\n<![CDATA[\n<details>\n]]>\n</details>" to "<details>",
+      "<details>\n<summary>X</summary>\n<!DOCTYPE\n<details>\n</details>" to "<details>",
     ).forEach { (source, literalClose) ->
       val blocks = parseChatMarkdownBlocks(source)
       val disclosure = blocks.single() as ChatMarkdownRenderBlock.Disclosure

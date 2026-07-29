@@ -99,18 +99,32 @@ enum ChatMarkdownBlockSyntax {
     }
 }
 
+/// Disclosure scanning pauses inside CommonMark raw HTML block types 1-5;
+/// their contents stay literal until the matching terminator.
 private enum ChatMarkdownRawHTMLContext {
     case comment
+    case processingInstruction
+    case declaration
+    case cdata
     case element(String)
 
     static func opening(in line: String) -> ChatMarkdownRawHTMLContext? {
-        let trimmed = line.drop(while: \.isWhitespace).lowercased()
+        let trimmed = line.drop(while: \.isWhitespace)
+        let lowercased = trimmed.lowercased()
         if trimmed.hasPrefix("<!--") { return .comment }
+        if trimmed.hasPrefix("<?") { return .processingInstruction }
+        if trimmed.hasPrefix("<![CDATA[") { return .cdata }
+        if trimmed.count > 2,
+           trimmed.hasPrefix("<!"),
+           ("A"..."Z").contains(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)])
+        {
+            return .declaration
+        }
         for tag in ["pre", "script", "style", "textarea"] {
             let prefix = "<\(tag)"
-            guard trimmed.hasPrefix(prefix) else { continue }
-            let boundary = trimmed.index(trimmed.startIndex, offsetBy: prefix.count)
-            if boundary == trimmed.endIndex || trimmed[boundary].isWhitespace || trimmed[boundary] == ">" {
+            guard lowercased.hasPrefix(prefix) else { continue }
+            let boundary = lowercased.index(lowercased.startIndex, offsetBy: prefix.count)
+            if boundary == lowercased.endIndex || lowercased[boundary].isWhitespace || lowercased[boundary] == ">" {
                 return .element(tag)
             }
         }
@@ -121,6 +135,12 @@ private enum ChatMarkdownRawHTMLContext {
         switch self {
         case .comment:
             line.contains("-->")
+        case .processingInstruction:
+            line.contains("?>")
+        case .declaration:
+            line.contains(">")
+        case .cdata:
+            line.contains("]]>")
         case let .element(tag):
             line.lowercased().contains("</\(tag)>")
         }

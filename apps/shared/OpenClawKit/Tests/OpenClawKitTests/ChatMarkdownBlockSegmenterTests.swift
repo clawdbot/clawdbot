@@ -299,6 +299,15 @@ struct ChatMarkdownBlockSegmenterTests {
             (
                 "<details>\n<summary>X</summary>\n<!--\n</details>\n-->\n</details>",
                 "<!--\n</details>\n-->"),
+            (
+                "<details>\n<summary>X</summary>\n<?pi\n<details>\n?>\n</details>",
+                "<?pi\n<details>\n?>"),
+            (
+                "<details>\n<summary>X</summary>\n<![CDATA[\n<details>\n]]>\n</details>",
+                "<![CDATA[\n<details>\n]]>"),
+            (
+                "<details>\n<summary>X</summary>\n<!DOCTYPE\n<details>\n</details>",
+                "<!DOCTYPE\n<details>"),
         ] {
             let blocks = self.segments(markdown)
             guard blocks.count == 1,

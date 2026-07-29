@@ -822,11 +822,25 @@ private class DisclosureTokenizer {
     val kind: TagKind,
   )
 
+  // Disclosure scanning pauses inside CommonMark raw HTML block types 1-5;
+  // their contents stay literal until the matching terminator.
   private sealed interface RawHtmlContext {
     fun closes(line: String): Boolean
 
     data object Comment : RawHtmlContext {
       override fun closes(line: String): Boolean = line.contains("-->")
+    }
+
+    data object ProcessingInstruction : RawHtmlContext {
+      override fun closes(line: String): Boolean = line.contains("?>")
+    }
+
+    data object Declaration : RawHtmlContext {
+      override fun closes(line: String): Boolean = line.contains('>')
+    }
+
+    data object Cdata : RawHtmlContext {
+      override fun closes(line: String): Boolean = line.contains("]]>")
     }
 
     data class Element(
@@ -837,12 +851,16 @@ private class DisclosureTokenizer {
 
     companion object {
       fun opening(line: String): RawHtmlContext? {
-        val trimmed = line.trimStart().lowercase(Locale.US)
+        val trimmed = line.trimStart()
+        val lowercased = trimmed.lowercase(Locale.US)
         if (trimmed.startsWith("<!--")) return Comment
+        if (trimmed.startsWith("<?")) return ProcessingInstruction
+        if (trimmed.startsWith("<![CDATA[")) return Cdata
+        if (trimmed.length > 2 && trimmed.startsWith("<!") && trimmed[2] in 'A'..'Z') return Declaration
         for (tag in listOf("pre", "script", "style", "textarea")) {
           val prefix = "<$tag"
-          if (!trimmed.startsWith(prefix)) continue
-          val boundary = trimmed.getOrNull(prefix.length)
+          if (!lowercased.startsWith(prefix)) continue
+          val boundary = lowercased.getOrNull(prefix.length)
           if (boundary == null || boundary.isWhitespace() || boundary == '>') return Element(tag)
         }
         return null
