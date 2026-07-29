@@ -113,6 +113,7 @@ describe("playback transcode policy", () => {
         ],
         codecProbeInputFormats: {
           "audio/m4a": "mov",
+          "audio/mpeg": "mp3",
           "audio/mp4": "mov",
           "audio/wav": "wav",
           "audio/wave": "wav",
@@ -189,6 +190,27 @@ describe("playback transcode policy", () => {
       fileName: "float.wav",
       mimeType: "audio/x-wav",
       audioCodec: "pcm_f32le",
+      expected: "transcode",
+    },
+    {
+      name: "MPEG layer 3 audio",
+      fileName: "layer3.mp3",
+      mimeType: "audio/mpeg",
+      audioCodec: "mp3",
+      expected: "native",
+    },
+    {
+      name: "MPEG layer 2 audio",
+      fileName: "layer2.mp2",
+      mimeType: "audio/mpeg",
+      audioCodec: "mp2",
+      expected: "transcode",
+    },
+    {
+      name: "PCM inside M4A",
+      fileName: "pcm.m4a",
+      mimeType: "audio/m4a",
+      audioCodec: "pcm_s16le",
       expected: "transcode",
     },
   ] as const)(
@@ -747,6 +769,11 @@ describe("resolvePlaybackTranscode", () => {
 
   it("passes already portable media through without invoking ffmpeg", async () => {
     const source = await createSource("native.mp3", "ID3-native");
+    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
+      durationMs: 1000,
+      audioCodec: "mp3",
+      audioStreamIndex: 0,
+    });
 
     await expect(
       playback.resolvePlaybackTranscode({

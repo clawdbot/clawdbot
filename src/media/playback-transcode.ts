@@ -10,7 +10,7 @@ import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
-import { getMediaDir } from "./store.js";
+import { getMediaDir, PLAYBACK_TRANSCODE_SUBDIR } from "./store.js";
 
 type PlaybackMediaKind = Extract<MediaKind, "audio" | "video">;
 type PlaybackMode = "native" | "transcode";
@@ -21,8 +21,6 @@ type PlaybackPolicyEntry = {
   transcodeInputFormats: Readonly<Record<string, string>>;
   target: { contentType: string; extension: `.${string}` };
 };
-
-const WAV_MIME_TYPES = new Set(["audio/wav", "audio/wave", "audio/x-wav"]);
 
 /**
  * Native means safe across the supported browser, AVPlayer, and ExoPlayer clients.
@@ -42,6 +40,7 @@ export const PLAYBACK_TRANSCODE_POLICY = {
     ],
     codecProbeInputFormats: {
       "audio/m4a": "mov",
+      "audio/mpeg": "mp3",
       "audio/mp4": "mov",
       "audio/wav": "wav",
       "audio/wave": "wav",
@@ -125,7 +124,6 @@ type PlaybackInspection =
       videoStreamIndex?: number;
     };
 
-const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
 const PLAYBACK_TRANSCODE_CACHE_VERSION = "v2";
 const MAX_PLAYBACK_TRANSCODE_JOBS = 2;
 const PLAYBACK_TRANSCODE_MAX_ALLOC_BYTES = 256 * 1024 * 1024;
@@ -281,10 +279,10 @@ function hasNativePlaybackCodecs(
     if (probe.audioStreamIndex === undefined || !codec) {
       return undefined;
     }
-    if (WAV_MIME_TYPES.has(normalizeMimeType(mimeType) ?? "")) {
+    if (/^audio\/(?:x-wav|wav|wave)$/.test(normalizeMimeType(mimeType) ?? "")) {
       return codec === "pcm_s16le" || codec === "pcm_u8";
     }
-    return codec === "aac" || codec === "mp3" || codec === "pcm_s16le";
+    return codec === "mp3" || (normalizeMimeType(mimeType) !== "audio/mpeg" && codec === "aac");
   }
   if (!probe.videoCodec || probe.videoStreamIndex === undefined) {
     return undefined;
