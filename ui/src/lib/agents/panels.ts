@@ -1,4 +1,4 @@
-export const AGENT_PANEL_IDS = [
+const AGENT_PANEL_IDS = [
   "overview",
   "files",
   "tools",
