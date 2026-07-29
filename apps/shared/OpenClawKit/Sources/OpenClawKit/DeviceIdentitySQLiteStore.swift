@@ -372,9 +372,25 @@ enum DeviceIdentitySQLiteStore {
                     "Device identity Doctor import is pending; run openclaw doctor --fix before starting the app")
             }
             if self.pathMayExist(nativeClaimURL) {
-                guard !self.pathMayExist(source.identityURL) else {
-                    throw DeviceIdentityStore.storageError(
-                        "Legacy device identity source and interrupted native claim both exist")
+                if self.pathMayExist(source.identityURL) {
+                    guard
+                        let sourceFile = try? self.readLegacyIdentity(
+                            source.identityURL,
+                            beneath: source.stateDirURL),
+                        let claimFile = try? self.readLegacyIdentity(
+                            nativeClaimURL,
+                            beneath: source.stateDirURL),
+                        sourceFile.material.identity.publicKey == claimFile.material.identity.publicKey,
+                        sourceFile.material.identity.privateKey == claimFile.material.identity.privateKey
+                    else {
+                        throw DeviceIdentityStore.storageError(
+                            "Legacy device identity source and interrupted native claim both exist")
+                    }
+                    // Matching key material means the interrupted import and recreated source are the same identity,
+                    // so dropping the stale claim loses nothing. deviceId is metadata here; the canonical SQLite row
+                    // decides which value survives.
+                    try FileManager.default.removeItem(at: nativeClaimURL)
+                    continue
                 }
                 ownsNativeClaim = true
                 break
@@ -403,28 +419,15 @@ enum DeviceIdentitySQLiteStore {
         }
 
         do {
-            let before = try self.legacyFileSnapshot(
+            let claimed = try self.readLegacyIdentity(
                 nativeClaimURL,
-                beneath: source.stateDirURL,
-                maximumBytes: self.maximumLegacyIdentityBytes)
-            let data = try Data(contentsOf: nativeClaimURL, options: [.mappedIfSafe])
-            guard data.count <= self.maximumLegacyIdentityBytes else {
-                throw DeviceIdentityStore.storageError("Legacy device identity exceeds the maximum supported size")
-            }
-            let after = try self.legacyFileSnapshot(
-                nativeClaimURL,
-                beneath: source.stateDirURL,
-                maximumBytes: self.maximumLegacyIdentityBytes)
-            guard before == after, UInt64(data.count) == before.size else {
-                throw DeviceIdentityStore.storageError("Legacy device identity changed while being claimed")
-            }
-            let material = try DeviceIdentityStore.material(fromLegacyData: data)
+                beneath: source.stateDirURL)
             return LegacyClaim(
                 source: source,
                 identityURL: nativeClaimURL,
-                data: data,
-                snapshot: before,
-                material: material)
+                data: claimed.data,
+                snapshot: claimed.snapshot,
+                material: claimed.material)
         } catch {
             do {
                 try self.restoreClaimedLegacyIdentity(
@@ -437,6 +440,29 @@ enum DeviceIdentitySQLiteStore {
             }
             throw error
         }
+    }
+
+    private static func readLegacyIdentity(
+        _ url: URL,
+        beneath stateDirURL: URL) throws
+        -> (data: Data, snapshot: LegacyFileSnapshot, material: DeviceIdentityMaterial)
+    {
+        let before = try self.legacyFileSnapshot(
+            url,
+            beneath: stateDirURL,
+            maximumBytes: self.maximumLegacyIdentityBytes)
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        guard data.count <= self.maximumLegacyIdentityBytes else {
+            throw DeviceIdentityStore.storageError("Legacy device identity exceeds the maximum supported size")
+        }
+        let after = try self.legacyFileSnapshot(
+            url,
+            beneath: stateDirURL,
+            maximumBytes: self.maximumLegacyIdentityBytes)
+        guard before == after, UInt64(data.count) == before.size else {
+            throw DeviceIdentityStore.storageError("Legacy device identity changed while being claimed")
+        }
+        return try (data, before, DeviceIdentityStore.material(fromLegacyData: data))
     }
 
     private static func claimURL(_ sourceURL: URL, suffix: String) -> URL {

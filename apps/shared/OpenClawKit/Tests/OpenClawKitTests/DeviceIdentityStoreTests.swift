@@ -667,6 +667,95 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `matching recreated source drops stale native claim`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let source = try Self.writeLegacyIdentity(
+            stateDirURL: tempDir.appendingPathComponent("legacy", isDirectory: true),
+            profile: .primary,
+            contents: Self.nodePEMIdentityJSON(deviceId: "recreated-source"))
+        let claimURL = URL(
+            fileURLWithPath: source.identityURL.path + ".native-importing",
+            isDirectory: false)
+        try Self.nodePEMIdentityJSON(deviceId: "interrupted-claim")
+            .write(to: claimURL, atomically: true, encoding: .utf8)
+        let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
+
+        let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
+            databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
+            destinationStateDirURL: destination,
+            profile: .primary,
+            legacySources: [source])
+
+        #expect(identity.deviceId == Self.fixtureDeviceID)
+        #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
+        #expect(!FileManager.default.fileExists(atPath: claimURL.path))
+    }
+
+    @Test
+    func `conflicting recreated source preserves native claim`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let source = try Self.writeLegacyIdentity(
+            stateDirURL: tempDir.appendingPathComponent("legacy", isDirectory: true),
+            profile: .primary,
+            contents: Self.nodePEMIdentityJSON())
+        let claimURL = URL(
+            fileURLWithPath: source.identityURL.path + ".native-importing",
+            isDirectory: false)
+        try JSONEncoder().encode(DeviceIdentityStore.generateMaterial().identity).write(to: claimURL)
+        let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
+
+        do {
+            _ = try DeviceIdentitySQLiteStore.loadOrCreate(
+                databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
+                destinationStateDirURL: destination,
+                profile: .primary,
+                legacySources: [source])
+            Issue.record("Expected conflicting source and claim to throw")
+        } catch let error as NSError {
+            #expect(error.localizedDescription ==
+                "Legacy device identity source and interrupted native claim both exist")
+        }
+
+        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: claimURL.path))
+    }
+
+    @Test
+    func `unparseable native claim is preserved with recreated source`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let source = try Self.writeLegacyIdentity(
+            stateDirURL: tempDir.appendingPathComponent("legacy", isDirectory: true),
+            profile: .primary,
+            contents: Self.nodePEMIdentityJSON())
+        let claimURL = URL(
+            fileURLWithPath: source.identityURL.path + ".native-importing",
+            isDirectory: false)
+        try Data("not-json".utf8).write(to: claimURL)
+        let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
+
+        do {
+            _ = try DeviceIdentitySQLiteStore.loadOrCreate(
+                databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
+                destinationStateDirURL: destination,
+                profile: .primary,
+                legacySources: [source])
+            Issue.record("Expected unparseable claim to throw")
+        } catch let error as NSError {
+            #expect(error.localizedDescription ==
+                "Legacy device identity source and interrupted native claim both exist")
+        }
+
+        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: claimURL.path))
+    }
+
+    @Test
     func `source reappearance preserves both native claim and recreated source`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
