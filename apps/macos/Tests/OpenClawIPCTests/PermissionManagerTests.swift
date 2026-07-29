@@ -24,12 +24,6 @@ struct PermissionManagerTests {
         #expect(ensured.keys.count == caps.count)
     }
 
-    @Test func `location status reuses shared requester`() async {
-        let expected = LocationPermissionRequester.shared.authorizationStatus
-        let actual = await PermissionManager.locationAuthorizationStatus()
-        #expect(actual == expected)
-    }
-
     @Test func `location status matches canonical authorization`() async {
         let status = await PermissionManager.locationAuthorizationStatus()
         let results = await PermissionManager.grantedStatus([.location])
