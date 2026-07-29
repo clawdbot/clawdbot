@@ -454,6 +454,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  presentation?: import("../../../packages/gateway-protocol/src/index.js").SessionPresentation;
   visibility?: SessionVisibility;
   sharingRole?: SessionSharingRole;
   incognito?: true;

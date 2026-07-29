@@ -91,6 +91,10 @@ test("lists and patches session store via sessions.* RPC", async () => {
         updatedAt: stale,
         spawnedBy: "agent:main:main",
       },
+      "agent:main:telegram:main:direct:491234567890": {
+        sessionId: "sess-direct",
+        updatedAt: stale,
+      },
       global: {
         sessionId: "sess-global",
         updatedAt: now - 10_000,
@@ -207,6 +211,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
         titleSource: string;
         family: string;
         agentId?: string;
+        accountId?: string;
         isMain: boolean;
         isBackground: boolean;
       };
@@ -240,6 +245,15 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const group = list1.payload?.sessions.find((s) => s.key === "agent:main:discord:group:dev");
   expect(group?.presentation?.title).toBe("Discord group");
   expect(JSON.stringify(group?.presentation)).not.toContain("U123ABC45");
+  const direct = list1.payload?.sessions.find(
+    (s) => s.key === "agent:main:telegram:main:direct:491234567890",
+  );
+  expect(direct?.presentation).toMatchObject({
+    title: "Telegram direct message",
+    family: "direct",
+    accountId: "main",
+  });
+  expect(JSON.stringify(direct?.presentation)).not.toContain("491234567890");
 
   const active = await directSessionReq<{
     sessions: Array<{ key: string }>;

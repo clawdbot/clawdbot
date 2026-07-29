@@ -3,10 +3,12 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
-/** Stable presentation category for a session row. */
-// Presentation taxonomies can grow independently of native clients. Keep their
-// wire representation open so a newer Gateway cannot make an older client fail
-// to decode an otherwise compatible sessions.list response.
+/**
+ * Stable presentation category for a session row.
+ *
+ * These taxonomies remain open so a newer Gateway can add a presentation
+ * category without making an otherwise compatible older client reject the row.
+ */
 export const SessionPresentationFamilySchema = NonEmptyString;
 export const SessionPresentationTitleSourceSchema = NonEmptyString;
 export const SessionPresentationPeerKindSchema = NonEmptyString;
@@ -22,6 +24,8 @@ export const SessionPresentationSchema = closedObject({
   accountId: Type.Optional(NonEmptyString),
   peerKind: Type.Optional(SessionPresentationPeerKindSchema),
   isMain: Type.Boolean(),
+  // Presentation classification only: it never changes visibility, sharing,
+  // retention, or authorization semantics for the underlying session.
   isBackground: Type.Boolean(),
 });
 

@@ -47,9 +47,28 @@ function normalizeTitle(value: string | undefined, key: string): string | undefi
   return normalized && normalized !== key ? normalized : undefined;
 }
 
-function normalizeDisplayName(value: string | undefined, key: string): string | undefined {
+function normalizeDisplayName(
+  value: string | undefined,
+  key: string,
+  channel?: string,
+): string | undefined {
   const normalized = normalizeTitle(value, key);
-  return normalized && !OPAQUE_ID_PRESENT_RE.test(normalized) ? normalized : undefined;
+  if (!normalized || OPAQUE_ID_PRESENT_RE.test(normalized)) {
+    return undefined;
+  }
+  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
+  const transportPrefix = normalizedChannel ? `${normalizedChannel}:` : undefined;
+  // Session storage can synthesize compact group names such as `discord:g-dev`.
+  // They are routing tokens, not a presentation title; surface the generated
+  // channel title instead so clients do not learn or render opaque identifiers.
+  if (
+    transportPrefix &&
+    normalizeLowercaseStringOrEmpty(normalized).startsWith(transportPrefix) &&
+    !/\s/u.test(normalized.slice(transportPrefix.length))
+  ) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function formatWorktree(worktree: SessionEntry["worktree"]): string | undefined {
@@ -213,7 +232,7 @@ export function buildGatewaySessionPresentation(params: {
   // Direct-session display names may be transport-derived peer ids; explicit labels remain safe.
   let displayName: string | undefined;
   if (!hasDirectPeerDisplay) {
-    displayName = normalizeDisplayName(params.displayName, key);
+    displayName = normalizeDisplayName(params.displayName, key, channel);
   }
   const worktreeTitle = formatWorktree(entry?.worktree);
   const title = label ?? displayName ?? fallbackTitle({ family, rest, channel, worktreeTitle });

@@ -1,8 +1,10 @@
+import * as sessionPresentation from "./session-presentation.js";
 import * as sessionsCatalog from "./sessions-catalog.js";
 import * as sessions from "./sessions.js";
 
 export const SessionCoreProtocolSchemas = {
   SessionsListParams: sessions.SessionsListParamsSchema,
+  SessionPresentation: sessionPresentation.SessionPresentationSchema,
   SessionCatalogCapabilities: sessionsCatalog.SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptor: sessionsCatalog.SessionCatalogDescriptorSchema,
   SessionCatalogPullRequestSummary: sessionsCatalog.SessionCatalogPullRequestSummarySchema,
