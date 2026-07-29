@@ -1,5 +1,5 @@
-// GPT-Live (OpenAI "quicksilver") routing uses either the ChatGPT OAuth browser
-// WebRTC path or the Platform API-key Frameless Bidi backend WebSocket path.
+// GPT-Live (OpenAI "quicksilver") uses browser or Gateway-owned WebRTC when
+// the host owns delegation, and the Platform-key Frameless Bidi WebSocket elsewhere.
 
 const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
 

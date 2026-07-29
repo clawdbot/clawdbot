@@ -19,6 +19,14 @@ function attachInternalRealtimeVoiceProviderApi(
       providerConfig: Record<string, unknown>;
       model?: string;
     }) => object;
+    isGatewayRelayConfigured?: (ctx: {
+      providerConfig: Record<string, unknown>;
+      agentId?: string;
+    }) => boolean;
+    resolveGatewayRelayCapabilities?: (ctx: {
+      providerConfig: Record<string, unknown>;
+      model?: string;
+    }) => object;
   },
 ): void {
   Object.defineProperty(provider, INTERNAL_REALTIME_VOICE_PROVIDER, {
@@ -111,6 +119,36 @@ describe("realtime voice provider resolver", () => {
     expect(isBrowserSessionConfigured).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "voice-agent" }),
     );
+  });
+
+  it("limits internal relay readiness to the gateway-relay surface", () => {
+    const relayOnly: RealtimeVoiceProviderPlugin = {
+      id: "relay-only",
+      label: "Relay only",
+      isConfigured: () => false,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+    attachInternalRealtimeVoiceProviderApi(relayOnly, {
+      isBrowserSessionConfigured: () => false,
+      isGatewayRelayConfigured: () => true,
+    });
+
+    expect(() =>
+      resolveConfiguredRealtimeVoiceProvider({
+        configuredProviderId: "relay-only",
+        providers: [relayOnly],
+        surface: "bridge",
+      }),
+    ).toThrow('Realtime voice provider "relay-only" is not configured');
+    expect(
+      resolveConfiguredRealtimeVoiceProvider({
+        configuredProviderId: "relay-only",
+        providers: [relayOnly],
+        surface: "gateway-relay",
+      }).provider,
+    ).toBe(relayOnly);
   });
 
   it("applies a default model before provider config resolution", () => {

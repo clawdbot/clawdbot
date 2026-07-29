@@ -13,6 +13,11 @@ function readInternalRealtimeVoiceProviderApi(provider: object) {
       providerConfig: Record<string, unknown>;
       agentId?: string;
     }) => boolean;
+    isGatewayRelayConfigured: (ctx: {
+      cfg?: object;
+      providerConfig: Record<string, unknown>;
+      agentId?: string;
+    }) => boolean;
     resolveBrowserSessionCapabilities: (ctx: {
       cfg?: object;
       providerConfig: Record<string, unknown>;
@@ -373,7 +378,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         model: "gpt-live-1-mini",
       }),
     ).toMatchObject({
-      transports: ["webrtc"],
+      transports: ["webrtc", "gateway-relay"],
       handlesAgentConsult: true,
       supportsToolCalls: false,
       supportsVideoFrames: false,
@@ -868,6 +873,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(provider.isConfigured({ cfg, providerConfig: { model: "gpt-live-1-mini" } })).toBe(
       false,
     );
+    expect(
+      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
+        cfg,
+        providerConfig: { model: "gpt-live-1-mini" },
+        agentId: "main",
+      }),
+    ).toBe(true);
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isBrowserSessionConfigured({
         cfg,

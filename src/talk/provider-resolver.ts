@@ -9,7 +9,9 @@ import { resolveConfiguredCapabilityProvider } from "../plugin-sdk/provider-sele
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   isInternalRealtimeVoiceBrowserSessionConfigured,
+  isInternalRealtimeVoiceGatewayRelayConfigured,
   resolveInternalRealtimeVoiceBrowserSessionCapabilities,
+  resolveInternalRealtimeVoiceGatewayRelayCapabilities,
   type InternalRealtimeVoiceProviderCapabilities,
 } from "./provider-internal.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
@@ -37,7 +39,7 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   /** Model injected before provider-specific resolveConfig runs. */
   defaultModel?: string;
   /** Runtime surface being selected. Defaults to the provider bridge path. */
-  surface?: "browser-session" | "bridge";
+  surface?: "browser-session" | "gateway-relay" | "bridge";
   noRegisteredProviderMessage?: string;
 };
 
@@ -47,10 +49,16 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   cfg?: OpenClawConfig;
   /** Effective per-session model after request overrides. */
   model?: string;
-  surface?: "browser-session" | "bridge";
+  surface?: "browser-session" | "gateway-relay" | "bridge";
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
   if (params.surface === "browser-session") {
     const internalCapabilities = resolveInternalRealtimeVoiceBrowserSessionCapabilities(params);
+    if (internalCapabilities) {
+      return internalCapabilities;
+    }
+  }
+  if (params.surface === "gateway-relay") {
+    const internalCapabilities = resolveInternalRealtimeVoiceGatewayRelayCapabilities(params);
     if (internalCapabilities) {
       return internalCapabilities;
     }
@@ -63,7 +71,7 @@ export function isRealtimeVoiceProviderConfigured(params: {
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
   agentId?: string;
-  surface?: "browser-session" | "bridge";
+  surface?: "browser-session" | "gateway-relay" | "bridge";
 }): boolean {
   if (
     params.provider.isConfigured({
@@ -74,7 +82,9 @@ export function isRealtimeVoiceProviderConfigured(params: {
     return true;
   }
   return (
-    params.surface === "browser-session" && isInternalRealtimeVoiceBrowserSessionConfigured(params)
+    (params.surface === "browser-session" &&
+      isInternalRealtimeVoiceBrowserSessionConfigured(params)) ||
+    (params.surface === "gateway-relay" && isInternalRealtimeVoiceGatewayRelayConfigured(params))
   );
 }
 

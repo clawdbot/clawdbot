@@ -54,7 +54,7 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
     });
   });
 
-  it("routes gpt-live models to a backend WebSocket bridge", () => {
+  it("routes gpt-live by the host-owned delegation seam", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const callbacks = {
       onAudio: vi.fn(),
@@ -66,6 +66,13 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
         providerConfig: { apiKey: "test-key", model: "gpt-live-1-codex" },
       }),
     ).toMatchObject({ supportsToolResultContinuation: true });
+    expect(
+      provider.createBridge({
+        ...callbacks,
+        providerConfig: { apiKey: "test-key", model: "gpt-live-1" },
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      }),
+    ).toMatchObject({ supportsToolResultContinuation: false });
     expect(() =>
       provider.createBridge({
         ...callbacks,

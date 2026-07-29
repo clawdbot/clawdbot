@@ -16,6 +16,7 @@ import {
   validateTalkSessionSubmitToolResultParams,
   validateTalkSessionTurnParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
@@ -286,7 +287,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           cfg: runtimeConfig,
           cfgForResolve: runtimeConfig,
           defaultModel: realtimeConfig.model,
-          surface: "bridge",
+          surface: "gateway-relay",
           noRegisteredProviderMessage: "No realtime voice provider registered",
         });
         const launchOptions = buildRealtimeVoiceLaunchOptions({
@@ -300,12 +301,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requireSessionKeyForProfile: true,
           warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
         });
-        if (realtimeContext.requestedSessionKey) {
-          await ensureClientVoiceAgentSessionEntry({
-            agentId: realtimeContext.agentId,
-            sessionKey: realtimeContext.requestedSessionKey,
-          });
-        }
+        const sessionKey =
+          realtimeContext.requestedSessionKey ??
+          buildAgentMainSessionKey({ agentId: realtimeContext.agentId });
+        await ensureClientVoiceAgentSessionEntry({
+          agentId: realtimeContext.agentId,
+          sessionKey,
+        });
         const session = createTalkRealtimeRelaySession({
           context,
           connId,
@@ -315,7 +317,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           instructions: buildRealtimeInstructions(realtimeContext.instructions),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
           model: launchOptions.model,
-          sessionKey: realtimeContext.requestedSessionKey,
+          sessionKey,
           voice: launchOptions.voice,
           language: normalizeOptionalLowercaseString(params.language),
           forceAgentConsultOnFinalTranscript:

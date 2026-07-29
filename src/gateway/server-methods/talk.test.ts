@@ -569,7 +569,7 @@ describe("talk.catalog handler", () => {
     );
   });
 
-  it("uses the bridge surface for gateway-relay catalog resolution", async () => {
+  it("uses the gateway-relay surface for relay catalog resolution", async () => {
     const isConfigured = vi.fn(() => true);
     const provider = {
       id: "relay",
@@ -607,10 +607,10 @@ describe("talk.catalog handler", () => {
     });
 
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ surface: "bridge" }),
+      expect.objectContaining({ surface: "gateway-relay" }),
     );
     expect(mocks.resolveRealtimeVoiceProviderCapabilities).toHaveBeenCalledWith(
-      expect.objectContaining({ surface: "bridge" }),
+      expect.objectContaining({ surface: "gateway-relay" }),
     );
     expect(isConfigured).toHaveBeenCalledWith(expect.not.objectContaining({ surface: "bridge" }));
     const catalog = expectRespondOk(respond);
@@ -1671,7 +1671,7 @@ describe("talk.session unified handlers", () => {
       configuredProviderId: "openai",
       providerConfigs: { openai: { apiKey: "openai-key" } },
       defaultModel: "gpt-realtime-default",
-      surface: "bridge",
+      surface: "gateway-relay",
     });
     expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
       agentId: "main",

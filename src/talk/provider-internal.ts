@@ -43,6 +43,16 @@ type InternalRealtimeVoiceProviderApi = {
     /** Effective per-session model after request overrides. */
     model?: string;
   }) => InternalRealtimeVoiceProviderCapabilities;
+  isGatewayRelayConfigured?: (ctx: {
+    cfg?: OpenClawConfig;
+    providerConfig: RealtimeVoiceProviderConfig;
+    agentId?: string;
+  }) => boolean;
+  resolveGatewayRelayCapabilities?: (ctx: {
+    cfg?: OpenClawConfig;
+    providerConfig: RealtimeVoiceProviderConfig;
+    model?: string;
+  }) => InternalRealtimeVoiceProviderCapabilities;
   cancelBrowserSession?: (
     request: InternalRealtimeVoiceBrowserSessionCreateRequest,
     session: RealtimeVoiceBrowserSession,
@@ -90,6 +100,34 @@ export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
       model: params.model,
     },
   );
+}
+
+export function isInternalRealtimeVoiceGatewayRelayConfigured(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  cfg?: OpenClawConfig;
+  providerConfig: RealtimeVoiceProviderConfig;
+  agentId?: string;
+}): boolean {
+  return (
+    readInternalRealtimeVoiceProviderApi(params.provider)?.isGatewayRelayConfigured?.({
+      cfg: params.cfg,
+      providerConfig: params.providerConfig,
+      agentId: params.agentId,
+    }) === true
+  );
+}
+
+export function resolveInternalRealtimeVoiceGatewayRelayCapabilities(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  cfg?: OpenClawConfig;
+  providerConfig: RealtimeVoiceProviderConfig;
+  model?: string;
+}): InternalRealtimeVoiceProviderCapabilities | undefined {
+  return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveGatewayRelayCapabilities?.({
+    cfg: params.cfg,
+    providerConfig: params.providerConfig,
+    model: params.model,
+  });
 }
 
 export async function cancelInternalRealtimeVoiceBrowserSession(params: {

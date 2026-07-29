@@ -106,6 +106,11 @@ export type RealtimeVoiceProviderConfiguredContext = {
   providerConfig: RealtimeVoiceProviderConfig;
 };
 
+export type RealtimeVoiceAgentConsultRunner = (params: {
+  prompt: string;
+  signal?: AbortSignal;
+}) => Promise<{ text: string }>;
+
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
@@ -115,6 +120,8 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
   tools?: RealtimeVoiceTool[];
+  /** Host-injected agent delegation runner for provider-owned realtime control channels. */
+  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
 };
 
 export type RealtimeVoiceBrowserSessionCreateRequest = {
@@ -128,8 +135,8 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
-  /** Host-injected agent delegation runner for provider-owned browser control channels. */
-  runAgentConsult?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
+  /** Host-injected agent delegation runner for provider-owned realtime control channels. */
+  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
 };
 
 export type RealtimeVoiceBrowserAudioContract = {
