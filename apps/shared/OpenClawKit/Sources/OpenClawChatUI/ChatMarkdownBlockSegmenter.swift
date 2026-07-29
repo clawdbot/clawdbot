@@ -259,36 +259,7 @@ enum ChatMarkdownBlockSegmenter {
             return left.lineRange.upperBound > right.lineRange.upperBound
         }
 
-        var unfolded: [UnfoldedBlock] = []
-        var disclosureTokenizer = DisclosureTokenizer()
-        var proseStart = 0
-
-        func appendProse(until end: Int) {
-            guard proseStart < end else { return }
-            unfolded.append(contentsOf: self.proseOnly(Array(source.lines[proseStart..<end])).map(UnfoldedBlock.block))
-        }
-
-        for extraction in extractions where extraction.lineRange.lowerBound >= proseStart {
-            if case let .html(html) = extraction.content,
-               !disclosureTokenizer.shouldTokenize(html)
-            {
-                continue
-            }
-            appendProse(until: extraction.lineRange.lowerBound)
-            switch extraction.content {
-            case let .block(block):
-                unfolded.append(.block(block))
-            case let .html(html):
-                unfolded.append(contentsOf: disclosureTokenizer.tokenize(
-                    html,
-                    parseMarkdown: { markdown in
-                        self.segments(markdown: markdown, isComplete: isComplete).map(UnfoldedBlock.block)
-                    }))
-            }
-            proseStart = extraction.lineRange.upperBound
-        }
-
-        appendProse(until: source.lines.count)
+        let unfolded = self.unfold(extractions, source: source, isComplete: isComplete)
         let blocks = self.foldDisclosures(unfolded)
         let reparsesListContent = blocks.contains { block in
             if case .list = block { return true }
@@ -1169,5 +1140,45 @@ enum ChatMarkdownBlockSegmenter {
             }
             return (count, cursor)
         }
+    }
+}
+
+extension ChatMarkdownBlockSegmenter {
+    fileprivate static func unfold(
+        _ extractions: [Extraction],
+        source: SourceBuffer,
+        isComplete: Bool) -> [UnfoldedBlock]
+    {
+        var unfolded: [UnfoldedBlock] = []
+        var disclosureTokenizer = DisclosureTokenizer()
+        var proseStart = 0
+
+        func appendProse(until end: Int) {
+            guard proseStart < end else { return }
+            unfolded.append(contentsOf: self.proseOnly(Array(source.lines[proseStart..<end])).map(UnfoldedBlock.block))
+        }
+
+        for extraction in extractions where extraction.lineRange.lowerBound >= proseStart {
+            if case let .html(html) = extraction.content,
+               !disclosureTokenizer.shouldTokenize(html)
+            {
+                continue
+            }
+            appendProse(until: extraction.lineRange.lowerBound)
+            switch extraction.content {
+            case let .block(block):
+                unfolded.append(.block(block))
+            case let .html(html):
+                unfolded.append(contentsOf: disclosureTokenizer.tokenize(
+                    html,
+                    parseMarkdown: { markdown in
+                        self.segments(markdown: markdown, isComplete: isComplete).map(UnfoldedBlock.block)
+                    }))
+            }
+            proseStart = extraction.lineRange.upperBound
+        }
+
+        appendProse(until: source.lines.count)
+        return unfolded
     }
 }
