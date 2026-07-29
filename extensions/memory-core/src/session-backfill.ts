@@ -31,6 +31,11 @@ import {
   type SessionIngestionMessage,
 } from "./dreaming-phases.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+import type {
+  SessionBackfillDay,
+  SessionBackfillExecution,
+  SessionBackfillResult,
+} from "./session-backfill-contract.js";
 import {
   drainSessionBackfill,
   normalizeSessionBackfillSelection,
@@ -49,6 +54,10 @@ const TOP_CANDIDATE_LIMIT = 5;
 const MAX_SESSION_BACKFILL_APPLY_BATCHES = 10_000;
 
 export { normalizeSessionBackfillSelection } from "./session-backfill-lifecycle.js";
+export type {
+  SessionBackfillExecution,
+  SessionBackfillResult,
+} from "./session-backfill-contract.js";
 
 export type MemorySessionBackfillOptions = {
   agent?: string;
@@ -102,47 +111,6 @@ type SessionBackfillScan = {
 type SessionBackfillCollection = {
   byDay: Map<string, SessionBackfillCandidate[]>;
   scans: SessionBackfillScan[];
-};
-
-type SessionBackfillDay = {
-  day: string;
-  candidateCount: number;
-  topCandidates: string[];
-};
-
-export type SessionBackfillResult = {
-  agentId: string;
-  workspaceDir: string;
-  applied: boolean;
-  rem: boolean;
-  days: SessionBackfillDay[];
-  candidateCount: number;
-  stagedEntries: number;
-  writtenDiaryEntries: number;
-  replacedDiaryEntries: number;
-  batchCount?: number;
-  batches?: SessionBackfillBatchProgress[];
-  rollback?: {
-    removedDiaryEntries: number;
-    removedStagedEntries: number;
-  };
-};
-
-type SessionBackfillBatchProgress = {
-  batch: number;
-  days: number;
-  candidates: number;
-  stagedEntries: number;
-};
-
-type SessionBackfillContinuation = {
-  advanced: boolean;
-  hasMore: boolean;
-};
-
-export type SessionBackfillExecution = {
-  result: SessionBackfillResult;
-  continuation: SessionBackfillContinuation;
 };
 
 export type RunSessionBackfillParams = {

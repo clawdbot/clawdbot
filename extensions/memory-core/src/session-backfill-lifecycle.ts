@@ -6,7 +6,10 @@ import {
   SESSION_BACKFILL_REWIND_NAMESPACE,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
-import type { SessionBackfillExecution, SessionBackfillResult } from "./session-backfill.js";
+import type {
+  SessionBackfillExecution,
+  SessionBackfillResult,
+} from "./session-backfill-contract.js";
 
 const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
