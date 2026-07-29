@@ -5143,6 +5143,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: UX copy (suggested)
   - H2: Related
 
+## nodes/media-playback.md
+
+- Route: /nodes/media-playback
+- Headings:
+  - H2: Client support
+  - H2: Portable formats
+  - H2: Lazy playback renditions
+  - H2: Managed attachments and access
+  - H2: Metadata and limits
+  - H2: Troubleshooting
+  - H3: Duration or dimensions are missing
+  - H3: A recognized format downloads instead of playing
+  - H3: Playback stays in preparing state
+  - H3: Linux reports a codec error
+  - H3: Android shows a media row while offline
+  - H2: Related
+
 ## nodes/media-understanding.md
 
 - Route: /nodes/media-understanding
