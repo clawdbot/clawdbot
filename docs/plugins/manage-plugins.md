@@ -126,12 +126,22 @@ openclaw plugins install --link ./my-plugin
 Bare package specs install from npm during the launch cutover, unless the
 name matches a bundled or official plugin id, in which case OpenClaw uses
 that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
-`npm-pack:` for deterministic source selection.
+`npm-pack:` for deterministic source selection. OpenClaw's bundled and official
+catalog packages are trusted alongside ClawHub packages. New arbitrary npm,
+git, local path/archive, `npm-pack:`, or marketplace sources require
+`--force` in noninteractive installs after you review
+and trust the source.
 
-Use `--force` only to overwrite an existing install target from a different
-source. For routine upgrades of a tracked npm, ClawHub, or hook-pack install,
-use `openclaw plugins update` instead; `--force` is not supported with
-`--link`.
+`--force` confirms a non-ClawHub source without prompting and overwrites an
+existing install target when needed. For routine upgrades of a tracked npm,
+ClawHub, or hook-pack install, use `openclaw plugins update` instead. With
+`--link`, `--force` only confirms the source; the linked directory is not
+copied or overwritten.
+
+If a newly installed plugin requires configuration that is not present yet,
+OpenClaw records the install but leaves the plugin disabled. Configure
+`plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an
+existing config entry is present but invalid, install fails without rewriting it.
 
 ## Restart and inspect
 
@@ -166,9 +176,11 @@ runs.
 `openclaw plugins update --all` is the bulk maintenance path. It still
 respects ordinary tracked install specs, but trusted official OpenClaw
 plugin records sync to the current official catalog target instead of
-staying pinned to a stale exact official package; when `update.channel` is
-`beta`, that sync prefers the beta release line. Use a targeted
-`update <plugin-id>` to keep an exact or tagged official spec untouched.
+staying pinned to a stale exact official package. The canonical channel
+resolver uses both `update.channel` and the installed core version, so an
+installed beta core with no configured channel keeps official plugins on the
+beta release line. Use a targeted `update <plugin-id>` to keep an exact or
+tagged official spec untouched.
 
 For npm installs, pass an explicit package spec to switch the tracked
 record:

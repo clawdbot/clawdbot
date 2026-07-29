@@ -81,7 +81,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   let stopped = false;
   let abandonInFlightRestart = false;
   let activeCheck: Promise<void> | null = null;
-  let timer: ReturnType<typeof setInterval> | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   const suppressedAccounts = new Set<string>();
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
@@ -98,15 +98,15 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
 
       const snapshot = channelManager.getRuntimeSnapshot();
-      const autostartSuppression = channelManager.getAutostartSuppression();
-      if (!autostartSuppression) {
-        suppressedAccounts.clear();
-      }
+      const globalAutostartSuppression = channelManager.getAutostartSuppression();
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
         if (!accounts) {
           continue;
         }
+        const autostartSuppressed =
+          globalAutostartSuppression !== null ||
+          channelManager.isAmbientAutostartSuppressed(channelId);
         for (const [accountId, status] of Object.entries(accounts)) {
           // A replacement monitor owns future accounts. The retired monitor may
           // only finish the restart it had already begun.
@@ -123,7 +123,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
           const key = rKey(channelId, accountId);
-          if (autostartSuppression) {
+          if (autostartSuppressed) {
             if (status.running !== true && !suppressedAccounts.has(key)) {
               log.info?.(
                 `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,
@@ -147,6 +147,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             log.info?.(
               `[${channelId}:${accountId}] health-monitor: skipping restart, terminal disconnect`,
             );
+            continue;
+          }
+          // The channel supervisor owns the account while its own backoff restart
+          // is in flight. Restarting here cannot start anything (the supervisor
+          // still holds the account task) and only resets the attempt ladder, so
+          // a crash-looping channel would never reach its give-up terminal state.
+          if (channelManager.isAutoRestartScheduled(channelId as ChannelId, accountId)) {
             continue;
           }
 
@@ -229,11 +236,25 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     return check;
   }
 
+  function scheduleCheck(delayMs: number) {
+    timer = setTimeout(() => {
+      timer = null;
+      void runCheck().finally(() => {
+        if (!stopped) {
+          scheduleCheck(checkIntervalMs);
+        }
+      });
+    }, delayMs);
+    if (typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+  }
+
   function retire(abandonRestart: boolean) {
     stopped = true;
     abandonInFlightRestart ||= abandonRestart;
     if (timer) {
-      clearInterval(timer);
+      clearTimeout(timer);
       timer = null;
     }
     if (!activeCheck) {
@@ -276,10 +297,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abandonInFlightRestart = true;
   } else {
     abortSignal?.addEventListener("abort", shutdown, { once: true });
-    timer = setInterval(() => void runCheck(), checkIntervalMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
+    // One lifecycle-owned timer runs first when startup grace expires, then rearms only after
+    // each check settles so slow provider recovery cannot overlap the next evaluation.
+    scheduleCheck(resolveTimerTimeoutMs(timing.monitorStartupGraceMs, 0, 0));
     log.info?.(
       `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s)`,
     );

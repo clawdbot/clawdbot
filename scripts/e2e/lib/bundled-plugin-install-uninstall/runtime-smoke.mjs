@@ -1062,16 +1062,13 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
-    config.messages = {
-      ...config.messages,
-      tts: {
-        ...config.messages?.tts,
-        provider,
-        providers: {
-          ...config.messages?.tts?.providers,
-          [provider]: {
-            ...config.messages?.tts?.providers?.[provider],
-          },
+    config.tts = {
+      ...config.tts,
+      provider,
+      providers: {
+        ...config.tts?.providers,
+        [provider]: {
+          ...config.tts?.providers?.[provider],
         },
       },
     };
@@ -1394,10 +1391,8 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
         plugins: {
           enabled: false,
         },
-        messages: {
-          tts: {
-            provider: selectedProvider,
-          },
+        tts: {
+          provider: selectedProvider,
         },
       },
       port,
@@ -1450,13 +1445,11 @@ async function smokeOpenAiTts(pluginIndex) {
             openai: { enabled: true },
           },
         },
-        messages: {
-          tts: {
-            provider: "openai",
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              },
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             },
           },
         },
@@ -1524,7 +1517,7 @@ function tailText(text) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, pluginRoot, provider] =
     argv;
   const pluginIndex = readNonNegativeInt(pluginIndexRaw, 0, "bundled plugin runtime index");

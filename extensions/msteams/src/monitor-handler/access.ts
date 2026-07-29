@@ -14,10 +14,12 @@ import {
 } from "../../runtime-api.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import { resolveMSTeamsRouteConfig } from "../policy.js";
+import { looksLikeMSTeamsConversationId } from "../resolve-allowlist.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 const MSTEAMS_SENDER_NAME_KIND = "plugin:msteams-sender-name" as const;
+const MSTEAMS_CONVERSATION_ID_KIND = "plugin:msteams-conversation-id" as const;
 const msteamsIngressIdentity = {
   key: "sender-id",
   normalize: normalizeIngressValue,
@@ -25,18 +27,47 @@ const msteamsIngressIdentity = {
     {
       key: "sender-name",
       kind: MSTEAMS_SENDER_NAME_KIND,
-      normalizeEntry: normalizeIngressValue,
-      normalizeSubject: normalizeIngressValue,
+      normalizeEntry: normalizeSenderNameIngressValue,
+      normalizeSubject: normalizeSenderNameIngressValue,
       dangerous: true,
+    },
+    {
+      key: "conversation-id",
+      kind: MSTEAMS_CONVERSATION_ID_KIND,
+      normalizeEntry: normalizeAllowlistConversationId,
+      normalizeSubject: normalizeAllowlistConversationId,
     },
   ],
   isWildcardEntry: (entry) => normalizeIngressValue(entry) === "*",
   resolveEntryId: ({ entryIndex, fieldKey }) =>
-    `msteams-entry-${entryIndex + 1}:${fieldKey === "sender-name" ? "name" : "id"}`,
+    `msteams-entry-${entryIndex + 1}:${
+      fieldKey === "sender-name"
+        ? "name"
+        : fieldKey === "conversation-id"
+          ? "conversation-id"
+          : "id"
+    }`,
 } satisfies StableChannelIngressIdentityParams;
 
 function normalizeIngressValue(value?: string | null): string | null {
   return normalizeOptionalLowercaseString(value) ?? null;
+}
+
+function normalizeSenderNameIngressValue(value?: string | null): string | null {
+  const normalized = normalizeIngressValue(value);
+  if (!normalized) {
+    return null;
+  }
+  // Conversation allowlist entries must never become spoofable display-name principals.
+  return looksLikeMSTeamsConversationId(normalizeMSTeamsConversationId(normalized))
+    ? null
+    : normalized;
+}
+
+function normalizeAllowlistConversationId(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  // Microsoft Graph conversation IDs are opaque; case-folding would authorize a different chat.
+  return trimmed ? normalizeMSTeamsConversationId(trimmed) : null;
 }
 
 export async function resolveMSTeamsSenderAccess(params: {
@@ -84,7 +115,10 @@ export async function resolveMSTeamsSenderAccess(params: {
     readStoreAllowFrom: pairing.readAllowFromStore,
     subject: {
       stableId: senderId,
-      aliases: { "sender-name": senderName },
+      aliases: {
+        "sender-name": senderName,
+        ...(!isDirectMessage ? { "conversation-id": conversationId } : {}),
+      },
     },
     conversation: {
       kind: isDirectMessage ? "direct" : convType === "channel" ? "channel" : "group",

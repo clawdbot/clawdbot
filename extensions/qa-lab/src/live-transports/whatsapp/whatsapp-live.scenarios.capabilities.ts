@@ -24,7 +24,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-outbound-document-preserves-filename",
     title: "WhatsApp direct Gateway document preserves filename and caption",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_DOCUMENT_FILE_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -62,8 +61,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-outbound-send-serialization",
     title: "WhatsApp parallel Gateway sends deliver every outbound message",
-    defaultEnabled: false,
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_SERIAL_SEND_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -99,7 +96,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-outbound-poll",
     title: "WhatsApp direct Gateway poll delivers outbound native poll",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_OUTBOUND_POLL_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -133,7 +129,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-group-outbound-media",
     title: "WhatsApp direct Gateway send delivers media to a group",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     requiresGroupJid: true,
     buildRun: () => {
@@ -196,7 +191,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-group-outbound-audio",
     title: "WhatsApp direct Gateway send delivers audio to a group",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     requiresGroupJid: true,
     buildRun: () => {
@@ -240,7 +234,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-group-outbound-poll",
     title: "WhatsApp direct Gateway poll delivers native poll to a group",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     requiresGroupJid: true,
     buildRun: () => {
@@ -276,7 +269,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-message-actions",
     title: "WhatsApp direct Gateway message.action react and upload-file execute",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     configOverrides: {
       actions: true,
@@ -331,7 +323,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-inbound-structured-messages",
     title: "WhatsApp inbound structured messages reach the agent",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 240_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_STRUCTURED_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -396,7 +387,6 @@ export const WHATSAPP_QA_CAPABILITY_SCENARIOS: WhatsAppQaScenarioDefinition[] = 
   {
     id: "whatsapp-group-audio-gating",
     title: "WhatsApp group audio mention gating",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     configOverrides: {
       audioPreflight: true,

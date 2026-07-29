@@ -2,10 +2,11 @@ title: Telegram whoami command reply
 
 scenario:
   id: telegram-whoami-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - telegram.built-in-commands
   objective: Verify Telegram command identity includes the active channel context.
   successCriteria:
     - The whoami command returns an identity block.
@@ -30,8 +31,8 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text:
-              expr: "transport.id === 'telegram' ? '/whoami@openclaw' : '/whoami'"
+            text: /whoami
+            nativeCommand: { name: whoami }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }

@@ -21,6 +21,9 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
         return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: #"{"owner":"cli"}"#)
     }
 
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+
     func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
     func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
@@ -29,6 +32,49 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 
 @Suite(.serialized)
 struct MacNodeHostWorkerTests {
+    @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
+        let input = MacNodeHostWorkerRetryPolicy.Input(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
+        var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
+
+        try policy.prepareForStart(input)
+        let dispositions = (0..<20).map { _ in policy.recordUnexpectedExit(for: input) }
+
+        #expect(dispositions.prefix(5) == [
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000),
+            .retry(attempt: 2, delayNanoseconds: 2_000_000_000),
+            .retry(attempt: 3, delayNanoseconds: 4_000_000_000),
+            .retry(attempt: 4, delayNanoseconds: 8_000_000_000),
+            .retry(attempt: 5, delayNanoseconds: 10_000_000_000),
+        ])
+        #expect(dispositions.dropFirst(5).allSatisfy {
+            $0 == .giveUp(unexpectedExitCount: 6)
+        })
+        #expect(throws: MacNodeHostWorkerRetryPolicy.RetryBudgetExhausted.self) {
+            try policy.prepareForStart(input)
+        }
+    }
+
+    @Test func `new worker input resets an exhausted crash retry budget`() throws {
+        let original = MacNodeHostWorkerRetryPolicy.Input(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
+        let updated = MacNodeHostWorkerRetryPolicy.Input(
+            command: original.command,
+            configurationGeneration: 5)
+        var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
+
+        try policy.prepareForStart(original)
+        #expect(policy.recordUnexpectedExit(for: original) ==
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
+        #expect(policy.recordUnexpectedExit(for: original) == .giveUp(unexpectedExitCount: 2))
+
+        try policy.prepareForStart(updated)
+        #expect(policy.recordUnexpectedExit(for: updated) ==
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
+    }
+
     @Test func `worker allows a generous cold-start window`() async throws {
         #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
 
@@ -76,7 +122,7 @@ struct MacNodeHostWorkerTests {
         test "$OPENCLAW_NODE_EXEC_HOST" = app || exit 42
         test "$OPENCLAW_NODE_EXEC_FALLBACK" = 0 || exit 43
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        printf '%s\\n' '{"type":"gateway-request","id":"gateway-1","method":"skills.bins","params":{},"timeoutMs":1000}'
+        printf '%s\\n' '{"type":"gateway-request","id":"gateway-1","method":"node.invoke.progress","params":{"invokeId":"terminal-1","nodeId":"node-1","seq":0,"chunk":"hello"},"timeoutMs":1000}'
         IFS= read -r unavailable
         printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
         printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
@@ -95,6 +141,34 @@ struct MacNodeHostWorkerTests {
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
         #expect(response.ok)
         #expect(response.payload != nil)
+        await worker.stop()
+    }
+
+    @Test func `worker forwards terminal input and cancellation frames`() async throws {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = """
+        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["terminal"],"commands":["codex.terminal.resume.v1"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        IFS= read -r invoke
+        IFS= read -r input
+        IFS= read -r cancel
+        printf '%s' "$invoke" | grep -q '"id":"terminal-1"' || exit 40
+        printf '%s' "$input" | grep -q '"type":"invoke-input"' || exit 41
+        printf '%s' "$input" | grep -q '"invokeId":"terminal-1"' || exit 42
+        printf '%s' "$input" | grep -q '"seq":7' || exit 43
+        printf '%s' "$cancel" | grep -q '"type":"invoke-cancel"' || exit 44
+        printf '%s' "$cancel" | grep -q '"invokeId":"terminal-1"' || exit 45
+        printf '%s\\n' '{"type":"invoke-result","result":{"id":"terminal-1","ok":true}}'
+        while IFS= read -r line; do :; done
+        """
+
+        _ = try await worker.start(command: ["/bin/sh", "-c", script])
+        await worker.handleInput(invokeId: "terminal-1", seq: 7, payloadJSON: #"{"data":"x"}"#)
+        await worker.cancel(invokeId: "terminal-1")
+        let response = await worker.invoke(BridgeInvokeRequest(
+            id: "terminal-1",
+            command: "codex.terminal.resume.v1"))
+
+        #expect(response.ok)
         await worker.stop()
     }
 

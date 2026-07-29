@@ -16,7 +16,7 @@ Adds OpenRouter model provider support to OpenClaw.
 
 ## Surface
 
-providers: openrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, usageProviders, videoGenerationProviders
+providers: `openrouter`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `musicGenerationProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 

@@ -11,7 +11,7 @@ import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 /** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
-export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
 const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
 /** @internal Shared repository-script contract. */
@@ -168,10 +168,12 @@ function collectTrackedBundledPluginFiles(cwd) {
   if (result.status !== 0) {
     return null;
   }
-
   const filesByPlugin = new Map();
   for (const rawLine of result.stdout.split("\n")) {
     const line = toPosixPath(rawLine.trim());
+    if (!fs.existsSync(path.join(cwd, line))) {
+      continue;
+    }
     const match = new RegExp(`^${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/(.+)$`).exec(line);
     if (!match) {
       continue;

@@ -404,9 +404,15 @@ function hasPersistentApproval(params: {
 }
 
 async function addPersistentApproval(entry: PluginBindingApprovalEntry): Promise<void> {
-  const file = getApprovals();
+  // Persist before publishing the grant into the in-memory cache. hasPersistentApproval
+  // auto-approves later binds from this cache, so a failed SQLite write must not leave the
+  // runtime more permissive than disk: on throw the cache stays untouched and the user is
+  // re-prompted, instead of silently auto-approving a grant that never persisted.
+  await persistApprovalEntry(entry);
+  // Recompute from the current cache after the await so a concurrent allow-always persisted
+  // during the write is not dropped by a stale pre-await snapshot.
   const key = buildApprovalScopeKey(entry);
-  const approvals = file.approvals.filter(
+  const approvals = getApprovals().approvals.filter(
     (existing) =>
       buildApprovalScopeKey({
         pluginRoot: existing.pluginRoot,
@@ -418,7 +424,6 @@ async function addPersistentApproval(entry: PluginBindingApprovalEntry): Promise
   const state = getPluginBindingGlobalState();
   state.approvalsCache = { approvals };
   state.approvalsLoaded = true;
-  await persistApprovalEntry(entry);
 }
 
 function buildBindingMetadata(params: {
@@ -442,7 +447,7 @@ function buildBindingMetadata(params: {
   };
 }
 
-export function isPluginOwnedBindingMetadata(metadata: unknown): metadata is PluginBindingMetadata {
+function isPluginOwnedBindingMetadata(metadata: unknown): metadata is PluginBindingMetadata {
   if (!metadata || typeof metadata !== "object") {
     return false;
   }
@@ -1002,3 +1007,4 @@ export function buildPluginBindingResolvedText(params: PluginBindingResolveResul
   }
   return `Allowed ${params.request.pluginName ?? params.request.pluginId} to bind this conversation once.${summarySuffix}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

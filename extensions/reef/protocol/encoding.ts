@@ -1,12 +1,9 @@
-const encoder = new TextEncoder();
+export { bytesToHex as hex, equalBytes, utf8ToBytes as utf8 } from "@noble/ciphers/utils.js";
+
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-export function utf8(value: string): Uint8Array {
-  return encoder.encode(value);
-}
 
 export function decodeUtf8(value: Uint8Array): string {
   return decoder.decode(value);
@@ -98,19 +95,4 @@ export function fromBase64(value: string): Uint8Array {
     throw new Error("non-canonical base64");
   }
   return output;
-}
-
-export function hex(value: Uint8Array): string {
-  return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-export function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  let difference = 0;
-  for (let index = 0; index < a.length; index++) {
-    difference |= a[index]! ^ b[index]!;
-  }
-  return difference === 0;
 }

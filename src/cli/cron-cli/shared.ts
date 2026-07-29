@@ -23,7 +23,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
-export function parseCronCommandArgv(value: unknown): string[] | undefined {
+function parseCronArgv(value: unknown, flag: string): string[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -31,16 +31,24 @@ export function parseCronCommandArgv(value: unknown): string[] | undefined {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("--command-argv must be a JSON array of strings");
+    throw new Error(`${flag} must be a JSON array of strings`);
   }
   if (
     !Array.isArray(parsed) ||
     parsed.length === 0 ||
     parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
-    throw new Error("--command-argv must be a non-empty JSON array of non-empty strings");
+    throw new Error(`${flag} must be a non-empty JSON array of non-empty strings`);
   }
   return parsed;
+}
+
+export function parseCronCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--command-argv");
+}
+
+export function parseCronStreamCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--stream-command");
 }
 
 export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
@@ -388,6 +396,10 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   if (schedule?.kind === "on-exit") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
     return `on-exit ${schedule.command}${cwd}`;
+  }
+  if (schedule?.kind === "stream") {
+    const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
+    return `stream ${schedule.command.join(" ")}${cwd}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";

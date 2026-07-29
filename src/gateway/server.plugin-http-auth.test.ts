@@ -116,6 +116,7 @@ function createRuntimeScopeRecorderHandler(params: {
   observedRuntimeScopes: string[][];
   allowedResults: boolean[];
   gatewayRuntimeScopeSurface?: "trusted-operator";
+  match?: "exact" | "prefix";
 }) {
   return createGatewayPluginRequestHandler({
     registry: createTestRegistry({
@@ -128,7 +129,7 @@ function createRuntimeScopeRecorderHandler(params: {
           ...(params.gatewayRuntimeScopeSurface
             ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
             : {}),
-          match: "exact",
+          match: params.match ?? "exact",
           handler: async (_req: IncomingMessage, res: ServerResponse) => {
             const runtimeScopes =
               getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];

@@ -10,7 +10,7 @@ import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { upsertSqliteSessionEntry } from "../config/sessions/session-accessor.sqlite.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { testing as agentCommandTesting } from "./agent.js";
@@ -20,18 +20,11 @@ const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
-const pluginRegistryMocks = vi.hoisted(() => ({
-  ensurePluginRegistryLoaded: vi.fn(),
-}));
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
-}));
-
-vi.mock("../plugins/runtime/runtime-registry-loader.js", () => ({
-  ensurePluginRegistryLoaded: pluginRegistryMocks.ensurePluginRegistryLoaded,
 }));
 
 const execFileAsync = promisify(execFile);

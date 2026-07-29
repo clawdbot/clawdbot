@@ -5,9 +5,10 @@ import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
+import { isRecord } from "../bundle-mcp-adapter.js";
 import { buildCodexMcpServersConfig, normalizeCodexMcpServerConfig } from "../codex-mcp-config.js";
 import { requiresMcpBearerProjection, resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
-import { isRecord } from "./bundle-mcp-adapter-shared.js";
+import { partitionMcpServersByConnectionScope } from "../mcp-connection-resolver.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
 // Mutable JSON shape structurally compatible with the bundled Codex
@@ -87,7 +88,9 @@ export function buildCodexUserMcpServersThreadConfigPatch(
   options?: CodexUserMcpServersProjectionOptions,
 ): { mcp_servers: CodexThreadConfigObject } | undefined {
   const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
-  const entries = Object.entries(userServers);
+  // Fail-closed: requester-scoped servers never enter harness-native MCP config.
+  const { staticServers } = partitionMcpServersByConnectionScope(userServers);
+  const entries = Object.entries(staticServers);
   if (entries.length === 0) {
     return undefined;
   }
@@ -113,7 +116,9 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   options?: CodexUserMcpServersProjectionOptions,
 ): Promise<{ mcp_servers: CodexThreadConfigObject } | undefined> {
   const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
-  const entries = Object.entries(userServers);
+  // Fail-closed: requester-scoped servers never enter harness-native MCP config.
+  const { staticServers } = partitionMcpServersByConnectionScope(userServers);
+  const entries = Object.entries(staticServers);
   if (entries.length === 0) {
     return undefined;
   }

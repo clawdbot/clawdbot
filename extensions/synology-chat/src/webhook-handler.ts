@@ -23,6 +23,12 @@ import {
   RateLimiter,
 } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
+import {
+  SynologyIngressPermanentError,
+  type SynologyIngressLifecycle,
+  type SynologyIngressMonitor,
+  type SynologyWebhookRawEvent,
+} from "./webhook-ingress.js";
 
 // One rate limiter per account, created lazily
 const rateLimiters = new Map<string, RateLimiter>();
@@ -118,18 +124,6 @@ function getInvalidTokenRateLimiter(account: ResolvedSynologyChatAccount): Inval
     invalidTokenRateLimiters.set(account.accountId, rl);
   }
   return rl;
-}
-
-export function clearSynologyWebhookRateLimiterStateForTest(): void {
-  for (const limiter of rateLimiters.values()) {
-    limiter.clear();
-  }
-  rateLimiters.clear();
-  for (const limiter of invalidTokenRateLimiters.values()) {
-    limiter.clear();
-  }
-  invalidTokenRateLimiters.clear();
-  webhookInFlightLimiter.clear();
 }
 
 function getSynologyWebhookInvalidTokenRateLimitKey(params: {
@@ -286,7 +280,13 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
  * - user_id <- user_id | userId | user
  * - text    <- text | message | content
  */
-function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayload | null {
+function parseRawEvent(
+  req: IncomingMessage,
+  body: string,
+): {
+  rawEvent: SynologyWebhookRawEvent;
+  token: string | undefined;
+} {
   const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
 
   let bodyFields: Record<string, unknown>;
@@ -307,8 +307,18 @@ function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayloa
   const queryFields = parseQueryParams(req);
   const headerToken = extractTokenFromHeaders(req);
 
-  const token =
-    pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken;
+  return {
+    rawEvent: { bodyFields, queryFields },
+    token: pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken,
+  };
+}
+
+function parsePayload(
+  rawEvent: SynologyWebhookRawEvent,
+  token: string | undefined,
+): SynologyWebhookPayload | null {
+  const { bodyFields, queryFields } = rawEvent;
+
   const userId =
     pickAlias(bodyFields, ["user_id", "userId", "user"]) ??
     pickAlias(queryFields, ["user_id", "userId", "user"]);
@@ -358,7 +368,7 @@ function respondNoContent(res: ServerResponse) {
 
 export interface WebhookHandlerDeps {
   account: ResolvedSynologyChatAccount;
-  deliver: (msg: import("./inbound-context.js").SynologyInboundMessage) => Promise<string | null>;
+  receive: SynologyIngressMonitor["receive"];
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   log?: {
@@ -377,19 +387,13 @@ export interface WebhookHandlerDeps {
  * 2. Validates token (constant-time)
  * 3. Checks user allowlist
  * 4. Checks rate limit
- * 5. Sanitizes input
- * 6. Immediately ACKs request (204)
- * 7. Delivers to the agent asynchronously and sends final reply via incomingUrl
+ * 5. Durably appends the raw webhook envelope
+ * 6. ACKs only after append succeeds
  */
-type SynologyWebhookAuthorization =
-  | { ok: false; statusCode: number; error: string }
-  | { ok: true; commandAuthorized: boolean };
+type SynologyWebhookAuthorization = { ok: false; statusCode: number; error: string } | { ok: true };
 
 type AuthorizedSynologyWebhook = {
-  payload: SynologyWebhookPayload;
-  body: string;
-  commandAuthorized: boolean;
-  preview: string;
+  rawEvent: SynologyWebhookRawEvent;
 };
 
 async function parseWebhookPayloadRequest(params: {
@@ -397,7 +401,9 @@ async function parseWebhookPayloadRequest(params: {
   res: ServerResponse;
   log?: WebhookHandlerDeps["log"];
   bodyTimeoutMs?: number;
-}): Promise<{ ok: false } | { ok: true; payload: SynologyWebhookPayload }> {
+}): Promise<
+  { ok: false } | { ok: true; payload: SynologyWebhookPayload; rawEvent: SynologyWebhookRawEvent }
+> {
   const bodyResult = await readBody(params.req, params.bodyTimeoutMs);
   if (!bodyResult.ok) {
     params.log?.error("Failed to read request body", bodyResult.error);
@@ -405,19 +411,20 @@ async function parseWebhookPayloadRequest(params: {
     return { ok: false };
   }
 
-  let payload: SynologyWebhookPayload | null;
+  let raw: ReturnType<typeof parseRawEvent>;
   try {
-    payload = parsePayload(params.req, bodyResult.body);
+    raw = parseRawEvent(params.req, bodyResult.body);
   } catch (err) {
     params.log?.warn("Failed to parse webhook payload", err);
     respondJson(params.res, 400, { error: "Invalid request body" });
     return { ok: false };
   }
+  const payload = parsePayload(raw.rawEvent, raw.token);
   if (!payload) {
     respondJson(params.res, 400, { error: "Missing required fields (token, user_id, text)" });
     return { ok: false };
   }
-  return { ok: true, payload };
+  return { ok: true, payload, rawEvent: raw.rawEvent };
 }
 
 async function authorizeSynologyWebhook(params: {
@@ -481,7 +488,7 @@ async function authorizeSynologyWebhook(params: {
     return { ok: false, statusCode: 429, error: "Rate limit exceeded" };
   }
 
-  return { ok: true, commandAuthorized: auth.senderAccess.allowed };
+  return { ok: true };
 }
 
 function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
@@ -523,19 +530,10 @@ async function parseAndAuthorizeSynologyWebhook(params: {
     return { ok: false };
   }
 
-  const cleanText = sanitizeSynologyWebhookText(parsed.payload);
-  if (!cleanText) {
-    respondNoContent(params.res);
-    return { ok: false };
-  }
-  const preview = cleanText.length > 100 ? `${truncateUtf16Safe(cleanText, 100)}...` : cleanText;
   return {
     ok: true,
     message: {
-      payload: parsed.payload,
-      body: cleanText,
-      commandAuthorized: authorized.commandAuthorized,
-      preview,
+      rawEvent: parsed.rawEvent,
     },
   };
 }
@@ -564,61 +562,76 @@ async function resolveSynologyReplyDeliveryUserId(params: {
   return params.payload.user_id;
 }
 
-async function processAuthorizedSynologyWebhook(params: {
+async function authorizeClaimedSynologyWebhook(params: {
   account: ResolvedSynologyChatAccount;
-  deliver: WebhookHandlerDeps["deliver"];
-  log?: WebhookHandlerDeps["log"];
-  message: AuthorizedSynologyWebhook;
-}): Promise<void> {
-  const authorizedWebhookUserId = params.message.payload.user_id;
-  let deliveryUserId = authorizedWebhookUserId;
-  try {
-    deliveryUserId = await resolveSynologyReplyDeliveryUserId({
-      account: params.account,
-      payload: params.message.payload,
-      log: params.log,
-    });
+  payload: SynologyWebhookPayload;
+}): Promise<boolean> {
+  const auth = await authorizeUserForDmWithIngress({
+    accountId: params.account.accountId,
+    userId: params.payload.user_id,
+    dmPolicy: params.account.dmPolicy,
+    allowedUserIds: params.account.allowedUserIds,
+  });
+  if (!auth.senderAccess.allowed) {
+    throw new SynologyIngressPermanentError(
+      "synology-auth",
+      `Synology Chat user ${params.payload.user_id} is no longer authorized.`,
+    );
+  }
+  return auth.senderAccess.allowed;
+}
 
-    const reply = await params.deliver({
-      body: params.message.body,
+export async function processSynologyWebhookIngressEvent(params: {
+  account: ResolvedSynologyChatAccount;
+  deliver: (
+    msg: import("./inbound-context.js").SynologyInboundMessage,
+    lifecycle: SynologyIngressLifecycle,
+  ) => Promise<unknown>;
+  log?: WebhookHandlerDeps["log"];
+  rawEvent: SynologyWebhookRawEvent;
+  lifecycle: SynologyIngressLifecycle;
+}): Promise<void> {
+  const payload = parsePayload(params.rawEvent, params.account.token);
+  if (!payload || !payload.post_id) {
+    throw new SynologyIngressPermanentError(
+      "invalid-event",
+      "Synology Chat claimed webhook cannot be normalized.",
+    );
+  }
+  const commandAuthorized = await authorizeClaimedSynologyWebhook({
+    account: params.account,
+    payload,
+  });
+  const body = sanitizeSynologyWebhookText(payload);
+  if (!body) {
+    return;
+  }
+  const preview = body.length > 100 ? `${truncateUtf16Safe(body, 100)}...` : body;
+  params.log?.info?.(`Message from ${payload.username} (${payload.user_id}): ${preview}`);
+
+  const authorizedWebhookUserId = payload.user_id;
+  const deliveryUserId = await resolveSynologyReplyDeliveryUserId({
+    account: params.account,
+    payload,
+    log: params.log,
+  });
+  await params.deliver(
+    {
+      body,
       from: authorizedWebhookUserId,
-      senderName: params.message.payload.username,
+      senderName: payload.username,
       provider: "synology-chat",
       chatType: "direct",
       accountId: params.account.accountId,
-      commandAuthorized: params.message.commandAuthorized,
+      commandAuthorized,
       chatUserId: deliveryUserId,
-    });
-    if (!reply) {
-      return;
-    }
-
-    await synologyClient.sendMessage(
-      params.account.incomingUrl,
-      reply,
-      deliveryUserId,
-      params.account.allowInsecureSsl,
-    );
-    const replyPreview = reply.length > 100 ? `${truncateUtf16Safe(reply, 100)}...` : reply;
-    params.log?.info?.(
-      `Reply sent to ${params.message.payload.username} (${deliveryUserId}): ${replyPreview}`,
-    );
-  } catch (err) {
-    const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
-    params.log?.error?.(
-      `Failed to process message from ${params.message.payload.username}: ${errMsg}`,
-    );
-    await synologyClient.sendMessage(
-      params.account.incomingUrl,
-      "Sorry, an error occurred while processing your message.",
-      deliveryUserId,
-      params.account.allowInsecureSsl,
-    );
-  }
+    },
+    params.lifecycle,
+  );
 }
 
 export function createWebhookHandler(deps: WebhookHandlerDeps) {
-  const { account, deliver, log } = deps;
+  const { account, log } = deps;
   const rateLimiter = getRateLimiter(account);
   const invalidTokenRateLimiter = getInvalidTokenRateLimiter(account);
 
@@ -659,17 +672,18 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       return;
     }
 
-    log?.info(
-      `Message from ${authorized.message.payload.username} (${authorized.message.payload.user_id}): ${authorized.message.preview}`,
-    );
-
-    // ACK immediately so Synology Chat won't remain in "Processing..."
+    let admitted: Awaited<ReturnType<SynologyIngressMonitor["receive"]>>;
+    try {
+      admitted = await deps.receive(authorized.message.rawEvent);
+    } catch (error) {
+      log?.error?.("Failed to durably admit Synology Chat webhook", error);
+      respondJson(res, 503, { error: "Webhook admission failed" });
+      return;
+    }
+    if (admitted.kind === "invalid") {
+      respondJson(res, 400, { error: admitted.message });
+      return;
+    }
     respondNoContent(res);
-    await processAuthorizedSynologyWebhook({
-      account,
-      deliver,
-      log,
-      message: authorized.message,
-    });
   };
 }

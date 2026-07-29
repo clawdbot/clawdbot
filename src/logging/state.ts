@@ -10,6 +10,7 @@ function createLoggingState() {
     invalidEnvLogLevelValue: null as string | null,
     consolePatched: false,
     forceConsoleToStderr: false,
+    earlyConsoleRoutingRestore: null as boolean | null,
     consoleTimestampPrefix: false,
     consoleSubsystemFilter: null as string[] | null,
     resolvingConsoleSettings: false,

@@ -5,14 +5,53 @@ import {
 } from "./metadata-normalization.ts";
 import { isRecord } from "./normalization-utils.ts";
 import {
+  isValidWorkboardBoardId,
   WORKBOARD_PRIORITIES,
   WORKBOARD_STATUSES,
+  type WorkboardBoardSummary,
   type WorkboardCard,
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardTaskStatus,
   type WorkboardTaskSummary,
 } from "./types.ts";
+
+function normalizeCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+}
+
+function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  if (!isValidWorkboardBoardId(id)) {
+    return null;
+  }
+  const byStatus: Partial<Record<WorkboardStatus, number>> = {};
+  if (isRecord(value.byStatus)) {
+    for (const status of WORKBOARD_STATUSES) {
+      if (value.byStatus[status] !== undefined) {
+        byStatus[status] = normalizeCount(value.byStatus[status]);
+      }
+    }
+  }
+  return {
+    id,
+    total: normalizeCount(value.total),
+    active: normalizeCount(value.active),
+    archived: normalizeCount(value.archived),
+    byStatus,
+    ...(typeof value.name === "string" && value.name.trim() ? { name: value.name.trim() } : {}),
+    ...(typeof value.description === "string" && value.description.trim()
+      ? { description: value.description.trim() }
+      : {}),
+    ...(typeof value.icon === "string" && value.icon.trim() ? { icon: value.icon.trim() } : {}),
+    ...(typeof value.color === "string" && value.color.trim() ? { color: value.color.trim() } : {}),
+    ...(typeof value.updatedAt === "number" ? { updatedAt: value.updatedAt } : {}),
+    ...(typeof value.archivedAt === "number" ? { archivedAt: value.archivedAt } : {}),
+  };
+}
 
 function normalizeCard(value: unknown): WorkboardCard | null {
   if (!isRecord(value)) {
@@ -59,10 +98,11 @@ function normalizeCard(value: unknown): WorkboardCard | null {
 
 export function normalizeCardsPayload(payload: unknown): {
   cards: WorkboardCard[];
+  boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
 } {
   if (!isRecord(payload)) {
-    return { cards: [], statuses: WORKBOARD_STATUSES };
+    return { cards: [], boards: [], statuses: WORKBOARD_STATUSES };
   }
   const cards = Array.isArray(payload.cards)
     ? payload.cards.map(normalizeCard).filter((card): card is WorkboardCard => card !== null)
@@ -72,7 +112,21 @@ export function normalizeCardsPayload(payload: unknown): {
         WORKBOARD_STATUSES.includes(status as WorkboardStatus),
       )
     : WORKBOARD_STATUSES;
-  return { cards, statuses: statuses.length ? statuses : WORKBOARD_STATUSES };
+  const boards = Array.isArray(payload.boards)
+    ? payload.boards
+        .map(normalizeBoardSummary)
+        .filter((board): board is WorkboardBoardSummary => board !== null)
+    : [];
+  return { cards, boards, statuses: statuses.length ? statuses : WORKBOARD_STATUSES };
+}
+
+export function normalizeBoardsPayload(payload: unknown): WorkboardBoardSummary[] | null {
+  if (!isRecord(payload) || !Array.isArray(payload.boards)) {
+    return null;
+  }
+  return payload.boards
+    .map(normalizeBoardSummary)
+    .filter((board): board is WorkboardBoardSummary => board !== null);
 }
 
 export function normalizeCardPayload(payload: unknown): WorkboardCard {

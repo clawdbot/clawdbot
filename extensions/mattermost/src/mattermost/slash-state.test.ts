@@ -93,7 +93,7 @@ function createResponse(): { res: ServerResponse; getBody: () => string } {
     end(chunk?: string | Buffer) {
       body = chunk ? String(chunk) : "";
     },
-  } as ServerResponse;
+  } as unknown as ServerResponse;
   return { res, getBody: () => body };
 }
 

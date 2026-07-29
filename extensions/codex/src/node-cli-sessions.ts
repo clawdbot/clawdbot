@@ -119,6 +119,7 @@ export async function listCodexCliSessionsOnNode(params: {
       filter: params.filter,
     },
     timeoutMs: 15_000,
+    scopes: ["operator.write"],
   });
   return { node, result: parseCodexCliSessionsListResult(raw) };
 }
@@ -163,6 +164,7 @@ export async function resumeCodexCliSessionOnNode(params: {
       timeoutMs: params.timeoutMs,
     },
     timeoutMs: (params.timeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS) + 5_000,
+    scopes: ["operator.write"],
   });
   const payload = unwrapNodeInvokePayload(raw);
   if (!isRecord(payload) || payload.ok !== true || typeof payload.text !== "string") {

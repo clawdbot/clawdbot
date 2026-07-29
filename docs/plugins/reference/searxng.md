@@ -16,4 +16,4 @@ Adds web search provider support.
 
 ## Surface
 
-contracts: webSearchProviders
+contracts: `webSearchProviders`

@@ -5,16 +5,19 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  artifactDownloadArgs,
   expectedChildDispatches,
   expectedSelectedChildDispatches,
+  githubRestArgs,
   manifestChildEntries,
   parseReleaseCiSummaryArgs,
   readManifestArtifactArchive,
   releaseCiWatchFingerprint,
   requiredChildKeysForRerunGroup,
   resolveManifestChildOriginAttempt,
+  runReleaseCiGh,
   selectExactChildRun,
   selectExactChildRunFromPages,
   selectManifestArtifact,
@@ -35,6 +38,52 @@ import {
 const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
+
+describe("GitHub API commands", () => {
+  it("delegates authentication to gh for REST and artifact requests", () => {
+    expect(githubRestArgs("actions/runs/123", "owner/repo")).toEqual([
+      "api",
+      "repos/owner/repo/actions/runs/123",
+    ]);
+    expect(artifactDownloadArgs(456, "owner/repo")).toEqual([
+      "api",
+      "repos/owner/repo/actions/artifacts/456/zip",
+    ]);
+  });
+});
+
+describe("runReleaseCiGh", () => {
+  it("bounds each GitHub lookup with a timeout and SIGKILL", () => {
+    const execFileSyncImpl = vi.fn(() => "result");
+
+    expect(
+      runReleaseCiGh(["api", "repos/openclaw/openclaw/actions/runs/1"], { execFileSyncImpl }),
+    ).toBe("result");
+    expect(execFileSyncImpl).toHaveBeenCalledOnce();
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      ["api", "repos/openclaw/openclaw/actions/runs/1"],
+      expect.objectContaining({
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 60_000,
+      }),
+    );
+  });
+
+  it("propagates GitHub lookup timeouts", () => {
+    const timeoutError = Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    expect(() =>
+      runReleaseCiGh(["api", "rate_limit"], {
+        execFileSyncImpl: () => {
+          throw timeoutError;
+        },
+      }),
+    ).toThrow(timeoutError);
+  });
+});
 
 function crc32(input: Buffer): number {
   let crc = 0xffffffff;

@@ -26,6 +26,8 @@ export type TaskSummary = {
   progressSummary?: string;
   terminalSummary?: string;
   error?: string;
+  /** Bounded task input returned by tasks.get, not tasks.list. */
+  prompt?: string;
 };
 
 type TaskEventPayload =
@@ -103,6 +105,7 @@ function normalizeTaskSummary(value: unknown): TaskSummary | null {
   const progressSummary = optionalString(value.progressSummary);
   const terminalSummary = optionalString(value.terminalSummary);
   const error = optionalString(value.error);
+  const prompt = optionalString(value.prompt);
   return {
     id,
     taskId,
@@ -123,6 +126,7 @@ function normalizeTaskSummary(value: unknown): TaskSummary | null {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    ...(prompt ? { prompt } : {}),
   };
 }
 
@@ -198,6 +202,60 @@ export function taskTimestampMs(value: TaskTimestamp | undefined): number {
   return 0;
 }
 
+type TaskSnapshotProvenance = "snapshot" | "event" | "detail";
+
+function preserveTaskPrompt(
+  selected: TaskSummary,
+  current: TaskSummary,
+  lookup: TaskSummary,
+): TaskSummary {
+  const prompt = lookup.prompt ?? current.prompt;
+  return prompt && selected.prompt !== prompt ? { ...selected, prompt } : selected;
+}
+
+export function newestTaskSnapshot(
+  current: TaskSummary,
+  lookup: TaskSummary | undefined,
+  provenance: TaskSnapshotProvenance = "detail",
+): TaskSummary {
+  if (!lookup) {
+    return current;
+  }
+  const currentAt = taskTimestampMs(current.updatedAt ?? current.endedAt ?? current.createdAt);
+  const lookupAt = taskTimestampMs(lookup.updatedAt ?? lookup.endedAt ?? lookup.createdAt);
+  if (lookupAt > currentAt) {
+    return preserveTaskPrompt(lookup, current, lookup);
+  }
+  if (lookupAt < currentAt) {
+    return current;
+  }
+  // Millisecond clocks collide under load. Ordered pages and events advance
+  // active work; only events correct terminal output, and details stay stale-safe.
+  const currentActive = isActiveTask(current);
+  const lookupActive = isActiveTask(lookup);
+  if (currentActive !== lookupActive) {
+    return preserveTaskPrompt(currentActive ? lookup : current, current, lookup);
+  }
+  if (!currentActive) {
+    return provenance === "event" ? preserveTaskPrompt(lookup, current, lookup) : current;
+  }
+  if (current.status === "running" && lookup.status === "queued") {
+    return preserveTaskPrompt(current, current, lookup);
+  }
+  if (current.status === "queued" && lookup.status === "running") {
+    return preserveTaskPrompt(lookup, current, lookup);
+  }
+  const currentToolCount = current.toolUseCount ?? 0;
+  const lookupToolCount = lookup.toolUseCount ?? 0;
+  if (currentToolCount > lookupToolCount) {
+    return preserveTaskPrompt(current, current, lookup);
+  }
+  if (lookupToolCount > currentToolCount || provenance !== "detail") {
+    return preserveTaskPrompt(lookup, current, lookup);
+  }
+  return preserveTaskPrompt(current, current, lookup);
+}
+
 export function sortTasks(tasks: readonly TaskSummary[]): TaskSummary[] {
   return tasks.toSorted((left, right) => {
     const timeDelta = taskTimestampMs(right.updatedAt) - taskTimestampMs(left.updatedAt);
@@ -230,13 +288,21 @@ export function normalizeTasksListResult(value: unknown): TaskSummary[] | null {
   );
 }
 
+export function normalizeTasksGetResult(value: unknown): TaskSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return normalizeTaskSummary(value.task);
+}
+
 // The ledger pages newest-first, so one page can hide long-running tasks behind
 // newer terminal records; callers fetch active tasks separately and merge here.
 export function mergeTaskLists(...lists: readonly (readonly TaskSummary[])[]): TaskSummary[] {
   const byId = new Map<string, TaskSummary>();
   for (const list of lists) {
     for (const task of list) {
-      byId.set(task.id, task);
+      const current = byId.get(task.id);
+      byId.set(task.id, current ? newestTaskSnapshot(current, task, "snapshot") : task);
     }
   }
   return sortTasks([...byId.values()]);
@@ -297,8 +363,10 @@ export function applyTaskEvent(
       refetch: false,
     };
   }
+  const current = tasks.find((task) => task.id === event.task.id);
+  const next = current ? newestTaskSnapshot(current, event.task, "event") : event.task;
   return {
-    tasks: sortTasks([event.task, ...tasks.filter((task) => task.id !== event.task.id)]),
+    tasks: sortTasks([next, ...tasks.filter((task) => task.id !== event.task.id)]),
     refetch: false,
   };
 }

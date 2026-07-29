@@ -1,13 +1,27 @@
 // Matrix tests cover reply context plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createMatrixReplyContextResolver, summarizeMatrixReplyEvent } from "./reply-context.js";
+import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createPollStartEvent } from "./test-events.js";
 import type { MatrixRawEvent } from "./types.js";
 
+async function resolveReplyBody(event: MatrixRawEvent): Promise<string | undefined> {
+  const resolveReplyContext = createMatrixReplyContextResolver({
+    client: { getEvent: vi.fn(async () => event) } as never,
+    getMemberDisplayName: vi.fn(async () => "Alice"),
+    logVerboseMessage: () => {},
+  });
+  return (
+    await resolveReplyContext({
+      roomId: "!room:example.org",
+      eventId: event.event_id ?? "$event",
+    })
+  ).replyToBody;
+}
+
 describe("matrix reply context", () => {
-  it("summarizes reply events from body text", () => {
+  it("summarizes reply events from body text", async () => {
     expect(
-      summarizeMatrixReplyEvent({
+      await resolveReplyBody({
         event_id: "$original",
         sender: "@alice:example.org",
         type: "m.room.message",
@@ -20,9 +34,9 @@ describe("matrix reply context", () => {
     ).toBe("Some quoted message");
   });
 
-  it("truncates long reply bodies", () => {
+  it("truncates long reply bodies", async () => {
     const longBody = "x".repeat(600);
-    const result = summarizeMatrixReplyEvent({
+    const result = await resolveReplyBody({
       event_id: "$original",
       sender: "@alice:example.org",
       type: "m.room.message",
@@ -39,13 +53,13 @@ describe("matrix reply context", () => {
     expect(result.endsWith("...")).toBe(true);
   });
 
-  it("truncates on a code-point boundary without orphaning a surrogate half", () => {
+  it("truncates on a code-point boundary without orphaning a surrogate half", async () => {
     // Body is 496 'a' + 😀 (U+1F600, a surrogate pair at UTF-16 indices 496-497)
     // + "bcd". Raw `.slice(0, 497)` would split the emoji and leave a lone high
     // surrogate (\uD83D) before the ellipsis. The fix must drop the half emoji.
     const body = `${"a".repeat(496)}😀bcd`;
     expect(body.length).toBe(501);
-    const result = summarizeMatrixReplyEvent({
+    const result = await resolveReplyBody({
       event_id: "$original",
       sender: "@alice:example.org",
       type: "m.room.message",
@@ -63,9 +77,9 @@ describe("matrix reply context", () => {
     expect(result.includes("\uD83D")).toBe(false);
   });
 
-  it("handles media-only reply events", () => {
+  it("handles media-only reply events", async () => {
     expect(
-      summarizeMatrixReplyEvent({
+      await resolveReplyBody({
         event_id: "$original",
         sender: "@alice:example.org",
         type: "m.room.message",
@@ -78,8 +92,8 @@ describe("matrix reply context", () => {
     ).toBe("[matrix image attachment]");
   });
 
-  it("summarizes poll start events from poll content", () => {
-    expect(summarizeMatrixReplyEvent(createPollStartEvent("$poll"))).toBe(
+  it("summarizes poll start events from poll content", async () => {
+    expect(await resolveReplyBody(createPollStartEvent("$poll"))).toBe(
       "[Poll]\nLunch?\n\n1. Pizza\n2. Sushi",
     );
   });

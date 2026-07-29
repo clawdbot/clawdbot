@@ -224,6 +224,56 @@ describe("tool display details", () => {
     expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
   });
 
+  it("keeps normal search patterns concise", () => {
+    for (const [command, expected] of [
+      ['rg "foo|bar" src/agents', 'search "foo|bar" in src/agents'],
+      ["rg 'search engine' src/agents", 'search "search engine" in src/agents'],
+      ["rg 'search textual data' src/agents", 'search "search textual data" in src/agents'],
+      ["rg 'research text in docs' src/agents", 'search "research text in docs" in src/agents'],
+    ]) {
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe(expected);
+    }
+  });
+
+  it("uses a neutral label for recursive or malformed search patterns", () => {
+    for (const command of [
+      `rg 'search "foo" in src/agents' src`,
+      `rg 'Bash failed: search "foo" in src|search "bar"' src`,
+      `rg 'run printf -> search "foo" in src' src`,
+      "rg 'search text' src",
+      "rg 'search text in src/agents' src",
+      "rg 'foo|search text in src/agents' src",
+      "rg 'run printf -> search text' src",
+      "rg 'line1\nline2' src",
+      "rg 'line with trailing newline\n' src",
+      "rg '`generated command`' src",
+      `rg '${"x".repeat(121)}' src`,
+      `rg '${" ".repeat(121)}x' src`,
+    ]) {
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe("search text in src");
+    }
+  });
+
+  it("sanitizes recursive search patterns inside pipelines", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "exec",
+          args: { command: `printf x | rg 'search "foo" in src' .` },
+          detailMode: "explain",
+        }),
+      ),
+    ).toBe("print text -> search text in .");
+  });
+
   it("moves cd path to context suffix and appends raw command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

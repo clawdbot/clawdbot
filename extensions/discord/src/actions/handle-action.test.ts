@@ -99,6 +99,23 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid autoArchiveMin before Discord thread-create runtime", async () => {
+    const cfg = discordConfig({ threads: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          threadName: "proof-thread",
+          autoArchiveMin: 999,
+        },
+        cfg,
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).rejects.toThrow("autoArchiveMin must be one of 60, 1440, 4320, or 10080 minutes");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
   it("uses Discord requesterSenderId for guild admin actions and ignores params senderUserId", async () => {
     const cfg = discordConfig({ channels: true });
     await handleDiscordMessageAction({

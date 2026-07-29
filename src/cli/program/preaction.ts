@@ -13,6 +13,7 @@ import {
   resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
 import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
+import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
@@ -35,6 +36,7 @@ function setProcessTitleForCommand(actionCommand: Command) {
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
   return (
+    commandPath[0] === "update" ||
     resolvePluginInstallInvalidConfigPolicy(
       resolvePluginInstallPreactionRequest({
         actionCommand,
@@ -43,14 +45,6 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
       }),
     ) === "allow-plugin-recovery"
   );
-}
-
-function getRootCommand(command: Command): Command {
-  let current = command;
-  while (current.parent) {
-    current = current.parent;
-  }
-  return current;
 }
 
 function getActionCommandPath(actionCommand: Command): string[] {
@@ -64,11 +58,10 @@ function getActionCommandPath(actionCommand: Command): string[] {
 }
 
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
-  const root = getRootCommand(actionCommand);
-  if (root.getOptionValueSource("logLevel") !== "cli") {
+  if (actionCommand.getOptionValueSourceWithGlobals("logLevel") !== "cli") {
     return undefined;
   }
-  const logLevel = root.getOptionValue("logLevel");
+  const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
@@ -124,6 +117,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    applyResolvedCommandOutputMode(jsonOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
       protocolCommandPath: getActionCommandPath(actionCommand),
@@ -153,6 +147,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
     let skipPristineStartupStateMigrations = false;
     let skipPristineCoreStateMigrations = false;
+    let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     if (isGatewayRunAction(actionCommand)) {
       const {
         prepareGatewayRunBootstrap,
@@ -162,6 +157,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       } = await import("../gateway-cli/pre-bootstrap.js");
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
+      allowInvalid ||= resolvedOptions.allowUnconfigured === true;
       const opts = {
         force: resolvedOptions.force === true,
         reset: resolvedOptions.reset === true,
@@ -183,7 +179,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       runtime: defaultRuntime,
       commandPath,
       startupPolicy,
-      allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+      allowInvalid,
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),

@@ -2,6 +2,7 @@ import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAgentWorkspaceEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
+import { getPolicyPath, scopedPolicyValue } from "../policy-value.js";
 import {
   SANDBOX_CONTAINER_POLICY_RULES,
   type PolicyRuleMetadata,
@@ -121,6 +122,10 @@ export function policyHasIngressRules(policy: unknown): boolean {
   return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
     ingressPolicyHasRules(overlay.ingress),
   );
+}
+
+export function policyHasRoutingRules(policy: unknown): boolean {
+  return isRecord(policy) && isRecord(policy.routing);
 }
 
 function ingressPolicyHasRules(value: unknown): boolean {
@@ -439,24 +444,4 @@ function scopedPolicyFields(
       metadata: rule,
       value,
     }));
-}
-
-function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
-  const [root, ...remainingPath] = path;
-  if (!root) {
-    return undefined;
-  }
-  const scopedRoot = root === "agents" ? overlay.agents : overlay[root];
-  return getPolicyPath(scopedRoot, remainingPath);
-}
-
-export function getPolicyPath(value: unknown, path: readonly string[]): unknown {
-  let current = value;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return current;
 }

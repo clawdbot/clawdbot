@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mjs";
 
 const DOC_PATH = "docs/plugins/plugin-inventory.md";
 const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
@@ -34,6 +35,26 @@ const PLUGIN_DOC_ALIASES = new Map([
 const SKIPPED_REFERENCE_PAGE_IDS = new Set(["parallel"]);
 const MANUAL_SECTION_START = "<!-- openclaw-plugin-reference:manual-start -->";
 const MANUAL_SECTION_END = "<!-- openclaw-plugin-reference:manual-end -->";
+// Generated link labels are user-visible product names and translation source.
+const RELATED_DOC_PRODUCT_IDS = new Set([
+  "chutes",
+  "discord",
+  "fireworks",
+  "googlechat",
+  "imessage",
+  "line",
+  "matrix",
+  "meta",
+  "msteams",
+  "raft",
+  "runway",
+  "signal",
+  "slack",
+  "synthetic",
+  "telegram",
+  "tokenjuice",
+  "whatsapp",
+]);
 
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, relativePath), "utf8"));
@@ -72,6 +93,10 @@ function docLink({ label, href }) {
   return `[${label}](${href})`;
 }
 
+function relatedDocLabel(value) {
+  return RELATED_DOC_PRODUCT_IDS.has(value) ? humanizeId(value) : value;
+}
+
 function pluginReferencePath(id) {
   return `/plugins/reference/${id}`;
 }
@@ -100,6 +125,12 @@ function pluginReferenceLabel(record) {
 }
 
 function humanizeId(value) {
+  if (value === "teams-meetings") {
+    return "Microsoft Teams meetings";
+  }
+  if (value === "zoom-meetings") {
+    return "Zoom meetings";
+  }
   const names = new Map([
     ["acpx", "ACPx"],
     ["ai", "AI"],
@@ -244,7 +275,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
   const links = [];
   const pluginAlias = PLUGIN_DOC_ALIASES.get(manifest.id) ?? PLUGIN_DOC_ALIASES.get(dirName);
   if (pluginAlias) {
-    const pluginAliasLabel = manifest.id ?? dirName;
+    const pluginAliasLabel = relatedDocLabel(manifest.id ?? dirName);
     pushUniqueDocLink(links, { href: pluginAlias, label: pluginAliasLabel });
   }
 
@@ -252,7 +283,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
   if (channelDoc) {
     pushUniqueDocLink(links, {
       href: channelDoc,
-      label: channelDoc.replace(/^\/channels\//u, ""),
+      label: relatedDocLabel(channelDoc.replace(/^\/channels\//u, "")),
     });
   }
 
@@ -262,7 +293,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
     const relativePath = `docs/channels/${channel}.md`;
     if (fileExists(relativePath)) {
-      pushUniqueDocLink(links, { href: `/channels/${channel}`, label: channel });
+      pushUniqueDocLink(links, { href: `/channels/${channel}`, label: relatedDocLabel(channel) });
     }
   }
 
@@ -272,12 +303,15 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
     const alias = PROVIDER_DOC_ALIASES.get(provider);
     if (alias) {
-      pushUniqueDocLink(links, { href: alias, label: provider });
+      pushUniqueDocLink(links, { href: alias, label: relatedDocLabel(provider) });
       continue;
     }
     const relativePath = `docs/providers/${provider}.md`;
     if (fileExists(relativePath)) {
-      pushUniqueDocLink(links, { href: `/providers/${provider}`, label: provider });
+      pushUniqueDocLink(links, {
+        href: `/providers/${provider}`,
+        label: relatedDocLabel(provider),
+      });
     }
   }
 
@@ -286,40 +320,26 @@ function resolveDocs({ dirName, manifest, packageJson }) {
       continue;
     }
     if (fileExists(`docs/channels/${candidate}.md`)) {
-      pushUniqueDocLink(links, { href: `/channels/${candidate}`, label: candidate });
+      pushUniqueDocLink(links, {
+        href: `/channels/${candidate}`,
+        label: relatedDocLabel(candidate),
+      });
     }
     if (fileExists(`docs/providers/${candidate}.md`)) {
-      pushUniqueDocLink(links, { href: `/providers/${candidate}`, label: candidate });
+      pushUniqueDocLink(links, {
+        href: `/providers/${candidate}`,
+        label: relatedDocLabel(candidate),
+      });
     }
     if (fileExists(`docs/plugins/${candidate}.md`)) {
-      pushUniqueDocLink(links, { href: `/plugins/${candidate}`, label: candidate });
+      pushUniqueDocLink(links, {
+        href: `/plugins/${candidate}`,
+        label: relatedDocLabel(candidate),
+      });
     }
   }
 
   return links;
-}
-
-function resolveSurface(manifest) {
-  const parts = [];
-  if (Array.isArray(manifest.channels) && manifest.channels.length > 0) {
-    parts.push(`channels: ${manifest.channels.join(", ")}`);
-  }
-  if (Array.isArray(manifest.providers) && manifest.providers.length > 0) {
-    parts.push(`providers: ${manifest.providers.join(", ")}`);
-  }
-  const contracts = Object.keys(manifest.contracts ?? {}).toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-  if (contracts.length > 0) {
-    parts.push(`contracts: ${contracts.join(", ")}`);
-  }
-  if (Array.isArray(manifest.skills) && manifest.skills.length > 0) {
-    parts.push("skills");
-  }
-  if (parts.length === 0) {
-    return "plugin";
-  }
-  return parts.join("; ");
 }
 
 function resolveInstallRoute(packageJson, status) {
@@ -542,7 +562,7 @@ function collectPluginRecords() {
       name: humanizeId(id),
       packageName: packageJson.name ?? "-",
       status,
-      surface: resolveSurface(manifest),
+      surface: resolvePluginSurface(manifest),
     });
   }
 

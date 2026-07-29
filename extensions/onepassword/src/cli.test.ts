@@ -160,4 +160,27 @@ describe("1Password CLI output", () => {
       `${"x".repeat(76)}...`,
     ]);
   });
+
+  it.each(["", "0", "-1", "1.5", "0x10", "1e3", "1001"])(
+    "rejects invalid audit limits: %j",
+    async (limit) => {
+      const store = new MemoryKeyedStore<AuditRow>();
+      const entries = vi.spyOn(store, "entries");
+      const { onepassword, write } = setupCommands(store);
+
+      await expect(onepassword.child("audit").run({ limit })).rejects.toThrow(
+        "--limit must be an integer from 1 to 1000",
+      );
+      expect(entries).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts the maximum decimal audit limit", async () => {
+    const { onepassword, write } = setupCommands();
+
+    await onepassword.child("audit").run({ limit: "1000" });
+
+    expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toEqual([]);
+  });
 });

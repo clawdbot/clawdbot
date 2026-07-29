@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 // Type Suppression Inventory reports unchecked any casts and expected TypeScript errors.
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { collectFilesSync, isCodeFile, toPosixPath } from "./check-file-utils.js";
+import {
+  REPO_SCAN_ROOTS,
+  REPO_SCAN_SKIPPED_DIR_NAMES,
+  listRepoFilesSync,
+  toPosixPath,
+} from "./check-file-utils.js";
 
 type TypeSuppressionKind = "as-any" | "expect-error" | "type-assertion-any";
 
@@ -29,58 +33,74 @@ export type TypeSuppressionReport = {
   };
 };
 
-const DEFAULT_SCAN_ROOTS = ["src", "test", "extensions", "packages", "ui", "scripts"];
-const TYPE_SUPPRESSION_CANDIDATE_PATTERN = /\bany\b|@ts-expect-error/u;
-const DEFAULT_SKIPPED_DIR_NAMES = new Set([
-  ".artifacts",
-  ".generated",
-  "coverage",
-  "dist",
-  "fixtures",
-  "node_modules",
-  "vendor",
-]);
+const TYPE_SUPPRESSION_WHITESPACE_PATTERN = /\s/u;
 
-function listGitFiles(repoRoot: string, roots: readonly string[]): string[] | null {
-  try {
-    const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...roots], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return stdout.split(/\r?\n/u).filter(Boolean);
-  } catch {
-    return null;
+function skipTypeScriptTrivia(source: string, start: number): number {
+  let offset = start;
+  while (offset < source.length) {
+    const character = source[offset];
+    if (character && TYPE_SUPPRESSION_WHITESPACE_PATTERN.test(character)) {
+      offset += 1;
+      continue;
+    }
+    if (source.startsWith("/*", offset)) {
+      const commentEnd = source.indexOf("*/", offset + 2);
+      offset = commentEnd === -1 ? source.length : commentEnd + 2;
+      continue;
+    }
+    if (source.startsWith("//", offset)) {
+      offset += 2;
+      while (offset < source.length && !/[\r\n\u2028\u2029]/u.test(source[offset] ?? "")) {
+        offset += 1;
+      }
+      continue;
+    }
+    break;
   }
+  return offset;
+}
+
+function isAnyKeywordAt(source: string, offset: number): boolean {
+  return (
+    source.startsWith("any", offset) && !/[A-Za-z0-9_$]/u.test(source[offset + "any".length] ?? "")
+  );
+}
+
+function hasTypeSuppressionTextCandidate(source: string): boolean {
+  if (source.includes("@ts-expect-error")) {
+    return true;
+  }
+  for (const match of source.matchAll(/\bas\b/gu)) {
+    if (
+      isAnyKeywordAt(source, skipTypeScriptTrivia(source, (match.index ?? 0) + match[0].length))
+    ) {
+      return true;
+    }
+  }
+  for (let offset = source.indexOf("<"); offset !== -1; offset = source.indexOf("<", offset + 1)) {
+    const anyOffset = skipTypeScriptTrivia(source, offset + 1);
+    if (
+      isAnyKeywordAt(source, anyOffset) &&
+      source[skipTypeScriptTrivia(source, anyOffset + "any".length)] === ">"
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function listCandidateFiles(repoRoot: string, roots: readonly string[]): string[] {
-  const gitFiles = listGitFiles(repoRoot, roots);
-  const relativeFiles =
-    gitFiles ??
-    roots.flatMap((root) => {
-      const absoluteRoot = path.join(repoRoot, root);
-      if (!fs.existsSync(absoluteRoot)) {
-        return [];
-      }
-      return collectFilesSync(absoluteRoot, {
-        includeFile: isCodeFile,
-        skipDirNames: DEFAULT_SKIPPED_DIR_NAMES,
-      }).map((filePath) => toPosixPath(path.relative(repoRoot, filePath)));
-    });
-  return relativeFiles
-    .filter((file) => {
+  return listRepoFilesSync(repoRoot, {
+    includeFile: (file) => {
       const pathSegments = toPosixPath(file).split("/");
       return (
         /\.[cm]?tsx?$/u.test(file) &&
         !file.endsWith(".d.ts") &&
-        !pathSegments.some((segment) => DEFAULT_SKIPPED_DIR_NAMES.has(segment))
+        !pathSegments.some((segment) => REPO_SCAN_SKIPPED_DIR_NAMES.has(segment))
       );
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function sourceKindForFile(file: string): ts.ScriptKind {
-  return file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+    },
+    roots,
+  });
 }
 
 function addAnyCastFindings(
@@ -115,23 +135,30 @@ function addExpectErrorFindings(
   findings: TypeSuppressionFinding[],
 ): void {
   const source = sourceFile.getFullText();
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    false,
-    file.endsWith(".tsx") ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard,
-    source,
-  );
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    if (
-      token !== ts.SyntaxKind.SingleLineCommentTrivia &&
-      token !== ts.SyntaxKind.MultiLineCommentTrivia
-    ) {
-      continue;
+  if (!source.includes("@ts-expect-error")) {
+    return;
+  }
+  const comments = new Map<number, ts.CommentRange>();
+  const addComments = (ranges: readonly ts.CommentRange[] | undefined): void => {
+    for (const range of ranges ?? []) {
+      comments.set(range.pos, range);
     }
-    const comment = scanner.getTokenText();
+  };
+  const visit = (node: ts.Node): void => {
+    addComments(ts.getLeadingCommentRanges(source, node.pos));
+    addComments(ts.getTrailingCommentRanges(source, node.end));
+    for (const child of node.getChildren(sourceFile)) {
+      visit(child);
+    }
+  };
+  visit(sourceFile);
+  addComments(ts.getLeadingCommentRanges(source, sourceFile.endOfFileToken.pos));
+
+  for (const range of comments.values()) {
+    const comment = source.slice(range.pos, range.end);
     const markerPattern = /@ts-expect-error[^\r\n]*/gu;
     for (const match of comment.matchAll(markerPattern)) {
-      const position = scanner.getTokenPos() + (match.index ?? 0);
+      const position = range.pos + (match.index ?? 0);
       const line = sourceFile.getLineAndCharacterOfPosition(position).line;
       findings.push({
         excerpt: match[0].trim(),
@@ -149,7 +176,7 @@ export function collectTypeSuppressionReport(params: {
   roots?: readonly string[];
 }): TypeSuppressionReport {
   const files = [
-    ...(params.files ?? listCandidateFiles(params.repoRoot, params.roots ?? DEFAULT_SCAN_ROOTS)),
+    ...(params.files ?? listCandidateFiles(params.repoRoot, params.roots ?? REPO_SCAN_ROOTS)),
   ]
     .map(toPosixPath)
     .toSorted((left, right) => left.localeCompare(right));
@@ -161,18 +188,12 @@ export function collectTypeSuppressionReport(params: {
       continue;
     }
     const source = fs.readFileSync(absolutePath, "utf8");
-    // Full AST parsing dominates the repository ratchet. Every reported construct
-    // contains one of these literal markers, so marker-free files are safe to skip.
-    if (!TYPE_SUPPRESSION_CANDIDATE_PATTERN.test(source)) {
+    // Full AST parsing dominates the repository ratchet. This syntax-shaped text
+    // gate keeps false positives cheap; the AST remains the source of truth.
+    if (!hasTypeSuppressionTextCandidate(source)) {
       continue;
     }
-    const sourceFile = ts.createSourceFile(
-      file,
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      sourceKindForFile(file),
-    );
+    const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest);
     addAnyCastFindings(sourceFile, file, findings);
     addExpectErrorFindings(sourceFile, file, findings);
   }

@@ -111,7 +111,7 @@ function resolveSignalAliasTargetFromMap(params: {
   }
 }
 
-export function resolveSignalAliasTarget(params: {
+function resolveSignalAliasTarget(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   input: string;

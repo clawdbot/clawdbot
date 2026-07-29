@@ -6,6 +6,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -16,14 +17,18 @@ type QaGatewayMutationEnv = Pick<
   "gateway" | "transport" | "providerMode" | "primaryModel" | "alternateModel"
 >;
 
-async function fetchJson<T>(url: string): Promise<T> {
+const QA_SUITE_FETCH_JSON_TIMEOUT_MS = 15_000;
+
+async function fetchJson<T>(url: string, timeoutMs = QA_SUITE_FETCH_JSON_TIMEOUT_MS): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url,
     policy: { allowPrivateNetwork: true },
+    timeoutMs,
     auditContext: "qa-lab-suite-fetch-json",
   });
   try {
     if (!response.ok) {
+      await discardIgnoredResponseBody(response);
       throw new Error(`request failed ${response.status}: ${url}`);
     }
     return await readProviderJsonResponse<T>(response, "qa-lab-suite-fetch-json");
@@ -33,16 +38,19 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, timeoutMs = 45_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
       const { response, release } = await fetchWithSsrFGuard({
         url: `${env.gateway.baseUrl}/readyz`,
         policy: { allowPrivateNetwork: true },
+        timeoutMs: Math.max(1, deadline - Date.now()),
         auditContext: "qa-lab-suite-wait-for-gateway-healthy",
       });
       try {
-        if (response.ok) {
+        const ready = response.ok;
+        await discardIgnoredResponseBody(response);
+        if (ready) {
           return;
         }
       } finally {
@@ -51,7 +59,10 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
     } catch {
       // retry
     }
-    await sleep(250);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await sleep(Math.min(250, remainingMs));
+    }
   }
   throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
 }

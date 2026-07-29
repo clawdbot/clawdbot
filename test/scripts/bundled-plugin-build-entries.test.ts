@@ -166,7 +166,6 @@ describe("bundled plugin build entries", () => {
 
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-channel/");
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-lab/");
-    expectNoPrefixMatches(artifacts, "dist/extensions/qa-matrix/");
   });
 
   it("keeps explicitly downloadable plugins out of bundled package artifacts", () => {

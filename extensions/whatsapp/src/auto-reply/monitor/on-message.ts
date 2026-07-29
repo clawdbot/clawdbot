@@ -106,6 +106,7 @@ export function createWebOnMessageHandler(params: {
       route,
       groupHistoryKey,
       groupHistories: params.groupHistories,
+      groupHistoryLimit: params.groupHistoryLimit,
       groupMemberNames: params.groupMemberNames,
       connectionId: params.connectionId,
       verbose: params.verbose,
@@ -175,9 +176,9 @@ export function createWebOnMessageHandler(params: {
     }
 
     // Skip if this is a message we just sent (echo detection)
-    if (params.echoTracker.has(msg.payload.body)) {
+    if (params.echoTracker.has(msg.payload.body, conversationId)) {
       logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
-      params.echoTracker.forget(msg.payload.body);
+      params.echoTracker.forget(msg.payload.body, conversationId);
       return;
     }
 
@@ -210,8 +211,9 @@ export function createWebOnMessageHandler(params: {
     // undefined = preflight was not attempted (non-audio message).
     let preflightAudioTranscript: string | null | undefined;
     const hasAudioBody =
-      msg.payload.media?.type?.startsWith("audio/") === true &&
-      msg.payload.body === "<media:audio>";
+      (msg.payload.media?.kind === "audio" ||
+        msg.payload.media?.type?.startsWith("audio/") === true) &&
+      !msg.payload.body.trim();
     const canRunEarlyAudioPreflight =
       conversationKind === "group" || canRunDirectEarlyAudioPreflight;
     let ackAlreadySent = false;
@@ -248,8 +250,13 @@ export function createWebOnMessageHandler(params: {
         preflightAudioTranscript =
           (await transcribeFirstAudio({
             ctx: {
-              MediaPaths: [msg.payload.media?.path],
-              MediaTypes: msg.payload.media?.type ? [msg.payload.media?.type] : undefined,
+              media: [
+                {
+                  path: msg.payload.media.path,
+                  contentType: msg.payload.media.type,
+                  kind: msg.payload.media.kind ?? undefined,
+                },
+              ],
               From: conversationId,
               To: msg.platform.recipientJid,
               Provider: "whatsapp",

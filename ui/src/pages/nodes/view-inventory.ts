@@ -1,5 +1,6 @@
 // Nodes page renders the unified paired-device / node inventory sections.
 import { html, nothing, type TemplateResult } from "lit";
+import "../../components/modal-dialog.ts";
 import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -19,6 +20,7 @@ import {
   type NodesInventoryEntry,
   type NodesInventoryGroup,
 } from "../../lib/nodes/inventory.ts";
+import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { renderPendingDeviceRows } from "./view-pending-devices.ts";
 import { deviceIcon, renderDeviceTile } from "./view-shared.ts";
@@ -71,7 +73,7 @@ export function renderNodesInventory(props: NodesProps) {
         `
       : nothing}
     <button
-      class="btn primary"
+      class="btn"
       title=${props.canPairDevice ? "" : t("nodes.pairing.adminRequired")}
       ?disabled=${!props.canPairDevice}
       @click=${props.onDevicePairSetupOpen}
@@ -111,6 +113,58 @@ export function renderNodesInventory(props: NodesProps) {
           unpairedPresence.map((entry) => renderPresenceOnlyEntry(entry)),
         )
       : nothing}
+    ${renderRemovalPrompt(props)}
+  `;
+}
+
+/* In-page confirm instead of window.confirm: hosts without a native dialog
+   bridge silently cancel window.confirm, turning removals into no-ops. */
+function renderRemovalPrompt(props: NodesProps) {
+  const prompt = props.inventoryRemovalPrompt;
+  if (!prompt) {
+    return nothing;
+  }
+  const title =
+    prompt.kind === "entry"
+      ? t("nodes.inventory.removePromptTitle", { name: prompt.entry.name })
+      : t(
+          prompt.entries.length === 1
+            ? "nodes.inventory.removeStalePromptTitleOne"
+            : "nodes.inventory.removeStalePromptTitle",
+          { count: String(prompt.entries.length) },
+        );
+  const body =
+    prompt.kind === "entry"
+      ? t("nodes.inventory.removePromptBody")
+      : t("nodes.inventory.removeStalePromptBody");
+  return html`
+    <openclaw-modal-dialog
+      label=${title}
+      description=${body}
+      @modal-cancel=${props.onInventoryRemovalCancel}
+    >
+      <div class="exec-approval-card">
+        <div class="exec-approval-header">
+          <div>
+            <div class="exec-approval-title">${title}</div>
+            <div class="exec-approval-sub">${body}</div>
+          </div>
+        </div>
+        ${prompt.kind === "entry"
+          ? html`<div class="exec-approval-command mono">
+              ${t("nodes.inventory.deviceId", { id: prompt.entry.id })}
+            </div>`
+          : nothing}
+        <div class="exec-approval-actions">
+          <button class="btn danger" @click=${props.onInventoryRemovalConfirm}>
+            ${t("nodes.inventory.remove")}
+          </button>
+          <button class="btn" autofocus @click=${props.onInventoryRemovalCancel}>
+            ${t("common.cancel")}
+          </button>
+        </div>
+      </div>
+    </openclaw-modal-dialog>
   `;
 }
 
@@ -205,28 +259,6 @@ function entryWarnStatuses(
     );
   }
   return statuses;
-}
-
-const PLATFORM_DISPLAY_NAMES: Record<string, string> = {
-  macos: "macOS",
-  darwin: "macOS",
-  win32: "Windows",
-  windows: "Windows",
-  linux: "Linux",
-  ios: "iOS",
-  ipados: "iPadOS",
-  watchos: "watchOS",
-  android: "Android",
-  web: "Web",
-};
-
-function prettifyPlatform(platform: string): string {
-  const [name = "", ...rest] = platform.trim().split(/\s+/u);
-  // Mixed-case names ("iOS") are already branded; only capitalize all-lowercase input.
-  const fallback =
-    name === name.toLowerCase() ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : name;
-  const displayName = PLATFORM_DISPLAY_NAMES[name.toLowerCase()] ?? fallback;
-  return [displayName, ...rest].join(" ");
 }
 
 function formatInputRecency(lastInputSeconds: number): string {
@@ -338,9 +370,11 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
           : nothing}
         <button
           class="btn btn--sm danger"
+          aria-label=${t("nodes.inventory.removeName", { name: entry.name })}
+          title=${t("nodes.inventory.remove")}
           @click=${() => props.onInventoryRemove(toRemovalRequest(entry))}
         >
-          ${t("nodes.inventory.remove")}
+          ${icons.x}
         </button>
       </div>
     </div>

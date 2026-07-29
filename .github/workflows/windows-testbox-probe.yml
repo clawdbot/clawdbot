@@ -59,7 +59,7 @@ jobs:
         shell: pwsh
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.target_ref || github.ref }}
           persist-credentials: false
@@ -155,7 +155,12 @@ jobs:
               $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
               $rootfsUrl = Resolve-UbuntuWslRootfsUrl
               New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
-              Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfs -UseBasicParsing
+              Invoke-WebRequest `
+                -Uri $rootfsUrl `
+                -OutFile $rootfs `
+                -UseBasicParsing `
+                -ConnectionTimeoutSeconds 15 `
+                -OperationTimeoutSeconds 120
               $import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")
               Write-Host $import.Text
               Write-Host "wsl_import_exit=$($import.Code)"

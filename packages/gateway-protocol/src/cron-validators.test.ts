@@ -36,6 +36,34 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("rejects client-authored scheduled authority provenance", () => {
+    const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
+    expect(validateCronAddParams({ ...minimalAddParams, scheduledToolPolicy })).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { scheduledToolPolicy },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts failure alert field clears only in update patches", () => {
+    const failureAlert = {
+      after: null,
+      channel: null,
+      to: null,
+      cooldownMs: null,
+      includeSkipped: null,
+      mode: null,
+      accountId: null,
+    };
+
+    expect(validateCronUpdateParams({ id: "job-1", patch: { failureAlert } })).toBe(true);
+    expect(validateCronAddParams({ ...minimalAddParams, failureAlert })).toBe(false);
+    expect(validateCronUpdateParams({ id: "job-1", patch: { failureAlert: null } })).toBe(true);
+    expect(validateCronAddParams({ ...minimalAddParams, failureAlert: null })).toBe(false);
+  });
+
   it("rejects schedule integers that SQLite cannot round-trip safely", () => {
     const unsafe = Number.MAX_SAFE_INTEGER + 1;
     expect(
@@ -72,6 +100,32 @@ describe("cron protocol validators", () => {
       }),
     ).toBe(true);
     expect(validateCronUpdateParams({ id: "job-1", patch: { trigger: null } })).toBe(true);
+  });
+
+  it("accepts toolsAllow on systemEvent payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        payload: {
+          kind: "systemEvent",
+          text: "tick",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "systemEvent",
+            toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("rejects invalid trigger scripts and additional properties", () => {
@@ -386,6 +440,7 @@ describe("cron protocol validators", () => {
         sortDir: "asc",
         agentId: "ops",
         compact: true,
+        includeDeliveryPreviews: false,
       }),
     ).toBe(true);
     expect(validateCronListParams({ offset: -1 })).toBe(false);

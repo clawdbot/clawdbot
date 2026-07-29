@@ -33,6 +33,8 @@ export class MemoryReplayStore implements ReplayStore {
     return "new";
   }
 
+  async refresh(_peer: string, _id: string): Promise<void> {}
+
   async complete(
     peer: string,
     id: string,

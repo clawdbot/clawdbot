@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  isNodeVersionManagerRuntime,
-  resolveLinuxSystemCaBundle,
-} from "../bootstrap/node-extra-ca-certs.js";
+import { resolveAutoNodeExtraCaCerts } from "../bootstrap/node-extra-ca-certs.js";
+import { inspectGatewayHeapLimit } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildNodeServiceEnvironment,
@@ -728,6 +726,46 @@ describe("buildServiceEnvironment", () => {
   });
 });
 
+describe("buildServiceEnvironment NODE_OPTIONS", () => {
+  it("sets the adaptive default heap flag", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).toBe(
+      `--max-old-space-size=${inspectGatewayHeapLimit(undefined).maxOldSpaceSizeMiB}`,
+    );
+  });
+
+  it("drops ambient NODE_OPTIONS", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NODE_OPTIONS: "--require /tmp/preload.js --max-old-space-size=16384",
+      },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).not.toContain("--require");
+    expect(env.NODE_OPTIONS).not.toContain("16384");
+  });
+
+  it("keeps an explicit heap flag from the existing service only", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      existingNodeOptions: "--require /tmp/preload.js --max_old_space_size=6144",
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=6144");
+  });
+
+  it("does not apply the Gateway heap policy to node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+    });
+    expect(env.NODE_OPTIONS).toBeUndefined();
+  });
+});
+
 describe("buildNodeServiceEnvironment", () => {
   it("passes through HOME for node services", () => {
     const env = buildNodeServiceEnvironment({
@@ -925,31 +963,6 @@ describe("resolveGatewayStateDir", () => {
   });
 });
 
-describe("isNodeVersionManagerRuntime", () => {
-  it("returns true when NVM_DIR env var is set", () => {
-    expect(isNodeVersionManagerRuntime({ NVM_DIR: "/home/user/.nvm" })).toBe(true);
-  });
-
-  it("returns true when execPath contains /.nvm/", () => {
-    expect(isNodeVersionManagerRuntime({}, "/home/user/.nvm/versions/node/v22.22.0/bin/node")).toBe(
-      true,
-    );
-  });
-
-  it("returns false when neither NVM_DIR nor nvm execPath", () => {
-    expect(isNodeVersionManagerRuntime({}, "/usr/bin/node")).toBe(false);
-  });
-});
-
-describe("resolveLinuxSystemCaBundle", () => {
-  it("returns a known CA bundle path when one exists", () => {
-    const result = resolveLinuxSystemCaBundle();
-    if (process.platform === "linux") {
-      expect(result).toMatch(/\.(crt|pem)$/);
-    }
-  });
-});
-
 describe("shared Node TLS env defaults focused", () => {
   it("sets macOS TLS defaults for gateway services", () => {
     const env = buildServiceEnvironment({
@@ -971,9 +984,14 @@ describe("shared Node TLS env defaults focused", () => {
   });
 
   it("defaults NODE_EXTRA_CA_CERTS on Linux when NVM_DIR is set", () => {
-    const expected = resolveLinuxSystemCaBundle({ platform: "linux" });
+    const sourceEnv = { HOME: "/home/user", NVM_DIR: "/home/user/.nvm" };
+    const expected = resolveAutoNodeExtraCaCerts({
+      env: sourceEnv,
+      platform: "linux",
+      execPath: "/usr/bin/node",
+    });
     const env = buildServiceEnvironment({
-      env: { HOME: "/home/user", NVM_DIR: "/home/user/.nvm" },
+      env: sourceEnv,
       port: 18789,
       platform: "linux",
       execPath: "/usr/bin/node",
@@ -982,11 +1000,17 @@ describe("shared Node TLS env defaults focused", () => {
   });
 
   it("defaults NODE_EXTRA_CA_CERTS on Linux when execPath is under nvm", () => {
-    const expected = resolveLinuxSystemCaBundle({ platform: "linux" });
-    const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user" },
+    const sourceEnv = { HOME: "/home/user" };
+    const execPath = "/home/user/.nvm/versions/node/v22.22.0/bin/node";
+    const expected = resolveAutoNodeExtraCaCerts({
+      env: sourceEnv,
       platform: "linux",
-      execPath: "/home/user/.nvm/versions/node/v22.22.0/bin/node",
+      execPath,
+    });
+    const env = buildNodeServiceEnvironment({
+      env: sourceEnv,
+      platform: "linux",
+      execPath,
     });
     expect(env.NODE_EXTRA_CA_CERTS).toBe(expected);
   });

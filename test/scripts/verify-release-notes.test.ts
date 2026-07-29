@@ -8,16 +8,20 @@ import {
   canonicalPullRequests,
   collectReleaseProvenanceOverrides,
   contaminatingPullRequestReferences,
+  contributionRecordTarget,
   countTopLevelSectionBullets,
   createGithubSnapshotState,
   cumulativeShippedPullRequests,
   defaultGithubSnapshotPath,
   githubApiWithSnapshot,
   highlightCountError,
+  isEligibleHandle,
   persistGithubSnapshot,
+  pullRequestTitleFromCommitSubject,
   releaseNoteReferences,
   releasePullRequestReferencesToSuppress,
   releaseProvenanceMarkers,
+  recoverUnavailablePullRequests,
   renderedContributionRecordReferences,
   resolvedReleasePullRequests,
   standardRevertedHash,
@@ -45,6 +49,153 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("excludes maintainer and automation identities from contributor credit", () => {
+    expect(isEligibleHandle("human-contributor")).toBe(true);
+    expect(isEligibleHandle("steipete")).toBe(false);
+    expect(isEligibleHandle("steipete-oai")).toBe(false);
+    expect(isEligibleHandle("hugin-bot")).toBe(false);
+  });
+
+  it("accepts only canonical commit PR suffixes", () => {
+    expect(pullRequestTitleFromCommitSubject("Fix status (#102147)", 102147)).toBe("Fix status");
+    expect(pullRequestTitleFromCommitSubject("Fix status(#102147)", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject("Fix status (#0102147)", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject(" Fix status (#102147)", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject("Fix status (#102147) ", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject("Fix status (#102148)", 102147)).toBeUndefined();
+  });
+
+  it("reads the exact target from a generated contribution record", () => {
+    const target = "a".repeat(40);
+    expect(
+      contributionRecordTarget({
+        source: [
+          "## 2026.7.2",
+          "",
+          "### Complete contribution record",
+          "",
+          `This audited record covers the complete base..${target} history: 1 merged PR.`,
+        ].join("\n"),
+      }),
+    ).toBe(target);
+  });
+
+  it("recovers a vanished PR only from an exact covered commit and prior record", () => {
+    const number = 102147;
+    const commit = {
+      authorHandle: undefined,
+      closingReferences: [102146],
+      coauthors: [],
+      committedAt: "2026-07-01T12:00:00Z",
+      hash: "a".repeat(40),
+      pullRequests: [],
+      references: [number],
+      subject: `Fix silent maintenance delivery status (#${number})`,
+    };
+    const source = {
+      activeCommits: [commit],
+      coauthorsByReference: new Map<number, Set<string>>(),
+      pullRequests: new Set<number>(),
+      target: "c".repeat(40),
+    };
+    const nodes = new Map();
+    const recovered = recoverUnavailablePullRequests({
+      numbers: [number],
+      nodes,
+      record: {
+        pullRequests: new Map([[number, { references: [], thanks: ["coolmanns"] }]]),
+      },
+      recordTarget: "b".repeat(40),
+      source,
+      isAncestor: () => true,
+    });
+
+    expect(recovered.get(number)).toMatchObject({
+      __typename: "PullRequest",
+      number,
+      title: "Fix silent maintenance delivery status",
+      mergedAt: commit.committedAt,
+      mergeCommit: { oid: commit.hash },
+      author: { __typename: "User", login: "coolmanns" },
+    });
+    expect(commit.pullRequests).toEqual([number]);
+    expect(source.pullRequests).toEqual(new Set([number]));
+    expect(source.coauthorsByReference.get(number)).toEqual(new Set(["coolmanns"]));
+  });
+
+  it("does not recover an unavailable reference without an exact PR title suffix", () => {
+    const number = 102147;
+    const source = {
+      activeCommits: [
+        {
+          committedAt: "2026-07-01T12:00:00Z",
+          hash: "a".repeat(40),
+          pullRequests: [],
+          references: [number],
+          subject: `Fix status; refs #${number}`,
+        },
+      ],
+      coauthorsByReference: new Map<number, Set<string>>(),
+      pullRequests: new Set<number>(),
+      target: "c".repeat(40),
+    };
+
+    expect(
+      recoverUnavailablePullRequests({
+        numbers: [number],
+        nodes: new Map(),
+        record: {
+          pullRequests: new Map([[number, { references: [], thanks: ["coolmanns"] }]]),
+        },
+        recordTarget: "b".repeat(40),
+        source,
+        isAncestor: () => true,
+      }),
+    ).toEqual(new Map());
+  });
+
+  it("does not recover an unavailable PR with multiple active canonical commits", () => {
+    const number = 102147;
+    const coveredHash = "a".repeat(40);
+    const laterHash = "d".repeat(40);
+    const source = {
+      activeCommits: [
+        {
+          committedAt: "2026-07-01T12:00:00Z",
+          hash: coveredHash,
+          pullRequests: [],
+          references: [number],
+          subject: `Fix status (#${number})`,
+        },
+        {
+          committedAt: "2026-07-02T12:00:00Z",
+          hash: laterHash,
+          pullRequests: [],
+          references: [number],
+          subject: `Fix status again (#${number})`,
+        },
+      ],
+      coauthorsByReference: new Map<number, Set<string>>(),
+      pullRequests: new Set<number>(),
+      target: "c".repeat(40),
+    };
+
+    expect(
+      recoverUnavailablePullRequests({
+        numbers: [number],
+        nodes: new Map(),
+        record: {
+          pullRequests: new Map([[number, { references: [], thanks: ["coolmanns"] }]]),
+        },
+        recordTarget: "b".repeat(40),
+        source,
+        isAncestor: (left: string, right: string) =>
+          (left === "b".repeat(40) && right === source.target) ||
+          (left === coveredHash && right === "b".repeat(40)),
+      }),
+    ).toEqual(new Map());
+  });
+
   it("stores default GitHub snapshots in the shared Git common directory", () => {
     const commonDir = resolve("/tmp/openclaw-shared-git");
     expect(defaultGithubSnapshotPath("a".repeat(40), "b".repeat(40), commonDir)).toBe(
@@ -510,6 +661,30 @@ describe("release-note verification", () => {
         seededPullRequests: new Set([97118]),
       }),
     ).toEqual([]);
+  });
+
+  it("allows shipped PR references only in generated record metadata", () => {
+    const nodes = new Map([
+      [97118, { __typename: "PullRequest" }],
+      [102000, { __typename: "PullRequest" }],
+    ]);
+    const params = {
+      noteReferences: [],
+      recordedReferences: [97118, 102000],
+      excludedRecordedReferences: new Set([97118]),
+      sourcePullRequests: new Set([102000]),
+      sourceReferences: [102000],
+      seededPullRequests: new Set<number>(),
+      nodes,
+    };
+
+    expect(contaminatingPullRequestReferences(params)).toEqual([]);
+    expect(
+      contaminatingPullRequestReferences({
+        ...params,
+        noteReferences: [97118],
+      }),
+    ).toEqual([97118]);
   });
 
   it("ignores the stale generated record while rewriting it", () => {

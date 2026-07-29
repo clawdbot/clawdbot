@@ -70,10 +70,41 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     shippedBaselines: unknown[],
   ): number[];
   export function standardRevertedHash(message: string): string | null;
+  export function contributionRecordTarget(section: { source: string }): string | undefined;
+  export function pullRequestTitleFromCommitSubject(
+    subject: string,
+    number: number,
+  ): string | undefined;
   export function contributionRecordFor(section: Record<string, unknown>): {
     legacyIssues: Map<number, unknown>;
     pullRequests: Map<number, ContributionRecord>;
   };
+  export function contributionRecordTarget(section: { source: string }): string | undefined;
+  export function pullRequestTitleFromCommitSubject(
+    subject: string,
+    number: number,
+  ): string | undefined;
+  export function recoverUnavailablePullRequests(params: {
+    numbers: Iterable<number>;
+    nodes: Map<number, unknown>;
+    record: { pullRequests: Map<number, ContributionRecord> };
+    recordTarget?: string;
+    source: {
+      activeCommits: Array<{
+        authorHandle?: string;
+        closingReferences?: number[];
+        committedAt: string;
+        hash: string;
+        pullRequests: number[];
+        references: number[];
+        subject: string;
+      }>;
+      coauthorsByReference: Map<number, Set<string>>;
+      pullRequests: Set<number>;
+      target: string;
+    };
+    isAncestor?: (ancestor: string, descendant: string) => boolean;
+  }): Map<number, unknown>;
   export function cumulativeShippedPullRequests(changelog: unknown, label: string): Set<number>;
   export function subtractShippedPullRequests(
     source: unknown,
@@ -124,6 +155,9 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     associatedPullRequests: number[],
     hasProvenanceOverride: boolean,
   ): number[];
+  export function recoverUnavailablePullRequests(
+    params: Record<string, unknown>,
+  ): Map<number, Record<string, unknown>>;
   export function validateReleaseProvenanceOverrides(
     provenanceOverrides: Map<string, number[]>,
     nodes: Map<number, unknown>,
@@ -139,6 +173,7 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
   };
   export function countTopLevelSectionBullets(sectionSource: string, heading: string): number;
   export function highlightCountError(sectionSource: string): string | undefined;
+  export function isEligibleHandle(handle: string): boolean;
   export function ledgerChecks(...args: unknown[]): string[];
 }
 
@@ -226,6 +261,12 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
         activeCount: number;
         blockers: Array<{ kind: string; count: number; message: string }>;
       };
+  export function runBuiltGatewayCli(
+    checkout: string,
+    args: string[],
+    deployment?: GatewayDeployment | null,
+    options?: { stderr?: "inherit" | "pipe"; timeoutMs?: number },
+  ): string;
   export function verifyGatewayReadiness(
     runCommand: (command: string, args: string[], checkout: string) => unknown,
     checkout: string,

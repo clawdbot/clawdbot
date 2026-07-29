@@ -16,7 +16,10 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", async (importOriginal) =
   };
 });
 
-import { ExecApprovalButton, createDiscordExecApprovalButtonContext } from "./exec-approvals.js";
+import {
+  createDiscordExecApprovalButtonContext,
+  createExecApprovalButton,
+} from "./exec-approvals.js";
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>["execApprovals"],
@@ -90,7 +93,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("rejects invalid approval button payloads", async () => {
     const interaction = createInteraction();
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
     });
@@ -105,7 +108,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("blocks non-approvers from approving", async () => {
     const interaction = createInteraction({ userId: "999" });
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
     });
@@ -130,7 +133,7 @@ describe("discord exec approval monitor helpers", () => {
             resolution: createApprovalResolution(),
           }) as const,
       );
-      const button = new ExecApprovalButton({
+      const button = createExecApprovalButton({
         getApprovers: () => ["123"],
         resolveApproval,
       });
@@ -150,7 +153,7 @@ describe("discord exec approval monitor helpers", () => {
         throw new Error("message edit failed");
       }),
     });
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({
         ok: true,
@@ -180,7 +183,7 @@ describe("discord exec approval monitor helpers", () => {
       decision: "deny",
     });
     resolveApprovalOverGatewayMock.mockResolvedValueOnce(resolution);
-    const button = new ExecApprovalButton(
+    const button = createExecApprovalButton(
       createDiscordExecApprovalButtonContext({
         cfg: buildConfig({ enabled: true, approvers: ["123"] }),
         accountId: "default",
@@ -214,7 +217,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("shows a follow-up when gateway resolution fails", async () => {
     const interaction = createInteraction();
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({ ok: false, reason: "error" }),
     });
@@ -230,7 +233,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("shows a follow-up for already-resolved approval clicks", async () => {
     const interaction = createInteraction();
-    const button = new ExecApprovalButton({
+    const button = createExecApprovalButton({
       getApprovers: () => ["123"],
       resolveApproval: async () => ({ ok: false, reason: "not-found" }),
     });

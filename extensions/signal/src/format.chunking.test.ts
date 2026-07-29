@@ -301,6 +301,20 @@ describe("splitSignalFormattedText", () => {
 });
 
 describe("markdownToSignalTextChunks", () => {
+  it("marks a transcript-role header promoted to a chunk boundary", () => {
+    const header = "user[2026-07-02]";
+    const chunks = markdownToSignalTextChunks(`padding padding ${header} question`, 25);
+    const roleChunk = chunks.find((chunk) => chunk.text.startsWith(header));
+
+    expect(roleChunk).toBeDefined();
+    expect(roleChunk?.styles).toContainEqual({
+      start: 0,
+      length: header.length,
+      style: "MONOSPACE",
+    });
+    expect(chunks.every((chunk) => chunk.text.length <= 25)).toBe(true);
+  });
+
   it("treats Infinity as unbounded for media captions", () => {
     const markdown = "Here's **another** photo from today's walk.";
 

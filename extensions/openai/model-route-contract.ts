@@ -21,7 +21,7 @@ export const OPENAI_GPT_56_VARIANT_MODEL_IDS = [
 ] as const;
 
 /** Models with known first-party Platform and ChatGPT transports. */
-export const OPENAI_DUAL_ROUTE_MODEL_IDS = [
+const OPENAI_DUAL_ROUTE_MODEL_IDS = [
   ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
@@ -31,14 +31,12 @@ export const OPENAI_DUAL_ROUTE_MODEL_IDS = [
 ] as const;
 
 /** Direct aliases excluded from the ChatGPT catalog. */
-export const OPENAI_PLATFORM_ONLY_ROUTE_MODEL_IDS = [
+const OPENAI_PLATFORM_ONLY_ROUTE_MODEL_IDS = [
   OPENAI_CHAT_LATEST_MODEL_ID,
   OPENAI_GPT_56_MODEL_ID,
 ] as const;
 
-export const OPENAI_SUBSCRIPTION_ONLY_ROUTE_MODEL_IDS = [
-  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
-] as const;
+const OPENAI_SUBSCRIPTION_ONLY_ROUTE_MODEL_IDS = [OPENAI_GPT_53_CODEX_SPARK_MODEL_ID] as const;
 
 /** Modern model refs recognized by the unified OpenAI provider surface. */
 export const OPENAI_PROVIDER_MODERN_MODEL_IDS = [

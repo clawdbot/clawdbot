@@ -1,16 +1,19 @@
 // Msteams tests cover sdk plugin behavior.
-import * as fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMSTeamsApp, createMSTeamsTokenProvider } from "./sdk.js";
+import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+const { readSecretFile } = vi.hoisted(() => ({
+  readSecretFile: vi
+    .fn<(filePath: string, label: string) => Promise<string>>()
+    .mockResolvedValue("-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----"),
+}));
+
+vi.mock("openclaw/plugin-sdk/secret-file", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/secret-file")>();
   return {
     ...actual,
-    readFileSync: vi.fn(
-      () => "-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----",
-    ),
+    readSecretFile,
   };
 });
 
@@ -33,7 +36,14 @@ vi.mock("@azure/identity", () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  readSecretFile
+    .mockReset()
+    .mockResolvedValue("-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----");
 });
+
+async function createMSTeamsApp(...args: Parameters<typeof loadMSTeamsSdkWithAuth>) {
+  return (await loadMSTeamsSdkWithAuth(...args)).app;
+}
 
 describe("createMSTeamsApp", () => {
   it("does not crash with express 5 path-to-regexp (#55161)", async () => {
@@ -72,13 +82,11 @@ describe("createMSTeamsApp", () => {
 
     const app = await createMSTeamsApp(creds);
     expect(app).toBeDefined();
-    expect(fs.readFileSync).toHaveBeenCalledWith("/path/to/cert.pem", "utf-8");
+    expect(readSecretFile).toHaveBeenCalledWith("/path/to/cert.pem", "Microsoft Teams certificate");
   });
 
   it("throws when certificate file is missing", async () => {
-    vi.mocked(fs.readFileSync).mockImplementation(() => {
-      throw new Error("ENOENT: no such file");
-    });
+    readSecretFile.mockRejectedValue(new Error("ENOENT: no such file"));
 
     const creds: MSTeamsFederatedCredentials = {
       type: "federated",

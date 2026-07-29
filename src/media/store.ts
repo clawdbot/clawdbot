@@ -9,9 +9,8 @@ import {
   extnameFromAnyPath,
   nameFromAnyPath,
 } from "@openclaw/media-core/file-name";
-import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
@@ -37,12 +36,18 @@ type CleanOldMediaOptions = {
 };
 
 /** Overrides network dependencies for media-store tests. */
-export function setMediaStoreNetworkDepsForTest(deps?: {
+function setMediaStoreNetworkDepsForTest(deps?: {
   httpRequest?: RequestImpl;
   httpsRequest?: RequestImpl;
   resolvePinnedHostname?: ResolvePinnedHostnameImpl;
 }): void {
   setMediaStoreDownloadDepsForTest(deps);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
+    setMediaStoreNetworkDepsForTest,
+  };
 }
 
 function resolveMediaSubdir(subdir: string, caller: string): string {
@@ -201,6 +206,9 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
     recursive: options.recursive ?? true,
     pruneEmptyDirs: options.pruneEmptyDirs,
   });
+  // Trust metadata must not outlive the staged file that it authorizes.
+  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+  await pruneStaleTrustedGeneratedHtmlMarkers();
 }
 
 function looksLikeUrl(src: string) {
@@ -240,7 +248,7 @@ function safeOriginalFilenameExtension(originalFilename?: string): string | unde
 }
 
 function extensionForAuthoritativeHeaderMime(contentType?: string): string | undefined {
-  const mime = normalizeOptionalString(contentType?.split(";")[0]);
+  const mime = normalizeMimeType(contentType);
   if (!mime || mime === "application/octet-stream" || mime === "binary/octet-stream") {
     return undefined;
   }
@@ -255,7 +263,7 @@ function isGenericContainerMime(mime?: string): boolean {
 }
 
 function isImageHeaderMime(contentType?: string): boolean {
-  return normalizeOptionalString(contentType?.split(";")[0])?.startsWith("image/") === true;
+  return normalizeMimeType(contentType)?.startsWith("image/") === true;
 }
 
 function resolveSavedMediaExtension(params: {
@@ -374,7 +382,7 @@ async function writeMediaStreamToFile(params: {
 }
 
 /** Stable error categories for unsafe or failed source-file ingestion. */
-export type SaveMediaSourceErrorCode =
+type SaveMediaSourceErrorCode =
   | "invalid-path"
   | "not-found"
   | "not-file"
@@ -382,7 +390,7 @@ export type SaveMediaSourceErrorCode =
   | "too-large";
 
 /** Error raised when saveMediaSource cannot safely read or persist a source path. */
-export class SaveMediaSourceError extends Error {
+class SaveMediaSourceError extends Error {
   code: SaveMediaSourceErrorCode;
 
   constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions) {
@@ -583,7 +591,7 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
 }
 
 /** Read result for callers that need media bytes plus the resolved file path. */
-export type ReadMediaBufferResult = {
+type ReadMediaBufferResult = {
   id: string;
   path: string;
   buffer: Buffer;

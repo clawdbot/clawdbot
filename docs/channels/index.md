@@ -16,6 +16,7 @@ restart. "External plugin" channels are maintained outside the OpenClaw repo.
 
 ## Supported channels
 
+- [Buzz](/channels/buzz) - Buzz team rooms with threaded replies (official plugin).
 - [Discord](/channels/discord) - Discord Bot API + Gateway; supports servers, channels, and DMs (official plugin).
 - [Feishu](/channels/feishu) - Feishu/Lark bot via WebSocket (official plugin).
 - [Google Chat](/channels/googlechat) - Google Chat API app via HTTP webhook (official plugin).

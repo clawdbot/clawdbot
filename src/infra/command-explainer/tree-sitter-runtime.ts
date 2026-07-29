@@ -1,69 +1,26 @@
-// Lazy tree-sitter runtime resolves WASM assets, caches the bash parser, and
-// enforces source-size/time limits for command explanation.
-import fs from "node:fs";
+// Lazy tree-sitter runtime caches the bash parser and enforces source-size/time
+// limits for command explanation.
 import { createRequire } from "node:module";
-import path from "node:path";
 import * as TreeSitter from "web-tree-sitter";
 
 const require = createRequire(import.meta.url);
 
 let parserPromise: Promise<TreeSitter.Parser> | null = null;
-const parserLoader: () => Promise<TreeSitter.Parser> = loadParser;
 const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
 const MAX_COMMAND_EXPLANATION_PARSE_MS = 500;
 
-function resolvePackageFileForCommandExplanation(packageName: string, fileName: string): string {
-  let packageEntry: string;
-  try {
-    packageEntry = require.resolve(packageName);
-  } catch (error) {
-    throw new Error(
-      `Unable to resolve ${packageName} while loading the shell command explainer parser`,
-      { cause: error },
-    );
-  }
-
-  let directory = path.dirname(packageEntry);
-  const searched: string[] = [];
-  for (let depth = 0; depth < 5; depth += 1) {
-    const candidate = path.join(directory, fileName);
-    searched.push(candidate);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-    const parent = path.dirname(directory);
-    if (parent === directory) {
-      break;
-    }
-    directory = parent;
-  }
-  throw new Error(
-    `Unable to locate ${fileName} in ${packageName} while loading the shell command explainer parser; searched ${searched.join(", ")}`,
-  );
-}
-
-function resolveWebTreeSitterFile(fileName: string): string {
-  return resolvePackageFileForCommandExplanation("web-tree-sitter", fileName);
-}
-
-function resolveBashWasmPath(): string {
-  return resolvePackageFileForCommandExplanation("tree-sitter-bash", "tree-sitter-bash.wasm");
-}
-
 async function loadParser(): Promise<TreeSitter.Parser> {
-  await TreeSitter.Parser.init({
-    locateFile: resolveWebTreeSitterFile,
-  });
-  const language = await TreeSitter.Language.load(resolveBashWasmPath());
-  const parser = new TreeSitter.Parser();
-  parser.setLanguage(language);
-  return parser;
+  await TreeSitter.Parser.init();
+  const language = await TreeSitter.Language.load(
+    require.resolve("tree-sitter-bash/tree-sitter-bash.wasm"),
+  );
+  return new TreeSitter.Parser().setLanguage(language);
 }
 
 function getBashParserForCommandExplanation(): Promise<TreeSitter.Parser> {
   // Reset the cache on load failure so transient filesystem or WASM init errors
   // do not poison all later command explanations in the process.
-  parserPromise ??= parserLoader().catch((error: unknown) => {
+  parserPromise ??= loadParser().catch((error: unknown) => {
     parserPromise = null;
     throw error;
   });

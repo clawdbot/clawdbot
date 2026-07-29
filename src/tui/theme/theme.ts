@@ -85,8 +85,7 @@ function isLightBackground(): boolean {
   return false;
 }
 
-/** Whether the terminal has a light background. Exported for testing only. */
-export const lightMode = isLightBackground();
+const lightMode = isLightBackground();
 
 const darkPalette = {
   text: "#E8E3D5",
@@ -105,14 +104,13 @@ const darkPalette = {
   quote: "#8CC8FF",
   quoteBorder: "#3B4D6B",
   code: "#F0C987",
-  codeBlock: "#1E232A",
   codeBorder: "#343A45",
   link: "#7DD3A5",
   error: "#F97066",
   success: "#7DD3A5",
 } as const;
 
-export const lightPalette = {
+const lightPalette = {
   text: "#1E1E1E",
   dim: "#5B6472",
   accent: "#B45309",
@@ -129,14 +127,13 @@ export const lightPalette = {
   quote: "#1D4ED8",
   quoteBorder: "#2563EB",
   code: "#92400E",
-  codeBlock: "#F9FAFB",
   codeBorder: "#92400E",
   link: "#047857",
   error: "#DC2626",
   success: "#047857",
 } as const;
 
-export const palette = lightMode ? lightPalette : darkPalette;
+const palette = lightMode ? lightPalette : darkPalette;
 
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);

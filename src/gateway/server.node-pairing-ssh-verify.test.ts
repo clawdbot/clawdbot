@@ -42,7 +42,7 @@ async function waitFor<T>(
       return value;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`timed out waiting for ${what}`);

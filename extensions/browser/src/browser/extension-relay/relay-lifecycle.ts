@@ -11,6 +11,7 @@ import {
   withProfileOperationLease,
 } from "../server-context.lifecycle.js";
 import type { BrowserServerState, ProfileRuntimeState } from "../server-context.types.js";
+import { deliverPageShare } from "./page-share.js";
 import { type ExtensionRelayHandle, startExtensionRelayServer } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
@@ -54,7 +55,7 @@ export async function ensureExtensionRelayForProfile(
     // Resolve one canonical desired profile after applying that token so the
     // intentional auth-derived cdpUrl change is not mistaken for config drift.
     const { ensureExtensionRelayToken, readExtensionRelayToken } = await import("./relay-auth.js");
-    const token = readExtensionRelayToken() ?? ensureExtensionRelayToken();
+    const token = readExtensionRelayToken() ?? (await ensureExtensionRelayToken());
     if (state.resolved.extensionRelayToken !== token) {
       state.resolved = { ...state.resolved, extensionRelayToken: token };
     }
@@ -138,6 +139,7 @@ async function ensureDesiredRelay(params: {
         handle = await startExtensionRelayServer({
           port: profile.cdpPort,
           token,
+          onPageShare: (payload) => deliverPageShare(payload),
         });
         actor.cleanupRelays.add(handle);
         signal.throwIfAborted();

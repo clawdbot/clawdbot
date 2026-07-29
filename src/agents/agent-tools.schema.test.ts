@@ -11,11 +11,20 @@ import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
   isToolWrappedWithBeforeToolCallHook,
-  testing as beforeToolCallTesting,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { execSchema } from "./bash-tools.schemas.js";
+import {
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
+} from "./before-tool-call-metadata.js";
+
+const beforeToolCallTesting = {
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
+};
 
 const TEST_USAGE = {
   input: 0,
@@ -25,6 +34,26 @@ const TEST_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+describe("direct exec tool schema", () => {
+  it("keeps model-facing descriptions compact without hiding runtime constraints", () => {
+    const fields = execSchema.properties as Record<string, { description?: string }>;
+    const describeField = (name: string) => fields[name]?.description ?? "";
+    const descriptions = Object.values(fields).map((field) => field.description ?? "");
+
+    expect(descriptions.join("").length).toBeLessThan(550);
+    expect(describeField("workdir")).toContain("Blank/whitespace");
+    expect(describeField("yieldMs")).toContain("Milliseconds");
+    expect(describeField("timeout")).toContain("seconds");
+    expect(describeField("pty")).toContain("PTY");
+    expect(describeField("elevated")).toContain("if allowed");
+    expect(describeField("security")).toContain("tools.exec.security");
+    expect(describeField("security")).toContain("host approvals");
+    expect(describeField("ask")).toContain("tools.exec.ask");
+    expect(describeField("ask")).toContain("channel-origin");
+    expect(describeField("ask")).toContain("ask=off");
+  });
+});
 
 describe("normalizeToolParameterSchema", () => {
   it("reuses normalized schemas for the same schema object and provider options", () => {
@@ -102,6 +131,34 @@ describe("normalizeToolParameterSchema", () => {
       type: "object",
       properties: {
         sessionKey: { type: "string" },
+      },
+    });
+  });
+
+  it("applies llama.cpp cleaning only for the explicit tool-schema profile", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", pattern: "^\\S+$", maxLength: 200 },
+        safe: { type: "string", maxLength: 1999 },
+        boundary: { type: "string", maxLength: 2000 },
+        script: { type: "string", minLength: 1, maxLength: 65_536 },
+      },
+    };
+
+    expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(schema);
+    expect(
+      normalizeToolParameterSchema(schema, {
+        modelProvider: "openai-compatible",
+        modelCompat: { toolSchemaProfile: "llamacpp" },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", maxLength: 200 },
+        safe: { type: "string", maxLength: 1999 },
+        boundary: { type: "string" },
+        script: { type: "string", minLength: 1 },
       },
     });
   });
@@ -1322,3 +1379,4 @@ describe("normalizeToolParameters", () => {
     expect(params.required).toEqual(["name"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -274,44 +274,13 @@ function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
 }
 
 function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {
+  const updates = { ...row, task_id: undefined };
   executeSqliteQuerySync(
     db,
     getTaskRegistryKysely(db)
       .insertInto("task_runs")
       .values(row)
-      .onConflict((conflict) =>
-        conflict.column("task_id").doUpdateSet({
-          runtime: (eb) => eb.ref("excluded.runtime"),
-          task_kind: (eb) => eb.ref("excluded.task_kind"),
-          source_id: (eb) => eb.ref("excluded.source_id"),
-          requester_session_key: (eb) => eb.ref("excluded.requester_session_key"),
-          owner_key: (eb) => eb.ref("excluded.owner_key"),
-          scope_kind: (eb) => eb.ref("excluded.scope_kind"),
-          child_session_key: (eb) => eb.ref("excluded.child_session_key"),
-          parent_flow_id: (eb) => eb.ref("excluded.parent_flow_id"),
-          parent_task_id: (eb) => eb.ref("excluded.parent_task_id"),
-          agent_id: (eb) => eb.ref("excluded.agent_id"),
-          requester_agent_id: (eb) => eb.ref("excluded.requester_agent_id"),
-          run_id: (eb) => eb.ref("excluded.run_id"),
-          label: (eb) => eb.ref("excluded.label"),
-          task: (eb) => eb.ref("excluded.task"),
-          status: (eb) => eb.ref("excluded.status"),
-          delivery_status: (eb) => eb.ref("excluded.delivery_status"),
-          notify_policy: (eb) => eb.ref("excluded.notify_policy"),
-          created_at: (eb) => eb.ref("excluded.created_at"),
-          started_at: (eb) => eb.ref("excluded.started_at"),
-          ended_at: (eb) => eb.ref("excluded.ended_at"),
-          last_event_at: (eb) => eb.ref("excluded.last_event_at"),
-          cleanup_after: (eb) => eb.ref("excluded.cleanup_after"),
-          tool_use_count: (eb) => eb.ref("excluded.tool_use_count"),
-          last_tool_name: (eb) => eb.ref("excluded.last_tool_name"),
-          error: (eb) => eb.ref("excluded.error"),
-          progress_summary: (eb) => eb.ref("excluded.progress_summary"),
-          terminal_summary: (eb) => eb.ref("excluded.terminal_summary"),
-          terminal_outcome: (eb) => eb.ref("excluded.terminal_outcome"),
-          detail_json: (eb) => eb.ref("excluded.detail_json"),
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("task_id").doUpdateSet(updates)),
   );
 }
 

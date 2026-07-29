@@ -12,8 +12,6 @@ type StringEnumOptions<T extends readonly string[]> = {
   deprecated?: boolean;
 };
 
-// Avoid Type.Union([Type.Literal(...)]) which compiles to anyOf.
-// Some providers reject anyOf in tool schemas; a flat string enum is safer.
 export function stringEnum<T extends readonly string[]>(
   values: T,
   options: StringEnumOptions<T> = {},
@@ -23,11 +21,9 @@ export function stringEnum<T extends readonly string[]>(
     : values && typeof values === "object"
       ? Object.values(values).filter((value): value is T[number] => typeof value === "string")
       : [];
-  return Type.Unsafe<T[number]>({
-    type: "string",
-    ...(enumValues.length > 0 ? { enum: [...enumValues] } : {}),
-    ...options,
-  });
+  return enumValues.length === 0
+    ? Type.Unsafe<T[number]>({ type: "string", ...options })
+    : Type.Enum(enumValues, { type: "string", ...options });
 }
 
 export function optionalStringEnum<T extends readonly string[]>(

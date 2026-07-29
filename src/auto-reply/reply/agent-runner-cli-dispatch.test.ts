@@ -1,8 +1,11 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -10,6 +13,7 @@ import {
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
 import {
+  clearCliSessionBindingForRun,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -26,6 +30,7 @@ type ReasoningProgressPayload = Parameters<
 const cliDispatchState = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => cliDispatchState.runCliAgentMock(...args),
@@ -38,6 +43,97 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("bridges typed CLI plan events", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "codex-exec",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "pending" },
+          ],
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onPlanUpdate = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-plan-bridge",
+      provider: "codex-cli",
+      onPlanUpdate,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "codex",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-plan-bridge",
+      },
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith({
+      phase: "update",
+      title: "Plan updated",
+      explanation: undefined,
+      source: "codex-exec",
+      steps: [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "pending" },
+      ],
+    });
+  });
+
+  it("normalizes shipped string-step plan events to pending typed steps", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "codex-exec",
+          steps: ["Inspect", "  ", "Patch"],
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onPlanUpdate = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-plan-legacy",
+      provider: "codex-cli",
+      onPlanUpdate,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "codex",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-plan-legacy",
+      },
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: [
+          { step: "Inspect", status: "pending" },
+          { step: "Patch", status: "pending" },
+        ],
+      }),
+    );
+  });
+
   it("bridges thinking events to reasoning text and dedupes identical snapshots", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({
@@ -563,6 +659,62 @@ describe("keepCliSessionBindingOnlyWhenReused", () => {
     expect(onDroppedReplacement).toHaveBeenCalledOnce();
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+  });
+});
+
+describe("clearCliSessionBindingForRun", () => {
+  it("clears the expected binding from active and stored session entries", async () => {
+    const activeEntry = {
+      sessionId: "openclaw-active",
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
+      cliSessionIds: { "claude-cli": "stale-session" },
+      claudeCliSessionId: "stale-session",
+    };
+    const storedEntry = structuredClone(activeEntry);
+    const storePath = path.join(tempDirs.make("cli-session-cleanup-"), "sessions.json");
+    await replaceSessionEntry({ storePath, sessionKey: "main" }, structuredClone(activeEntry));
+
+    await clearCliSessionBindingForRun({
+      provider: "claude-cli",
+      expectedSessionId: "stale-session",
+      sessionKey: "main",
+      sessionStore: { main: storedEntry },
+      storePath,
+      activeSessionEntry: activeEntry,
+    });
+
+    for (const entry of [activeEntry, storedEntry]) {
+      expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(entry.claudeCliSessionId).toBeUndefined();
+      expect(entry.updatedAt).toBeGreaterThan(1);
+    }
+    const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
+    expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(persisted?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("does not clear a replacement binding adopted by another turn", async () => {
+    const entry = {
+      sessionId: "openclaw-active",
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: "replacement-session" } },
+      cliSessionIds: { "claude-cli": "replacement-session" },
+      claudeCliSessionId: "replacement-session",
+    };
+
+    await clearCliSessionBindingForRun({
+      provider: "claude-cli",
+      expectedSessionId: "stale-session",
+      activeSessionEntry: entry,
+    });
+
+    expect(entry.cliSessionBindings["claude-cli"].sessionId).toBe("replacement-session");
+    expect(entry.cliSessionIds["claude-cli"]).toBe("replacement-session");
+    expect(entry.claudeCliSessionId).toBe("replacement-session");
+    expect(entry.updatedAt).toBe(1);
   });
 });
 

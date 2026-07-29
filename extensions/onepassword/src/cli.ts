@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AuditRow } from "./broker.js";
@@ -16,6 +17,7 @@ type OnePasswordCliContext = {
   resolveConfig: () => OnePasswordConfig | undefined;
   resolveOpClient: () => Pick<OpClient, "opBin" | "tokenFilePresent">;
   auditStore: PluginStateKeyedStore<AuditRow>;
+  registerAdditionalCommands?: (command: CommandLike) => void;
   write?: (message: string) => void;
 };
 
@@ -23,8 +25,8 @@ function parseLimit(value: unknown): number {
   if (value === undefined) {
     return 50;
   }
-  const parsed = typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 1000) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined || parsed > 1000) {
     throw new Error("--limit must be an integer from 1 to 1000");
   }
   return parsed;
@@ -58,13 +60,26 @@ async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit:
         right.value.timestampMs - left.value.timestampMs || right.key.localeCompare(left.key),
     )
     .slice(0, limit)
-    .map(({ value }) => ({
-      timestamp: new Date(value.timestampMs).toISOString(),
-      agent: value.agentId,
-      slug: value.slug,
-      outcome: value.outcome,
-      reason: truncateReason(value.reason),
-    }));
+    .map(({ value }) => {
+      const row: {
+        timestamp: string;
+        agent: string;
+        slug: string;
+        outcome: string;
+        errorCode?: string;
+        reason: string;
+      } = {
+        timestamp: new Date(value.timestampMs).toISOString(),
+        agent: value.agentId,
+        slug: value.slug,
+        outcome: value.outcome,
+        reason: truncateReason(value.reason),
+      };
+      if (value.errorCode) {
+        row.errorCode = value.errorCode;
+      }
+      return row;
+    });
 }
 
 export function registerOnePasswordCommands(context: OnePasswordCliContext): void {
@@ -72,6 +87,7 @@ export function registerOnePasswordCommands(context: OnePasswordCliContext): voi
   const command = context.program
     .command("onepassword")
     .description("Inspect the 1Password broker");
+  context.registerAdditionalCommands?.(command);
   command
     .command("status")
     .description("Show broker readiness without secret values")

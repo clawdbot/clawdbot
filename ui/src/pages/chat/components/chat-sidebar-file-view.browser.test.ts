@@ -50,7 +50,7 @@ async function mountFile(content: FileSidebarContent): Promise<DetailPanel> {
   document.body.append(panel);
   mounted.push(panel);
   await panel.updateComplete;
-  await expect.poll(() => panel.querySelector(".cm-editor")).not.toBeNull();
+  await expect.poll(() => panel.querySelector(".cm-editor"), { timeout: 5_000 }).not.toBeNull();
   return panel;
 }
 

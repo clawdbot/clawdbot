@@ -5,9 +5,6 @@ import {
   buildSkillIndexEntries,
   filterPromptVisibleSkillEntries,
   filterUserInvocableSkillEntries,
-  isSkillPromptVisible,
-  isSkillRuntimeVisible,
-  isSkillUserInvocable,
   normalizeSkillIndexName,
 } from "./skill-index.js";
 
@@ -77,9 +74,6 @@ describe("skill index", () => {
       promptHidden,
       legacyPromptHidden,
     ]);
-    expect(isSkillRuntimeVisible(runtimeHidden)).toBe(false);
-    expect(isSkillPromptVisible(legacyPromptHidden)).toBe(false);
-    expect(isSkillUserInvocable(commandHidden)).toBe(false);
   });
 
   it("records source, bundled state, skill key, and agent filter state", () => {

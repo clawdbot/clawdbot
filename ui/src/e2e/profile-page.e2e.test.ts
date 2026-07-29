@@ -1,6 +1,12 @@
 // Control UI tests cover the settings profile page against a mocked Gateway.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  buildControlUiCspHeader,
+  computeInlineScriptHashes,
+} from "../../../src/gateway/control-ui-csp.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -13,109 +19,42 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "profile-identity");
+
+async function screenshot(page: Page, name: string) {
+  if (!captureUiProof) {
+    return;
+  }
+  await mkdir(proofDir, { recursive: true });
+  await page.locator("#settings-profile-identity").screenshot({
+    animations: "disabled",
+    path: path.join(proofDir, name),
+  });
+}
 
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-function costTotals(totalTokens: number) {
-  return {
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
-
-function localDate(daysAgo: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() - daysAgo);
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-const costDay = (daysAgo: number, tokens: number) => ({
-  date: localDate(daysAgo),
-  ...costTotals(tokens),
-});
-
-// Peak sits safely inside the 52-week heatmap window; the trailing three days
-// give a deterministic 3-day current streak regardless of run date.
-const usageCostResponse = {
-  updatedAt: Date.now(),
-  days: 4,
-  daily: [
-    costDay(10, 82_100_000_000),
-    costDay(2, 900_000_000),
-    costDay(1, 1_200_000_000),
-    costDay(0, 400_000_000),
-  ],
-  totals: { ...costTotals(2_800_000_000_000), totalCost: 1234.56 },
+const testProfile = {
+  id: "11111111-1111-4111-8111-111111111111",
+  displayName: "Test Person",
+  avatarMime: null,
+  mergedInto: null,
+  createdAt: 1,
+  updatedAt: 2,
+  emails: ["test@example.com"],
+  hasAvatar: false,
 };
-
-const sessionsUsageResponse = {
-  updatedAt: Date.now(),
-  startDate: localDate(365),
-  endDate: localDate(0),
-  sessions: [
-    {
-      key: "agent:main:marathon",
-      label: "marathon",
-      usage: { ...costTotals(1_000), durationMs: (59 * 60 + 4) * 60 * 1000 },
-    },
-    {
-      key: "agent:main:quickie",
-      label: "quickie",
-      usage: { ...costTotals(500), durationMs: 60_000 },
-    },
-  ],
-  totals: costTotals(2_800_000_000_000),
-  aggregates: {
-    sessionCount: 4_212,
-    longestSessionDurationMs: (59 * 60 + 4) * 60 * 1000,
-    messages: {
-      total: 2_787_815,
-      user: 1_400_000,
-      assistant: 1_387_815,
-      toolCalls: 42_380,
-      toolResults: 42_380,
-      errors: 12,
-    },
-    tools: {
-      totalCalls: 42_380,
-      uniqueTools: 205,
-      tools: [
-        { name: "exec", count: 6_418 },
-        { name: "browser", count: 5_256 },
-        { name: "message", count: 4_708 },
-      ],
-    },
-    byModel: [
-      {
-        provider: "anthropic",
-        model: "claude-opus-4-8",
-        count: 9_000,
-        totals: costTotals(2_000_000_000_000),
-      },
-      { provider: "openai", model: "gpt-5.5", count: 2_000, totals: costTotals(800_000_000_000) },
-    ],
-    byProvider: [],
-    byAgent: [{ agentId: "main", totals: costTotals(2_800_000_000_000) }],
-    byChannel: [
-      { channel: "whatsapp", totals: costTotals(1_500_000_000_000) },
-      { channel: "telegram", totals: costTotals(900_000_000_000) },
-      { channel: "discord", totals: costTotals(400_000_000_000) },
-    ],
-    daily: [],
+const testPresenceUsers = [
+  {
+    self: true,
+    id: testProfile.id,
+    name: testProfile.displayName,
+    email: testProfile.emails[0],
+    avatarUrl: `/api/users/${testProfile.id}/avatar?v=${testProfile.updatedAt}`,
   },
-};
+];
 
 describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
   beforeAll(async () => {
@@ -134,110 +73,294 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
   });
 
   async function openProfilePage(page: Page) {
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
+      presenceUsers: testPresenceUsers,
       methodResponses: {
-        "usage.cost": usageCostResponse,
-        "sessions.usage": sessionsUsageResponse,
+        "users.self": { profile: testProfile },
       },
     });
     const response = await page.goto(`${server.baseUrl}settings/profile`);
     expect(response?.status()).toBe(200);
+    return gateway;
   }
 
-  it("renders hero identity, lifetime stats, heatmap, and insights", async () => {
+  it("renders hero, identity, and a Usage statistics link without loading usage", async () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     try {
-      await openProfilePage(page);
+      const gateway = await openProfilePage(page);
 
       await page.locator(".profile-hero__name").waitFor({ timeout: 10_000 });
       await expect(page.locator(".profile-hero__name").textContent()).resolves.toContain(
         "OpenClaw",
       );
       await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain("@main");
-      // No avatar configured: the lobster mascot fills in.
       await page.locator(".profile-hero__avatar-mascot svg").waitFor({ timeout: 5_000 });
-      const chips = await page.locator(".profile-hero__chip").allTextContents();
-      expect(chips.some((chip) => chip.includes("In the reef since"))).toBe(true);
-      expect(chips.some((chip) => chip.includes("Whatsapp"))).toBe(true);
-
-      const statValues = await page.locator(".profile-stats__value").allTextContents();
-      expect(statValues[0]?.trim()).toBe("2.8T");
-      expect(statValues[1]?.trim()).toBe("82.1B");
-      expect(statValues[2]?.trim()).toBe("2d 11h");
-      expect(statValues[3]?.trim()).toBe("3 days");
-
-      const cellCount = await page.locator(".profile-heatmap__svg rect").count();
-      expect(cellCount).toBe(52 * 7);
-
-      const insightValues = await page.locator(".settings-kv dd").allTextContents();
-      expect(insightValues[0]?.trim()).toBe("claude-opus-4-8");
-      expect(insightValues.some((value) => value.replace(/[^0-9]/gu, "") === "2787815")).toBe(true);
-
-      const toolNames = await page.locator(".profile-tools__name").allTextContents();
-      expect(toolNames.map((name) => name.trim())).toEqual(["exec", "browser", "message"]);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps the loading note while a cold usage cache is still rebuilding", async () => {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    try {
-      await installMockGateway(page, {
-        methodResponses: {
-          "usage.cost": {
-            updatedAt: Date.now(),
-            days: 0,
-            daily: [],
-            totals: costTotals(0),
-            cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 12, staleFiles: 0 },
-          },
-          "sessions.usage": { ...sessionsUsageResponse, sessions: [], totals: costTotals(0) },
-        },
-      });
-      const response = await page.goto(`${server.baseUrl}settings/profile`);
-      expect(response?.status()).toBe(200);
-
-      await page.locator(".settings-empty").waitFor({ timeout: 10_000 });
-      // Zero totals with a refreshing cache must not claim a fresh shell.
-      await expect(page.locator(".settings-empty strong").count()).resolves.toBe(0);
-      await expect(page.locator(".settings-empty").textContent()).resolves.toContain(
-        "Diving for stats",
+      await page.locator("#settings-profile-identity").waitFor({ timeout: 5_000 });
+      await expect(
+        page.getByRole("button", { name: /Usage statistics/u }).textContent(),
+      ).resolves.toContain("View activity, costs, and usage trends.");
+      expect(await gateway.getRequests("usage.cost")).toEqual([]);
+      expect(await gateway.getRequests("sessions.usage")).toEqual([]);
+      expect(await page.locator(".profile-stats, .profile-heatmap, .profile-tools").count()).toBe(
+        0,
       );
     } finally {
       await context.close();
     }
   });
 
-  it("shows the fresh-shell empty state when no tokens were spent", async () => {
+  it("shares one authenticated avatar between the sidebar and profile preview", async () => {
+    if (captureUiProof) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      ...(captureUiProof
+        ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+        : {}),
+      viewport: { width: 1280, height: 800 },
+    });
+    const page = await context.newPage();
+    await page.route(`${server.baseUrl}settings/profile`, async (route) => {
+      const response = await route.fetch();
+      const body = await response.text();
+      await route.fulfill({
+        body,
+        headers: {
+          ...response.headers(),
+          "content-security-policy": buildControlUiCspHeader({
+            inlineScriptHashes: computeInlineScriptHashes(body),
+          }),
+        },
+        response,
+      });
+    });
+    const gatewayUrl = server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
+    await page.addInitScript((sameOriginGatewayUrl) => {
+      (
+        window as Window & {
+          ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+        }
+      )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+        gatewayUrl: sameOriginGatewayUrl,
+        token: "test",
+      };
+    }, gatewayUrl);
+    const avatarRequests: Array<{ authorization?: string; url: string }> = [];
+    let releaseRevisedAvatar: (() => void) | undefined;
+    const revisedAvatarReady = new Promise<void>((resolve) => {
+      releaseRevisedAvatar = resolve;
+    });
+    // Profile images require the same bearer auth as gateway RPCs. One cached
+    // blob keeps the sidebar and preview inside the Control UI's image CSP.
+    await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
+      const revision = new URL(route.request().url()).searchParams.get("v");
+      avatarRequests.push({
+        authorization: route.request().headers().authorization,
+        url: route.request().url(),
+      });
+      if (revision === "3") {
+        // Hold the real response so Chromium can prove pending fallback and
+        // stable image-node identity before the replacement finishes loading.
+        await revisedAvatarReady;
+      }
+      if (revision === "4") {
+        await route.fulfill({
+          body: JSON.stringify({ ok: false, error: { type: "not_found" } }),
+          contentType: "application/json",
+          status: 404,
+        });
+        return;
+      }
+      await route.fulfill({
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+          "base64",
+        ),
+        contentType: "image/png",
+        status: 200,
+      });
+    });
+    const gateway = await installMockGateway(page, {
+      presenceUsers: testPresenceUsers,
+      methodResponses: {
+        "users.self": { profile: testProfile },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["content-security-policy"]).toContain(
+        "img-src 'self' data: blob:",
+      );
+
+      const profileAvatar = page.locator("#settings-profile-identity openclaw-viewer-avatar img");
+      await profileAvatar.waitFor({ timeout: 10_000 });
+      const imageUrl = await profileAvatar.getAttribute("src");
+      expect(imageUrl).toMatch(/^blob:/u);
+      await expect
+        .poll(() => profileAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+        .toBe(1);
+      expect(
+        await profileAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "03-authenticated-profile-avatar.png"),
+        });
+      }
+
+      await page.getByRole("button", { name: "Back to app" }).click();
+      const sidebarAvatar = page.locator(".sidebar-identity-card openclaw-viewer-avatar img");
+      await sidebarAvatar.waitFor({ timeout: 10_000 });
+      await expect.poll(() => avatarRequests.length).toBe(1);
+      expect(avatarRequests[0]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=2`),
+      });
+      expect(await sidebarAvatar.getAttribute("src")).toBe(imageUrl);
+      expect(
+        await sidebarAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "03-authenticated-user-avatar-cache.png"),
+        });
+      }
+
+      const originalSidebarImage = await sidebarAvatar.elementHandle();
+      expect(originalSidebarImage).not.toBeNull();
+      const connect = await gateway.waitForRequest("connect");
+      const selfInstanceId = (connect.params as { client?: { instanceId?: string } } | undefined)
+        ?.client?.instanceId;
+      expect(selfInstanceId).toBeTruthy();
+      const publishAvatarRevision = async (revision: number) => {
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              instanceId: selfInstanceId,
+              mode: "webchat",
+              reason: "connect",
+              user: {
+                id: testProfile.id,
+                name: testProfile.displayName,
+                email: testProfile.emails[0],
+                avatarUrl: `/api/users/${testProfile.id}/avatar?v=${revision}`,
+              },
+              watchedSessions: [],
+            },
+          ],
+        });
+      };
+
+      await publishAvatarRevision(3);
+      await expect.poll(() => avatarRequests.length).toBe(2);
+      expect(
+        await originalSidebarImage?.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(true);
+      expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
+
+      releaseRevisedAvatar?.();
+      await expect
+        .poll(() => sidebarAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+        .toBe(1);
+      const revisedImageUrl = await sidebarAvatar.getAttribute("src");
+      expect(revisedImageUrl).toMatch(/^blob:/u);
+      expect(revisedImageUrl).not.toBe(imageUrl);
+      expect(await originalSidebarImage?.evaluate((image) => image.getAttribute("src"))).toBe(
+        revisedImageUrl,
+      );
+      expect(
+        await sidebarAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+      expect(avatarRequests[1]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=3`),
+      });
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "04-authenticated-user-avatar-revision.png"),
+        });
+      }
+
+      const missingAvatarResponse = page.waitForResponse(
+        (candidateResponse) =>
+          candidateResponse.url().includes(`/api/users/${testProfile.id}/avatar?v=4`) &&
+          candidateResponse.status() === 404,
+      );
+      await publishAvatarRevision(4);
+      await missingAvatarResponse;
+      await expect.poll(() => avatarRequests.length).toBe(3);
+      await expect.poll(() => sidebarAvatar.getAttribute("src")).toBeNull();
+      await expect
+        .poll(() =>
+          sidebarAvatar.evaluate((image) =>
+            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(async () =>
+          (
+            await page.locator(".sidebar-identity-card .viewer-avatar__fallback").textContent()
+          )?.trim(),
+        )
+        .toBe("TP");
+      expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
+      expect(avatarRequests[2]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=4`),
+      });
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "05-authenticated-user-avatar-missing.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("retries the missing identity bootstrap and opens the profile editor", async () => {
     const context = await browser.newContext();
     const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      presenceUsers: testPresenceUsers,
+      methodResponses: {
+        "users.self": { sequence: [{}, { profile: testProfile }] },
+      },
+    });
+
     try {
-      await installMockGateway(page, {
-        methodResponses: {
-          "usage.cost": {
-            updatedAt: Date.now(),
-            days: 0,
-            daily: [],
-            totals: costTotals(0),
-          },
-          "sessions.usage": {
-            ...sessionsUsageResponse,
-            sessions: [],
-            totals: costTotals(0),
-          },
-        },
-      });
       const response = await page.goto(`${server.baseUrl}settings/profile`);
       expect(response?.status()).toBe(200);
 
-      await page.locator(".settings-empty strong").waitFor({ timeout: 10_000 });
-      await expect(page.locator(".settings-empty strong").textContent()).resolves.toContain(
-        "A fresh shell",
+      const emptyState = page.locator(".profile-identity-empty");
+      await emptyState.waitFor({ timeout: 10_000 });
+      await expect(emptyState.textContent()).resolves.toContain("Identity is not set.");
+      await screenshot(page, "01-identity-not-set.png");
+
+      await page.getByRole("button", { name: "Set identity" }).click();
+
+      await page.locator('.identity-name-control input[type="text"]').waitFor({ timeout: 10_000 });
+      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+      await expect(page.locator(".identity-name-control input").inputValue()).resolves.toBe(
+        testProfile.displayName,
       );
-      await expect(page.locator(".profile-heatmap__svg").count()).resolves.toBe(0);
+      await screenshot(page, "02-identity-editor.png");
     } finally {
       await context.close();
     }

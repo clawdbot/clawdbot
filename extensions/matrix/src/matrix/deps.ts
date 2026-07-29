@@ -12,7 +12,7 @@ const REQUIRED_MATRIX_PACKAGES = [
   "@matrix-org/matrix-sdk-crypto-wasm",
 ];
 const MIN_MATRIX_CRYPTO_NATIVE_BINDING_BYTES = 1_000_000;
-export const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
+const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
@@ -51,7 +51,7 @@ type CommandResult = {
 
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
-export async function runFixedCommandWithTimeout(params: {
+async function runFixedCommandWithTimeout(params: {
   argv: string[];
   cwd: string;
   timeoutMs: number;

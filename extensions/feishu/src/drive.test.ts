@@ -174,7 +174,6 @@ describe("registerFeishuDriveTools", () => {
       perm: false,
       scopes: false,
       bitable: false,
-      base: false,
     });
     createFeishuToolClientMock.mockReturnValue({
       request: requestMock,
@@ -1494,3 +1493,4 @@ describe("registerFeishuDriveTools", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

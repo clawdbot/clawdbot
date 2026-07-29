@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SCP_STDERR_TAIL_CHARS, testing } from "./stage-sandbox-media.js";
+import { testing } from "./stage-sandbox-media.test-support.js";
+
+const SCP_STDERR_TAIL_CHARS = 16_384;
 
 const hasUnpairedUtf16Surrogate = (text: string): boolean =>
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);

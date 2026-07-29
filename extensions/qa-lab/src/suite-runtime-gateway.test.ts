@@ -9,6 +9,7 @@ import {
   patchConfig,
   restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
+  waitForGatewayHealthy,
 } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -122,7 +123,137 @@ describe("qa suite gateway helpers", () => {
     await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
       "qa-lab-suite-fetch-json: JSON response exceeds 16777216 bytes",
     );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 15_000 }),
+    );
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds stalled suite gateway JSON response bodies", async () => {
+    vi.useFakeTimers();
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementation(async ({ timeoutMs }: { timeoutMs: number }) => {
+      let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            bodyController = controller;
+            controller.enqueue(new TextEncoder().encode('{"pending":'));
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+      setTimeout(() => bodyController?.error(new Error("request timed out")), timeoutMs);
+      return { response, release };
+    });
+
+    const request = fetchJson("http://127.0.0.1:43123/config", 1_000);
+    const rejection = expect(request).rejects.toThrow("request timed out");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 1_000 }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels failed suite gateway JSON response bodies before releasing their guard", async () => {
+    const events: string[] = [];
+    const cancelBody = vi.fn(() => {
+      events.push("cancel");
+      throw new Error("cancel failed");
+    });
+    const release = vi.fn(async () => {
+      events.push("release");
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          cancel: cancelBody,
+        }),
+        { status: 503 },
+      ),
+      release,
+    });
+
+    await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
+      "request failed 503: http://127.0.0.1:43123/config",
+    );
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["cancel", "release"]);
+  });
+
+  it("cancels every ignored gateway health body before releasing its guard", async () => {
+    const events: string[] = [];
+    const failedCancel = vi.fn(() => {
+      events.push("failed:cancel");
+    });
+    const successCancel = vi.fn(() => {
+      events.push("success:cancel");
+    });
+    const failedRelease = vi.fn(async () => {
+      events.push("failed:release");
+    });
+    const successRelease = vi.fn(async () => {
+      events.push("success:release");
+    });
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            cancel: failedCancel,
+          }),
+          { status: 503 },
+        ),
+        release: failedRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            cancel: successCancel,
+          }),
+          { status: 200 },
+        ),
+        release: successRelease,
+      });
+
+    await expect(
+      waitForGatewayHealthy({ gateway: { baseUrl: "http://127.0.0.1:43123" } } as never, 1_000),
+    ).resolves.toBeUndefined();
+    expect(failedCancel).toHaveBeenCalledTimes(1);
+    expect(successCancel).toHaveBeenCalledTimes(1);
+    expect(failedRelease).toHaveBeenCalledTimes(1);
+    expect(successRelease).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      "failed:cancel",
+      "failed:release",
+      "success:cancel",
+      "success:release",
+    ]);
+  });
+
+  it("bounds a hung gateway health request by the remaining readiness deadline", async () => {
+    vi.useFakeTimers();
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ timeoutMs }: { timeoutMs: number }) =>
+        await new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("request timed out")), timeoutMs);
+        }),
+    );
+
+    const readiness = waitForGatewayHealthy(
+      { gateway: { baseUrl: "http://127.0.0.1:43123" } } as never,
+      1_000,
+    );
+    const rejection = expect(readiness).rejects.toThrow("timed out after 1000ms");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 1_000 }),
+    );
   });
 
   it("skips config mutations that would not change the snapshot", async () => {

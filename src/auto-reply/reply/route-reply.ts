@@ -31,6 +31,7 @@ import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
+import type { ResponsePrefixContext } from "./response-prefix-template.js";
 
 const messageRuntimeLoader = createLazyImportLoader(
   () => import("../../channels/message/runtime.js"),
@@ -103,20 +104,65 @@ type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** Model/session context for response-prefix template interpolation. */
+  responsePrefixContext?: ResponsePrefixContext;
 };
 
 type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
+  /** Whether a recipient-visible send completed or may already have completed. */
+  delivered: boolean;
+  /** True when the adapter may have sent but returned no delivery identity. */
+  ambiguous?: boolean;
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
-  /** Suppression reason when delivery was intentionally skipped. */
-  reason?: "cancelled_by_reply_payload_sending_hook" | "empty_after_reply_payload_sending_hook";
+  /** Delivery disposition reason when additional caller context is useful. */
+  reason?:
+    | "reasoning_payload_not_external"
+    | "adapter_returned_no_identity"
+    | "cancelled_by_message_sending_hook"
+    | "cancelled_by_reply_payload_sending_hook"
+    | "empty_after_message_sending_hook"
+    | "empty_after_reply_payload_sending_hook";
   /** Optional message ID from the provider. */
   messageId?: string;
   /** Error message if the send failed. */
   error?: string;
 };
+
+function summarizeVisibleRouteReplyDelivery(
+  results: readonly { messageId?: string }[],
+): Pick<RouteReplyResult, "delivered" | "messageId"> {
+  // Durable results may prove delivery through a receipt or alternate identity
+  // when messageId is empty. Provider success sentinels prove delivery but are
+  // not editable IDs; explicit suppression sentinels prove neither.
+  let delivered = false;
+  let lastVisibleMessageId: string | undefined;
+  for (let index = results.length - 1; index >= 0; index -= 1) {
+    const result = results[index];
+    if (!result) {
+      continue;
+    }
+    const messageId = result.messageId?.trim().toLowerCase();
+    if (messageId === "skipped" || messageId === "suppressed") {
+      continue;
+    }
+    if (!delivered) {
+      delivered = true;
+      if (!messageId) {
+        lastVisibleMessageId = result.messageId;
+      }
+    }
+    if (messageId && messageId !== "unknown" && messageId !== "ok") {
+      return { delivered: true, messageId: result.messageId };
+    }
+  }
+  return {
+    delivered,
+    messageId: delivered ? lastVisibleMessageId : undefined,
+  };
+}
 
 /**
  * Routes a reply payload to the specified channel.
@@ -129,7 +175,12 @@ type RouteReplyResult = {
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
   if (shouldSuppressReasoningPayload(payload)) {
-    return { ok: true };
+    return {
+      ok: true,
+      delivered: false,
+      suppressed: true,
+      reason: "reasoning_payload_not_external",
+    };
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
@@ -146,17 +197,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     : undefined;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
-  const responsePrefix = params.sessionKey
-    ? resolveEffectiveMessagesConfig(
-        cfg,
-        resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
-        { channel: normalizedChannel, accountId },
-      ).responsePrefix
-    : cfg.messages?.responsePrefix === "auto"
-      ? undefined
-      : cfg.messages?.responsePrefix;
+  const responsePrefix = resolveEffectiveMessagesConfig(
+    cfg,
+    resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
+    { channel: normalizedChannel, accountId },
+  ).responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    responsePrefixContext: params.responsePrefixContext,
     transformReplyPayload: messaging?.transformReplyPayload
       ? (nextPayload) =>
           messaging.transformReplyPayload?.({
@@ -167,7 +215,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : undefined,
   });
   if (!normalized) {
-    return { ok: true };
+    return { ok: true, delivered: false };
   }
   const externalPayload: ReplyPayload = {
     ...normalized,
@@ -202,21 +250,22 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       },
     )
   ) {
-    return { ok: true };
+    return { ok: true, delivered: false };
   }
 
   if (channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
+      delivered: false,
       error: "Webchat routing not supported for queued replies",
     };
   }
 
   if (!channelId) {
-    return { ok: false, error: `Unknown channel: ${String(channel)}` };
+    return { ok: false, delivered: false, error: `Unknown channel: ${String(channel)}` };
   }
   if (abortSignal?.aborted) {
-    return { ok: false, error: "Reply routing aborted" };
+    return { ok: false, delivered: false, error: "Reply routing aborted" };
   }
 
   const payloadMetadata = getReplyPayloadMetadata(normalized);
@@ -311,28 +360,54 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
             }
           : undefined,
     });
-    if (send.status === "failed" || send.status === "partial_failed") {
+    if (send.status === "failed") {
       throw send.error;
+    }
+    if (send.status === "partial_failed") {
+      const delivery = summarizeVisibleRouteReplyDelivery(send.results);
+      return {
+        ok: false,
+        delivered: delivery.delivered,
+        error: `Failed to route reply to ${channel}: ${formatErrorMessage(send.error)}`,
+        messageId: delivery.messageId,
+      };
     }
     if (
       send.status === "suppressed" &&
-      (send.reason === "cancelled_by_reply_payload_sending_hook" ||
+      (send.reason === "cancelled_by_message_sending_hook" ||
+        send.reason === "cancelled_by_reply_payload_sending_hook" ||
+        send.reason === "empty_after_message_sending_hook" ||
         send.reason === "empty_after_reply_payload_sending_hook")
     ) {
       return {
         ok: true,
+        delivered: false,
         suppressed: true,
         reason: send.reason,
       };
     }
+    if (send.status === "suppressed" && send.reason === "adapter_returned_no_identity") {
+      // The adapter call completed but returned no identity. Treat that as
+      // potentially visible so callers never retry or emit a duplicate fallback.
+      return {
+        ok: true,
+        delivered: true,
+        ambiguous: true,
+        reason: send.reason,
+      };
+    }
     const results = send.status === "sent" ? send.results : [];
-
-    const last = results.at(-1);
-    return { ok: true, messageId: last?.messageId };
+    const delivery = summarizeVisibleRouteReplyDelivery(results);
+    return {
+      ok: true,
+      delivered: delivery.delivered,
+      messageId: delivery.messageId,
+    };
   } catch (err) {
     const message = formatErrorMessage(err);
     return {
       ok: false,
+      delivered: false,
       error: `Failed to route reply to ${channel}: ${message}`,
     };
   }

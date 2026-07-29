@@ -471,7 +471,7 @@ describe("handleSlackMessageAction", () => {
         } as never,
         invoke: invoke as never,
       }),
-    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-character edit limit");
+    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -506,7 +506,7 @@ describe("handleSlackMessageAction", () => {
         } as never,
         invoke: invoke as never,
       }),
-    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-character edit limit");
+    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -1206,3 +1206,4 @@ describe("extractSlackToolSend", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -287,7 +287,7 @@ describe("sandboxRecreateCommand", () => {
     });
 
     it("should cancel on clack cancel symbol", async () => {
-      await runCancelledConfirmation(Symbol.for("clack:cancel"));
+      await runCancelledConfirmation(Symbol("clack:cancel"));
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();

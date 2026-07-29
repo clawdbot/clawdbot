@@ -1,15 +1,15 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import {
-  buildCohereCatalogModels,
-  COHERE_BASE_URL,
-  COHERE_COMMAND_A_REASONING_MODEL_ID,
-  COHERE_COMMAND_A_VISION_MODEL_ID,
-  COHERE_MODEL_CATALOG,
-  COHERE_NORTH_MINI_CODE_MODEL_ID,
-} from "./models.js";
-import { applyCohereConfig, COHERE_DEFAULT_MODEL_ID, COHERE_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildCohereCatalogModels, COHERE_BASE_URL } from "./models.js";
+import { applyCohereConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+const COHERE_DEFAULT_MODEL_REF = `cohere/${manifest.modelCatalog.providers.cohere.defaultModel}`;
+const COHERE_DEFAULT_MODEL_ID = "command-a-plus-05-2026";
+const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
+const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
+const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 describe("Cohere onboarding", () => {
   it("registers the manifest catalog through the onboarding preset", () => {
@@ -27,7 +27,9 @@ describe("Cohere onboarding", () => {
       COHERE_COMMAND_A_VISION_MODEL_ID,
       COHERE_NORTH_MINI_CODE_MODEL_ID,
     ]);
-    expect(buildCohereCatalogModels()).toHaveLength(COHERE_MODEL_CATALOG.length);
+    expect(buildCohereCatalogModels()).toHaveLength(
+      manifest.modelCatalog.providers.cohere.models.length,
+    );
   });
 
   it("sets Cohere only when there is no primary model", () => {

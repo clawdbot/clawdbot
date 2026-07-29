@@ -2,9 +2,12 @@ run_hosted_prepare_gates() {
   local pr="$1"
   local current_head="$2"
   local changelog_only="$3"
-  local recent_sha="${4:-}"
-  local remote_head
-  remote_head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+  local recent_sha=""
+  local remote_record remote_head remote_head_ref remote_is_cross_repository
+  remote_record=$(gh pr view "$pr" --json headRefName,headRefOid,isCrossRepository)
+  remote_head=$(printf '%s\n' "$remote_record" | jq -r .headRefOid)
+  remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
+  remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
   if [ "$remote_head" != "$current_head" ]; then
     echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
     return 1
@@ -40,11 +43,60 @@ run_hosted_prepare_gates() {
   if [ "$changelog_only" = "true" ]; then
     args+=(--changelog-only)
   fi
-  run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
+  if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+    return 0
+  fi
+
+  if rg -F -q "Missing successful recent CI workflow for $current_head. Observed: none" \
+    .local/gates-hosted-checks.log
+  then
+    if [ "$remote_is_cross_repository" = "true" ]; then
+      cat <<EOF_RECOVERY
+Missing hosted CI recovery:
+  scripts/pr ci-dispatch $pr
+  unavailable: PR #$pr comes from a fork, and release-gate dispatch requires the exact target SHA on a base-repository branch.
+EOF_RECOVERY
+      return 1
+    fi
+    cat <<EOF_RECOVERY
+Missing hosted CI recovery:
+  scripts/pr ci-dispatch $pr
+Underlying command:
+EOF_RECOVERY
+    printf '  gh workflow run ci.yml --ref %q -f %q -f release_gate=true -f %q\n' \
+      "$remote_head_ref" \
+      "target_ref=$remote_head" \
+      "pull_request_number=$pr"
+  fi
+  return 1
 }
 
-compute_pr_patch_id() {
-  git diff --binary "$1" "$2" | git patch-id --verbatim | awk 'NR == 1 { print $1 }'
+ci_dispatch() {
+  local pr="$1"
+  local record head_ref head_sha is_cross_repository
+  record=$(gh pr view "$pr" --json headRefName,headRefOid,isCrossRepository)
+  head_ref=$(printf '%s\n' "$record" | jq -r .headRefName)
+  head_sha=$(printf '%s\n' "$record" | jq -r .headRefOid)
+  is_cross_repository=$(printf '%s\n' "$record" | jq -r .isCrossRepository)
+  if [ -z "$head_ref" ] || [ "$head_ref" = "null" ] || [ -z "$head_sha" ] || [ "$head_sha" = "null" ]; then
+    echo "PR #$pr is missing remote headRefName/headRefOid metadata." >&2
+    return 1
+  fi
+  if [ "$is_cross_repository" = "true" ]; then
+    echo "PR #$pr comes from a fork; release-gate workflow dispatch requires a base-repository branch at $head_sha." >&2
+    return 1
+  fi
+
+  mark_pr_operation_side_effects_if_available
+  node "$script_parent_dir/pr-lib/ci-dispatch.mjs" "$pr" "$head_ref" "$head_sha" false
+}
+
+mark_pr_operation_side_effects_if_available() {
+  # scripts/pr sources operation-lock.sh first. Policy tests may source this
+  # library alone, where advancing a lock phase is neither possible nor needed.
+  if declare -F mark_pr_operation_side_effects_started >/dev/null; then
+    mark_pr_operation_side_effects_started
+  fi
 }
 
 pin_worktree_bundled_plugins_dir() {
@@ -317,6 +369,8 @@ prepare_gates() {
 
   enter_worktree "$pr" false
 
+  mark_pr_operation_side_effects_if_available
+  refresh_prep_branch_for_reviewed_head "$pr"
   checkout_prep_branch "$pr"
   require_artifact .local/pr-meta.env
   # shellcheck disable=SC1091
@@ -398,36 +452,14 @@ prepare_gates() {
   fi
 
   if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    gates_mode="hosted_exact_or_recent_rebase"
+    gates_mode="hosted_exact_or_recent_parent"
     remote_gates_provider=""
     remote_gates_lease_id=""
     remote_gates_run_url=""
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check origin/main...HEAD
     fi
-    local recent_hosted_sha=""
-    if [ -s .local/prep-sync.env ]; then
-      # shellcheck disable=SC1091
-      source .local/prep-sync.env
-      local current_prep_tree
-      current_prep_tree=$(git rev-parse "${current_head}^{tree}")
-      if [ "${PREP_SYNC_TREE:-}" != "$current_prep_tree" ]; then
-        echo "Prepared PR head no longer matches the recorded sync tree."
-        exit 1
-      fi
-      if [ -z "${PREP_SYNC_MAINLINE_BASE_SHA:-}" ] || [ -z "${PREP_SYNC_PATCH_ID:-}" ]; then
-        echo "Prepared PR sync evidence is incomplete."
-        exit 1
-      fi
-      local current_patch_id
-      current_patch_id=$(compute_pr_patch_id "$PREP_SYNC_MAINLINE_BASE_SHA" "$current_head")
-      if [ "$current_patch_id" != "$PREP_SYNC_PATCH_ID" ]; then
-        echo "Prepared PR patch no longer matches the verified pre-rebase patch."
-        exit 1
-      fi
-      recent_hosted_sha="${PREP_SYNC_EVIDENCE_SHA:-}"
-    fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$recent_hosted_sha"
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only"
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"

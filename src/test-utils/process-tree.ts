@@ -22,7 +22,7 @@ export async function writeForkingNoOutputScript(dir: string): Promise<string> {
   return scriptPath;
 }
 
-export function isPidAlive(pid: number): boolean {
+function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

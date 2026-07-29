@@ -21,12 +21,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
-  attachCodexMirrorIdentity,
   buildCodexUserPromptMessage,
   codexTranscriptMirrorRuntime,
   importCodexThreadHistoryToTranscript,
   projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
+import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 const mirrorCodexAppServerTranscript = codexTranscriptMirrorRuntime.mirror;
 const mirrorTranscriptBestEffort = codexTranscriptMirrorRuntime.mirrorBestEffort;
@@ -626,6 +626,83 @@ describe("projectBoundedCodexThreadHistory", () => {
 });
 
 describe("mirrorCodexAppServerTranscript", () => {
+  it("hides current memory-maintenance messages without hiding replayed turns", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (event) => {
+            const { display: _display, ...message } = (
+              event as { message: Record<string, unknown> }
+            ).message;
+            return { message: castAgentMessage(message) };
+          },
+        },
+      ]),
+    );
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-memory-");
+    const messages = [
+      attachCodexMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "ordinary prior reply" }],
+          timestamp: Date.now(),
+        }),
+        "turn-prior:assistant",
+      ),
+      attachCodexMirrorIdentity(
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "Pre-compaction memory flush" }],
+          timestamp: Date.now() + 1,
+        }),
+        "turn-memory:prompt",
+      ),
+      attachCodexMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
+          timestamp: Date.now() + 2,
+        }),
+        "turn-memory:tool-call:call-1",
+      ),
+      attachCodexMirrorIdentity(
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "write",
+          content: [{ type: "toolResult", toolCallId: "call-1", content: "saved" }],
+          timestamp: Date.now() + 3,
+        }),
+        "turn-memory:tool-result:call-1",
+      ),
+      attachCodexMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "NO_REPLY" }],
+          timestamp: Date.now() + 4,
+        }),
+        "turn-memory:assistant",
+      ),
+    ];
+    for (const message of messages.slice(1)) {
+      Object.assign(message, { display: false });
+    }
+
+    await mirrorCodexAppServerTranscript({
+      ...target,
+      messages,
+      idempotencyScope: "codex-app-server:memory",
+    });
+
+    const persistedMessages = (await readMirrorEvents(target))
+      .map((event) =>
+        event && typeof event === "object" ? (event as { message?: unknown }).message : undefined,
+      )
+      .filter((message): message is Record<string, unknown> =>
+        Boolean(message && typeof message === "object"),
+      );
+    expect(persistedMessages).toHaveLength(messages.length);
+    expect(persistedMessages[0]).not.toHaveProperty("display", false);
+    expect(persistedMessages.slice(1).every((message) => message.display === false)).toBe(true);
+  });
+
   it("mirrors user, assistant, and tool result messages by SQLite identity", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-basic-");
     const userMessage = makeAgentUserMessage({
@@ -1022,11 +1099,11 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:assistant",
     );
 
-    const assistantTranscriptOwned = await mirrorTranscriptBestEffort({
+    const mirrorOutcome = await mirrorTranscriptBestEffort({
       params: {
         sessionId: "session-1",
         suppressNextUserMessagePersistence: true,
-      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
+      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
       result: {
         messagesSnapshot: [assistantMessage],
       } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
@@ -1036,7 +1113,102 @@ describe("mirrorCodexAppServerTranscript", () => {
       turnId: "turn-1",
     });
 
-    expect(assistantTranscriptOwned).toBe(false);
+    expect(mirrorOutcome).toEqual({ assistantTranscriptOwned: false, mirroredMessages: [] });
+  });
+
+  it("does not attest a stale idempotency hit with the same mirror identity", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-stale-identity-");
+    const staleMessage = attachCodexMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "stale answer" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:assistant",
+    );
+    await mirrorCodexAppServerTranscript({
+      ...target,
+      messages: [staleMessage],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+    const currentMessage = attachCodexMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "current answer" }],
+        timestamp: Date.now() + 1,
+      }),
+      "turn-1:assistant",
+    );
+
+    const mirrorOutcome = await mirrorTranscriptBestEffort({
+      params: {
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+        suppressNextUserMessagePersistence: true,
+      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
+      result: {
+        messagesSnapshot: [currentMessage],
+      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      notifyUserMessagePersisted: () => undefined,
+      cwd: target.storePath,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
+    expect(mirrorOutcome.mirroredMessages).toEqual([]);
+  });
+
+  it("attests the exact persisted payload after a message-write hook transforms it", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: () => ({
+            message: castAgentMessage({
+              role: "assistant",
+              content: [{ type: "text", text: "[redacted by hook]" }],
+            }),
+          }),
+        },
+      ]),
+    );
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-attested-hook-");
+    const sourceMessage = attachCodexMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "sensitive answer" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:assistant",
+    );
+
+    const mirrorOutcome = await mirrorTranscriptBestEffort({
+      params: {
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+        suppressNextUserMessagePersistence: true,
+      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
+      result: {
+        messagesSnapshot: [sourceMessage],
+      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      notifyUserMessagePersisted: () => undefined,
+      cwd: target.storePath,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
+    expect(mirrorOutcome.assistantTranscriptIdempotencyKey).toBe(
+      "codex-app-server:thread-1:turn-1:assistant",
+    );
+    expect(mirrorOutcome.mirroredMessages).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "[redacted by hook]" }] },
+    ]);
+    expect(JSON.stringify(mirrorOutcome.mirroredMessages)).not.toContain("sensitive answer");
   });
 
   it("dedupes mirrored messages despite snapshot positional shifts", async () => {
@@ -1196,3 +1368,4 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

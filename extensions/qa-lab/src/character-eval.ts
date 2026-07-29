@@ -243,8 +243,6 @@ function formatDuration(ms: number) {
   }
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
   return prettyMilliseconds(roundedMs, {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 0,
     unitCount: 2,
   });
 }

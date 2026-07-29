@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { collectPreservedExistingServiceEnvVars } from "./daemon-install-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
@@ -85,7 +84,6 @@ vi.mock("../plugins/plugin-registry.js", async (importActual) => {
 });
 
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
-import { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -112,16 +110,6 @@ function createSecurePluginRoot(pathname: string): void {
   fs.mkdirSync(pathname);
   fs.chmodSync(pathname, 0o755);
 }
-
-describe("resolveGatewayDevMode", () => {
-  it("detects dev mode for src ts entrypoints", () => {
-    expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
-    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\openclaw\\src\\cli\\index.ts"])).toBe(
-      true,
-    );
-    expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/dist/cli/index.js"])).toBe(false);
-  });
-});
 
 function mockNodeGatewayPlanFixture(
   params: {
@@ -289,6 +277,26 @@ describe("buildGatewayInstallPlan", () => {
     expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
     expect(serviceEnvRequest?.port).toBe(3000);
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
+  });
+
+  it("passes only the existing service NODE_OPTIONS to heap resolution", async () => {
+    mockNodeGatewayPlanFixture();
+
+    await buildGatewayInstallPlan({
+      env: {
+        HOME: isolatedHome,
+        NODE_OPTIONS: "--max-old-space-size=16384",
+      },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        NODE_OPTIONS: "--max-old-space-size=6144",
+      },
+    });
+
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
+    ).toBe("--max-old-space-size=6144");
   });
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
@@ -614,7 +622,6 @@ describe("buildGatewayInstallPlan", () => {
               command: "/usr/bin/op",
               args: ["read", "op://Private/Discord/password"],
               passEnv: ["OP_CONNECT_TOKEN"],
-              allowInsecurePath: true,
             },
           },
         },
@@ -718,7 +725,6 @@ describe("buildGatewayInstallPlan", () => {
               command: "/usr/bin/op",
               args: ["read", "op://Private/OpenAI/api-key"],
               passEnv: ["OP_CONNECT_TOKEN"],
-              allowInsecurePath: true,
             },
           },
         },
@@ -850,7 +856,6 @@ describe("buildGatewayInstallPlan", () => {
                 "DOCKER_HOST",
                 "NODE_TLS_REJECT_UNAUTHORIZED",
               ],
-              allowInsecurePath: true,
             },
           },
         },
@@ -912,7 +917,6 @@ describe("buildGatewayInstallPlan", () => {
               command: "/usr/bin/op",
               args: ["read", "op://Private/OpenAI/api-key"],
               passEnv: ["HOME", "NODE_OPTIONS"],
-              allowInsecurePath: true,
             },
           },
         },
@@ -965,7 +969,6 @@ describe("buildGatewayInstallPlan", () => {
               source: "exec",
               command: "/usr/bin/op",
               passEnv: ["OP_CONNECT_TOKEN"],
-              allowInsecurePath: true,
             },
           },
         },
@@ -1702,7 +1705,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
   });
 
-  it("keeps source metadata for EnvironmentFile-backed preserved vars", async () => {
+  it("keeps differently-cased source metadata for EnvironmentFile-backed preserved vars", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/from-service",
@@ -1720,9 +1723,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
         OPENCLAW_GATEWAY_TOKEN: "old-token",
       },
       existingEnvironmentValueSources: {
-        OPENROUTER_API_KEY: "file",
-        CUSTOM_TOOL_HOME: "inline",
-        OPENCLAW_GATEWAY_TOKEN: "file",
+        openrouter_api_key: "file",
+        custom_tool_home: "inline",
+        openclaw_gateway_token: "file",
       },
     });
 
@@ -1780,44 +1783,46 @@ describe("gatewayInstallErrorHint", () => {
 });
 
 describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist", () => {
-  const managedKeys = new Set<string>();
+  async function buildEnvironment(existingEnvironment: Record<string, string>) {
+    mockNodeGatewayPlanFixture();
+    return (
+      await buildGatewayInstallPlan({
+        env: { HOME: "/tmp" },
+        port: 3000,
+        runtime: "node",
+        existingEnvironment,
+      })
+    ).environment;
+  }
 
-  it("continues to drop stale OPENCLAW_ALLOW_ROOT", () => {
-    const result = collectPreservedExistingServiceEnvVars(
-      { OPENCLAW_ALLOW_ROOT: "1" },
-      managedKeys,
-    );
+  it("continues to drop stale OPENCLAW_ALLOW_ROOT", async () => {
+    const result = await buildEnvironment({ OPENCLAW_ALLOW_ROOT: "1" });
     expect(result.OPENCLAW_ALLOW_ROOT).toBeUndefined();
   });
 
-  it("preserves OPENCLAW_CLI_CONTAINER_BYPASS and OPENCLAW_CONTAINER_HINT", () => {
-    const result = collectPreservedExistingServiceEnvVars(
-      {
-        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
-        OPENCLAW_CONTAINER_HINT: "ci",
-      },
-      managedKeys,
-    );
+  it("preserves OPENCLAW_CLI_CONTAINER_BYPASS and OPENCLAW_CONTAINER_HINT", async () => {
+    const result = await buildEnvironment({
+      OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+      OPENCLAW_CONTAINER_HINT: "ci",
+    });
     expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
     expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
   });
 
-  it("still drops arbitrary OPENCLAW_FOO", () => {
-    const result = collectPreservedExistingServiceEnvVars({ OPENCLAW_FOO: "bar" }, managedKeys);
+  it("still drops arbitrary OPENCLAW_FOO", async () => {
+    const result = await buildEnvironment({ OPENCLAW_FOO: "bar" });
     expect(result.OPENCLAW_FOO).toBeUndefined();
   });
 
-  it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", () => {
-    const result = collectPreservedExistingServiceEnvVars(
-      {
-        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
-        OPENCLAW_CONTAINER_HINT: "ci",
-        OPENCLAW_BAZ: "qux",
-      },
-      managedKeys,
-    );
+  it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", async () => {
+    const result = await buildEnvironment({
+      OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+      OPENCLAW_CONTAINER_HINT: "ci",
+      OPENCLAW_BAZ: "qux",
+    });
     expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
     expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
     expect(result.OPENCLAW_BAZ).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

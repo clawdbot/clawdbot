@@ -42,6 +42,10 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
+      "dist/extensions/discord/assets/embedded-app-sdk.mjs",
+      "dist/extensions/onepassword/onepassword-op-path.js",
+      "dist/extensions/onepassword/onepassword-secret-id.js",
+      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
@@ -64,11 +68,16 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
+      "dist/extensions/discord/assets/embedded-app-sdk.mjs",
+      "dist/extensions/onepassword/onepassword-op-path.js",
+      "dist/extensions/onepassword/onepassword-secret-id.js",
+      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
     expect(payload.sources).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
+    expect(payload.sources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
   });
 
   it("discovers static assets from plugin package metadata", async () => {
@@ -184,12 +193,6 @@ describe("runtime postbuild static assets", () => {
     const distAsset = "dist/extensions/diffs/assets/viewer-runtime.js";
     const runtimeAsset = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
 
-    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
-      "module.exports = {};\n",
-      "utf8",
-    );
     await fs.mkdir(path.join(rootDir, "extensions", "diffs", "assets"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "extensions", "diffs", "package.json"),
@@ -232,12 +235,6 @@ describe("runtime postbuild static assets", () => {
     const distPluginDir = path.join(rootDir, "dist", "extensions", "diffs");
     const runtimeAsset = path.join(rootDir, "dist-runtime", "extensions", "diffs", output);
 
-    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
-      "module.exports = {};\n",
-      "utf8",
-    );
     await fs.mkdir(path.join(distPluginDir, "assets"), { recursive: true });
     await fs.writeFile(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
     await fs.writeFile(
@@ -275,12 +272,6 @@ describe("runtime postbuild static assets", () => {
     const warn = vi.fn();
     const output = "assets/viewer-runtime.js";
 
-    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
-      "module.exports = {};\n",
-      "utf8",
-    );
     await fs.mkdir(path.join(rootDir, "extensions", "diffs"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "extensions", "diffs", "package.json"),

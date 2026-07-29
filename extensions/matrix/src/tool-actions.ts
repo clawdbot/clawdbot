@@ -33,6 +33,7 @@ import {
   voteMatrixPoll,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions.js";
+import type { MatrixMessageSummary } from "./matrix/actions/types.js";
 import { withAuthorizedMatrixReadTarget, type MatrixReadContext } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage } from "./matrix/send.js";
@@ -71,6 +72,20 @@ const verificationActions = new Set([
   "verificationBackupStatus",
   "verificationBackupRestore",
 ]);
+
+function projectMatrixMessagesForDisplay(messages: readonly MatrixMessageSummary[]) {
+  return messages.map((message) => ({
+    ...message,
+    ...(message.eventId ? { id: message.eventId } : {}),
+    ...(message.sender ? { authorTag: message.sender } : {}),
+    ...(message.body !== undefined ? { content: message.body } : {}),
+    ...(typeof message.timestamp === "number" &&
+    Number.isFinite(message.timestamp) &&
+    Math.abs(message.timestamp) <= 8_640_000_000_000_000
+      ? { ts: new Date(message.timestamp).toISOString() }
+      : {}),
+  }));
+}
 
 function readRoomId(params: Record<string, unknown>, required = true): string {
   const direct = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
@@ -310,7 +325,7 @@ export async function handleMatrixAction(
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
         const result = await withReadTarget(roomId, async (target) => {
-          return await readMatrixMessages(target.roomId, {
+          const messages = await readMatrixMessages(target.roomId, {
             limit: limit ?? undefined,
             before: before ?? undefined,
             after: after ?? undefined,
@@ -318,6 +333,12 @@ export async function handleMatrixAction(
             ...clientOpts,
             client: target.client,
           });
+          return {
+            ...messages,
+            messages: projectMatrixMessagesForDisplay(messages.messages),
+            roomId: target.roomId,
+            ...(threadId ? { threadId } : {}),
+          };
         });
         return jsonResult({ ok: true, ...result });
       }
@@ -357,7 +378,12 @@ export async function handleMatrixAction(
         return jsonResult({ ok: true, pinned: result.pinned });
       }
       const result = await listMatrixPins(target.roomId, actionOpts);
-      return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
+      return jsonResult({
+        ok: true,
+        pinned: result.pinned,
+        events: result.events,
+        pins: projectMatrixMessagesForDisplay(result.events),
+      });
     });
   }
 

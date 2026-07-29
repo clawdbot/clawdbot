@@ -40,8 +40,8 @@ type SessionListDeliveryContext = {
 /** Compact run status shown by session tools. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
-/** Normalized session row returned by session list-style tools. */
-export type SessionListRow = {
+/** Full Gateway session row consumed by session orchestration internals. */
+export type GatewaySessionListRow = {
   key: string;
   agentId?: string;
   kind: SessionKind;
@@ -90,6 +90,30 @@ export type SessionListRow = {
   lastAccountId?: string;
   lastThreadId?: string | number;
   transcriptPath?: string;
+  messages?: unknown[];
+};
+
+/** Focused model-facing row returned by sessions_list. */
+export type SessionListRow = {
+  key: string;
+  agentId: string;
+  kind: SessionKind;
+  channel: string;
+  label?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
+  parentSessionKey?: string;
+  updatedAt?: number;
+  archived: boolean;
+  pinned: boolean;
+  stateVersion?: number;
+  model?: string;
+  contextTokens?: number;
+  totalTokens?: number;
+  status?: SessionRunStatus;
+  abortedLastRun?: boolean;
+  childSessions?: string[];
   messages?: unknown[];
 };
 

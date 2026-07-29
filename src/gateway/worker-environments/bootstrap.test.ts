@@ -241,9 +241,6 @@ describe("bootstrapWorker", () => {
     expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
     expect(npmRunner.calls[1]?.options.input).toContain("npm install --global");
     expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1",
-    );
     expect(npmRunner.calls[1]?.options.input).toContain("postinstall-inventory.json");
     expect(npmRunner.calls[1]?.options.input).toContain("lib/node_modules/openclaw");
     expect(npmRunner.calls[1]?.options.input).toContain('cp -R "$package_dir/." "$staging/"');

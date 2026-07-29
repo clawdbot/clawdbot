@@ -1750,7 +1750,7 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.7.1/OpenClaw-2026.7.1.zip" length="59038286" type="application/octet-stream" sparkle:edSignature="smUCPNQSjvwkBN8kKC0c4Oq8ygySakUmjD9m/1L3j06UQ7QXWBZKnVtCfFMfAUb8cDv5wiPPm2mUNioWfZQcBQ=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.7.1/OpenClaw-2026.7.1.zip" length="59038535" type="application/octet-stream" sparkle:edSignature="a7K+wq4Fgg44Fg/Mt1XseUcICLiPShPz023twbvVHSlus+gQZjkE33aV4pwRKAOA2VlzZYkdRkEOX+3sE8h2BA=="/>
         </item>
         <item>
             <title>2026.6.11</title>

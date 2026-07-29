@@ -1,9 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeControlUiBuildInfo } from "./build-info-normalizers.ts";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 
 describe("Control UI build info", () => {
+  it("compares the normalized embedded version with the gateway", async () => {
+    vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
+      version: "2026.7.19",
+      buildId: "test",
+    });
+    vi.resetModules();
+
+    try {
+      const { controlUiVersionDiffersFrom } = await import("./build-info.ts");
+      expect(controlUiVersionDiffersFrom(" 2026.7.19 ")).toBe(false);
+      expect(controlUiVersionDiffersFrom("2026.7.20")).toBe(true);
+      expect(controlUiVersionDiffersFrom(undefined)).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
   it("keeps only full Git SHAs", () => {
     expect(normalizeControlUiBuildInfo({ commit: COMMIT.toUpperCase() }).commit).toBe(COMMIT);
     expect(normalizeControlUiBuildInfo({ commit: COMMIT.slice(0, 12) }).commit).toBeNull();
@@ -17,6 +35,12 @@ describe("Control UI build info", () => {
     expect(normalizeControlUiBuildInfo({ branch: "HEAD" }).branch).toBeNull();
     expect(normalizeControlUiBuildInfo({ branch: " " }).branch).toBeNull();
     expect(normalizeControlUiBuildInfo({ branch: "x".repeat(101) }).branch).toBe("x".repeat(100));
+    expect(normalizeControlUiBuildInfo({ branch: `${"x".repeat(98)}😀tail` }).branch).toBe(
+      `${"x".repeat(98)}😀`,
+    );
+    expect(normalizeControlUiBuildInfo({ branch: `${"x".repeat(99)}😀tail` }).branch).toBe(
+      "x".repeat(99),
+    );
   });
 
   it("canonicalizes only valid UTC build timestamps", () => {
@@ -36,6 +60,12 @@ describe("Control UI build info", () => {
     expect(
       normalizeControlUiBuildInfo({ builtAt: "2026-07-10T12:34:56+00:00" }).builtAt,
     ).toBeNull();
+    expect(normalizeControlUiBuildInfo({ commitAt: "2026-07-10T11:22:33Z" }).commitAt).toBe(
+      "2026-07-10T11:22:33.000Z",
+    );
+    expect(
+      normalizeControlUiBuildInfo({ commitAt: "2026-07-10T11:22:33+02:00" }).commitAt,
+    ).toBeNull();
   });
 
   it("renders invalid injected metadata as unavailable instead of inventing identity", () => {
@@ -43,6 +73,7 @@ describe("Control UI build info", () => {
       normalizeControlUiBuildInfo({
         version: "  ",
         commit: "deadbeef",
+        commitAt: "later",
         builtAt: "later",
         branch: "HEAD",
         dirty: "yes",
@@ -51,6 +82,7 @@ describe("Control UI build info", () => {
     ).toEqual({
       version: null,
       commit: null,
+      commitAt: null,
       builtAt: null,
       branch: null,
       dirty: null,

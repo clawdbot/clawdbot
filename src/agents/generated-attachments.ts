@@ -15,6 +15,10 @@ export type AgentGeneratedAttachment = {
   filePath?: string;
   mimeType?: string;
   name?: string;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 function generatedAttachmentReference(attachment: AgentGeneratedAttachment): string | undefined {
