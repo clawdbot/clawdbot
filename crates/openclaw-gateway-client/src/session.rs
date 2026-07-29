@@ -265,10 +265,23 @@ impl GatewaySession {
     }
 
     pub async fn next_event(&self) -> Result<Event, ClientError> {
-        match self.event_rx.lock().await.recv().await {
-            Ok(event) => Ok(event),
-            Err(broadcast::error::RecvError::Lagged(count)) => Err(ClientError::EventLagged(count)),
-            Err(broadcast::error::RecvError::Closed) => Err(self.closed_error()),
+        let mut closed = self.closed_rx.clone();
+        if closed.borrow().is_some() {
+            return Err(self.closed_error());
+        }
+        let mut events = self.event_rx.lock().await;
+        tokio::select! {
+            event = events.recv() => match event {
+                Ok(event) => Ok(event),
+                Err(broadcast::error::RecvError::Lagged(count)) => {
+                    Err(ClientError::EventLagged(count))
+                }
+                Err(broadcast::error::RecvError::Closed) => Err(self.closed_error()),
+            },
+            changed = closed.changed() => {
+                let _ = changed;
+                Err(self.closed_error())
+            }
         }
     }
 

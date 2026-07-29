@@ -84,6 +84,45 @@ async fn connects_publishes_events_and_correlates_requests() {
 }
 
 #[tokio::test]
+async fn idle_disconnect_unblocks_the_retained_event_receiver() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-close"}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(
+            &mut socket,
+            json!({
+                "type":"res", "id":connect["id"], "ok":true,
+                "payload":{"type":"hello-ok","protocol":4}
+            }),
+        )
+        .await;
+        socket.close(None).await.unwrap();
+    });
+
+    let session = GatewayClient::connect(
+        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
+    )
+    .await
+    .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(1), session.next_event())
+        .await
+        .expect("idle disconnect must unblock next_event");
+    assert!(matches!(result, Err(ClientError::Closed(_))));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn surfaces_websocket_ping_as_transport_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
