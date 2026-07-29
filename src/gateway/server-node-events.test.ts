@@ -971,7 +971,7 @@ describe("voice transcript events", () => {
     let checkCount = 0;
     const isConnectionCurrent = vi.fn(() => {
       checkCount += 1;
-      if (checkCount === 1 || checkCount === 3) {
+      if (checkCount <= 2) {
         return true;
       }
       if (checkCount === 4) {
@@ -984,7 +984,7 @@ describe("voice transcript events", () => {
       sessionKey: "voice-new-session-replay-race",
     };
 
-    await handleNodeEvent(
+    const firstReplay = handleNodeEvent(
       ctx,
       "node-new-session-replay",
       {
@@ -993,7 +993,7 @@ describe("voice transcript events", () => {
       },
       { isConnectionCurrent },
     );
-    await handleNodeEvent(
+    const duplicateReplay = handleNodeEvent(
       ctx,
       "node-new-session-replay",
       {
@@ -1002,6 +1002,7 @@ describe("voice transcript events", () => {
       },
       { isConnectionCurrent },
     );
+    await Promise.all([firstReplay, duplicateReplay]);
     await detachedChecksStarted.promise;
     detachedAdmission.resolve(true);
     await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
