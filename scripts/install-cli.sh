@@ -447,6 +447,7 @@ link_node_runtime_paths() {
 }
 
 linked_node_is_usable() {
+  local candidate_bin
   local current_version
   local required_version
 
@@ -460,6 +461,10 @@ linked_node_is_usable() {
     return 1
   fi
   if ! semver_at_least "$current_version" "$required_version"; then
+    return 1
+  fi
+  candidate_bin="$(node_dir)/bin"
+  if ! PATH="${candidate_bin}:${PATH}" "$(npm_bin)" --version >/dev/null 2>&1; then
     return 1
   fi
 

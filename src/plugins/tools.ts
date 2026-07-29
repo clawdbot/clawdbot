@@ -52,6 +52,10 @@ export type PluginToolMcpMeta = {
   safeServerName: string;
   toolName: string;
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  node?: {
+    id: string;
+    displayName?: string;
+  };
 };
 
 /** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
@@ -769,6 +773,7 @@ function createCachedDescriptorPluginTool(params: {
     label: descriptor.title ?? descriptor.name,
     description: descriptor.description,
     parameters: descriptor.inputSchema as never,
+    ...(descriptor.outputSchema ? { outputSchema: descriptor.outputSchema as never } : {}),
     ...(params.descriptor.requiredClientCaps
       ? { requiredClientCaps: [...params.descriptor.requiredClientCaps] }
       : {}),

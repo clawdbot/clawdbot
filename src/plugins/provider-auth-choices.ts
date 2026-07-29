@@ -17,6 +17,8 @@ export type ProviderAuthChoiceMetadata = {
   choiceId: string;
   choiceLabel: string;
   choiceHint?: string;
+  icon?: string;
+  website?: string;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
   deprecatedChoiceIds?: string[];
@@ -95,6 +97,8 @@ function toProviderAuthChoiceCandidate(params: {
     choiceId: choice.choiceId,
     choiceLabel: choice.choiceLabel ?? choice.choiceId,
     ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+    ...(choice.icon ? { icon: choice.icon } : {}),
+    ...(choice.website ? { website: choice.website } : {}),
     ...(choice.assistantPriority !== undefined
       ? { assistantPriority: choice.assistantPriority }
       : {}),

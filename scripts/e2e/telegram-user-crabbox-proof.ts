@@ -42,6 +42,7 @@ type CrabboxInspect = {
   sshPort?: string;
   sshUser?: string;
   state?: string;
+  tailscale?: unknown;
 };
 
 type Options = {
@@ -65,6 +66,9 @@ type Options = {
   idleTimeout: string;
   keepBox: boolean;
   leaseId?: string;
+  linkPreview?: boolean;
+  mcpAppFixture: boolean;
+  mockResponseChunkDelayMs?: number;
   mockResponseText: string;
   mockPort: number;
   outputDir: string;
@@ -82,6 +86,9 @@ type Options = {
   recordSeconds: number;
   remoteCommand: string[];
   sessionFile?: string;
+  sutContainer: boolean;
+  sutLane?: "baseline" | "candidate";
+  sutRepoRoot?: string;
   sutUsername?: string;
   target: string;
   tdlibSha256?: string;
@@ -90,6 +97,14 @@ type Options = {
   timeoutMs: number;
   ttl: string;
   userDriverScript: string;
+  nodeBin: string;
+  pnpmBin?: string;
+};
+
+type FunnelBridge = {
+  proxyPath: string;
+  tunnelLog: string;
+  tunnelPid: number;
 };
 
 type LocalSut = {
@@ -108,6 +123,9 @@ type LocalSut = {
   workspace: string;
   gateway: ChildProcess;
   gatewayLog: string;
+  funnelBridge?: FunnelBridge;
+  containerName?: string;
+  sutAttestation?: { lane: "baseline" | "candidate"; sha: string };
 };
 
 type SessionFile = {
@@ -130,6 +148,8 @@ type SessionFile = {
   };
   localRoot: string;
   localSut: {
+    containerName?: string;
+    sutAttestation?: { lane: "baseline" | "candidate"; sha: string };
     gatewayLog: string;
     gatewayPid: number;
     mockLog: string;
@@ -138,6 +158,7 @@ type SessionFile = {
     stateDir: string;
     tempRoot: string;
     workspace: string;
+    funnelBridge?: FunnelBridge;
   };
   outputDir: string;
   recorder: {
@@ -198,7 +219,10 @@ function usageText() {
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
+    "  --link-preview <true|false>   Set channels.telegram.linkPreview before Gateway startup.",
     "  --mock-response-file <path>    Text returned by the mock model.",
+    "  --mock-response-chunk-delay-ms <ms> Split the mock reply across two delayed deltas.",
+    "  --mcp-app-fixture              Configure the pinned MCP App fixture through a Crabbox Funnel.",
     "  --output-dir <path>           Artifact directory under the repo.",
     "  --message-id <id>             Telegram message id for proof-view deep link.",
     "  --preview-crop telegram-window Create a side-by-side friendly Telegram-window GIF.",
@@ -211,6 +235,9 @@ function usageText() {
     "  --repo <owner/name>           GitHub repo for publish. Default: openclaw/openclaw.",
     "  --session <path>              Session file from start. Default: <output-dir>/session.json.",
     "  --summary <text>              Artifact publish summary.",
+    "  --sut-container               Isolate the local OpenClaw SUT in Docker.",
+    "  --sut-lane <lane>             Attested prepared lane: baseline or candidate.",
+    "  --sut-repo-root <path>        Prepared SUT checkout mounted by the isolation wrapper.",
     "  --full-artifacts              Publish all session artifacts. Default publishes only the motion GIF.",
     "  --tdlib-sha256 <hex>         Expected SHA-256 for --tdlib-url. Defaults to <url>.sha256.",
     "  --tdlib-url <url>             Linux tdlib archive containing libtdjson.so.",
@@ -272,6 +299,16 @@ function parseTcpPort(value: string, label: string) {
   return parsed;
 }
 
+function parseBoolean(value: string, label: string) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  throw new Error(`${label} must be true or false.`);
+}
+
 function createTelegramProofRunId() {
   return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
 }
@@ -302,6 +339,7 @@ export function parseArgs(argvInput: string[]): Options {
     gatewayPort: 19_879,
     idleTimeout: "60m",
     keepBox: false,
+    mcpAppFixture: false,
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
@@ -314,12 +352,15 @@ export function parseArgs(argvInput: string[]): Options {
     recordFps: 24,
     recordSeconds: 35,
     remoteCommand: [],
+    sutContainer: process.env.MANTIS_CANDIDATE_TRUST === "fork-pr-head",
     target: "linux",
     text: "/status",
     timeoutMs: 90_000,
     ttl: "120m",
     userDriverScript:
       trimToValue(process.env.OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT) ?? DEFAULT_USER_DRIVER,
+    nodeBin: trimToValue(process.env.MANTIS_NODE_BIN) ?? process.execPath,
+    pnpmBin: trimToValue(process.env.MANTIS_PNPM_BIN),
   };
   const commandSeparator = argv.indexOf("--");
   if (command === "run" && commandSeparator >= 0) {
@@ -371,10 +412,19 @@ export function parseArgs(argvInput: string[]): Options {
       opts.idleTimeout = readValue();
     } else if (arg === "--keep-box") {
       opts.keepBox = true;
+    } else if (arg === "--link-preview") {
+      opts.linkPreview = parseBoolean(readValue(), "--link-preview");
     } else if (arg === "--mock-port") {
       opts.mockPort = parseTcpPort(readValue(), "--mock-port");
     } else if (arg === "--mock-response-file") {
       opts.mockResponseText = fs.readFileSync(resolveRepoPath(process.cwd(), readValue()), "utf8");
+    } else if (arg === "--mock-response-chunk-delay-ms") {
+      opts.mockResponseChunkDelayMs = parsePositiveTimerMs(
+        readValue(),
+        "--mock-response-chunk-delay-ms",
+      );
+    } else if (arg === "--mcp-app-fixture") {
+      opts.mcpAppFixture = true;
     } else if (arg === "--message-id") {
       opts.messageId = String(parsePositiveInteger(readValue(), "--message-id"));
     } else if (arg === "--output-dir") {
@@ -403,6 +453,18 @@ export function parseArgs(argvInput: string[]): Options {
       opts.sessionFile = readValue();
     } else if (arg === "--summary") {
       opts.publishSummary = readValue();
+    } else if (arg === "--sut-container") {
+      opts.sutContainer = true;
+    } else if (arg === "--sut-lane") {
+      const lane = readValue();
+      if (lane !== "baseline" && lane !== "candidate") {
+        throw new Error("--sut-lane must be baseline or candidate.");
+      }
+      opts.sutLane = lane;
+      opts.sutContainer = true;
+    } else if (arg === "--sut-repo-root") {
+      opts.sutRepoRoot = readValue();
+      opts.sutContainer = true;
     } else if (arg === "--full-artifacts") {
       opts.publishFullArtifacts = true;
     } else if (arg === "--record-fps") {
@@ -444,6 +506,30 @@ export function parseArgs(argvInput: string[]): Options {
   }
   if (command === "publish" && !opts.publishPr) {
     throw new Error("publish requires --pr.");
+  }
+  if (opts.mcpAppFixture && command !== "start") {
+    throw new Error("--mcp-app-fixture is available only for start sessions.");
+  }
+  if (opts.mcpAppFixture && opts.leaseId) {
+    throw new Error("--mcp-app-fixture requires a fresh lifecycle-owned Crabbox lease.");
+  }
+  if (opts.mcpAppFixture && opts.sutContainer) {
+    throw new Error("--mcp-app-fixture is unavailable for container-isolated SUT proof.");
+  }
+  if (command === "probe" && opts.sutContainer) {
+    throw new Error("--sut-container requires the held-session start flow.");
+  }
+  if (command !== "start" && opts.sutRepoRoot) {
+    throw new Error("--sut-repo-root is available only for start sessions.");
+  }
+  if (command !== "start" && opts.sutLane) {
+    throw new Error("--sut-lane is available only for start sessions.");
+  }
+  if (Boolean(opts.sutRepoRoot) !== Boolean(opts.sutLane)) {
+    throw new Error("--sut-repo-root and --sut-lane must be provided together.");
+  }
+  if (command === "start" && opts.sutContainer && (!opts.sutRepoRoot || !opts.sutLane)) {
+    throw new Error("container proof requires --sut-repo-root and --sut-lane.");
   }
   return opts;
 }
@@ -521,21 +607,39 @@ function childProcessBaseEnv() {
   return env;
 }
 
-function mockServerEnv(params: { mockPort: number; mockResponseText: string; requestLog: string }) {
+function mockServerEnv(params: {
+  mockPort: number;
+  mockResponseChunkDelayMs?: number;
+  mockResponseText: string;
+  requestLog: string;
+}) {
   return {
     ...childProcessBaseEnv(),
     MOCK_PORT: String(params.mockPort),
     MOCK_REQUEST_LOG: params.requestLog,
     SUCCESS_MARKER: params.mockResponseText,
+    ...(params.mockResponseChunkDelayMs === undefined
+      ? {}
+      : { MOCK_RESPONSE_CHUNK_DELAY_MS: String(params.mockResponseChunkDelayMs) }),
   };
 }
 
-function gatewayEnv(params: { configPath: string; stateDir: string; sutToken: string }) {
+function gatewayEnv(params: {
+  configPath: string;
+  gatewayPassword?: string;
+  stateDir: string;
+  sutToken: string;
+  tailscaleProxyDir?: string;
+}) {
   return {
     ...childProcessBaseEnv(),
     OPENAI_API_KEY: "sk-openclaw-e2e-mock",
     OPENCLAW_CONFIG_PATH: params.configPath,
+    ...(params.gatewayPassword ? { OPENCLAW_GATEWAY_PASSWORD: params.gatewayPassword } : {}),
     OPENCLAW_STATE_DIR: params.stateDir,
+    ...(params.tailscaleProxyDir
+      ? { PATH: `${params.tailscaleProxyDir}${path.delimiter}${process.env.PATH ?? ""}` }
+      : {}),
     TELEGRAM_BOT_TOKEN: params.sutToken,
   };
 }
@@ -547,8 +651,16 @@ export function createOpenClawGatewaySpawnSpec(params: {
   comSpec?: string;
   nodeExecPath?: string;
   npmExecPath?: string;
+  pnpmExecPath?: string;
   platform?: NodeJS.Platform;
 }): GatewaySpawnSpec {
+  if (params.pnpmExecPath) {
+    return {
+      args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
+      command: params.pnpmExecPath,
+      options: { cwd: params.repoRoot, env: params.env, shell: false },
+    };
+  }
   const spec = createPnpmRunnerSpawnSpec({
     comSpec: params.comSpec,
     cwd: params.repoRoot,
@@ -967,16 +1079,64 @@ function killTree(child: ChildProcess | undefined) {
   }
 }
 
-function killPidTree(pid: number | undefined) {
+function killPidTree(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") {
   if (!pid) {
     return;
   }
   try {
-    process.kill(-pid, "SIGTERM");
+    process.kill(-pid, signal);
   } catch {
     try {
-      process.kill(pid, "SIGTERM");
+      process.kill(pid, signal);
     } catch {}
+  }
+}
+
+export function processTargetExists(target: number) {
+  try {
+    process.kill(target, 0);
+    return true;
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+    if (code === "ESRCH") {
+      return false;
+    }
+    if (code === "EPERM") {
+      return true;
+    }
+    throw error;
+  }
+}
+
+function isPidTreeAlive(pid: number) {
+  for (const target of [-pid, pid]) {
+    if (processTargetExists(target)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function waitForPidTreeExit(pid: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidTreeAlive(pid)) {
+      return true;
+    }
+    await sleep(25);
+  }
+  return !isPidTreeAlive(pid);
+}
+
+async function stopPidTreeAndWait(pid: number) {
+  killPidTree(pid);
+  if (await waitForPidTreeExit(pid, 5_000)) {
+    return;
+  }
+  killPidTree(pid, "SIGKILL");
+  if (!(await waitForPidTreeExit(pid, 2_000))) {
+    throw new Error(`Local SUT process group ${pid} did not exit.`);
   }
 }
 
@@ -1104,11 +1264,14 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
   return value as JsonObject;
 }
 
-function writeSutConfig(params: {
+export function writeSutConfig(params: {
   gatewayPort: number;
   groupId: string;
+  linkPreview?: boolean;
+  mcpAppFixture?: boolean;
   mockPort: number;
   outputDir: string;
+  repoRoot?: string;
   testerId: string;
 }) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-crabbox-sut-"));
@@ -1125,19 +1288,18 @@ function writeSutConfig(params: {
           "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
         },
       },
-      list: [
-        {
+      entries: {
+        main: {
           default: true,
-          id: "main",
           model: { primary: "openai/gpt-5.6-luna" },
           name: "Main",
           workspace,
         },
-      ],
+      },
     },
     // Exercise the opt-in message audit surface: the DM probe should produce
     // inbound/outbound rows under the privacy-sensitive "direct" mode.
-    audit: { enabled: true, messages: "direct" },
+    logging: { audit: { enabled: true, messages: "direct" } },
     channels: {
       telegram: {
         allowFrom: [params.testerId],
@@ -1154,10 +1316,43 @@ function writeSutConfig(params: {
             requireMention: false,
           },
         },
+        ...(params.linkPreview === undefined ? {} : { linkPreview: params.linkPreview }),
         replyToMode: "first",
       },
     },
-    gateway: { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },
+    gateway: params.mcpAppFixture
+      ? {
+          auth: {
+            mode: "password",
+            password: {
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+              provider: "default",
+              source: "env",
+            },
+          },
+          bind: "loopback",
+          mode: "local",
+          port: params.gatewayPort,
+          tailscale: { mode: "funnel", resetOnExit: true },
+        }
+      : { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },
+    ...(params.mcpAppFixture
+      ? {
+          mcp: {
+            servers: {
+              fixture: {
+                args: [
+                  path.join(
+                    params.repoRoot ?? process.cwd(),
+                    "scripts/e2e/mcp-app-conformance-server.mjs",
+                  ),
+                ],
+                command: process.execPath,
+              },
+            },
+          },
+        }
+      : {}),
     messages: { groupChat: { visibleReplies: "automatic" } },
     models: {
       providers: {
@@ -1201,10 +1396,14 @@ export async function startLocalSut(
     groupId: string;
     mockResponseText: string;
     mockPort: number;
+    linkPreview?: boolean;
+    mockResponseChunkDelayMs?: number;
     outputDir: string;
     sutToken: string;
     testerId: string;
     repoRoot: string;
+    nodeBin?: string;
+    pnpmBin?: string;
   },
   deps: StartLocalSutDeps = {},
 ) {
@@ -1219,10 +1418,14 @@ export async function startLocalSut(
     const drained = await drainUpdates(params.sutToken);
     const config = writeConfig(params);
     const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
-    mock = spawnLoggedCommand("node", ["scripts/e2e/mock-openai-server.mjs"], {
-      cwd: params.repoRoot,
-      env: mockServerEnv({ ...params, requestLog }),
-    });
+    mock = spawnLoggedCommand(
+      params.nodeBin ?? process.execPath,
+      ["scripts/e2e/mock-openai-server.mjs"],
+      {
+        cwd: params.repoRoot,
+        env: mockServerEnv({ ...params, requestLog }),
+      },
+    );
     const runningMock = mock;
     await waitForOutputReady(
       runningMock.child,
@@ -1234,6 +1437,7 @@ export async function startLocalSut(
     const gatewaySpec = createGatewaySpawnSpec({
       env: gatewayEnv({ ...config, sutToken: params.sutToken }),
       gatewayPort: params.gatewayPort,
+      pnpmExecPath: params.pnpmBin,
       repoRoot: params.repoRoot,
     });
     gateway = spawnLoggedCommand(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
@@ -1307,26 +1511,284 @@ export async function recordProbeVideo(params: {
   }
 }
 
+export function createContainerizedSutSpawnSpec(params: {
+  codexProxyPort: number;
+  containerName: string;
+  gatewayPort: number;
+  mockPort: number;
+  mockResponseChunkDelayMs?: number;
+  mockResponseText: string;
+  repoRoot: string;
+  runtimeRoot: string;
+  sutLane: "baseline" | "candidate";
+  gatewayEnv: NodeJS.ProcessEnv;
+}) {
+  const containerHome = path.join(params.runtimeRoot, "container-home");
+  fs.mkdirSync(containerHome, { recursive: true });
+  const inputPath = path.join(params.runtimeRoot, "container-input.json");
+  fs.writeFileSync(
+    inputPath,
+    `${JSON.stringify({
+      gatewayPassword: params.gatewayEnv.OPENCLAW_GATEWAY_PASSWORD,
+      mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
+      mockResponseText: params.mockResponseText,
+      telegramBotToken: params.gatewayEnv.TELEGRAM_BOT_TOKEN,
+    })}\n`,
+    { mode: 0o600 },
+  );
+  return {
+    args: [
+      "-n",
+      "/usr/local/sbin/openclaw-mantis-sut-container",
+      "run",
+      params.containerName,
+      params.sutLane,
+      params.repoRoot,
+      params.runtimeRoot,
+      String(params.gatewayPort),
+      String(params.mockPort),
+      String(params.codexProxyPort),
+    ],
+    command: "sudo",
+    inputPath,
+    options: {
+      cwd: process.cwd(),
+      env: childProcessBaseEnv(),
+      shell: false,
+    } satisfies SpawnOptionsWithoutStdio,
+  };
+}
+
+export function readCodexProxyPort(codexHome: string): number | undefined {
+  let config: string;
+  try {
+    config = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const section = config.match(
+    /\[model_providers\.codex-action-responses-proxy\]([\s\S]*?)(?=\n\[|$)/u,
+  )?.[1];
+  const match = section?.match(/base_url\s*=\s*"http:\/\/127\.0\.0\.1:(\d+)\/v1"/u);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const port = Number.parseInt(match[1], 10);
+  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : undefined;
+}
+
+function requireCodexProxyPort() {
+  const codexHome = trimToValue(process.env.CODEX_HOME);
+  if (!codexHome) {
+    throw new Error("Fork SUT isolation requires CODEX_HOME for the proxy boundary check.");
+  }
+  const proxyPort = readCodexProxyPort(codexHome);
+  if (!proxyPort) {
+    throw new Error("Fork SUT isolation could not resolve the Codex Responses proxy port.");
+  }
+  return proxyPort;
+}
+
+type SutContainerAction = "destroy" | "stop";
+
+type SutContainerCommandRunner = (
+  command: string,
+  args: string[],
+  options: {
+    encoding: "utf8";
+    env: NodeJS.ProcessEnv;
+    stdio: "pipe";
+  },
+) => {
+  error?: Error;
+  signal?: NodeJS.Signals | null;
+  status: number | null;
+  stderr?: string;
+};
+
+export function runSutContainerAction(
+  action: SutContainerAction,
+  containerName: string | undefined,
+  runtimeRoot: string | undefined,
+  run: SutContainerCommandRunner = spawnSync,
+) {
+  if (!containerName || !runtimeRoot) {
+    return;
+  }
+  const result = run(
+    "sudo",
+    ["-n", "/usr/local/sbin/openclaw-mantis-sut-container", action, containerName, runtimeRoot],
+    {
+      encoding: "utf8",
+      env: childProcessBaseEnv(),
+      stdio: "pipe",
+    },
+  );
+  if (result.error) {
+    throw new Error(`Failed to ${action} container-isolated SUT: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
+  if (result.signal) {
+    throw new Error(`Container-isolated SUT ${action} was terminated by ${result.signal}.`);
+  }
+  if (result.status !== 0) {
+    const stderr = result.stderr?.trim().slice(-4_000);
+    throw new Error(
+      `Container-isolated SUT ${action} failed with exit code ${result.status ?? "unknown"}.${stderr ? `\n${stderr}` : ""}`,
+    );
+  }
+}
+
+async function stopLocalSutDaemon(
+  sut:
+    | {
+        containerName?: string;
+        gatewayPid?: number;
+        mockPid?: number;
+        tempRoot?: string;
+      }
+    | undefined,
+) {
+  let containerError: unknown;
+  try {
+    runSutContainerAction("stop", sut?.containerName, sut?.tempRoot);
+  } catch (error) {
+    containerError = error;
+  }
+  const pids = [...new Set([sut?.gatewayPid, sut?.mockPid].filter((pid) => pid !== undefined))];
+  const processResults = await Promise.allSettled(pids.map((pid) => stopPidTreeAndWait(pid)));
+  const processErrors = processResults.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (containerError || processErrors.length > 0) {
+    throw new AggregateError(
+      [...(containerError ? [containerError] : []), ...processErrors],
+      "Local SUT did not quiesce cleanly.",
+    );
+  }
+}
+
+function destroyLocalSutRuntime(sut: { containerName?: string; tempRoot?: string } | undefined) {
+  runSutContainerAction("destroy", sut?.containerName, sut?.tempRoot);
+}
+
+function cleanupFailureMessage(message: string, cleanupErrors: unknown[]) {
+  const details = cleanupErrors.map((error) =>
+    error instanceof Error ? error.message : String(error),
+  );
+  return [message, ...details.map((detail) => `Cleanup failure: ${detail}`)].join("\n");
+}
+
+function preserveLocalSutRuntimeArtifacts(
+  sut: Pick<SessionFile["localSut"], "gatewayLog" | "mockLog" | "requestLog">,
+  outputDir: string,
+) {
+  for (const source of [sut.gatewayLog, sut.mockLog, sut.requestLog]) {
+    const target = path.join(outputDir, path.basename(source));
+    if (path.resolve(source) !== path.resolve(target) && fs.existsSync(source)) {
+      fs.copyFileSync(source, target);
+    }
+  }
+}
+
 async function startLocalSutDaemon(params: {
+  funnelBridge?: FunnelBridge;
   gatewayPort: number;
   groupId: string;
   mockResponseText: string;
   mockPort: number;
+  linkPreview?: boolean;
+  mcpAppFixture?: boolean;
+  mockResponseChunkDelayMs?: number;
   outputDir: string;
   sutToken: string;
   testerId: string;
   repoRoot: string;
+  nodeBin?: string;
+  pnpmBin?: string;
+  sutContainer?: boolean;
+  sutLane?: "baseline" | "candidate";
 }) {
   const drained = await drainSutUpdates(params.sutToken);
   const config = writeSutConfig(params);
-  const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
-  const mockLog = path.join(params.outputDir, "mock-openai.log");
-  const gatewayLog = path.join(params.outputDir, "gateway.log");
+  const gatewayPassword = params.mcpAppFixture ? randomUUID() : undefined;
+  const runtimeLogRoot = params.sutContainer ? config.tempRoot : params.outputDir;
+  const requestLog = path.join(runtimeLogRoot, "mock-openai-requests.ndjson");
+  const mockLog = path.join(runtimeLogRoot, "mock-openai.log");
+  const gatewayLog = path.join(runtimeLogRoot, "gateway.log");
   let mockPid: number | undefined;
   let gatewayPid: number | undefined;
+  let containerName: string | undefined;
+  let containerInputPath: string | undefined;
   try {
+    if (params.sutContainer) {
+      if (!params.sutLane) {
+        throw new Error("Container-isolated SUT requires an attested lane.");
+      }
+      if (params.funnelBridge) {
+        throw new Error("Container-isolated fork SUT does not support the MCP App Funnel fixture.");
+      }
+      const codexProxyPort = requireCodexProxyPort();
+      containerName = `openclaw-telegram-sut-${randomUUID()}`;
+      const gatewayEnvVars = gatewayEnv({
+        ...config,
+        gatewayPassword,
+        sutToken: params.sutToken,
+      });
+      const spec = createContainerizedSutSpawnSpec({
+        codexProxyPort,
+        containerName,
+        gatewayEnv: gatewayEnvVars,
+        gatewayPort: params.gatewayPort,
+        mockPort: params.mockPort,
+        mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
+        mockResponseText: params.mockResponseText,
+        repoRoot: params.repoRoot,
+        runtimeRoot: config.tempRoot,
+        sutLane: params.sutLane,
+      });
+      containerInputPath = spec.inputPath;
+      gatewayPid = spawnDaemon({
+        args: spec.args,
+        command: spec.command,
+        cwd: spec.options.cwd ?? params.repoRoot,
+        env: spec.options.env ?? {},
+        logPath: path.join(params.outputDir, "sut-container.log"),
+        shell: spec.options.shell as boolean | undefined,
+      });
+      mockPid = gatewayPid;
+      if (!gatewayPid) {
+        throw new Error("container-isolated SUT did not start.");
+      }
+      await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 30_000);
+      await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
+      const sutAttestation = readJsonFile(path.join(config.tempRoot, "sut-attestation.json")) as {
+        lane?: unknown;
+        sha?: unknown;
+      };
+      if (
+        sutAttestation.lane !== params.sutLane ||
+        typeof sutAttestation.sha !== "string" ||
+        !/^[0-9a-f]{40}$/u.test(sutAttestation.sha)
+      ) {
+        throw new Error("Container-isolated SUT attestation mismatch.");
+      }
+      return {
+        ...config,
+        containerName,
+        drained,
+        gatewayLog,
+        gatewayPid,
+        mockLog,
+        mockPid: gatewayPid,
+        requestLog,
+        sutAttestation: { lane: params.sutLane, sha: sutAttestation.sha },
+        funnelBridge: params.funnelBridge,
+      };
+    }
     mockPid = spawnDaemon({
-      command: "node",
+      command: params.nodeBin ?? process.execPath,
       args: ["scripts/e2e/mock-openai-server.mjs"],
       cwd: params.repoRoot,
       env: mockServerEnv({ ...params, requestLog }),
@@ -1337,10 +1799,18 @@ async function startLocalSutDaemon(params: {
     }
     await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
 
-    const gatewayEnvVars = gatewayEnv({ ...config, sutToken: params.sutToken });
+    const gatewayEnvVars = gatewayEnv({
+      ...config,
+      gatewayPassword,
+      sutToken: params.sutToken,
+      tailscaleProxyDir: params.funnelBridge
+        ? path.dirname(params.funnelBridge.proxyPath)
+        : undefined,
+    });
     const gatewaySpec = createOpenClawGatewaySpawnSpec({
       env: gatewayEnvVars,
       gatewayPort: params.gatewayPort,
+      pnpmExecPath: params.pnpmBin,
       repoRoot: params.repoRoot,
     });
     gatewayPid = spawnDaemon({
@@ -1364,10 +1834,55 @@ async function startLocalSutDaemon(params: {
       mockLog,
       mockPid,
       requestLog,
+      funnelBridge: params.funnelBridge,
     };
   } catch (error) {
-    killPidTree(gatewayPid);
-    killPidTree(mockPid);
+    const cleanupErrors: unknown[] = [];
+    let quiesced = false;
+    try {
+      await stopLocalSutDaemon({
+        containerName,
+        gatewayPid,
+        mockPid,
+        tempRoot: config.tempRoot,
+      });
+      quiesced = true;
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (params.sutContainer) {
+      if (quiesced) {
+        try {
+          preserveLocalSutRuntimeArtifacts({ gatewayLog, mockLog, requestLog }, params.outputDir);
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
+      try {
+        destroyLocalSutRuntime({
+          containerName,
+          tempRoot: config.tempRoot,
+        });
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (containerInputPath) {
+      try {
+        fs.rmSync(containerInputPath, { force: true });
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new Error(
+        cleanupFailureMessage(
+          "Local SUT startup failed and cleanup was incomplete.",
+          cleanupErrors,
+        ),
+        { cause: error },
+      );
+    }
     throw error;
   }
 }
@@ -1376,24 +1891,34 @@ function extractLeaseId(output: string) {
   return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
 
+export function createCrabboxWarmupArgs(
+  opts: Pick<
+    Options,
+    "crabboxClass" | "idleTimeout" | "mcpAppFixture" | "provider" | "target" | "ttl"
+  >,
+) {
+  return [
+    "warmup",
+    "--provider",
+    opts.provider,
+    "--target",
+    opts.target,
+    "--desktop",
+    "--browser",
+    "--class",
+    opts.crabboxClass,
+    "--idle-timeout",
+    opts.idleTimeout,
+    "--ttl",
+    opts.ttl,
+    ...(opts.mcpAppFixture ? ["--tailscale"] : []),
+  ];
+}
+
 async function warmupCrabbox(opts: Options, root: string) {
   const result = await runCommand({
     command: opts.crabboxBin,
-    args: [
-      "warmup",
-      "--provider",
-      opts.provider,
-      "--target",
-      opts.target,
-      "--desktop",
-      "--browser",
-      "--class",
-      opts.crabboxClass,
-      "--idle-timeout",
-      opts.idleTimeout,
-      "--ttl",
-      opts.ttl,
-    ],
+    args: createCrabboxWarmupArgs(opts),
     cwd: root,
     stdio: "inherit",
   });
@@ -1611,6 +2136,93 @@ async function sshRun(
     stdio: "inherit",
     timeoutMs: options.timeoutMs,
   });
+}
+
+export function renderTailscaleSshProxy(params: { gatewayPort: number; inspect: CrabboxInspect }) {
+  const ssh = sshArgs(params.inspect);
+  return `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+
+const args = process.argv.slice(2);
+const port = ${JSON.stringify(String(params.gatewayPort))};
+const allowed =
+  (args.length === 1 && args[0] === "--version") ||
+  (args.length === 2 && args[0] === "status" && args[1] === "--json") ||
+  (args.length === 4 && args[0] === "funnel" && args[1] === "--bg" && args[2] === "--yes" && args[3] === port) ||
+  (args.length === 2 && args[0] === "funnel" && args[1] === "reset");
+if (!allowed) {
+  process.stderr.write("unsupported proof Tailscale command\\n");
+  process.exit(64);
+}
+const quote = (value) => "'" + value.replaceAll("'", "'\\\\''") + "'";
+const remoteCommand = ["tailscale", ...args].map(quote).join(" ");
+const result = spawnSync("ssh", ${JSON.stringify([...ssh.base, ssh.target])}.concat(remoteCommand), {
+  stdio: "inherit",
+});
+process.exit(result.status ?? 1);
+`;
+}
+
+async function startTailscaleFunnelBridge(params: {
+  gatewayPort: number;
+  inspect: CrabboxInspect;
+  localRoot: string;
+}) {
+  if (!params.inspect.tailscale) {
+    throw new Error("MCP App fixture proof requires a Tailscale-enabled Crabbox lease.");
+  }
+  // Keep the SUT local while letting its real Gateway lifecycle own Funnel on
+  // the Tailscale-enabled desktop lease; no Tailscale credential leaves Crabbox.
+  const proxyPath = path.join(params.localRoot, "tailscale");
+  await writeExecutable(
+    proxyPath,
+    renderTailscaleSshProxy({ gatewayPort: params.gatewayPort, inspect: params.inspect }),
+  );
+  const tunnelLog = path.join(params.localRoot, "gateway-funnel-tunnel.log");
+  const ssh = sshArgs(params.inspect);
+  const tunnelPid = spawnDaemon({
+    args: [
+      ...ssh.base,
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-N",
+      "-R",
+      `127.0.0.1:${params.gatewayPort}:127.0.0.1:${params.gatewayPort}`,
+      ssh.target,
+    ],
+    command: "ssh",
+    cwd: params.localRoot,
+    env: childProcessBaseEnv(),
+    logPath: tunnelLog,
+  });
+  if (!tunnelPid) {
+    throw new Error("Gateway Funnel reverse tunnel did not start.");
+  }
+  await sleep(500);
+  try {
+    process.kill(tunnelPid, 0);
+  } catch {
+    throw new Error(`Gateway Funnel reverse tunnel exited early.\n${readLogTail(tunnelLog)}`);
+  }
+  return { proxyPath, tunnelLog, tunnelPid };
+}
+
+async function stopTailscaleFunnelBridge(
+  root: string,
+  bridge: Pick<FunnelBridge, "proxyPath" | "tunnelPid">,
+) {
+  try {
+    // Explicit reset is the backstop when Gateway shutdown loses its async
+    // resetOnExit cleanup; the public route must not outlive this fresh lease.
+    await runCommand({
+      args: ["funnel", "reset"],
+      command: bridge.proxyPath,
+      cwd: root,
+      timeoutMs: 30_000,
+    });
+  } finally {
+    killPidTree(bridge.tunnelPid);
+  }
 }
 
 export function renderRemoteSetup(params: { tdlibSha256?: string; tdlibUrl?: string }) {
@@ -2212,6 +2824,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   let leaseId = opts.leaseId;
   let createdLease = false;
   let localSut: Awaited<ReturnType<typeof startLocalSutDaemon>> | undefined;
+  let funnelBridge: Awaited<ReturnType<typeof startTailscaleFunnelBridge>> | undefined;
   try {
     credential = await leaseCredential({ localRoot, opts, root });
     const sut = opts.sutUsername
@@ -2223,6 +2836,13 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       createdLease = true;
     }
     const inspect = await inspectCrabbox(opts, root, leaseId);
+    if (opts.mcpAppFixture) {
+      funnelBridge = await startTailscaleFunnelBridge({
+        gatewayPort: opts.gatewayPort,
+        inspect,
+        localRoot,
+      });
+    }
     await writeRemoteSessionScripts({
       inspect,
       localRoot,
@@ -2232,13 +2852,21 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       sutUsername: sut.username,
     });
     localSut = await startLocalSutDaemon({
+      funnelBridge,
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
+      mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
       mockPort: opts.mockPort,
+      mcpAppFixture: opts.mcpAppFixture,
       outputDir,
-      repoRoot: root,
+      nodeBin: opts.nodeBin,
+      pnpmBin: opts.pnpmBin,
+      repoRoot: opts.sutRepoRoot ? path.resolve(root, opts.sutRepoRoot) : root,
       sutToken: credential.sutToken,
+      sutContainer: opts.sutContainer,
+      sutLane: opts.sutLane,
       testerId: credential.testerUserId,
     });
     const recorder = await startRemoteRecording(root, inspect, opts);
@@ -2286,13 +2914,45 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       },
     };
   } catch (error) {
-    killPidTree(localSut?.gatewayPid);
-    killPidTree(localSut?.mockPid);
+    const cleanupErrors: unknown[] = [];
+    let sutQuiesced = false;
+    if (localSut) {
+      try {
+        await stopLocalSutDaemon(localSut);
+        sutQuiesced = true;
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      if (sutQuiesced) {
+        try {
+          preserveLocalSutRuntimeArtifacts(localSut, outputDir);
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
+      try {
+        destroyLocalSutRuntime(localSut);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (funnelBridge) {
+      await stopTailscaleFunnelBridge(root, funnelBridge).catch(() => {});
+    }
     if (credential) {
       await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
     }
     if (leaseId && createdLease) {
       await stopCrabbox(root, opts, leaseId).catch(() => {});
+    }
+    if (cleanupErrors.length > 0) {
+      throw new Error(
+        cleanupFailureMessage(
+          "Telegram proof startup failed and local SUT cleanup was incomplete.",
+          cleanupErrors,
+        ),
+        { cause: error },
+      );
     }
     throw error;
   }
@@ -2439,6 +3099,7 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
     session: path.relative(root, pathname),
     startedAt: session.createdAt,
     status: "fail",
+    sutAttestation: session.localSut.sutAttestation,
   };
   const videoPath = path.join(session.outputDir, "telegram-user-crabbox-session.mp4");
   const motionVideoPath = path.join(session.outputDir, "telegram-user-crabbox-session-motion.mp4");
@@ -2535,8 +3196,35 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
     };
     summary.status = "pass";
   } finally {
-    killPidTree(session.localSut.gatewayPid);
-    killPidTree(session.localSut.mockPid);
+    let sutQuiesced = false;
+    try {
+      await stopLocalSutDaemon(session.localSut);
+      sutQuiesced = true;
+    } catch (error) {
+      summary.sutStopError = error instanceof Error ? error.message : String(error);
+      summary.status = "fail";
+    }
+    if (sutQuiesced) {
+      try {
+        preserveLocalSutRuntimeArtifacts(session.localSut, session.outputDir);
+      } catch (error) {
+        summary.runtimeArtifactError = error instanceof Error ? error.message : String(error);
+        summary.status = "fail";
+      }
+    }
+    try {
+      destroyLocalSutRuntime(session.localSut);
+    } catch (error) {
+      summary.sutDestroyError = error instanceof Error ? error.message : String(error);
+      summary.status = "fail";
+    }
+    if (session.localSut.funnelBridge) {
+      await stopTailscaleFunnelBridge(root, session.localSut.funnelBridge).catch(
+        (error: unknown) => {
+          summary.funnelResetError = error instanceof Error ? error.message : String(error);
+        },
+      );
+    }
     await terminateDesktopSession();
     await releaseCredential(root, opts, session.credential.leaseFile).catch((error: unknown) => {
       summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
@@ -2787,9 +3475,13 @@ async function main() {
     const sutRuntime = await startLocalSut({
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
+      mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
       mockPort: opts.mockPort,
       outputDir,
+      nodeBin: opts.nodeBin,
+      pnpmBin: opts.pnpmBin,
       repoRoot: root,
       sutToken: credential.sutToken,
       testerId: credential.testerUserId,

@@ -96,9 +96,16 @@ export function checkUnusedExports(output) {
 }
 
 async function main() {
-  for (const scan of KNIP_SCANS) {
-    const ok = await runUnusedExportScan(scan);
-    if (!ok) {
+  // The scans are independent Knip child processes over separate configs;
+  // running them concurrently cuts the lane's serial wall clock roughly 2x.
+  const results = await Promise.all(
+    KNIP_SCANS.map(async (scan) => ({
+      scan,
+      result: await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name }),
+    })),
+  );
+  for (const { scan, result } of results) {
+    if (!reportUnusedExportScan(scan, result)) {
       process.exitCode = 1;
       return;
     }
@@ -108,8 +115,7 @@ async function main() {
   );
 }
 
-async function runUnusedExportScan(scan) {
-  const result = await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name });
+function reportUnusedExportScan(scan, result) {
   if (result.errorCode || result.status === null) {
     console.error(
       `deadcode ${scan.name} failed: ${result.errorCode ?? result.signal ?? "unknown"}${

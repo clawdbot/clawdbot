@@ -49,8 +49,6 @@ function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabili
       negative_prompt: "string",
       negativePrompt: "string",
       style: "string",
-      guidance_scale: "number",
-      guidanceScale: "number",
     },
     generate: {
       maxVideos: 1,

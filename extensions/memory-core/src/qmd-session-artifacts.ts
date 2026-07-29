@@ -1,9 +1,9 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { migrateSqliteSchemaToStrict } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 const QMD_SESSION_ARTIFACT_TABLE = "openclaw_qmd_session_artifacts";
 const QMD_SESSION_ARTIFACT_SCHEMA = `
@@ -90,11 +90,10 @@ function ensureQmdSessionArtifactSchema(db: DatabaseSync): void {
 }
 
 function openQmdSessionArtifactDb(indexPath: string, readOnly = false): DatabaseSync {
-  const { DatabaseSync: SqliteDatabase } = requireNodeSqlite();
   if (!readOnly) {
     fsSync.mkdirSync(path.dirname(indexPath), { recursive: true });
   }
-  const db = new SqliteDatabase(indexPath, { readOnly });
+  const db = openNodeSqliteDatabase(indexPath, { readOnly });
   db.exec("PRAGMA busy_timeout = 1000");
   return db;
 }
@@ -180,6 +179,7 @@ export function replaceQmdSessionArtifactMappings(params: {
 }
 
 export function refreshQmdSessionArtifactDocIds(params: {
+  assertOwned: () => void;
   collection: string;
   indexPath: string;
 }): void {
@@ -203,12 +203,15 @@ export function refreshQmdSessionArtifactDocIds(params: {
        SET docid = ?, updated_at = ?
        WHERE collection = ? AND artifact_path = ?`,
     );
+    params.assertOwned();
     db.exec("BEGIN");
     transactionStarted = true;
     const updatedAt = Date.now();
     for (const row of rows) {
+      params.assertOwned();
       updateDocId.run(row.docid, updatedAt, params.collection, row.artifact_path);
     }
+    params.assertOwned();
     db.exec("COMMIT");
   } catch (err) {
     if (transactionStarted) {

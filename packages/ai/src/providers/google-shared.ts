@@ -14,6 +14,7 @@ import {
   ThinkingLevel,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -30,6 +31,7 @@ import type {
   StreamOptions,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { formatProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -469,7 +471,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+    output.errorMessage = formatProviderError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
   }
@@ -906,7 +908,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   endCurrentBlock();
 
   if (params.signal?.aborted) {
-    throw new Error("Request was aborted");
+    throw transportAbortError(params.signal);
   }
 
   if (params.output.stopReason === "aborted" || params.output.stopReason === "error") {

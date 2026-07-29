@@ -5,6 +5,7 @@ import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tu
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
+import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 type LocalShellDeps = {
   chatLog: {
@@ -59,7 +60,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         ],
         2,
       );
-      selector.onSelect = (item) => {
+      selector.onSelect = (item: SelectItem) => {
         deps.closeOverlay(overlayHandle);
         if (item.value === "yes") {
           localExecAllowed = true;
@@ -165,7 +166,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       });
 
       child.on("error", (err) => {
-        deps.chatLog.addSystem(`[local] error: ${String(err)}`);
+        deps.chatLog.addSystem(`[local] error: ${formatTuiErrorMessage(err)}`);
         deps.tui.requestRender();
         resolve();
       });

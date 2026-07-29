@@ -9,11 +9,7 @@ const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
   markCommitmentsStatus: vi.fn(),
   resolveCommitmentDatabasePath: vi.fn(() => "/tmp/openclaw.sqlite"),
-  getRuntimeConfig: vi.fn(() => ({
-    commitments: {
-      enabled: true,
-    },
-  })),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../commitments/store.js", () => ({
@@ -239,7 +235,7 @@ describe("commitments command", () => {
     expect(logs).toEqual([]);
     expect(stdout).toEqual([JSON.stringify({ dismissed: ["cm_escape"] }, null, 2)]);
     expect(mocks.markCommitmentsStatus).toHaveBeenCalledWith({
-      cfg: { commitments: { enabled: true } },
+      cfg: {},
       ids: ["cm_escape"],
       status: "dismissed",
       nowMs: expect.any(Number),

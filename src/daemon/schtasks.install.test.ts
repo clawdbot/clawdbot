@@ -14,7 +14,7 @@ import {
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 
-const resolveWindowsSystemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
+const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 // Pin code page detection so launcher encoding never depends on the host ACP.
 vi.mock("../infra/windows-encoding.js", async () => {
@@ -23,7 +23,8 @@ vi.mock("../infra/windows-encoding.js", async () => {
   );
   return {
     ...actual,
-    resolveWindowsSystemEncoding: () => resolveWindowsSystemEncodingMock(),
+    resolveWindowsOemCodePage: () => 437,
+    resolveWindowsOemEncoding: () => resolveWindowsOemEncodingMock(),
   };
 });
 
@@ -59,8 +60,8 @@ beforeEach(() => {
   schtasksCalls.length = 0;
   schtasksResponses.length = 0;
   xmlPayloadCaptures.length = 0;
-  resolveWindowsSystemEncodingMock.mockReset();
-  resolveWindowsSystemEncodingMock.mockReturnValue(null);
+  resolveWindowsOemEncodingMock.mockReset();
+  resolveWindowsOemEncodingMock.mockReturnValue(null);
 });
 
 describe("installScheduledTask", () => {
@@ -291,7 +292,7 @@ describe("installScheduledTask", () => {
 
   it("fails the install instead of writing an unrepresentable cmd launcher", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
-      resolveWindowsSystemEncodingMock.mockReturnValue("gbk");
+      resolveWindowsOemEncodingMock.mockReturnValue("gbk");
       schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
 
       await expect(
@@ -301,7 +302,7 @@ describe("installScheduledTask", () => {
           programArguments: ["node", "gateway.js"],
           environment: { OC_LABEL: "🚀" },
         }),
-      ).rejects.toThrow(/cannot be represented in the Windows system code page/);
+      ).rejects.toThrow(/cannot be represented in the Windows console code page/);
       await expect(fs.access(resolveTaskScriptPath(env))).rejects.toThrow();
     });
   });

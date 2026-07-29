@@ -61,12 +61,6 @@ type SubagentGetSessionMessagesResult = {
   messages: unknown[];
 };
 
-/** @deprecated Use SubagentGetSessionMessagesParams. */
-type SubagentGetSessionParams = SubagentGetSessionMessagesParams;
-
-/** @deprecated Use SubagentGetSessionMessagesResult. */
-type SubagentGetSessionResult = SubagentGetSessionMessagesResult;
-
 type SubagentDeleteSessionParams = {
   sessionKey: string;
   deleteTranscript?: boolean;
@@ -96,6 +90,8 @@ type RuntimeNodeInvokeParams = {
   params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
+  /** Cancel the invocation and any work already dispatched to a first-party node. */
+  signal?: AbortSignal;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
 };
@@ -124,8 +120,6 @@ export type PluginRuntime = PluginRuntimeCore & {
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
-    /** @deprecated Use getSessionMessages. */
-    getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
   nodes: {

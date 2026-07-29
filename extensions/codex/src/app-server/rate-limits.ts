@@ -26,6 +26,8 @@ const DAY_WINDOW_MINUTES = 24 * 60;
 const WEEKLY_WINDOW_MINUTES = 7 * DAY_WINDOW_MINUTES;
 const WEEKLY_RESET_GAP_MS = 3 * ONE_DAY_MS;
 const CODEX_USAGE_LIMIT_MESSAGE_PREFIX = "You've reached your Codex subscription usage limit.";
+const CODEX_USAGE_LIMIT_STATE_MISMATCH_MESSAGE =
+  "Codex rejected the request with a usage-limit error, but its current account usage does not report an exhausted limit.";
 
 type LimitWindowKey = (typeof LIMIT_WINDOW_KEYS)[number];
 
@@ -56,6 +58,7 @@ export function formatCodexUsageLimitErrorMessage(params: {
   message?: string | null;
   codexErrorInfo?: JsonValue | null;
   rateLimits?: JsonValue;
+  rateLimitsAuthoritative?: boolean;
   nowMs?: number;
 }): string | undefined {
   const message = normalizeText(params.message);
@@ -64,6 +67,16 @@ export function formatCodexUsageLimitErrorMessage(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   const usageSummary = summarizeCodexAccountUsage(params.rateLimits, nowMs);
+  if (
+    params.rateLimitsAuthoritative &&
+    hasCodexRateLimitSnapshots(params.rateLimits) &&
+    !usageSummary?.blocked
+  ) {
+    return [
+      CODEX_USAGE_LIMIT_STATE_MISMATCH_MESSAGE,
+      "Retry the request, use another Codex account if available, or switch to another configured model/provider.",
+    ].join(" ");
+  }
   const blockingReset = selectBlockingRateLimitReset(params.rateLimits, nowMs);
   const nextReset =
     blockingReset ??

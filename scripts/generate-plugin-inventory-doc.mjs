@@ -125,6 +125,12 @@ function pluginReferenceLabel(record) {
 }
 
 function humanizeId(value) {
+  if (value === "teams-meetings") {
+    return "Microsoft Teams meetings";
+  }
+  if (value === "zoom-meetings") {
+    return "Zoom meetings";
+  }
   const names = new Map([
     ["acpx", "ACPx"],
     ["ai", "AI"],

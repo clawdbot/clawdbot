@@ -1,7 +1,10 @@
 /** In-process Gateway calls for built-in agent tools. */
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
+import type { TrustedSessionCreation } from "../../gateway/server-methods/session-creation-provenance.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
+  getInProcessGatewayRequestContext,
   hasInProcessGatewayContext,
 } from "../../gateway/server-plugins.js";
 import { callGatewayTool } from "./gateway.js";
@@ -13,6 +16,10 @@ export type InProcessGatewayCaller = <T = Record<string, unknown>>(
 
 export function hasInProcessGatewayToolContext(): boolean {
   return hasInProcessGatewayContext();
+}
+
+export function getInProcessGatewayToolContext(): GatewayRequestContext | undefined {
+  return getInProcessGatewayRequestContext();
 }
 
 export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
@@ -28,3 +35,20 @@ export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
   }
   return await callGatewayTool<T>(method, {}, params, { scopes });
 };
+
+export async function callInProcessGatewayToolWithCreation<T = Record<string, unknown>>(
+  method: string,
+  params: Record<string, unknown>,
+  creation: TrustedSessionCreation,
+): Promise<T> {
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
+  if (hasInProcessGatewayContext()) {
+    return await dispatchGatewayMethodInProcess<T>(method, params, {
+      forceSyntheticClient: true,
+      sessionCreation: creation,
+      syntheticScopes: scopes,
+    });
+  }
+  // The fallback is a real Gateway request; trusted creation metadata never crosses the wire.
+  return await callGatewayTool<T>(method, {}, params, { scopes });
+}

@@ -12,6 +12,7 @@ type DiscordInboundJobRuntimeField =
   | "abortSignal"
   | "guildHistories"
   | "client"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
   | "discordRestFetch";
 
@@ -23,7 +24,10 @@ export type DiscordInboundJob = {
   queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayKeys?: string[];
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+  };
 };
 
 function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
@@ -42,13 +46,14 @@ function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): 
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
 ): DiscordInboundJob {
   const {
     runtime,
     abortSignal,
     guildHistories,
     client,
+    turnAdoptionLifecycle,
     threadBindings,
     discordRestFetch,
     message,
@@ -74,10 +79,11 @@ export function buildDiscordInboundJob(
       abortSignal,
       guildHistories,
       client,
+      turnAdoptionLifecycle,
       threadBindings,
       discordRestFetch,
     },
-    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
+    ingressSettlement: options?.ingressSettlement,
   };
 }
 

@@ -270,7 +270,7 @@ export function createTelegramProgressController(params: {
   };
   const handlePlanUpdate = async (payload: CallbackPayload<"onPlanUpdate">) => {
     if (payload.phase === "update" && canPushToolProgress()) {
-      await compositor.pushPlanProgress(payload.planSteps, {
+      await compositor.pushPlanProgress(payload.steps, {
         explanation: payload.explanation,
       });
     }
@@ -326,6 +326,12 @@ export function createTelegramProgressController(params: {
 
   return {
     applyCollapseSummary,
+    beginQueuedFollowup: () => {
+      finalAnswerDeliveryStarted = false;
+      finalAnswerDelivered = false;
+      sawProgressFinal = false;
+      compositor.beginNewTurn({ force: true });
+    },
     canPushToolProgress,
     cancel: () => compositor.cancel(),
     closeReasoningBurst: () => summary.closeReasoningBurst(),

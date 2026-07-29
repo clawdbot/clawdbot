@@ -26,14 +26,17 @@ export type DispatchTelegramMessageParams = {
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
-  /** Fires after recovery-relevant session/run state is durably persisted. */
-  onTurnAdopted?: () => void | Promise<void>;
-  /** Marks a queued follow-up whose adoption will happen at reply-lane admission. */
-  onTurnDeferred?: () => void;
-  /** Releases a deferred turn that completed without ever owning the reply lane. */
-  onTurnAbandoned?: () => void;
-  /** Cancels queued/model work when ingress ownership fails before adoption. */
-  turnAbortSignal?: AbortSignal;
+  /**
+   * Canonical turn ownership lifecycle from the durable ingress drain
+   * (or a test double). Pre-adoption abort + adopt/defer/abandon.
+   */
+  turnAdoptionLifecycle?: {
+    admission?: "exclusive" | "cancel-only";
+    onAdopted: () => void | Promise<void>;
+    onDeferred?: () => void;
+    onAbandoned?: () => void;
+    abortSignal?: AbortSignal;
+  };
 };
 
 export type TelegramDispatchResult =

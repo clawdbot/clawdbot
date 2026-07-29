@@ -1,20 +1,13 @@
 // Slack plugin module implements channel.setup behavior.
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
-} from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import {
-  listSlackAccountIds,
-  resolveSlackConfigAccessorAccount,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-  type SlackConfigAccessorAccount,
-} from "./accounts.js";
 import type { ChannelPlugin } from "./channel-api.js";
+import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
-import { slackSetupAdapter, createSlackSetupWizardProxy } from "./setup-core.js";
+import {
+  slackSetupAdapter,
+  slackSetupContract,
+  createSlackSetupWizardProxy,
+} from "./setup-core.js";
 import {
   describeSlackSetupAccount,
   isSlackSetupAccountConfigured,
@@ -24,21 +17,6 @@ import {
 const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
   slackSetupWizard: (await import("./setup-surface.js")).slackSetupWizard,
 }));
-
-const slackSetupConfigAdapter = createScopedChannelConfigAdapter<
-  ResolvedSlackAccount,
-  SlackConfigAccessorAccount
->({
-  sectionKey: SLACK_CHANNEL,
-  listAccountIds: listSlackAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
-  resolveAccessorAccount: resolveSlackConfigAccessorAccount,
-  defaultAccountId: resolveDefaultSlackAccountId,
-  clearBaseFields: ["botToken", "appToken", "name"],
-  resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account) => account.defaultTo,
-});
 
 export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: SLACK_CHANNEL,
@@ -74,7 +52,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   reload: { configPrefixes: ["channels.slack"] },
   configSchema: SlackChannelConfigSchema,
   config: {
-    ...slackSetupConfigAdapter,
+    ...slackBaseConfigAdapter,
     hasConfiguredState: ({ env }) =>
       ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some(
         (key) => typeof env?.[key] === "string" && env[key]?.trim().length > 0,
@@ -83,4 +61,5 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     describeAccount: (account) => describeSlackSetupAccount(account),
   },
   setup: slackSetupAdapter,
+  setupContract: slackSetupContract,
 };

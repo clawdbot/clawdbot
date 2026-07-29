@@ -48,6 +48,7 @@ class OpenClawMascot extends LitElement {
 
   @property({ reflect: true }) mood: MascotMood = "idle";
   @property({ type: Number }) size = DEFAULT_SIZE;
+  @property({ type: Boolean }) tease = false;
 
   private readonly animator = new MascotAnimator();
   private animationFrame = 0;
@@ -107,6 +108,7 @@ class OpenClawMascot extends LitElement {
     // Seed the animator's mood before the first pose so `begin()` schedules
     // for the real mood; `updated()` runs after this and would be too late.
     this.animator.setMood(this.resolvedMood, currentSeconds());
+    this.animator.setTease(this.tease, currentSeconds());
     this.drawCurrentFrame(currentSeconds());
     this.syncPlayback();
   }
@@ -118,10 +120,23 @@ class OpenClawMascot extends LitElement {
     if (changed.has("mood")) {
       this.animator.setMood(this.resolvedMood, currentSeconds());
     }
-    if (changed.has("size") || changed.has("mood")) {
+    if (changed.has("tease")) {
+      this.animator.setTease(this.tease, currentSeconds());
+    }
+    if (changed.has("size") || changed.has("mood") || changed.has("tease")) {
       this.drawCurrentFrame(currentSeconds());
       this.syncPlayback();
     }
+  }
+
+  catchOnce(): void {
+    if (!this.isConnected || this.reducedMotion) {
+      return;
+    }
+    const time = currentSeconds();
+    this.animator.playCatch(time);
+    this.drawCurrentFrame(time);
+    this.syncPlayback();
   }
 
   override render() {

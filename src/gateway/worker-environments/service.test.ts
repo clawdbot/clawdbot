@@ -22,6 +22,13 @@ import { createWorkerEnvironmentService, type WorkerEnvironmentService } from ".
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
 type WorkerEnvironmentServiceError = Error & { code: string };
@@ -89,7 +96,6 @@ describe("worker environment service", () => {
           development: {
             provider: "fake",
             settings: { region: "test" },
-            lifetime: { idleTimeoutMinutes: 10 },
           },
         },
       },
@@ -304,7 +310,6 @@ describe("worker environment service", () => {
           profileSnapshot: {
             install: "bundle",
             settings: { region: "test" },
-            lifetime: { idleTimeoutMinutes: 10 },
           },
         });
         getDevelopmentProfile().settings = { region: "mutated" };
@@ -613,7 +618,7 @@ describe("worker environment service", () => {
         },
       ],
     });
-    await vi.waitFor(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
     placementStore.validateWorkerTurn.mockReturnValue(false);
     finishCommit?.();
 
@@ -788,7 +793,7 @@ describe("worker environment service", () => {
         },
       ],
     });
-    await vi.waitFor(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
     const terminal = workerService.pushLiveEvent(identity, {
       runEpoch: identity.ownerEpoch,
       lastAckedSeq: 0,
@@ -1030,7 +1035,7 @@ describe("worker environment service", () => {
         identity.environmentId,
       );
     started.launch();
-    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(send).toHaveBeenCalledOnce());
     expect(executeInference).not.toHaveBeenCalled();
     expect(send.mock.calls[0]?.[0]).toMatchObject({
       event: "worker.inference.terminal",
@@ -1069,7 +1074,7 @@ describe("worker environment service", () => {
       throw new Error("inference fixture failed to start");
     }
     started.launch();
-    await vi.waitFor(() => expect(executeInference).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(executeInference).toHaveBeenCalledOnce());
     database.db
       .prepare("UPDATE worker_environment_credentials SET session_id = ? WHERE environment_id = ?")
       .run("session-other", environmentId);
@@ -1284,7 +1289,7 @@ describe("worker environment service", () => {
     });
     const creation = createService(createProvider()).create("development", "request-bootstrap");
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(store.list()[0]).toMatchObject({
         state: "bootstrapping",
         bootstrapReceipt: null,
@@ -1725,11 +1730,15 @@ describe("worker environment service", () => {
     await createService(createProvider({ destroy })).reconcileOnce();
 
     expect(destroy).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: `lease:${environmentId}`,
+      profile: { region: "test" },
+    });
     expect(store.get(environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
+      state: "destroyed",
+      leaseId: `lease:${environmentId}`,
       attachedSessionIds: [],
-      lastError: "Attached worker build no longer matches the Gateway",
+      lastError: null,
     });
   });
 
@@ -2217,7 +2226,7 @@ describe("worker environment service", () => {
       ownerEpoch: 1,
     });
     const rejectedStart = expect(starting).rejects.toThrow("tunnel stopped");
-    await vi.waitFor(() => expect(tunnelManager.start).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(tunnelManager.start).toHaveBeenCalledOnce());
 
     await workerService.destroy("worker-tunnel-pending");
 
@@ -2322,7 +2331,7 @@ describe("worker environment service", () => {
 
     const reconciliation = createService(provider).reconcileOnce();
     try {
-      await vi.waitFor(() => expect(inspected).toHaveLength(2));
+      await waitForFast(() => expect(inspected).toHaveLength(2));
     } finally {
       release?.();
     }
@@ -2360,7 +2369,7 @@ describe("worker environment service", () => {
     const provision = vi.fn(createProvider().provision);
     const workerService = createService(createProvider({ provision }));
     const first = workerService.create("development", "request-queued-before-stop");
-    await vi.waitFor(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
     const queued = workerService.create("development", "request-queued-before-stop");
     const queuedResult = expect(queued).rejects.toMatchObject({
       code: "invalid_state",
@@ -2387,7 +2396,7 @@ describe("worker environment service", () => {
     const destroy = vi.fn(async () => {});
     const workerService = createService(createProvider({ destroy }));
     const creation = workerService.create("development", "request-destroy-before-stop");
-    await vi.waitFor(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
     const environmentId = store.list()[0]?.environmentId;
     expect(environmentId).toBeTruthy();
     const teardown = workerService.destroy(environmentId!);
@@ -2420,7 +2429,7 @@ describe("worker environment service", () => {
     });
     const workerService = createService(createProvider());
     const creation = workerService.create("development", "request-stop-after-reconcile-failure");
-    await vi.waitFor(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
     const reconciliation = workerService.reconcileOnce();
     const reconciliationResult = expect(reconciliation).rejects.toThrow(
       "reconcile database read failed",
@@ -2454,7 +2463,7 @@ describe("worker environment service", () => {
     const workerService = createService(createProvider({ inspect }));
 
     workerService.start();
-    await vi.waitFor(() => expect(inspect).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(inspect).toHaveBeenCalledTimes(1));
     let stopped = false;
     const stopping = workerService.stop().then(() => {
       stopped = true;

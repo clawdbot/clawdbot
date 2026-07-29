@@ -28,6 +28,9 @@ const QA_DOCKER_E2E_LANES = {
   "bundled-plugin-install-uninstall": {
     script: "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
   },
+  "codex-on-demand": {
+    script: "scripts/e2e/codex-on-demand-docker.sh",
+  },
   "system-agent-first-run": {
     script: "scripts/e2e/system-agent-first-run-docker.sh",
   },

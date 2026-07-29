@@ -1,6 +1,6 @@
 // Voice Call tests cover realtime audio pacer plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RealtimeAudioPacer, RealtimeMulawSpeechStartDetector } from "./realtime-audio-pacer.js";
+import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 
 type RealtimeAudioSerializer = ConstructorParameters<typeof RealtimeAudioPacer>[0]["serializer"];
 
@@ -118,25 +118,5 @@ describe("RealtimeAudioPacer", () => {
       { event: "media", media: { payload: Buffer.alloc(160, 0x7f).toString("base64") } },
       { event: "clear" },
     ]);
-  });
-});
-
-describe("RealtimeMulawSpeechStartDetector", () => {
-  it("detects a speech start after consecutive loud chunks and resets after quiet", () => {
-    const detector = new RealtimeMulawSpeechStartDetector({
-      requiredLoudChunks: 2,
-      requiredQuietChunks: 2,
-      rmsThreshold: 0.02,
-    });
-    const silence = Buffer.alloc(160, 0xff);
-    const speech = Buffer.alloc(160, 0x00);
-
-    expect(detector.accept(speech)).toBe(false);
-    expect(detector.accept(speech)).toBe(true);
-    expect(detector.accept(speech)).toBe(false);
-    expect(detector.accept(silence)).toBe(false);
-    expect(detector.accept(silence)).toBe(false);
-    expect(detector.accept(speech)).toBe(false);
-    expect(detector.accept(speech)).toBe(true);
   });
 });

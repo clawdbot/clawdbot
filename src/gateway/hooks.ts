@@ -13,6 +13,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
+  commitHookTransformMappingReload,
   hasHookTemplateExpressions,
   type HookMappingResolved,
   resolveHookMappings,
@@ -63,10 +64,6 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   if (trimmed === "/") {
     throw new Error("hooks.path may not be '/'");
   }
-  const maxBodyBytes =
-    cfg.hooks?.maxBodyBytes && cfg.hooks.maxBodyBytes > 0
-      ? cfg.hooks.maxBodyBytes
-      : DEFAULT_HOOKS_MAX_BODY_BYTES;
   const mappings = resolveHookMappings(cfg.hooks);
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
@@ -99,7 +96,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   return {
     basePath: trimmed,
     token,
-    maxBodyBytes,
+    maxBodyBytes: DEFAULT_HOOKS_MAX_BODY_BYTES,
     mappings,
     agentPolicy: {
       defaultAgentId,
@@ -112,6 +109,10 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       allowedSessionKeyPrefixes,
     },
   };
+}
+
+export function commitHooksConfigReload(): void {
+  commitHookTransformMappingReload();
 }
 
 function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<string> {

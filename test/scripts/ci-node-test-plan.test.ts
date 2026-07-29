@@ -4,11 +4,17 @@ import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import {
+  assignVitestFsCacheWriter,
   createNodeTestShardBundles,
   createNodeTestShards,
+  type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
+import {
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "../vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
@@ -107,6 +113,40 @@ function isGatewayServerTestFile(file: string): boolean {
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
+  it("assigns one semantic Vitest cache writer without changing shard order", () => {
+    const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    const compact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compact: true,
+    });
+
+    const expectWriter = (plan: Array<Pick<NodeTestShard, "groups" | "shardName">>) => {
+      const marked = assignVitestFsCacheWriter(plan);
+      expect(marked.map((shard) => shard.shardName)).toEqual(plan.map((shard) => shard.shardName));
+      expect(marked.filter((shard) => shard.saveVitestFsCache)).toHaveLength(1);
+      expect(
+        marked.find((shard) => shard.saveVitestFsCache)?.shardName.startsWith("core-unit-fast") ||
+          marked
+            .find((shard) => shard.saveVitestFsCache)
+            ?.groups?.some((group) => group.shard_name.startsWith("core-unit-fast")),
+      ).toBe(true);
+    };
+    expectWriter(full);
+    expectWriter(compact);
+
+    expect(assignVitestFsCacheWriter([])).toEqual([]);
+    const changedOnly = {
+      checkName: "checks-node-changed-only",
+      configs: ["test/vitest/vitest.unit.config.ts"],
+      requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
+      shardName: "changed-only",
+    };
+    expect(assignVitestFsCacheWriter([changedOnly])).toEqual([
+      { ...changedOnly, saveVitestFsCache: true },
+    ]);
+  });
+
   it("creates split shards without walking test roots", () => {
     const payload = expectNoNodeFsScans<{
       includePatterns: number;
@@ -145,13 +185,18 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ).toBe(true);
     expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
     expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
-    expect(bundled.slice(0, 4).map((shard) => shard.shardName)).toEqual([
-      "core-tooling",
-      "auto-reply-reply-commands-1",
-      "auto-reply-reply-commands-2",
-      "auto-reply-reply-commands-3",
+    expect(bundled.slice(0, 6).map((shard) => shard.shardName)).toEqual([
+      "core-unit-fast-1",
+      "core-unit-fast-2",
+      "core-tooling-1",
+      "core-tooling-2",
+      "core-tooling-3",
+      "core-tooling-4",
     ]);
-    expect(bundled.find((shard) => shard.shardName === "core-unit-fast")?.runner).toBe(
+    expect(bundled.find((shard) => shard.shardName === "core-unit-fast-1")?.runner).toBe(
+      DEFAULT_NODE_TEST_RUNNER,
+    );
+    expect(bundled.find((shard) => shard.shardName === "core-unit-fast-2")?.runner).toBe(
       DEFAULT_NODE_TEST_RUNNER,
     );
     expect(
@@ -201,12 +246,16 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const jobOf = (name: string) =>
       compact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
     expect(jobOf("agentic-agents-core-runner-embedded")).toBeGreaterThanOrEqual(0);
-    expect(jobOf("core-unit-fast")).toBeGreaterThanOrEqual(0);
-    expect(jobOf("agentic-agents-core-runner-embedded")).not.toBe(jobOf("core-unit-fast"));
+    // The complete Control UI and model catalog both cold-load broad graphs;
+    // pairing them starves model visibility and repeatedly hits its timeout.
+    expect(jobOf("agentic-agents-core-models")).not.toBe(jobOf("core-runtime-media-ui"));
+    // Cheap stripes may legally co-locate in one bin; only existence matters.
+    expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
+    expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
     // Spawn/signal-timing suites never mix with regular groups, and every
     // compact bin runs serially: overlapping Vitest runs flake timing-
     // sensitive tests on both runner classes.
-    const exclusiveGroupRe = /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$/u;
+    const exclusiveGroupRe = /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$/u;
     for (const shard of compact) {
       const exclusiveCount = shard.groups.filter((group) =>
         exclusiveGroupRe.test(group.shard_name),
@@ -221,13 +270,11 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
       ).length,
     ).toBeGreaterThan(0);
+    // Both plans carry the same split stripes now; compact bundling must
+    // preserve base include coverage exactly.
     expect(
       compact
-        .flatMap((shard) =>
-          shard.groups.flatMap((group) =>
-            group.shard_name.startsWith("core-tooling-") ? [] : (group.includePatterns ?? []),
-          ),
-        )
+        .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []))
         .toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(
       base.flatMap((shard) => shard.includePatterns ?? []).toSorted((a, b) => a.localeCompare(b)),
@@ -245,6 +292,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       // default scales with the runner class.
       OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
+    expect(
+      compact.flatMap((shard) => shard.groups).find((group) => group.shard_name === "agentic-cli")
+        ?.env,
+    ).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
     const startupCoreJob = compact.find((shard) =>
       shard.groups.some((group) => group.shard_name === "agentic-control-plane-startup-core"),
     );
@@ -259,6 +312,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .flatMap((shard) => shard.groups)
         .find((group) => group.shard_name === "agentic-control-plane-startup-health-runtime")?.env,
     ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
+    const embeddedAgentJob = compact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-agents-embedded"),
+    );
+    expect(embeddedAgentJob?.groups).toHaveLength(1);
+    expect(embeddedAgentJob?.groups[0]?.env).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
+    });
     expect(
       compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
@@ -276,18 +336,19 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .find((group) => group.shard_name === "core-tooling-isolated"),
     ).toEqual(
       expect.objectContaining({
-        configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+        configs: [
+          "test/vitest/vitest.tooling-docker.config.ts",
+          "test/vitest/vitest.tooling-isolated.config.ts",
+        ],
       }),
     );
+    // The docker helper config rides with the isolated shard on both plans;
+    // no standalone core-tooling-docker group remains.
     expect(
       compact
         .flatMap((shard) => shard.groups)
-        .find((group) => group.shard_name === "core-tooling-docker"),
-    ).toEqual(
-      expect.objectContaining({
-        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
-      }),
-    );
+        .some((group) => group.shard_name === "core-tooling-docker"),
+    ).toBe(false);
     const toolingGroups = compact
       .flatMap((shard) => shard.groups)
       .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
@@ -313,13 +374,22 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(coreUnitShards).toEqual([
       {
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        requiresDist: false,
+        shardName: "core-unit-fast-1",
+      },
+      {
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        requiresDist: false,
+        shardName: "core-unit-fast-2",
+      },
+      {
         configs: [
-          "test/vitest/vitest.unit-fast.config.ts",
           "test/vitest/vitest.unit-fast-isolated.config.ts",
           "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         ],
         requiresDist: false,
-        shardName: "core-unit-fast",
+        shardName: "core-unit-fast-isolated",
       },
       {
         configs: [
@@ -373,25 +443,25 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       shard.shardName.startsWith("core-tooling"),
     );
 
-    expect(toolingShards).toEqual([
-      {
-        checkName: "checks-node-core-tooling",
-        configs: [
-          "test/vitest/vitest.tooling.config.ts",
-          "test/vitest/vitest.tooling-isolated.config.ts",
-        ],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "core-tooling",
-      },
-      {
-        checkName: "checks-node-core-tooling-docker",
-        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "core-tooling-docker",
-      },
-    ]);
+    const stripes = toolingShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
+    expect(stripes).toHaveLength(4);
+    for (const stripe of stripes) {
+      expect(stripe.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+      expect(stripe.requiresDist).toBe(false);
+      expect(stripe.includePatterns?.length ?? 0).toBeGreaterThan(0);
+    }
+    // Stripes partition the tooling files: no overlap, nothing dropped.
+    const stripeFiles = stripes.flatMap((stripe) => stripe.includePatterns ?? []);
+    expect(new Set(stripeFiles).size).toBe(stripeFiles.length);
+    expect(
+      toolingShards.find((shard) => shard.shardName === "core-tooling-isolated"),
+    ).toMatchObject({
+      configs: [
+        "test/vitest/vitest.tooling-docker.config.ts",
+        "test/vitest/vitest.tooling-isolated.config.ts",
+      ],
+      requiresDist: false,
+    });
   });
 
   it("assigns Blacksmith runners to every core node shard", () => {
@@ -614,6 +684,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.media-understanding.config.ts",
           "test/vitest/vitest.tui.config.ts",
           "test/vitest/vitest.ui.config.ts",
+          "test/vitest/vitest.ui-isolated.config.ts",
           "test/vitest/vitest.wizard.config.ts",
         ],
         requiresDist: false,
@@ -791,7 +862,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(cliShard).toEqual({
       checkName: "checks-node-agentic-cli",
       shardName: "agentic-cli",
-      configs: ["test/vitest/vitest.cli.config.ts"],
+      configs: ["test/vitest/vitest.cli.config.ts", "test/vitest/vitest.cli-process.config.ts"],
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });
@@ -945,7 +1016,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       },
       {
         checkName: "checks-node-agentic-agents-embedded",
-        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        configs: [
+          "test/vitest/vitest.agents-embedded-agent.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+        ],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000" },
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-embedded",
@@ -1030,6 +1107,31 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
       .toSorted((a, b) => a.localeCompare(b));
 
+    expect(actual).toEqual(expected);
+    expect(new Set(actual).size).toBe(actual.length);
+  });
+
+  it("keeps embedded-agent tests in four bounded config surfaces", () => {
+    const shard = createNodeTestShards().find(
+      (candidate) => candidate.shardName === "agentic-agents-embedded",
+    );
+    const incompleteTurnFiles = new Set(agentVitestProjectOwners.embeddedIncompleteTurn.include);
+    const overflowCompactionFiles = new Set(
+      agentVitestProjectOwners.embeddedOverflowCompaction.include,
+    );
+    const actual = [
+      ...fg
+        .sync(agentVitestProjectOwners.embedded.include)
+        .filter((file) => !incompleteTurnFiles.has(file) && !overflowCompactionFiles.has(file)),
+      ...agentVitestProjectOwners.embeddedIncompleteTurn.include,
+      ...agentVitestProjectOwners.embeddedOverflowCompaction.include,
+      ...fg.sync(agentVitestProjectOwners.embeddedRun.include),
+    ].toSorted((left, right) => left.localeCompare(right));
+    const expected = listTestFiles("src/agents/embedded-agent-runner").toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+
+    expect(shard?.configs).toEqual(embeddedAgentVitestProjectOwners.map((owner) => owner.config));
     expect(actual).toEqual(expected);
     expect(new Set(actual).size).toBe(actual.length);
   });

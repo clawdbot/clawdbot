@@ -17,11 +17,7 @@ import {
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import { settleReplyDispatcher, withReplyDispatcher } from "../../auto-reply/dispatch.js";
-import {
-  formatAgentEnvelope,
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../auto-reply/envelope.js";
+import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -54,6 +50,7 @@ import {
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
+  dispatchChannelInboundTurn,
   dispatchChannelInboundReply,
   runChannelInboundEvent,
   runPreparedInboundReply,
@@ -71,12 +68,7 @@ import {
   updateSessionLastRoute,
 } from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import {
-  fetchRemoteMedia,
-  readRemoteMediaBuffer,
-  saveRemoteMedia,
-  saveResponseMedia,
-} from "../../media/fetch.js";
+import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -122,8 +114,6 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       settleReplyDispatcher,
       finalizeInboundContext,
       formatAgentEnvelope,
-      /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
-      formatInboundEnvelope,
       resolveEnvelopeFormatOptions,
     },
     routing: {
@@ -154,7 +144,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     media: {
       readRemoteMediaBuffer,
-      fetchRemoteMedia,
+      fetchRemoteMedia: readRemoteMediaBuffer,
       saveRemoteMedia,
       saveResponseMedia,
       saveMediaBuffer,
@@ -198,6 +188,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildContext: buildChannelInboundEventContext,
       run: runChannelInboundEvent,
       runPreparedReply: runPreparedInboundReply,
+      dispatch: dispatchChannelInboundTurn,
       dispatchReply: dispatchChannelInboundReply,
     },
     threadBindings: {

@@ -8,6 +8,7 @@ import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -17,10 +18,11 @@ let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
 let nextExecCacheId = 1;
-const loginShellEnvProbeCache = new Map<
-  string,
-  { ok: true; entries: Array<[string, string]> } | { ok: false; error: string }
->();
+type CachedLoginShellEnvProbeResult =
+  | { ok: true; entries: Array<[string, string]> }
+  | { ok: false; error: string };
+const loginShellEnvProbeCache = new Map<string, CachedLoginShellEnvProbeResult>();
+const LOGIN_SHELL_ENV_CACHE_LIMIT = 64;
 const execCacheIds = new WeakMap<object, number>();
 
 function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -169,6 +171,11 @@ type LoginShellEnvProbeResult =
   | { ok: true; shellEnv: Map<string, string> }
   | { ok: false; error: string };
 
+function cacheLoginShellEnvProbe(cacheKey: string, result: CachedLoginShellEnvProbeResult): void {
+  loginShellEnvProbeCache.set(cacheKey, result);
+  pruneMapToMaxSize(loginShellEnvProbeCache, LOGIN_SHELL_ENV_CACHE_LIMIT);
+}
+
 function probeLoginShellEnv(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
@@ -192,17 +199,21 @@ function probeLoginShellEnv(params: {
   });
   const cached = loginShellEnvProbeCache.get(cacheKey);
   if (cached) {
+    // Login-shell probes can consume the full timeout; keep active configurations ahead of
+    // colder entries when the shared insertion-order pruning helper enforces the bound.
+    loginShellEnvProbeCache.delete(cacheKey);
+    loginShellEnvProbeCache.set(cacheKey, cached);
     return cached.ok ? { ok: true, shellEnv: new Map(cached.entries) } : cached;
   }
 
   try {
     const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
     const shellEnv = parseShellEnv(stdout);
-    loginShellEnvProbeCache.set(cacheKey, { ok: true, entries: [...shellEnv.entries()] });
+    cacheLoginShellEnvProbe(cacheKey, { ok: true, entries: [...shellEnv.entries()] });
     return { ok: true, shellEnv };
   } catch (err) {
     const result = { ok: false as const, error: formatErrorMessage(err) };
-    loginShellEnvProbeCache.set(cacheKey, result);
+    cacheLoginShellEnvProbe(cacheKey, result);
     return result;
   }
 }

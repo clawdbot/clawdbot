@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover realtime talk conversation behavior.
 import { describe, expect, it } from "vitest";
 import {

@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  readJsonBodyWithLimit,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
-import { resolveActivityUserAuthorized } from "./allowlist.js";
 import {
   DISCORD_TOKEN_URL,
   DISCORD_USER_URL,
@@ -38,12 +42,8 @@ type DiscordActivityHttpDeps = {
   fetchGuard?: FetchGuard;
   now?: () => number;
   readVendorAsset?: (assetPath: string) => Promise<Buffer>;
-};
-
-type DiscordOauthUser = {
-  id?: string;
-  username?: string;
-  discriminator?: string;
+  logError?: (message: string) => void;
+  bodyTimeoutMs?: number;
 };
 
 function setCommonHeaders(res: ServerResponse): void {
@@ -82,27 +82,6 @@ function notFound(res: ServerResponse, widgetDocument = false): true {
     "text/plain; charset=utf-8",
     widgetDocument ? { "Content-Security-Policy": DISCORD_ACTIVITY_WIDGET_CSP } : undefined,
   );
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += data.byteLength;
-    if (total > BODY_MAX_BYTES) {
-      return null;
-    }
-    chunks.push(data);
-  }
-  try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function readHeader(req: IncomingMessage, name: string): string | undefined {
@@ -144,7 +123,20 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
   const fetchGuard = deps.fetchGuard ?? fetchWithSsrFGuard;
   const limiter = new TokenRateLimiter(deps.now ?? Date.now);
   const readVendorAsset = deps.readVendorAsset ?? ((assetPath: string) => fs.readFile(assetPath));
+  const reportError = deps.logError ?? logError;
+  // The OAuth code body is unauthenticated and tiny. Reuse the pre-auth webhook budget so a
+  // stalled upload cannot retain a Gateway handler indefinitely.
+  const bodyTimeoutMs = deps.bodyTimeoutMs ?? WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
   let vendorAsset: Promise<Buffer> | undefined;
+  let pendingLaunchFailureLogged = false;
+
+  function logPendingLaunchFailure(error: unknown): void {
+    if (pendingLaunchFailureLogged) {
+      return;
+    }
+    pendingLaunchFailureLogged = true;
+    reportError(`discord activity: failed to consume pending launch: ${String(error)}`);
+  }
 
   async function handleToken(req: IncomingMessage, res: ServerResponse): Promise<true> {
     const cfg = deps.runtime.currentConfig();
@@ -162,7 +154,21 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     if (!account) {
       return respondJson(res, 503, { error: "Discord Activities is not fully configured" });
     }
-    const body = await readJsonBody(req);
+    const bodyResult = await readJsonBodyWithLimit(req, {
+      maxBytes: BODY_MAX_BYTES,
+      timeoutMs: bodyTimeoutMs,
+      emptyObjectOnEmpty: true,
+    });
+    if (!bodyResult.ok && bodyResult.code === "REQUEST_BODY_TIMEOUT") {
+      return respondJson(res, 408, { error: "request body timeout" });
+    }
+    const body =
+      bodyResult.ok &&
+      bodyResult.value &&
+      typeof bodyResult.value === "object" &&
+      !Array.isArray(bodyResult.value)
+        ? (bodyResult.value as Record<string, unknown>)
+        : null;
     const code = typeof body?.code === "string" ? body.code.trim() : "";
     if (!code) {
       return respondJson(res, 401, { error: "invalid authorization code" });
@@ -213,23 +219,13 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       } catch {
         return respondJson(res, 503, { error: "Discord user lookup unavailable" });
       }
-      const user: DiscordOauthUser = {
-        id: typeof userResponse.body?.id === "string" ? userResponse.body.id : undefined,
-        username:
-          typeof userResponse.body?.username === "string" ? userResponse.body.username : undefined,
-        discriminator:
-          typeof userResponse.body?.discriminator === "string"
-            ? userResponse.body.discriminator
-            : undefined,
-      };
-      if (!userResponse.ok || !user.id) {
+      const discordUserId =
+        typeof userResponse.body?.id === "string" ? userResponse.body.id : undefined;
+      if (!userResponse.ok || !discordUserId) {
         return respondJson(res, 401, { error: "Discord user lookup failed" });
       }
-      if (!resolveActivityUserAuthorized(account.config, { ...user, id: user.id })) {
-        return respondJson(res, 403, { error: "Discord user is not allowlisted" });
-      }
       const minted = await deps.runtime.store.createSession({
-        discordUserId: user.id,
+        discordUserId,
         accountId: account.accountId,
       });
       completed = true;
@@ -270,16 +266,51 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     let resolved: {
       id: string;
       widget: NonNullable<Awaited<ReturnType<typeof deps.runtime.store.lookupWidget>>>;
-    } | null;
+    } | null = null;
+    // Prefer an explicit ID, then the click-time launch record, then the newest posted widget.
     const requestedWidgetId = widgetIdFromCustomId(customId);
     if (requestedWidgetId) {
       const widget = await deps.runtime.store.lookupWidget(requestedWidgetId);
+      // A parseable ID is an explicit widget selection. Missing or foreign widgets fail closed
+      // instead of silently opening unrelated pending or newest-widget state.
       if (widget?.accountId !== session.accountId || widget.channelId !== channelId) {
         return respondJson(res, 404, { error: "widget not found" });
       }
       resolved = { id: requestedWidgetId, widget };
+      // Awaited like every sibling store call on this path (sessions, widgets): the local
+      // KV either answers or the process is wedged; per-call budgets here would be asymmetric.
+      try {
+        await deps.runtime.store.retirePendingLaunch(
+          session.accountId,
+          channelId,
+          session.discordUserId,
+          requestedWidgetId,
+        );
+      } catch (error) {
+        logPendingLaunchFailure(error);
+      }
     } else {
-      resolved = await deps.runtime.store.singleWidgetForChannel(session.accountId, channelId);
+      try {
+        const pendingLaunch = await deps.runtime.store.consumePendingLaunch(
+          session.accountId,
+          channelId,
+          session.discordUserId,
+        );
+        if (pendingLaunch) {
+          const widget = await deps.runtime.store.lookupWidget(pendingLaunch.widgetId);
+          if (widget?.accountId === session.accountId && widget.channelId === channelId) {
+            resolved = { id: pendingLaunch.widgetId, widget };
+          }
+        }
+      } catch (error) {
+        logPendingLaunchFailure(error);
+      }
+      // Some Discord clients omit the launch custom ID. Prefer the most recently posted channel
+      // widget while keeping older widgets addressable through buttons that preserve custom IDs.
+      resolved ??= await deps.runtime.store.latestPostedWidgetForChannel(
+        session.accountId,
+        channelId,
+      );
     }
     if (!resolved) {
       return respondJson(res, 404, { error: "widget not found" });

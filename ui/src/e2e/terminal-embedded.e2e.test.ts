@@ -12,6 +12,8 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCREENSHOT?.trim();
+const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -126,6 +128,71 @@ describeControlUiE2e("embedded terminal document", () => {
       await closeControl.click();
       const terminalClose = await gateway.waitForRequest("terminal.close");
       expect(terminalClose.params).toEqual({ sessionId: "terminal-e2e" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("restores a persisted session with no gateway PTY as exited", async () => {
+    const context = await browser.newContext({
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 800 },
+      ...(deadSessionVideoDir
+        ? { recordVideo: { dir: deadSessionVideoDir, size: { width: 1280, height: 800 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      (
+        window as Window & {
+          ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: {
+            gatewayUrl: string;
+            token: string;
+          };
+        }
+      )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+        gatewayUrl: "ws://gateway.example.test",
+        token: "test",
+      };
+      window.sessionStorage.setItem(
+        "openclaw.terminal.sessions.v1",
+        JSON.stringify(["terminal-dead-after-restart"]),
+      );
+    });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["connect"],
+      featureMethods: ["terminal.open"],
+      methodResponses: {
+        "terminal.list": { sessions: [] },
+        "terminal.open": {
+          agentId: "main",
+          confined: false,
+          cwd: "/workspace",
+          sessionId: "replacement-terminal",
+          shell: "/bin/bash",
+        },
+      },
+      terminalEnabled: true,
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}?view=terminal`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      await gateway.waitForRequest("terminal.list");
+      await page.waitForTimeout(250);
+
+      if (deadSessionScreenshotPath) {
+        await page.screenshot({ path: deadSessionScreenshotPath, fullPage: true });
+      }
+      const status = page.locator("openclaw-terminal-panel .tabstrip-tab__status");
+      await expect.poll(async () => await status.textContent(), { timeout: 5_000 }).toBe("exited");
+      expect(await gateway.getRequests("terminal.attach")).toHaveLength(0);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      expect(
+        await page.evaluate(() => window.sessionStorage.getItem("openclaw.terminal.sessions.v1")),
+      ).toBe("[]");
     } finally {
       await context.close();
     }

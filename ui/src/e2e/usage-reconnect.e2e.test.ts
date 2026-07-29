@@ -12,6 +12,9 @@ import {
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 
+// Mirrors the module-private default usage TTL asserted by this flow.
+const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
+
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
@@ -135,9 +138,8 @@ async function proxyReconnect(
   expectedSocketCount: number,
 ): Promise<void> {
   await gateway.closeLatest(1001, "proxy idle timeout");
-  await page.locator("openclaw-connection-banner").waitFor({ state: "visible" });
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
-  await page.locator("openclaw-connection-banner").waitFor({ state: "hidden" });
+  expect(await page.locator(".sidebar-identity-card__subtitle").count()).toBe(0);
 }
 
 async function captureProof(page: Page, name: string): Promise<void> {
@@ -179,8 +181,14 @@ describeControlUiE2e("Control UI usage proxy reconnect lifecycle", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}usage`);
+      const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar
+        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
+        .click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequestCount(gateway, "sessions.usage", 1);
       await waitForRequestCount(gateway, "usage.cost", 1);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
@@ -192,63 +200,53 @@ describeControlUiE2e("Control UI usage proxy reconnect lifecycle", () => {
         expect(await requestCount(gateway, "usage.cost")).toBe(1);
       }
 
-      await gateway.deferNext("sessions.usage");
-      await gateway.deferNext("usage.cost");
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page.evaluate((ttlMs) => {
+        const staleNow = Date.now() + ttlMs;
+        Date.now = () => staleNow;
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => "hidden",
+        });
+        Object.defineProperty(document, "hasFocus", {
+          configurable: true,
+          value: () => false,
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      }, USAGE_PAYLOAD_TTL_MS);
+      await proxyReconnect(page, gateway, 5);
+      expect(await requestCount(gateway, "sessions.usage")).toBe(1);
+      expect(await requestCount(gateway, "usage.cost")).toBe(1);
+
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => "visible",
+        });
+        Object.defineProperty(document, "hasFocus", {
+          configurable: true,
+          value: () => true,
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new Event("focus"));
+      });
       await waitForRequestCount(gateway, "sessions.usage", 2);
       await waitForRequestCount(gateway, "usage.cost", 2);
 
-      await proxyReconnect(page, gateway, 5);
+      await gateway.deferNext("sessions.usage");
+      await gateway.deferNext("usage.cost");
+      await page
+        .locator("openclaw-usage-page")
+        .getByRole("button", { name: "Refresh", exact: true })
+        .click();
       await waitForRequestCount(gateway, "sessions.usage", 3);
       await waitForRequestCount(gateway, "usage.cost", 3);
+
+      await proxyReconnect(page, gateway, 6);
+      await waitForRequestCount(gateway, "sessions.usage", 4);
+      await waitForRequestCount(gateway, "usage.cost", 4);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
       await expect.poll(() => usageBadges(page)).toEqual(["120 Tokens", "$0.01 Cost", "1 session"]);
       await captureProof(page, "usage-after-interrupted-retry.png");
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("resumes Profile cache settlement once and then preserves the settled result", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const refreshing = {
-      status: "refreshing" as const,
-      cachedFiles: 1,
-      pendingFiles: 1,
-      staleFiles: 0,
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.usage": sessionsUsage(refreshing),
-        "usage.cost": costSummary(refreshing),
-      },
-    });
-
-    try {
-      const response = await page.goto(`${server.baseUrl}settings/profile`);
-      expect(response?.status()).toBe(200);
-      await waitForRequestCount(gateway, "sessions.usage", 1);
-      await waitForRequestCount(gateway, "usage.cost", 1);
-      await page.locator(".profile-stats").waitFor({ timeout: 10_000 });
-
-      await gateway.setMethodResponse("sessions.usage", sessionsUsage());
-      await gateway.setMethodResponse("usage.cost", costSummary());
-      await proxyReconnect(page, gateway, 2);
-      await waitForRequestCount(gateway, "sessions.usage", 2);
-      await waitForRequestCount(gateway, "usage.cost", 2);
-      await page.locator(".profile-stats").waitFor();
-      await expect
-        .poll(() => page.locator(".profile-stats__value").first().textContent())
-        .toBe("120");
-
-      await proxyReconnect(page, gateway, 3);
-      expect(await requestCount(gateway, "sessions.usage")).toBe(2);
-      expect(await requestCount(gateway, "usage.cost")).toBe(2);
-      await expect
-        .poll(() => page.locator(".profile-stats__value").first().textContent())
-        .toBe("120");
-      await captureProof(page, "profile-after-cache-settlement.png");
     } finally {
       await context.close();
     }

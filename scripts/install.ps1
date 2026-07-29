@@ -104,6 +104,84 @@ function Complete-Install {
     throw "OpenClaw installation failed with exit code $($script:InstallExitCode)."
 }
 
+function Resolve-InstallerTempDirectory {
+    param([scriptblock]$LongPathResolver)
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($candidate in @($env:TEMP, $env:TMP, [System.IO.Path]::GetTempPath())) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+            $candidates.Add($candidate)
+        }
+    }
+
+    $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
+    if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
+        $candidates.Add((Join-Path $localAppData "Temp"))
+    }
+
+    $userHome = [Environment]::GetFolderPath("UserProfile")
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $candidates.Add((Join-Path $userHome "AppData\Local\Temp"))
+    }
+
+    foreach ($candidate in $candidates) {
+        $pathToResolve = $candidate
+        $candidateHasShortAlias = $candidate -match '(?i)~\d'
+        $requiresCanonicalization = (
+            $candidateHasShortAlias -or
+            $candidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)
+        )
+        if ($pathToResolve.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $pathToResolve = "\\" + $pathToResolve.Substring(8)
+        } elseif ($pathToResolve.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $pathToResolve = $pathToResolve.Substring(4)
+        }
+        try {
+            if ($LongPathResolver) {
+                $resolvedCandidate = & $LongPathResolver $pathToResolve
+            } else {
+                # Windows PowerShell 5.1: FSO Folder.Path echoes 8.3 aliases; Get-Item.FullName expands them.
+                $resolvedCandidate = (Get-Item -LiteralPath $pathToResolve -ErrorAction Stop).FullName
+            }
+        } catch {
+            if ($requiresCanonicalization) {
+                continue
+            }
+            $resolvedCandidate = $pathToResolve
+        }
+        if ([string]::IsNullOrWhiteSpace($resolvedCandidate)) {
+            continue
+        }
+        if ($candidateHasShortAlias -and $resolvedCandidate -match '(?i)~\d') {
+            continue
+        }
+        if ($resolvedCandidate.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $resolvedCandidate = "\\" + $resolvedCandidate.Substring(8)
+        } elseif ($resolvedCandidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $resolvedCandidate = $resolvedCandidate.Substring(4)
+        }
+        if (
+            Test-Path -LiteralPath $resolvedCandidate -PathType Container
+        ) {
+            return $resolvedCandidate
+        }
+        # Try the next existing root; archive and extraction children do not exist yet.
+    }
+
+    throw "Could not find a usable Windows temporary directory."
+}
+
+function Initialize-InstallerTempDirectory {
+    param([scriptblock]$LongPathResolver)
+
+    $tempDirectory = Resolve-InstallerTempDirectory -LongPathResolver $LongPathResolver
+    $script:InstallerTempDirectory = $tempDirectory
+    $env:TEMP = $tempDirectory
+    $env:TMP = $tempDirectory
+}
+
+Initialize-InstallerTempDirectory
+
 Write-Host ""
 Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
 Write-Host ""
@@ -331,11 +409,11 @@ function Resolve-PortableNodeDownload {
     $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
     $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" @requestTimeouts
     $release = $index |
-        Where-Object { $_.version -match '^v24\.' } |
+        Where-Object { $_.version -match '^v26\.' } |
         Select-Object -First 1
 
     if (-not $release -or -not $release.version) {
-        throw "Could not resolve latest Node.js 24 release metadata."
+        throw "Could not resolve latest Node.js 26 release metadata."
     }
 
     $fileKey = "win-$architecture-zip"
@@ -408,7 +486,7 @@ function Install-PortableNode {
     $download = Resolve-PortableNodeDownload
     $portableRoot = Get-PortableNodeRoot
     $portableParent = Split-Path -Parent $portableRoot
-    $tmpZip = Join-Path $env:TEMP $download.Name
+    $tmpZip = Join-Path $script:InstallerTempDirectory $download.Name
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
@@ -501,7 +579,7 @@ function Install-Node {
     Write-Host ""
     Write-Host "Error: Could not install Node.js automatically." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Please install Node.js 24.15+ manually:" -ForegroundColor Yellow
+    Write-Host "Please install Node.js 26 manually:" -ForegroundColor Yellow
     Write-Host "  https://nodejs.org/en/download/" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Or install winget (App Installer) from the Microsoft Store." -ForegroundColor Gray
@@ -717,8 +795,9 @@ function Install-PortableGit {
     $download = Resolve-PortableGitDownload
     $portableRoot = Get-PortableGitRoot
     $portableParent = Split-Path -Parent $portableRoot
-    $tmpZip = Join-Path $env:TEMP $download.Name
-    $tmpExtract = Join-Path $env:TEMP ("openclaw-portable-git-" + [guid]::NewGuid().ToString("N"))
+    $tempName = "openclaw-portable-git-" + [guid]::NewGuid().ToString("N")
+    $tmpZip = Join-Path $script:InstallerTempDirectory ($tempName + ".zip")
+    $tmpExtract = Join-Path $script:InstallerTempDirectory $tempName
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
@@ -734,6 +813,7 @@ function Install-PortableGit {
         $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
         Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
+        New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
     } finally {
         if (Test-Path $tmpZip) {
@@ -858,8 +938,8 @@ function Get-WindowsCommandSafeDirectory {
     if (-not [string]::IsNullOrWhiteSpace($userHome) -and (Test-Path $userHome)) {
         return $userHome
     }
-    if (-not [string]::IsNullOrWhiteSpace($env:TEMP) -and (Test-Path $env:TEMP)) {
-        return $env:TEMP
+    if (Test-Path -LiteralPath $script:InstallerTempDirectory -PathType Container) {
+        return $script:InstallerTempDirectory
     }
     return $null
 }
@@ -1458,7 +1538,8 @@ function Install-OpenClawFromGit {
             Write-Host "[!] pnpm install failed for the Git checkout" -ForegroundColor Red
             return $false
         }
-        if (-not (& $pnpmCommand ui:build)) {
+        & $pnpmCommand ui:build
+        if ($LASTEXITCODE -ne 0) {
             Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
         }
         $env:NODE_OPTIONS = Resolve-NodeOptionsWithMinOldSpace -NodeOptions $prevNodeOptions -MinOldSpaceMb 8192

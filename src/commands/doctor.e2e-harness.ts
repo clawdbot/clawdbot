@@ -208,6 +208,27 @@ function createLegacyStateMigrationDetectionResult(params?: {
     targetScope: undefined,
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
+    deviceAuth: {
+      sourcePath: "/tmp/state/identity/device-auth.json",
+      sourcePresent: false,
+      hasLegacy: false,
+    },
+    deviceIdentity: {
+      sourcePath: "/tmp/state/identity/device.json",
+      claimPath: "/tmp/state/identity/device.json.doctor-importing",
+      nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+      hasLegacy: false,
+      hasInvalidCanonical: false,
+    },
+    mcpOauth: {
+      sourceDir: "/tmp/state/mcp-oauth",
+      sourcePaths: [],
+      hasLegacy: false,
+    },
+    execApprovals: {
+      sourcePath: "/tmp/state/exec-approvals.json",
+      hasLegacy: false,
+    },
     sessions: {
       legacyDir: "/tmp/state/sessions",
       legacyStorePath: "/tmp/state/sessions/sessions.json",
@@ -245,6 +266,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       preview: [],
     },
+    worktrees: { hasLegacy: false },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
       flowRunsPath: "/tmp/state/flows/registry.sqlite",
@@ -284,12 +306,24 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/commitments/commitments.json",
       hasLegacy: false,
     },
+    auditLogs: {
+      sources: [],
+      hasLegacy: false,
+    },
+    acpReplayLedger: {
+      sourcePath: "/tmp/state/acp/event-ledger.json",
+      hasLegacy: false,
+    },
     managedOutgoingImages: {
       sourceDir: "/tmp/state/media/outgoing/records",
       hasLegacy: false,
     },
     apns: {
       sourcePath: "/tmp/state/push/apns-registrations.json",
+      hasLegacy: false,
+    },
+    workspace: {
+      sources: [],
       hasLegacy: false,
     },
     webPush: {
@@ -315,11 +349,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       knownChannelIds: [],
       defaultAccountIds: {},
       accountIds: {},
-      hasLegacy: false,
-    },
-    execApprovals: {
-      sourcePath: "/tmp/state/exec-approvals.legacy.json",
-      targetPath: "/tmp/state/exec-approvals.json",
       hasLegacy: false,
     },
     channelPlans: {

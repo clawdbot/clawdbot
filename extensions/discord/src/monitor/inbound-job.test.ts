@@ -1,5 +1,5 @@
 // Discord tests cover inbound job plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Message } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { buildDiscordInboundJob, materializeDiscordInboundJob } from "./inbound-job.js";
@@ -72,7 +72,6 @@ describe("buildDiscordInboundJob", () => {
         {
           path: "/tmp/openclaw-discord-test/photo.png",
           contentType: "image/png",
-          placeholder: "<media:image>",
         },
       ],
     });
@@ -143,7 +142,11 @@ describe("buildDiscordInboundJob", () => {
 
   it("re-materializes the process context with an overridden abort signal", async () => {
     const ctx = await createBaseDiscordMessageContext();
-    const job = buildDiscordInboundJob(ctx, { replayKeys: ["default:ch-1:m-1"] });
+    const ingressSettlement = {
+      settle: vi.fn(async () => {}),
+      abandon: vi.fn(async () => {}),
+    };
+    const job = buildDiscordInboundJob(ctx, { ingressSettlement });
     const overrideAbortController = new AbortController();
 
     const rematerialized = materializeDiscordInboundJob(job, overrideAbortController.signal);
@@ -154,7 +157,7 @@ describe("buildDiscordInboundJob", () => {
     expect(rematerialized.abortSignal).toBe(overrideAbortController.signal);
     expect(rematerialized.message).toEqual(job.payload.message);
     expect(rematerialized.data).toEqual(job.payload.data);
-    expect(job.replayKeys).toEqual(["default:ch-1:m-1"]);
+    expect(job.ingressSettlement).toBe(ingressSettlement);
   });
 
   it("preserves Discord message getters across queued jobs", async () => {

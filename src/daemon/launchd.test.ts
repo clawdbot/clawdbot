@@ -1,6 +1,8 @@
 // Launchd tests cover macOS service plist generation and command handling.
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PortListener } from "../infra/ports-types.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
@@ -19,6 +21,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  startLaunchAgent,
   stopLaunchAgent,
 } from "./launchd.js";
 
@@ -50,17 +53,29 @@ const state = vi.hoisted(() => ({
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
   fileWrites: [] as Array<{ path: string; data: string }>,
+  cleanupProtectedPids: [] as Array<number | undefined>,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
-    (_params: unknown) => { ok: true; value: number | undefined } | { ok: false; error: string }
-  >(() => ({ ok: true, value: 7331 })),
+    (_params: unknown) => { ok: true; value: Promise<boolean> } | { ok: false; error: string }
+  >(() => ({ ok: true, value: Promise.resolve(true) })),
 }));
+type CleanStaleGatewayProcessesOptions = {
+  protectedPid?: number;
+  resolveProtectedPid?: () => number | undefined;
+};
+
 const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
-  vi.fn<(port?: number) => number[]>(() => []),
+  vi.fn<(port?: number, options?: CleanStaleGatewayProcessesOptions) => number[]>(() => []),
 );
+const launchctlSpawnSync = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() =>
-  vi.fn(async () => ({ port: 18789, status: "free", listeners: [], hints: [] })),
+  vi.fn<typeof import("../infra/ports-inspect.js").inspectPortUsage>(async () => ({
+    port: 18789,
+    status: "free",
+    listeners: [],
+    hints: [],
+  })),
 );
 const probePortUsage = vi.hoisted(() =>
   vi.fn<typeof import("../infra/ports-probe.js").probePortUsage>(async () => "free"),
@@ -226,79 +241,89 @@ function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
   return args;
 }
 
-vi.mock("./exec-file.js", () => ({
-  execFileUtf8: vi.fn(async (file: string, args: string[]) => {
-    const call = normalizeLaunchctlArgs(file, args);
-    state.launchctlCalls.push(call);
-    if (call[0] === "list") {
-      return { stdout: state.listOutput, stderr: "", code: 0 };
+function executeLaunchctlMock(file: string, args: string[]) {
+  const call = normalizeLaunchctlArgs(file, args);
+  state.launchctlCalls.push(call);
+  if (call[0] === "list") {
+    return { stdout: state.listOutput, stderr: "", code: 0 };
+  }
+  if (call[0] === "print") {
+    if (state.printNotLoadedRemaining > 0) {
+      state.printNotLoadedRemaining -= 1;
+      return { stdout: "", stderr: "Could not find service", code: 113 };
     }
-    if (call[0] === "print") {
-      if (state.printNotLoadedRemaining > 0) {
-        state.printNotLoadedRemaining -= 1;
-        return { stdout: "", stderr: "Could not find service", code: 113 };
-      }
-      if (state.printError && state.printFailuresRemaining > 0) {
-        state.printFailuresRemaining -= 1;
-        return { stdout: "", stderr: state.printError, code: state.printCode };
-      }
-      if (!state.serviceLoaded) {
-        return { stdout: "", stderr: "Could not find service", code: 113 };
-      }
-      if (state.printOutput) {
-        return { stdout: state.printOutput, stderr: "", code: 0 };
-      }
-      if (!state.serviceRunning) {
-        return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
-      }
-      return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
+    if (state.printError && state.printFailuresRemaining > 0) {
+      state.printFailuresRemaining -= 1;
+      return { stdout: "", stderr: state.printError, code: state.printCode };
     }
-    if (call[0] === "disable" && state.disableError) {
-      return { stdout: "", stderr: state.disableError, code: state.disableCode };
+    if (!state.serviceLoaded) {
+      return { stdout: "", stderr: "Could not find service", code: 113 };
     }
-    if (call[0] === "stop") {
-      if (state.stopError) {
-        return { stdout: "", stderr: state.stopError, code: state.stopCode };
-      }
-      if (!state.stopLeavesRunning) {
-        state.serviceRunning = false;
-      }
-      return { stdout: "", stderr: "", code: 0 };
+    if (state.printOutput) {
+      return { stdout: state.printOutput, stderr: "", code: 0 };
     }
-    if (call[0] === "bootout") {
-      if (state.bootoutError) {
-        return { stdout: "", stderr: state.bootoutError, code: state.bootoutCode };
-      }
-      state.serviceLoaded = false;
+    if (!state.serviceRunning) {
+      return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
+    }
+    return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
+  }
+  if (call[0] === "disable" && state.disableError) {
+    return { stdout: "", stderr: state.disableError, code: state.disableCode };
+  }
+  if (call[0] === "stop") {
+    if (state.stopError) {
+      return { stdout: "", stderr: state.stopError, code: state.stopCode };
+    }
+    if (!state.stopLeavesRunning) {
       state.serviceRunning = false;
-      return { stdout: "", stderr: "", code: 0 };
-    }
-    if (call[0] === "enable") {
-      return { stdout: "", stderr: "", code: 0 };
-    }
-    if (call[0] === "bootstrap") {
-      if (state.bootstrapError) {
-        if (state.bootstrapLoadsServiceOnFailure) {
-          state.serviceLoaded = true;
-          state.serviceRunning = true;
-        }
-        return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
-      }
-      state.serviceLoaded = true;
-      state.serviceRunning = true;
-      return { stdout: "", stderr: "", code: 0 };
-    }
-    if (call[0] === "kickstart") {
-      if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
-        state.kickstartFailuresRemaining -= 1;
-        return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
-      }
-      state.serviceLoaded = true;
-      state.serviceRunning = true;
-      return { stdout: "", stderr: "", code: 0 };
     }
     return { stdout: "", stderr: "", code: 0 };
-  }),
+  }
+  if (call[0] === "bootout") {
+    if (state.bootoutError) {
+      return { stdout: "", stderr: state.bootoutError, code: state.bootoutCode };
+    }
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  if (call[0] === "enable") {
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  if (call[0] === "bootstrap") {
+    if (state.bootstrapError) {
+      if (state.bootstrapLoadsServiceOnFailure) {
+        state.serviceLoaded = true;
+        state.serviceRunning = true;
+      }
+      return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
+    }
+    state.serviceLoaded = true;
+    state.serviceRunning = true;
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  if (call[0] === "kickstart") {
+    if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
+      state.kickstartFailuresRemaining -= 1;
+      return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
+    }
+    state.serviceLoaded = true;
+    state.serviceRunning = true;
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  return { stdout: "", stderr: "", code: 0 };
+}
+
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    { spawnSync: (...args: unknown[]) => launchctlSpawnSync(...args) },
+  );
+});
+
+vi.mock("./exec-file.js", () => ({
+  execFileUtf8: vi.fn(async (file: string, args: string[]) => executeLaunchctlMock(file, args)),
 }));
 
 vi.mock("./launchd-restart-handoff.js", () => ({
@@ -307,7 +332,10 @@ vi.mock("./launchd-restart-handoff.js", () => ({
 }));
 
 vi.mock("../infra/restart-stale-pids.js", () => ({
-  cleanStaleGatewayProcessesSync: (port?: number) => cleanStaleGatewayProcessesSync(port),
+  cleanStaleGatewayProcessesSync: (port?: number, options?: CleanStaleGatewayProcessesOptions) =>
+    options === undefined
+      ? cleanStaleGatewayProcessesSync(port)
+      : cleanStaleGatewayProcessesSync(port, options),
 }));
 
 vi.mock("../infra/ports.js", () => ({
@@ -407,8 +435,17 @@ beforeEach(() => {
   state.files.clear();
   state.fileModes.clear();
   state.fileWrites.length = 0;
+  state.cleanupProtectedPids.length = 0;
+  launchctlSpawnSync.mockReset();
+  launchctlSpawnSync.mockImplementation((file: string, args: string[]) => {
+    const result = executeLaunchctlMock(file, args);
+    return { ...result, status: result.code, error: undefined };
+  });
   cleanStaleGatewayProcessesSync.mockReset();
-  cleanStaleGatewayProcessesSync.mockReturnValue([]);
+  cleanStaleGatewayProcessesSync.mockImplementation((_port, options) => {
+    state.cleanupProtectedPids.push(options?.resolveProtectedPid?.() ?? options?.protectedPid);
+    return [];
+  });
   inspectPortUsage.mockReset();
   inspectPortUsage.mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
   probePortUsage.mockReset();
@@ -418,7 +455,7 @@ beforeEach(() => {
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
     ok: true,
-    value: 7331,
+    value: Promise.resolve(true),
   });
   vi.clearAllMocks();
 });
@@ -1343,7 +1380,12 @@ describe("launchd install", () => {
       envFilePath,
       ...defaultProgramArguments,
     ]);
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      19007,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
   });
 
   it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
@@ -1674,6 +1716,7 @@ describe("launchd install", () => {
       OPENCLAW_GATEWAY_PORT: "19004",
     };
     const stdout = new PassThrough();
+    const onMutation = vi.fn();
     let output = "";
     stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
@@ -1687,10 +1730,11 @@ describe("launchd install", () => {
     probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19004 is held by pid 4242."]);
 
-    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout })).rejects.toThrow(
+    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, onMutation })).rejects.toThrow(
       "gateway port 19004 is still busy after LaunchAgent stop\nPort 19004 is held by pid 4242.",
     );
 
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19004);
     expect(inspectPortUsage).toHaveBeenCalledWith(19004);
     expect(output).not.toContain("Stopped LaunchAgent");
@@ -1819,6 +1863,7 @@ describe("launchd install", () => {
       OPENCLAW_GATEWAY_PORT: "19008",
     };
     const stdout = new PassThrough();
+    const onMutation = vi.fn();
     let output = "";
     state.disableError = "Operation not permitted";
     stdout.on("data", (chunk: Buffer) => {
@@ -1833,10 +1878,13 @@ describe("launchd install", () => {
     probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
 
-    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true })).rejects.toThrow(
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true, onMutation }),
+    ).rejects.toThrow(
       "gateway port 19008 is still busy after LaunchAgent stop\nPort 19008 is held by pid 4242.",
     );
 
+    expect(onMutation).toHaveBeenCalledWith({ mode: "disable-bootout" });
     expect(launchctlCommandNames()).toContain("bootout");
     expect(output).toContain("used bootout fallback");
     expect(output).not.toContain("Stopped LaunchAgent");
@@ -1922,6 +1970,21 @@ describe("launchd install", () => {
     );
   });
 
+  it("audits disable when stop and its bootout fallback both fail", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.stopError = "stop failed";
+    state.bootoutError = "bootout failed";
+
+    await expect(
+      stopLaunchAgent({ env, stdout: new PassThrough(), disable: true, onMutation }),
+    ).rejects.toThrow("launchctl stop failed; used bootout fallback");
+
+    expect(onMutation).toHaveBeenCalledWith({ mode: "disable" });
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "disable-stop" });
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "disable-bootout" });
+  });
+
   it("throws when default bootout fails", async () => {
     const env = createDefaultLaunchdEnv();
     state.bootoutError = "launchctl bootout permission denied";
@@ -1955,22 +2018,108 @@ describe("launchd install", () => {
       ...createDefaultLaunchdEnv(),
       OPENCLAW_GATEWAY_PORT: "18789",
     };
+    const onMutation = vi.fn();
     const result = await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
+      onMutation,
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
     const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
     expect(state.launchctlCalls).toEqual([
+      ["print", serviceId],
       ["enable", serviceId],
       ["kickstart", "-k", serviceId],
     ]);
     expect(launchctlCommandNames()).not.toContain("bootout");
     expect(launchctlCommandNames()).not.toContain("bootstrap");
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
+  });
+
+  it("starts a loaded LaunchAgent and audits before output", async () => {
+    const env = createDefaultLaunchdEnv();
+    const write = vi.fn();
+    const onMutation = vi.fn(({ mode }: { mode: string }) => {
+      if (mode === "kickstart") {
+        throw new Error("audit failed");
+      }
+    });
+
+    await expect(
+      startLaunchAgent({
+        env,
+        stdout: { write } as unknown as NodeJS.WritableStream,
+        onMutation,
+      }),
+    ).resolves.toBeUndefined();
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["enable", serviceId],
+      ["kickstart", serviceId],
+    ]);
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
+    expect(
+      expectDefined(onMutation.mock.invocationCallOrder[1], "kickstart audit call order"),
+    ).toBeLessThan(expectDefined(write.mock.invocationCallOrder[0], "start output call order"));
+  });
+
+  it("bootstraps an unloaded LaunchAgent and audits the successful mutation", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.kickstartError = "Could not find service";
+    state.kickstartFailuresRemaining = 1;
+
+    await startLaunchAgent({ env, stdout: new PassThrough(), onMutation });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["enable", serviceId],
+      ["kickstart", serviceId],
+      ["bootstrap", domain, resolveLaunchAgentPlistPath(env)],
+    ]);
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "bootstrap" }]]);
+  });
+
+  it("audits enable but not kickstart when the later launch fails", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.kickstartError = "Input/output error";
+    state.kickstartFailuresRemaining = 1;
+
+    await expect(startLaunchAgent({ env, stdout: new PassThrough(), onMutation })).rejects.toThrow(
+      "launchctl kickstart failed: Input/output error",
+    );
+
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }]]);
+  });
+
+  it("audits kickstart before a later output failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    const onMutation = vi.fn();
+    const stdout = {
+      write: vi.fn(() => {
+        throw new Error("output failed");
+      }),
+    } as unknown as NodeJS.WritableStream;
+
+    await expect(restartLaunchAgent({ env, stdout, onMutation })).rejects.toThrow("output failed");
+
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
   });
 
   it("reloads launchd after rewriting an existing plist", async () => {
@@ -1999,17 +2148,76 @@ describe("launchd install", () => {
       ].join("\n"),
     );
 
+    const onMutation = vi.fn();
     await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
+      onMutation,
     });
 
     const plist = state.files.get(plistPath) ?? "";
     expect(plist).toContain("<key>StandardInPath</key>");
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(launchctlCommandNames()).toEqual(["print", "enable", "bootout", "enable", "bootstrap"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
+    expect(onMutation.mock.calls).toEqual([
+      [{ mode: "enable" }],
+      [{ mode: "bootout" }],
+      [{ mode: "enable" }],
+      [{ mode: "bootstrap" }],
+    ]);
+  });
+
+  it("audits reload bootout before a later bootstrap failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    state.bootstrapError = "Operation not permitted";
+    state.bootstrapCode = 5;
+    const onMutation = vi.fn();
+
+    await expect(
+      restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
+    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+
+    expect(onMutation.mock.calls).toEqual([
+      [{ mode: "enable" }],
+      [{ mode: "bootout" }],
+      [{ mode: "enable" }],
+    ]);
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("completes reload when the mutation observer fails after bootout", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    const onMutation = vi.fn(({ mode }: { mode: string }) => {
+      if (mode === "bootout") {
+        throw new Error("audit failed");
+      }
+    });
+
+    await expect(
+      restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
+    ).resolves.toEqual({ outcome: "completed" });
+
+    expect(launchctlCommandNames()).toEqual(["print", "enable", "bootout", "enable", "bootstrap"]);
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootout" });
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
   });
 
   it("treats a concurrent launchd bootstrap as success when the service is loaded", async () => {
@@ -2046,7 +2254,14 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap", "print"]);
+    expect(launchctlCommandNames()).toEqual([
+      "print",
+      "enable",
+      "bootout",
+      "enable",
+      "bootstrap",
+      "print",
+    ]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -2061,7 +2276,12 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19001);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      19001,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
   });
 
   it("ignores invalid configured gateway ports for stale cleanup", async () => {
@@ -2095,8 +2315,37 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      19007,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
     expect(inspectPortUsage).toHaveBeenCalledWith(19007);
+  });
+
+  it("uses the final repeated LaunchAgent port flag for restart stale cleanup", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: [...defaultProgramArguments, "--port", "18789", "--port=19008"],
+      environment: {},
+    });
+    state.launchctlCalls.length = 0;
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+      19008,
+      expect.objectContaining({
+        resolveProtectedPid: expect.any(Function),
+      }),
+    );
+    expect(inspectPortUsage).toHaveBeenCalledWith(19008);
   });
 
   it("ignores invalid stored LaunchAgent environment ports for stale cleanup", async () => {
@@ -2118,52 +2367,132 @@ describe("launchd install", () => {
     expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
-  it("fails restart before kickstart when the configured gateway port remains busy", async () => {
-    const env = {
-      ...createDefaultLaunchdEnv(),
-      OPENCLAW_GATEWAY_PORT: "19002",
-    };
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const originalPlist = [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      '<plist version="1.0">',
-      "  <dict>",
-      "    <key>Label</key>",
-      "    <string>ai.openclaw.gateway</string>",
-      "    <key>ProgramArguments</key>",
-      "    <array>",
-      "      <string>node</string>",
-      "      <string>gateway.js</string>",
-      "    </array>",
-      "    <key>StandardOutPath</key>",
-      "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
-      "  </dict>",
-      "</plist>",
-    ].join("\n");
-    state.files.set(plistPath, originalPlist);
-    inspectPortUsage.mockResolvedValue({
-      port: 19002,
-      status: "busy",
+  it.each([
+    {
+      name: "managed dual-stack ownership",
+      managedPidAfterCleanup: 4242,
+      listeners: [
+        { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
+        { pid: 4242, address: "TCP [::1]:19002 (LISTEN)" },
+      ],
+    },
+    {
+      name: "a changed launchd PID",
+      managedPidAfterCleanup: 4343,
+      listeners: [{ pid: 4343, address: "TCP 127.0.0.1:19002 (LISTEN)" }],
+    },
+  ] satisfies Array<{
+    name: string;
+    managedPidAfterCleanup: number;
+    listeners: PortListener[];
+  }>)(
+    "protects the current service and allows $name",
+    async ({ managedPidAfterCleanup, listeners }) => {
+      const env = {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_GATEWAY_PORT: "19002",
+      };
+      if (managedPidAfterCleanup !== 4242) {
+        state.printOutput = ["state = running", `pid = ${managedPidAfterCleanup}`].join("\n");
+      }
+      inspectPortUsage.mockResolvedValue({
+        port: 19002,
+        status: "busy",
+        listeners,
+        hints: [],
+      });
+
+      const result = await restartLaunchAgent({ env, stdout: new PassThrough() });
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const serviceId = `${domain}/ai.openclaw.gateway`;
+      expect(result).toEqual({ outcome: "completed" });
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+        19002,
+        expect.objectContaining({ resolveProtectedPid: expect.any(Function) }),
+      );
+      expect(state.cleanupProtectedPids).toEqual([managedPidAfterCleanup]);
+      expect(inspectPortUsage).toHaveBeenCalledWith(19002);
+      expect(state.launchctlCalls).toEqual([
+        ["print", serviceId],
+        ["print", serviceId],
+        ["enable", serviceId],
+        ["kickstart", "-k", serviceId],
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      name: "unrelated",
+      listeners: [{ pid: 5151, address: "TCP 127.0.0.1:19002 (LISTEN)" }],
+    },
+    {
+      name: "mixed",
+      listeners: [
+        { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
+        { pid: 5151, address: "TCP [::1]:19002 (LISTEN)" },
+      ],
+    },
+    {
+      name: "missing-PID",
+      listeners: [{ address: "TCP 127.0.0.1:19002 (LISTEN)" }],
+    },
+    {
+      name: "unattributed",
       listeners: [],
-      hints: [],
-    });
-    formatPortDiagnostics.mockReturnValue(["Port 19002 is held by pid 4242."]);
-
-    await expect(
-      restartLaunchAgent({
+    },
+  ] satisfies Array<{ name: string; listeners: PortListener[] }>)(
+    "rejects $name gateway port ownership before mutating launchd",
+    async ({ listeners }) => {
+      const env = {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_GATEWAY_PORT: "19002",
+      };
+      setLaunchAgentPlist({
         env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow(
-      "gateway port 19002 is still busy before LaunchAgent restart\nPort 19002 is held by pid 4242.",
-    );
+        label: "ai.openclaw.gateway",
+        programArguments: ["node", "gateway.js"],
+      });
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      const originalPlist = state.files.get(plistPath);
+      inspectPortUsage.mockResolvedValue({
+        port: 19002,
+        status: "busy",
+        listeners,
+        hints: ["Another process is listening on this port."],
+      });
+      formatPortDiagnostics.mockReturnValue(["Port 19002 is already in use."]);
 
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19002);
-    expect(state.files.get(plistPath)).toBe(originalPlist);
-    expect(state.fileWrites).toHaveLength(0);
-    expect(launchctlCommandNames()).not.toContain("kickstart");
-  });
+      await expect(
+        restartLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+        }),
+      ).rejects.toThrow(
+        "gateway port 19002 is busy but is not verifiably owned by LaunchAgent ai.openclaw.gateway",
+      );
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const serviceId = `${domain}/ai.openclaw.gateway`;
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
+        19002,
+        expect.objectContaining({ resolveProtectedPid: expect.any(Function) }),
+      );
+      expect(state.cleanupProtectedPids).toEqual([4242]);
+      expect(inspectPortUsage).toHaveBeenCalledWith(19002);
+      expect(state.launchctlCalls).toEqual([
+        ["print", serviceId],
+        ["print", serviceId],
+      ]);
+      expect(state.files.get(plistPath)).toBe(originalPlist);
+      expect(state.fileWrites).toHaveLength(0);
+      expect(launchctlCommandNames()).not.toContain("enable");
+      expect(launchctlCommandNames()).not.toContain("bootout");
+      expect(launchctlCommandNames()).not.toContain("bootstrap");
+      expect(launchctlCommandNames()).not.toContain("kickstart");
+    },
+  );
 
   it("skips stale cleanup when no explicit launch agent port can be resolved", async () => {
     const env = createDefaultLaunchdEnv();

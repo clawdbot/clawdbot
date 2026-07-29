@@ -13,7 +13,7 @@ import {
 const schtasksResponses = vi.hoisted(
   (): Array<{ code: number; stdout: string; stderr: string }> => [],
 );
-const resolveWindowsSystemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
+const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: async () => schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" },
@@ -25,14 +25,15 @@ vi.mock("../infra/windows-encoding.js", async () => {
   );
   return {
     ...actual,
-    resolveWindowsSystemEncoding: () => resolveWindowsSystemEncodingMock(),
+    resolveWindowsOemCodePage: () => 437,
+    resolveWindowsOemEncoding: () => resolveWindowsOemEncodingMock(),
   };
 });
 
 beforeEach(() => {
   schtasksResponses.length = 0;
-  resolveWindowsSystemEncodingMock.mockReset();
-  resolveWindowsSystemEncodingMock.mockReturnValue(null);
+  resolveWindowsOemEncodingMock.mockReset();
+  resolveWindowsOemEncodingMock.mockReturnValue(null);
 });
 
 describe("scheduled task runtime derivation", () => {
@@ -234,7 +235,7 @@ describe("readScheduledTaskCommand", () => {
         let scriptBytes: Buffer = Buffer.from(script, "utf8");
         if (options.scriptEncoding === "gbk") {
           // Production bytes for a code-page install: marker line + GBK body.
-          resolveWindowsSystemEncodingMock.mockReturnValueOnce("gbk");
+          resolveWindowsOemEncodingMock.mockReturnValueOnce("gbk");
           scriptBytes = encodeWindowsLauncherScript({ format: "cmd", content: script });
         }
         await fs.writeFile(scriptPath, scriptBytes);

@@ -35,6 +35,7 @@ import {
   resolveManagedPluginSourceRoots,
   resolveManagedGatewayEntrypoint,
   runBuiltGatewayCall,
+  runBuiltGatewayCli,
   verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
 import {
@@ -543,6 +544,32 @@ describe("openclaw live updater", () => {
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
     ]);
+  });
+
+  test("bounds built Gateway CLI probes and cleans their config overlay", () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const entrypoint = path.join(mirror, "dist/index.js");
+    writeFileSync(entrypoint, "setInterval(() => {}, 1_000);\n");
+
+    expect(() =>
+      runBuiltGatewayCli(
+        mirror,
+        ["gateway", "status"],
+        {
+          configPath: path.join(root, "openclaw.json"),
+          entrypoint,
+          executable: process.execPath,
+          invocationPrefix: [entrypoint],
+          port: 18789,
+          runtime: process.execPath,
+        },
+        { timeoutMs: 100 },
+      ),
+    ).toThrow();
+    expect(
+      readdirSync(root).filter((name) => name.startsWith(".openclaw-live-updater-config-")),
+    ).toEqual([]);
   });
 
   test("parses ready and busy atomic Gateway suspension responses", () => {
@@ -1921,6 +1948,34 @@ describe("openclaw live updater", () => {
     const { root, mirror } = makeFixture();
     const lockPath = path.join(root, "maintenance.lock");
     mkdirSync(lockPath);
+    const owner = { pid: process.pid, checkout: mirror, startedAt: "racing" };
+    const writer = spawn(
+      "sh",
+      ["-c", 'sleep 0.03; printf "%s\\n" "$OWNER_JSON" > "$LOCK_PATH/owner.json"'],
+      {
+        env: { ...process.env, LOCK_PATH: lockPath, OWNER_JSON: JSON.stringify(owner) },
+        stdio: "ignore",
+      },
+    );
+
+    try {
+      expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
+        acquired: false,
+        owner,
+      });
+    } finally {
+      writer.kill();
+    }
+  });
+
+  test("re-reads an empty owner file left by a racing writer's creation window", () => {
+    const { root, mirror } = makeFixture();
+    const lockPath = path.join(root, "maintenance.lock");
+    mkdirSync(lockPath);
+    // Freeze writeFileSync's open-truncate window (the #109140 flake class):
+    // owner.json exists but is still empty when the reader first sees it, and
+    // the racing writer publishes the owner content shortly after.
+    writeFileSync(path.join(lockPath, "owner.json"), "");
     const owner = { pid: process.pid, checkout: mirror, startedAt: "racing" };
     const writer = spawn(
       "sh",

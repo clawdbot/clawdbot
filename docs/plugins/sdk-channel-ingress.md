@@ -118,8 +118,10 @@ Most channels should leave activation after sender and command gates. Public
 chat surfaces that must quiet non-mentioned traffic before sender allowlist
 noise can opt into `activation.order: "before-sender"` when text-command
 bypass is disabled. Channels with implicit activation, such as replies in bot
-threads, can pass `activation.allowedImplicitMentionKinds`; the projected
-`activationAccess.shouldBypassMention` then reports when command or implicit
+threads, resolve `channels.defaults.implicitMentions` plus channel and account
+overrides with `resolveChannelImplicitMentions(...)`, then pass the result as
+`activation.implicitMentions`. The projected
+`activationAccess.shouldBypassMention` reports when command or implicit
 activation bypassed an explicit mention.
 
 ## Redaction

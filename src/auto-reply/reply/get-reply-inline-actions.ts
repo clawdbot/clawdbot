@@ -20,7 +20,13 @@ import {
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  ThinkingCatalogEntry,
+  VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   readAbortCutoffFromSessionEntry,
@@ -200,6 +206,7 @@ export async function handleInlineActions(params: {
   elevatedAllowed: boolean;
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: Parameters<typeof buildStatusReply>[0]["defaultGroupActivation"];
+  thinkingCatalog?: ThinkingCatalogEntry[];
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
@@ -244,6 +251,7 @@ export async function handleInlineActions(params: {
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
+    thinkingCatalog,
     resolvedThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
@@ -450,8 +458,10 @@ export async function handleInlineActions(params: {
           .filter((entry): entry is string => Boolean(entry))
           .join("\n\n");
     ctx.Body = rewrittenBody;
+    ctx.agentText = rewrittenBody;
     ctx.BodyForAgent = rewrittenBody;
     sessionCtx.Body = rewrittenBody;
+    sessionCtx.agentText = rewrittenBody;
     sessionCtx.BodyForAgent = rewrittenBody;
     sessionCtx.BodyStripped = rewrittenBody;
     cleanedBody = rewrittenBody;
@@ -474,6 +484,7 @@ export async function handleInlineActions(params: {
   if (inlineCommand) {
     cleanedBody = inlineCommand.cleaned;
     sessionCtx.Body = cleanedBody;
+    sessionCtx.agentText = cleanedBody;
     sessionCtx.BodyForAgent = cleanedBody;
     sessionCtx.BodyStripped = cleanedBody;
   }
@@ -502,6 +513,7 @@ export async function handleInlineActions(params: {
       model,
       contextTokens,
       workspaceDir,
+      thinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
@@ -544,6 +556,7 @@ export async function handleInlineActions(params: {
       workspaceDir,
       opts,
       defaultGroupActivation: defaultActivation,
+      thinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
@@ -616,7 +629,7 @@ export async function handleInlineActions(params: {
   }
 
   const commandBodyBeforeRun = command.commandBodyNormalized;
-  const bodyBeforeRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
+  const bodyBeforeRun = sessionCtx.agentText;
   const commandResult = await runCommands(command);
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
@@ -626,7 +639,7 @@ export async function handleInlineActions(params: {
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;
   } else {
-    const bodyAfterRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
+    const bodyAfterRun = sessionCtx.agentText;
     if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
       cleanedBody = bodyAfterRun;
     }

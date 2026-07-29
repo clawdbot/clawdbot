@@ -13,7 +13,10 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  UserTurnTranscriptRecorder,
+  UserTurnTranscriptTarget,
+} from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
@@ -21,6 +24,7 @@ type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (
     recorder?: UserTurnTranscriptRecorder,
   ) => Promise<"admitted" | "duplicate-source">;
+  beginBeforeAgentReply: () => Promise<boolean>;
   checkpointBeforeAgentReply: (params: {
     state: Exclude<RestartRecoveryBeforeAgentReplyState, "admitted" | "pending">;
     pendingFinalDelivery?: {
@@ -134,11 +138,17 @@ export function createReplyRestartRecoveryClaimController(params: {
   admissionRunId?: unknown;
   getEntry: () => SessionEntry | undefined;
   getSessionId: () => string;
-  beforeAgentReplyState?: "pending" | "continue";
+  beforeAgentReplyState?: "admitted" | "pending" | "continue";
   isRestartAbort: () => boolean;
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
   requesterAccountId?: unknown;
   requesterSenderId?: unknown;
+  resolveUserTurnTarget?: (params: {
+    entry: SessionEntry;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }) => UserTurnTranscriptTarget | undefined;
   sessionKey?: string;
   setEntry: (entry: SessionEntry) => void;
   sameChannelThreadRequired?: boolean;
@@ -161,6 +171,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     const expectedSessionState = buildExpectedSessionState(options.entry);
     if (options.recorder && !options.recorder.hasPersisted()) {
       const result = await options.recorder.persistApproved({
+        target: params.resolveUserTurnTarget?.({
+          entry: options.entry,
+          sessionId: options.sessionId,
+          sessionKey: options.sessionKey,
+          storePath: options.storePath,
+        }),
         expectedSessionId: options.sessionId,
         expectedSessionState,
         sessionLifecyclePatch: options.patch,
@@ -190,7 +206,17 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (!recorder || recorder.hasPersisted()) {
       return;
     }
-    const result = await recorder.persistApproved({ expectedSessionId: sessionId });
+    const entry = params.getEntry();
+    const target =
+      entry && params.sessionKey && params.storePath
+        ? params.resolveUserTurnTarget?.({
+            entry,
+            sessionId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          })
+        : undefined;
+    const result = await recorder.persistApproved({ target, expectedSessionId: sessionId });
     if (!result) {
       throw new Error("session changed before durable user-turn admission");
     }
@@ -246,11 +272,16 @@ export function createReplyRestartRecoveryClaimController(params: {
       if (entry.status !== "running" || entry.abortedLastRun === true) {
         throw new Error("restart recovery claim changed before agent adoption");
       }
+      const recoveredBeforeAgentReplyState =
+        activeClaimRunId === admissionRunId
+          ? entry.restartRecoveryBeforeAgentReplyState
+          : undefined;
       // Clear the retry verifier as the transcript-only claim crosses into execution.
       const adopted = await persistAdmissionPatch({
         entry,
         patch: {
-          restartRecoveryBeforeAgentReplyState: params.beforeAgentReplyState,
+          restartRecoveryBeforeAgentReplyState:
+            recoveredBeforeAgentReplyState ?? params.beforeAgentReplyState,
           restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryRequestFingerprint: undefined,
@@ -364,11 +395,18 @@ export function createReplyRestartRecoveryClaimController(params: {
                 restartRecoveryBeforeAgentReplyState: state,
                 ...(pendingFinalDelivery
                   ? {
-                      pendingFinalDelivery: true,
-                      pendingFinalDeliveryText: pendingFinalDelivery.text,
-                      pendingFinalDeliveryIntentId: pendingFinalDelivery.intentId,
-                      pendingFinalDeliveryContext: pendingFinalDelivery.context,
-                      pendingFinalDeliveryCreatedAt: updatedAt,
+                      pendingFinalDelivery: {
+                        ...(pendingFinalDelivery.text
+                          ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
+                          : { kind: "transport-only" as const }),
+                        createdAt: updatedAt,
+                        ...(pendingFinalDelivery.intentId
+                          ? { intentId: pendingFinalDelivery.intentId }
+                          : {}),
+                        ...(pendingFinalDelivery.context
+                          ? { context: pendingFinalDelivery.context }
+                          : {}),
+                      },
                       // Hook-owned replies are already terminal. A restart may only deliver this
                       // checkpoint; it must never resume the model or broader tool surface.
                       restartRecoveryForceSafeTools: true,
@@ -383,6 +421,46 @@ export function createReplyRestartRecoveryClaimController(params: {
         throw new Error("before_agent_reply checkpoint lost restart recovery ownership");
       }
       params.setEntry(persisted);
+    };
+
+  const beginBeforeAgentReply: ReplyRestartRecoveryClaimController["beginBeforeAgentReply"] =
+    async () => {
+      if (!tracked || !params.sessionKey || !params.storePath) {
+        return true;
+      }
+      const current = loadSessionEntry({
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        clone: false,
+        hydrateSkillPromptRefs: false,
+      });
+      if (
+        current?.sessionId === params.getSessionId() &&
+        current.restartRecoveryDeliveryRunId === recoveryRunId &&
+        current.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
+        current.restartRecoveryBeforeAgentReplyState === "continue"
+      ) {
+        return false;
+      }
+      // `pending` is an unknown plugin side-effect window, not a retry state.
+      // Its CAS fails closed; startup recovery rejects it before runner dispatch.
+      const updatedAt = Date.now();
+      const persisted = await updateSessionEntry(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        (persistedCurrent) =>
+          persistedCurrent.sessionId === params.getSessionId() &&
+          persistedCurrent.restartRecoveryDeliveryRunId === recoveryRunId &&
+          persistedCurrent.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
+          persistedCurrent.restartRecoveryBeforeAgentReplyState === "admitted"
+            ? { restartRecoveryBeforeAgentReplyState: "pending", updatedAt }
+            : null,
+        { skipMaintenance: true, takeCacheOwnership: true },
+      );
+      if (!persisted) {
+        throw new Error("before_agent_reply start lost restart recovery ownership");
+      }
+      params.setEntry(persisted);
+      return true;
     };
 
   const clear = async (): Promise<void> => {
@@ -412,13 +490,6 @@ export function createReplyRestartRecoveryClaimController(params: {
             abortedLastRun: true,
             endedAt,
             pendingFinalDelivery: undefined,
-            pendingFinalDeliveryText: undefined,
-            pendingFinalDeliveryCreatedAt: undefined,
-            pendingFinalDeliveryLastAttemptAt: undefined,
-            pendingFinalDeliveryAttemptCount: undefined,
-            pendingFinalDeliveryLastError: undefined,
-            pendingFinalDeliveryContext: undefined,
-            pendingFinalDeliveryIntentId: undefined,
             runtimeMs:
               typeof current.startedAt === "number"
                 ? Math.max(0, endedAt - current.startedAt)
@@ -427,9 +498,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             updatedAt: endedAt,
           };
         }
-        const preservesPendingFinal =
-          current.pendingFinalDelivery === true ||
-          normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined;
+        const preservesPendingFinal = current.pendingFinalDelivery !== undefined;
         const completesHandledSilent =
           current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
           !preservesPendingFinal;
@@ -482,5 +551,5 @@ export function createReplyRestartRecoveryClaimController(params: {
     return persisted?.abortedLastRun === true || params.getEntry()?.abortedLastRun === true;
   };
 
-  return { admitUserTurn, checkpointBeforeAgentReply, clear, isArmed };
+  return { admitUserTurn, beginBeforeAgentReply, checkpointBeforeAgentReply, clear, isArmed };
 }

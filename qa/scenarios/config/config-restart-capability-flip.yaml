@@ -3,11 +3,12 @@ title: "Config restart capability flip"
 scenario:
   id: config-restart-capability-flip
   surface: config
+  runtimePairLane: core
   coverage:
     primary:
-      - config.restart-apply
+      - gateway.restart-and-stop-restart-apply
     secondary:
-      - plugins.capabilities
+      - plugins.mixed-plugin-capabilities
   objective: Verify a restart-triggering config change flips capability inventory and the same session successfully uses the newly restored tool after wake-up.
   successCriteria:
     - Capability is absent before the restart-triggering patch.
@@ -51,7 +52,7 @@ flow:
             expr: "originalTools ? (Object.prototype.hasOwnProperty.call(originalTools, 'deny') ? structuredClone(originalTools.deny) : undefined) : undefined"
         - set: originalImageGenerationModelPrimary
           value:
-            expr: "original.config.agents?.defaults?.imageGenerationModel?.primary ?? null"
+            expr: "original.config.agents?.defaults?.mediaModels?.image?.primary ?? null"
         - set: denied
           value:
             expr: "Array.isArray(originalToolsDeny) ? originalToolsDeny.map((entry) => String(entry)) : []"
@@ -104,9 +105,10 @@ flow:
                           expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
                       agents:
                         defaults:
-                          imageGenerationModel:
-                            primary:
-                              ref: originalImageGenerationModelPrimary
+                          mediaModels:
+                            image:
+                              primary:
+                                ref: originalImageGenerationModelPrimary
                     sessionKey:
                       ref: sessionKey
                     note:

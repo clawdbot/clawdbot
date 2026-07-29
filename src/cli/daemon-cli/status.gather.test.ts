@@ -382,6 +382,26 @@ describe("gatherDaemonStatus", () => {
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
   });
 
+  it("reports the heap limit from the installed Gateway service", async () => {
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+        NODE_OPTIONS: "--max-old-space-size=6144",
+      },
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.service.gatewayHeap).toMatchObject({ appliedMiB: 6144 });
+    expect(status.service.gatewayHeap?.memorySource).toMatch(/^(constrained|physical)$/u);
+  });
+
   it("includes Windows firewall diagnostics during deep LAN gateway status", async () => {
     inspectWindowsGatewayFirewall.mockResolvedValueOnce({
       applies: true,
@@ -439,32 +459,6 @@ describe("gatherDaemonStatus", () => {
     };
     expect(probeInput.requireRpc).toBe(true);
     expect(probeInput.configPath).toBe("/tmp/openclaw-daemon/openclaw.json");
-  });
-
-  it("uses configured handshake timeout as the default daemon probe budget", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        handshakeTimeoutMs: 30_000,
-        auth: { token: "daemon-token" },
-      },
-    };
-
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
-
-    const probeInput = callArg(callGatewayStatusProbe) as {
-      config?: unknown;
-      preauthHandshakeTimeoutMs?: number;
-      timeoutMs?: number;
-    };
-    expect(probeInput.config).toBe(daemonLoadedConfig);
-    expect(probeInput.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(probeInput.timeoutMs).toBe(30_000);
   });
 
   it("reuses the shared CLI config snapshot when the daemon uses the same config path", async () => {

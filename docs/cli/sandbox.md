@@ -7,6 +7,8 @@ status: active
 
 Manage sandbox runtimes for isolated agent execution: Docker containers, SSH targets, or OpenShell backends.
 
+[`openclaw agent exec`](/cli/agent#agent-exec) does not use these configured runtimes. Its isolated implicit policy config turns the agent sandbox off, allows full Gateway-host execution, and restricts filesystem tools to `--cwd`.
+
 ## Commands
 
 ### `openclaw sandbox list`
@@ -92,7 +94,7 @@ Run `openclaw doctor --fix` to migrate valid legacy entries into SQLite. Invalid
 
 ## Configuration
 
-Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
+Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.entries.*.sandbox`):
 
 ```jsonc
 {

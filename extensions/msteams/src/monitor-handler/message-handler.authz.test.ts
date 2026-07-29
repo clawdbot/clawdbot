@@ -1,5 +1,4 @@
 // Msteams tests cover message handler.authz plugin behavior.
-import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
@@ -127,7 +126,7 @@ describe("msteams monitor handler authz", () => {
 
   function resetThreadMocks() {
     currentParentMessageId = `parent-msg-${++parentMessageSequence}`;
-    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
     graphThreadMockState.resolveTeamGroupId.mockClear();
     graphThreadMockState.fetchChannelMessage.mockReset();
     graphThreadMockState.fetchThreadReplies.mockReset();
@@ -310,11 +309,11 @@ describe("msteams monitor handler authz", () => {
 
   function firstSettledDispatch(): { ctxPayload?: unknown } {
     const dispatched = mockCallArg(
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher,
       0,
       0,
     );
-    return recordFromMockCall(dispatched) as { ctxPayload?: unknown };
+    return { ctxPayload: recordFromMockCall(dispatched).ctx };
   }
 
   function logMeta(logFn: unknown, message: string): Record<string, unknown> {
@@ -452,7 +451,7 @@ describe("msteams monitor handler authz", () => {
       timezone: "America/New_York",
     });
     expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   // Regression coverage for #58774: proactive sends fail with HTTP 403 when
@@ -662,7 +661,7 @@ describe("msteams monitor handler authz", () => {
 
     expect(hasControlCommand).toHaveBeenCalledWith("/config set foo bar", deps.cfg);
     expect(conversationStore.upsert).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
@@ -689,54 +688,11 @@ describe("msteams monitor handler authz", () => {
     await handler(createAttackerGroupActivity({ text: "hello /status" }));
 
     expect(isControlCommandMessage).toHaveBeenCalledWith("hello /status", deps.cfg);
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
-      1,
-    );
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
     expect(ctxPayload.BodyForAgent).toBe("hello /status");
     expect(ctxPayload.CommandAuthorized).toBe(false);
-  });
-
-  it("flushes pending group text before authorizing a bare abort without a mention", async () => {
-    resetThreadMocks();
-    const isBareAbort = vi.fn((text?: string) =>
-      ["abort", "stop"].includes(text?.trim().toLowerCase() ?? ""),
-    );
-    const { deps } = createDeps(
-      {
-        commands: { useAccessGroups: false },
-        messages: { inbound: { debounceMs: 60_000 } },
-        channels: {
-          msteams: {
-            groupPolicy: "open",
-            requireMention: true,
-          },
-        },
-      } as OpenClawConfig,
-      {
-        hasControlCommand: vi.fn(() => false),
-        isControlCommandMessage: isBareAbort,
-        shouldComputeCommandAuthorized: isBareAbort,
-        shouldHandleTextCommands: vi.fn(() => true),
-        createInboundDebouncer,
-        resolveInboundDebounceMs: vi.fn(() => 60_000),
-      },
-    );
-
-    const handler = createMSTeamsMessageHandler(deps);
-    await handler(createAttackerGroupActivity({ text: "pending text" }));
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
-
-    await handler(createAttackerGroupActivity({ text: "abort" }));
-
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
-      1,
-    );
-    const dispatched = firstSettledDispatch();
-    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
-    expect(ctxPayload.BodyForAgent).toBe("abort");
-    expect(ctxPayload.CommandAuthorized).toBe(true);
   });
 
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
@@ -771,7 +727,7 @@ describe("msteams monitor handler authz", () => {
       }),
     );
 
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
       ([text]) => text === "Teams message in channel from Member",
     );
@@ -811,10 +767,13 @@ describe("msteams monitor handler authz", () => {
           team: { id: "team123", name: "Team 123" },
           channel: { name: "General" },
         },
+        extraActivity: {
+          entities: [{ type: "clientInfo", timezone: "America/New_York" }],
+        },
       }),
     );
 
-    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
       ([text]) => text === "Teams message in channel from Member",
     );
@@ -824,6 +783,13 @@ describe("msteams monitor handler authz", () => {
     expect(systemEventCall[0]).not.toContain("please check the build");
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("please check the build");
+    const dispatchParams = recordFromMockCall(
+      mockCallArg(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher, 0, 0),
+    );
+    expect(dispatchParams.cfg).not.toBe(deps.cfg);
+    expect(recordFromMockCall(dispatchParams.cfg).agents).toEqual({
+      defaults: { userTimezone: "America/New_York" },
+    });
   });
 
   it("extracts message text from a mixed-case HTML attachment type", async () => {
@@ -976,12 +942,8 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.SupplementalContext).toMatchObject({
-      quote: {
-        body: "Quoted body",
-        sender: "Alice",
-      },
-    });
+    expect(ctx.ReplyToBody).toBe("Quoted body");
+    expect(ctx.ReplyToSender).toBe("Alice");
   });
 
   it("drops quote context when attachment metadata disagrees with a blocked parent sender", async () => {
@@ -994,7 +956,8 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.SupplementalContext).toEqual({});
+    expect(ctx.ReplyToBody).toBeUndefined();
+    expect(ctx.ReplyToSender).toBeUndefined();
     expect(ctx.BodyForAgent).toBe("Current message");
   });
 
@@ -1027,7 +990,7 @@ describe("msteams monitor handler authz", () => {
     // group chat: the fetched body would bypass the supplemental-quote visibility
     // allowlist. Only 1:1 DMs may fetch full text.
     const ctx = recordFromMockCall(firstSettledDispatch().ctxPayload);
-    expect(ctx.SupplementalContext).toMatchObject({ quote: { body: "secret snippet…" } });
+    expect(ctx.ReplyToBody).toBe("secret snippet…");
     expect(graphThreadMockState.fetchChatMessageText).not.toHaveBeenCalled();
   });
 
@@ -1067,10 +1030,9 @@ describe("msteams monitor handler authz", () => {
         timeoutMs: 10_000,
       }),
     );
-    expect(recordFromMockCall(firstSettledDispatch().ctxPayload).SupplementalContext).toMatchObject(
-      {
-        quote: { id: "message-1", body: "complete quoted message", sender: "Bot" },
-      },
-    );
+    const ctx = recordFromMockCall(firstSettledDispatch().ctxPayload);
+    expect(ctx.ReplyToId).toBe("message-1");
+    expect(ctx.ReplyToBody).toBe("complete quoted message");
+    expect(ctx.ReplyToSender).toBe("Bot");
   });
 });

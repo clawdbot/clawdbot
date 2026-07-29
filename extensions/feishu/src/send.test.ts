@@ -731,8 +731,7 @@ describe("getMessageFeishu", () => {
     expect(mockLogVerbose).toHaveBeenCalledWith(
       expect.stringContaining("feishu message content parse failed for text message"),
     );
-    // Ensure raw content is NOT logged (security: prevent message content leaks)
-    expect(mockLogVerbose).not.toHaveBeenCalledWith(expect.stringContaining("{bad json}"));
+    expect(mockLogVerbose.mock.calls.flat().map(String).join("\n")).not.toContain("{bad json}");
     expect(result).toMatchObject({
       messageId: "om_bad_json",
       contentType: "text",
@@ -740,7 +739,6 @@ describe("getMessageFeishu", () => {
     });
   });
 });
-
 
 describe("editMessageFeishu", () => {
   beforeEach(() => {

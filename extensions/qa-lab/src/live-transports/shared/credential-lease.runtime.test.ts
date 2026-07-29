@@ -563,6 +563,48 @@ describe("credential lease runtime", () => {
     expect(sleeps[1]).toBeGreaterThan(sleeps[0] ?? 0);
   });
 
+  it("retries transient convex acquire transport failures", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(
+        new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "ok",
+          credentialId: "cred-after-timeout",
+          leaseToken: "test",
+          payload: { groupId: "-100789", driverToken: "test", sutToken: "test" },
+        }),
+      );
+    const sleeps: number[] = [];
+    let nowMs = 0;
+
+    const lease = await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "test",
+        OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "90000",
+      },
+      fetchImpl,
+      randomImpl: () => 0,
+      timeImpl: () => nowMs,
+      sleepImpl: async (ms) => {
+        sleeps.push(ms);
+        nowMs += ms;
+      },
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    expect(lease.credentialId).toBe("cred-after-timeout");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleeps).toHaveLength(1);
+  });
+
   it("rejects non-https convex site URLs unless local insecure opt-in is enabled", async () => {
     await expect(
       acquireQaCredentialLease({
@@ -724,6 +766,55 @@ describe("credential lease runtime", () => {
     await vi.advanceTimersByTimeAsync(55);
     expect(heartbeat.getFailure()).toBeInstanceOf(Error);
     expect(() => heartbeat.throwIfFailed()).toThrow("heartbeat-down");
+    await heartbeat.stop();
+  });
+
+  it("retries transient heartbeat transport failures", async () => {
+    vi.useFakeTimers();
+    const heartbeatRequest = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
+      )
+      .mockResolvedValueOnce(undefined);
+    const heartbeat = startQaCredentialLeaseHeartbeat(
+      {
+        source: "convex",
+        kind: "telegram",
+        heartbeatIntervalMs: 50,
+        heartbeat: heartbeatRequest,
+      },
+      { intervalMs: 50, retryDelaysMs: [10] },
+    );
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(heartbeatRequest).toHaveBeenCalledTimes(1);
+    expect(heartbeat.getFailure()).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(heartbeatRequest).toHaveBeenCalledTimes(2);
+    expect(heartbeat.getFailure()).toBeNull();
+    await heartbeat.stop();
+  });
+
+  it("fails closed after transient heartbeat retries are exhausted", async () => {
+    vi.useFakeTimers();
+    const heartbeatRequest = vi.fn(async () => {
+      throw new Error("fetch failed | ETIMEDOUT");
+    });
+    const heartbeat = startQaCredentialLeaseHeartbeat(
+      {
+        source: "convex",
+        kind: "telegram",
+        heartbeatIntervalMs: 50,
+        heartbeat: heartbeatRequest,
+      },
+      { intervalMs: 50, retryDelaysMs: [10, 20] },
+    );
+
+    await vi.advanceTimersByTimeAsync(80);
+    expect(heartbeatRequest).toHaveBeenCalledTimes(3);
+    expect(() => heartbeat.throwIfFailed()).toThrow("ETIMEDOUT");
     await heartbeat.stop();
   });
 });

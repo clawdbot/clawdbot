@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   createChangedNodeTestShards,
   hasBuildArtifactAffectingChange,
+  hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mjs";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
@@ -80,6 +81,37 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
   });
 
+  it("classifies prompt-snapshot impact by surface and generator import graph", () => {
+    // Inside the generator's import graph -> regenerated output can change.
+    expect(hasPromptSnapshotAffectingChange(["src/auto-reply/reply/prompt-prelude.ts"])).toBe(true);
+    // The codex extension loads through a dynamic bundled-plugin module id the
+    // graph walk cannot see; it stays on the always-run surface.
+    expect(hasPromptSnapshotAffectingChange(["extensions/codex/src/index.ts"])).toBe(true);
+    expect(
+      hasPromptSnapshotAffectingChange([
+        "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/README.md",
+      ]),
+    ).toBe(true);
+    expect(hasPromptSnapshotAffectingChange(["scripts/generate-prompt-snapshots.ts"])).toBe(true);
+    // Workspace packages feed the generator through package-specifier imports
+    // the relative graph walk cannot see.
+    expect(hasPromptSnapshotAffectingChange(["packages/llm-core/src/index.ts"])).toBe(true);
+    // The gate's own orchestration must not be able to skip the gated lane.
+    expect(hasPromptSnapshotAffectingChange([".github/workflows/ci.yml"])).toBe(true);
+    expect(hasPromptSnapshotAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(
+      true,
+    );
+    // Outside the surface and the generator graph -> the lane may skip.
+    expect(hasPromptSnapshotAffectingChange(["ui/src/app.ts"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["docs/index.md"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["test/scripts/ci-node-test-plan.test.ts"])).toBe(
+      false,
+    );
+    // Deleted source files cannot be graphed; fail safe to running the check.
+    expect(hasPromptSnapshotAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
+  });
+
   it("fails safe to the full plan for broad changes", () => {
     expect(createChangedNodeTestShards(["package.json"])).toBeNull();
   });
@@ -128,7 +160,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("fails safe when public SDK changes affect extension imports", () => {
-    expect(createChangedNodeTestShards(["src/plugin-sdk/index.ts"])).toBeNull();
+    expect(createChangedNodeTestShards(["src/plugin-sdk/core.ts"])).toBeNull();
   });
 
   it("fails safe when a core change reaches package consumers through the public SDK", () => {
@@ -195,5 +227,22 @@ describe("CI changed Node test plan", () => {
     expect(targetShards.every((shard) => (shard.targets?.length ?? 0) <= 12)).toBe(true);
     const targets = targetShards.flatMap((shard) => shard.targets ?? []);
     expect(new Set(targets).size).toBe(targets.length);
+  });
+
+  it("serializes changed-test chunks that contain Memory Core integration tests", () => {
+    const shards = createChangedNodeTestShards([
+      "extensions/memory-core/src/memory/mmr.ts",
+      "extensions/memory-core/src/memory/mmr.test.ts",
+    ]);
+    expect(shards).not.toBeNull();
+    const targetShards = shards?.filter((shard) => shard.targets) ?? [];
+    expect(targetShards.length).toBeGreaterThan(0);
+    expect(
+      targetShards
+        .filter((shard) =>
+          shard.targets?.some((target) => target.startsWith("extensions/memory-core/")),
+        )
+        .every((shard) => shard.planConcurrency === 1),
+    ).toBe(true);
   });
 });

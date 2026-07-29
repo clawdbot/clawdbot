@@ -1,6 +1,4 @@
 // Covers heartbeat tool-response handling and visible reply policy.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
@@ -17,11 +15,23 @@ import {
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  deleteCronJobScratch,
+  readCronJobScratchState,
+  readHeartbeatMonitorScratch,
+} from "../cron/scratch-store.js";
+import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
+import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
 import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
   seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -226,6 +236,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         storePath: string;
         cfg: OpenClawConfig;
       }) => Promise<void>;
+      tasks?: Parameters<typeof runHeartbeatOnce>[0]["tasks"];
     } = {},
   ) {
     return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
@@ -248,6 +259,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
       await runHeartbeatOnce({
         cfg,
+        tasks: params.tasks,
         deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
 
@@ -281,6 +293,118 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("commits a scratch replacement without exposing it as reply channel data", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const jobId = await seedHeartbeatScratchForTest({ content: "old scratch" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const reply = createHeartbeatToolResponsePayload({
+        outcome: "progress",
+        notify: false,
+        summary: "Updated monitor context.",
+        scratch: "new private scratch",
+      });
+      expect(JSON.stringify(reply)).not.toContain("new private scratch");
+      replySpy.mockResolvedValue(reply);
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        source: "manual",
+        deps: createDeps({ sendTelegram: vi.fn(), getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId).scratch?.content).toBe(
+        "new private scratch",
+      );
+    });
+  });
+
+  it("does not recreate scratch when its monitor is deleted while the heartbeat runs", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const cronStorePath = resolveCronJobsStorePath();
+      const monitor = readHeartbeatMonitorScratch(cronStorePath, "main");
+      expect(monitor).toBeDefined();
+      if (!monitor) {
+        throw new Error("Expected seeded heartbeat monitor");
+      }
+      deleteCronJobScratch(cronStorePath, monitor.jobId);
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockImplementation(async () => {
+        await saveCronJobsStore(cronStorePath, { version: 1, jobs: [] });
+        return createHeartbeatToolResponsePayload({
+          outcome: "progress",
+          notify: false,
+          summary: "Updated monitor context.",
+          scratch: "late scratch write",
+        });
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        source: "manual",
+        deps: createDeps({ sendTelegram: vi.fn(), getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(readCronJobScratchState(cronStorePath, monitor.jobId)).toEqual({
+        currentRevision: 0,
+      });
+    });
+  });
+
+  it("persists a meaningful quiet outcome for the base session", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+      const cfg = createConfig({ tmpDir, storePath });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "progress",
+          notify: false,
+          summary: "Deployment completed; smoke test pending.",
+          nextCheck: "next scheduled heartbeat",
+        }),
+      );
+
+      await runHeartbeatOnce({
+        cfg,
+        source: "manual",
+        reason: "operator check",
+        deps: createDeps({ sendTelegram: vi.fn(), getReplyFromConfig: replySpy }),
+      });
+
+      expect(
+        claimHeartbeatOutcomeForRun({
+          agentId: "main",
+          sessionKey,
+          storePath,
+          runId: "user-run",
+        }),
+      ).toMatchObject({
+        outcome: "progress",
+        summary: "Deployment completed; smoke test pending.",
+        wakeSource: "manual",
+        wakeReason: "operator check",
+      });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+    });
   });
 
   it("delivers notificationText when notify=true", async () => {
@@ -366,17 +490,8 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
-  it("delivers a terminal tool warning without recording successful heartbeat bookkeeping", async () => {
+  it("delivers a terminal tool warning without recording successful delivery bookkeeping", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      await fs.writeFile(
-        path.join(tmpDir, "HEARTBEAT.md"),
-        `tasks:
-  - name: check-delivery
-    interval: 1m
-    prompt: Check delivery
-`,
-        "utf-8",
-      );
       const cfg = createConfig({ tmpDir, storePath });
       const sessionKey = await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
@@ -401,13 +516,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
       const sessionStore = readSessionStoreForTest<{
-        heartbeatTaskState?: Record<string, number>;
         lastHeartbeatText?: string;
       }>(storePath);
 
       expect(result).toEqual({ status: "failed", reason: "agent-tool-failure" });
       expectTelegramSend(sendTelegram, { text: warning, cfg });
-      expect(sessionStore[sessionKey]?.heartbeatTaskState).toBeUndefined();
       expect(sessionStore[sessionKey]?.lastHeartbeatText).toBeUndefined();
       expect(getLastHeartbeatEvent()).toMatchObject({
         status: "failed",
@@ -432,9 +545,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         await patchSessionEntry(
           { storePath, sessionKey },
           () => ({
-            pendingFinalDelivery: true,
-            pendingFinalDeliveryText: pendingText,
-            pendingFinalDeliveryCreatedAt: Date.now(),
+            pendingFinalDelivery: {
+              kind: "replayable",
+              text: pendingText,
+              createdAt: Date.now(),
+            },
           }),
           { preserveActivity: true },
         );
@@ -453,13 +568,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
 
       const sessionStore = readSessionStoreForTest<{
-        pendingFinalDelivery?: boolean;
-        pendingFinalDeliveryText?: string;
+        pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
       }>(storePath);
       expectTelegramSend(sendTelegram, { text: warning, cfg });
       expect(sessionStore[sessionKey]).toMatchObject({
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: pendingText,
+        pendingFinalDelivery: expect.objectContaining({
+          kind: "replayable",
+          text: pendingText,
+        }),
       });
     });
   });
@@ -477,9 +593,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         await patchSessionEntry(
           { storePath, sessionKey },
           () => ({
-            pendingFinalDelivery: true,
-            pendingFinalDeliveryText: warning,
-            pendingFinalDeliveryCreatedAt: Date.now(),
+            pendingFinalDelivery: {
+              kind: "replayable",
+              text: warning,
+              createdAt: Date.now(),
+            },
           }),
           { preserveActivity: true },
         );
@@ -498,12 +616,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
 
       const sessionStore = readSessionStoreForTest<{
-        pendingFinalDelivery?: boolean;
-        pendingFinalDeliveryText?: string;
+        pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
       }>(storePath);
       expectTelegramSend(sendTelegram, { text: warning, cfg });
       expect(sessionStore[sessionKey]?.pendingFinalDelivery).toBeUndefined();
-      expect(sessionStore[sessionKey]?.pendingFinalDeliveryText).toBeUndefined();
     });
   });
 
@@ -565,25 +681,31 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
-  it.each(["", "\n", "\r\n"])(
-    "converts trailing notify=false fallback text into silent Telegram delivery with suffix %j",
-    async (suffix) => {
-      const { result, sendTelegram, cfg } = await runPlainFallbackReply(
-        `No interruption needed.\n\nnotify=false${suffix}`,
-      );
+  it("converts trailing notify=false fallback text into silent Telegram delivery", async () => {
+    const { result, sendTelegram, cfg } = await runPlainFallbackReply(
+      "No interruption needed.\n\nnotify=false",
+    );
 
-      expect(result.status).toBe("ran");
-      expectTelegramSend(sendTelegram, {
-        text: "No interruption needed.",
-        cfg,
-        silent: true,
-      });
-      expect(getLastHeartbeatEvent()).toMatchObject({
-        status: "sent",
-        preview: "No interruption needed.",
-        channel: "telegram",
-        silent: true,
-      });
+    expect(result.status).toBe("ran");
+    expectTelegramSend(sendTelegram, {
+      text: "No interruption needed.",
+      cfg,
+      silent: true,
+    });
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      status: "sent",
+      preview: "No interruption needed.",
+      channel: "telegram",
+      silent: true,
+    });
+  });
+
+  it.each(["\n", "\r\n"])(
+    "strips trailing notify=false with suffix %j without rerunning a heartbeat",
+    (suffix) => {
+      expect(
+        stripTrailingHeartbeatNotifyFalse(`No interruption needed.\n\nnotify=false${suffix}`),
+      ).toEqual({ text: "No interruption needed.", silent: true });
     },
   );
 
@@ -613,6 +735,93 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
+  it.each([
+    {
+      name: "global message-tool reply policy",
+      visibleReplies: "message_tool" as const,
+      target: "telegram" as const,
+      chatType: "direct" as const,
+    },
+    {
+      name: "group-specific message-tool reply policy",
+      groupVisibleReplies: "message_tool" as const,
+      target: "last" as const,
+      chatType: "group" as const,
+    },
+  ])("keeps a heartbeat's unmarked final private under $name", async (policy) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, ...policy });
+      await seedMainSessionStore(storePath, cfg, {
+        chatType: policy.chatType,
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue({
+        text: "Private heartbeat reasoning with HEARTBEAT_OK inside the sentence.",
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "ok-token",
+        channel: "telegram",
+        silent: true,
+      });
+    });
+  });
+
+  it("keeps marked operator notices visible in message-tool heartbeat mode", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const notice = "The configured model backend needs operator attention.";
+      replySpy.mockResolvedValue(markReplyPayloadForSourceSuppressionDelivery({ text: notice }));
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, { text: notice, cfg });
+    });
+  });
+
+  it("keeps ordinary heartbeat finals visible under automatic reply policy", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "automatic" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const text = "The heartbeat found a deployment requiring your attention.";
+      replySpy.mockResolvedValue({ text });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, { text, cfg });
+    });
+  });
+
   it("uses the heartbeat response tool prompt in message-tool mode", async () => {
     const result = await runPromptScenario({
       config: { visibleReplies: "message_tool" },
@@ -636,55 +845,20 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expectHeartbeatToolPrompt(result);
   });
 
-  it.each([
-    {
-      name: "uses the isolated Codex runtime instead of the base OpenClaw runtime",
+  it("uses the isolated Codex runtime instead of the base OpenClaw runtime", async () => {
+    // One direction proves prompt recalculation after isolation. Reciprocal
+    // runtime precedence is covered directly by thinking-runtime.test.ts.
+    const result = await runPromptScenario({
       config: { isolatedSession: true },
       session: {
         modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
         agentRuntimeOverride: "openclaw",
       },
-      expectedToolPrompt: true,
-    },
-    {
-      name: "uses the isolated OpenClaw runtime instead of the base Codex runtime",
-      config: {
-        isolatedSession: true,
-        model: "anthropic/claude-sonnet-4-6",
-      },
-      session: {
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        agentRuntimeOverride: "codex",
-      },
-      expectedToolPrompt: false,
-    },
-  ])("$name", async ({ config, session, expectedToolPrompt }) => {
-    const result = await runPromptScenario({ config, session });
-
-    expect(result.calledCtx.SessionKey).toMatch(/:heartbeat$/);
-    if (expectedToolPrompt) {
-      expectHeartbeatToolPrompt(result);
-      return;
-    }
-    expect(result.calledCtx.Body).toContain("HEARTBEAT_OK");
-    expect(result.calledCtx.Body).not.toContain("heartbeat_respond");
-    expect(result.calledOpts.sourceReplyDeliveryMode).toBeUndefined();
-  });
-
-  it.each([
-    ["observational harness id", { agentHarnessId: "codex" }],
-    ["provider-incompatible override", { agentRuntimeOverride: "codex" }],
-  ])("does not let a %s select the next heartbeat runtime", async (_label, session) => {
-    const result = await runPromptScenario({
-      config: { model: "anthropic/claude-sonnet-4-6" },
-      session,
     });
 
-    expect(result.calledCtx.Body).toContain("HEARTBEAT_OK");
-    expect(result.calledCtx.Body).not.toContain("heartbeat_respond");
-    expect(result.calledOpts.sourceReplyDeliveryMode).toBeUndefined();
+    expect(result.calledCtx.SessionKey).toMatch(/:heartbeat$/);
+    expectHeartbeatToolPrompt(result);
   });
 
   it("delivers Codex runtime failure notices during Codex heartbeat message-tool mode", async () => {
@@ -834,17 +1008,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("uses the heartbeat response tool prompt for due heartbeat tasks", async () => {
     const result = await runPromptScenario({
       config: { visibleReplies: "message_tool" },
-      beforeSeed: async ({ tmpDir }) => {
-        await fs.writeFile(
-          path.join(tmpDir, "HEARTBEAT.md"),
-          `tasks:
-  - name: status
-    interval: 1m
-    prompt: Check deployment status
-`,
-          "utf-8",
-        );
-      },
+      tasks: [{ jobId: "job-status", name: "status", prompt: "Check deployment status" }],
     });
 
     expectHeartbeatToolPrompt(result, [

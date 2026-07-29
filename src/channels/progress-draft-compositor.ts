@@ -34,6 +34,88 @@ export const PROGRESS_STATUS_PREAMBLE_FRESH_MS = 20_000;
 // commentary updates. It owns draft lifecycle state before the final reply wins.
 type ChannelProgressDraftMode = StreamingMode;
 export type ChannelProgressDraftCompositorLine = string | ChannelProgressDraftLine;
+export type ChannelProgressDraftCompositorSnapshot = Readonly<{
+  lines: readonly ChannelProgressDraftCompositorLine[];
+  statusHeadline?: string;
+  plan?: readonly AgentPlanStep[];
+  planExplanation?: string;
+}>;
+
+/** Tracks per-turn activity for compact progress receipts. */
+export function createChannelProgressReceiptTracker(params?: { now?: () => number }) {
+  const now = params?.now ?? Date.now;
+  let startedAt = now();
+  let reasoningSteps = 0;
+  let toolCalls = 0;
+  let commentaryNotes = 0;
+  let reasoningOpen = false;
+  const seenCommentaryIds = new Set<string>();
+  let lastCommentaryText = "";
+
+  const closeReasoning = () => {
+    if (!reasoningOpen) {
+      return;
+    }
+    reasoningOpen = false;
+    reasoningSteps += 1;
+  };
+
+  const reset = () => {
+    startedAt = now();
+    reasoningSteps = 0;
+    toolCalls = 0;
+    commentaryNotes = 0;
+    reasoningOpen = false;
+    seenCommentaryIds.clear();
+    lastCommentaryText = "";
+  };
+
+  return {
+    noteReasoning() {
+      reasoningOpen = true;
+    },
+    closeReasoning,
+    noteToolCall(toolName?: string) {
+      closeReasoning();
+      if (isChannelProgressDraftWorkToolName(toolName)) {
+        toolCalls += 1;
+      }
+    },
+    noteCommentary(itemId?: string, text?: string) {
+      const trimmed = text?.trim();
+      if (!trimmed) {
+        return;
+      }
+      if (itemId) {
+        if (!seenCommentaryIds.has(itemId)) {
+          seenCommentaryIds.add(itemId);
+          commentaryNotes += 1;
+        }
+        return;
+      }
+      if (trimmed !== lastCommentaryText) {
+        lastCommentaryText = trimmed;
+        commentaryNotes += 1;
+      }
+    },
+    reset,
+    buildSummaryLine() {
+      closeReasoning();
+      const seconds = Math.max(1, Math.round((now() - startedAt) / 1000));
+      return [
+        ...(reasoningSteps > 0
+          ? [`🧠 ${reasoningSteps} thought${reasoningSteps === 1 ? "" : "s"}`]
+          : []),
+        ...(commentaryNotes > 0
+          ? [`💬 ${commentaryNotes} note${commentaryNotes === 1 ? "" : "s"}`]
+          : []),
+        ...(toolCalls > 0 ? [`🛠️ ${toolCalls} tool call${toolCalls === 1 ? "" : "s"}`] : []),
+        `⏱️ ${seconds}s`,
+      ].join(" · ");
+    },
+  };
+}
+
 type ChannelProgressDraftUpdateOptions = {
   flush?: boolean;
   lines?: readonly ChannelProgressDraftCompositorLine[];
@@ -102,6 +184,16 @@ export function createChannelProgressDraftCompositor(params: {
   let finalReplyDelivered = false;
   let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
+  const mergeReasoningProgress = (text?: string, options?: { snapshot?: boolean }): string => {
+    if (!text) {
+      return "";
+    }
+    reasoningRawText = mergeReasoningProgressText(reasoningRawText, text, {
+      snapshot: options?.snapshot === true,
+    });
+    return normalizeReasoningProgressLine(reasoningRawText);
+  };
+
   const clearPreambleExpiryTimer = () => {
     if (preambleExpiryTimer !== undefined) {
       clearTimeoutFn(preambleExpiryTimer);
@@ -127,6 +219,16 @@ export function createChannelProgressDraftCompositor(params: {
       narration: resolveStatusText() || undefined,
       plan: planSteps,
     });
+
+  const getSnapshot = (): ChannelProgressDraftCompositorSnapshot => {
+    const statusHeadline = resolveStatusText();
+    return {
+      lines: lines.map((line) => (typeof line === "string" ? line : { ...line })),
+      ...(statusHeadline ? { statusHeadline } : {}),
+      ...(planSteps ? { plan: planSteps.map((entry) => ({ ...entry })) } : {}),
+      ...(planExplanation ? { planExplanation } : {}),
+    };
+  };
 
   const clearProgressState = (suppressed: boolean) => {
     clearPreambleExpiryTimer();
@@ -188,6 +290,8 @@ export function createChannelProgressDraftCompositor(params: {
       await render({ flush: true });
       schedulePreambleExpiryRefresh();
     },
+    setTimeoutFn,
+    clearTimeoutFn,
   });
 
   const clearLine = async (lineId: string) => {
@@ -308,6 +412,7 @@ export function createChannelProgressDraftCompositor(params: {
     get hasPlanProgress() {
       return Boolean(planSteps?.length);
     },
+    getSnapshot,
     markFinalReplyStarted() {
       finalReplyStarted = true;
       // Final delivery must disarm the delayed start before async delivery work.
@@ -319,11 +424,10 @@ export function createChannelProgressDraftCompositor(params: {
       finalReplyDelivered = true;
       clearPreambleExpiryTimer();
     },
-    // Queued/followup turns reuse this compositor after the primary turn's
-    // final reply settled it. Re-arm the draft lanes so the queued turn gets
-    // the same in-progress rendering as a primary turn (path independence).
-    beginNewTurn() {
-      if (!finalReplyStarted && !finalReplyDelivered) {
+    // Authoritative queued admission may force reset after a silent turn;
+    // ordinary assistant boundaries still require a settled final.
+    beginNewTurn(options?: { force?: boolean }) {
+      if (options?.force !== true && !finalReplyStarted && !finalReplyDelivered) {
         return false;
       }
       finalReplyStarted = false;
@@ -338,6 +442,7 @@ export function createChannelProgressDraftCompositor(params: {
     resetReasoningProgress() {
       reasoningRawText = "";
     },
+    mergeReasoningProgress,
     suppress() {
       clearProgressState(true);
     },
@@ -500,10 +605,7 @@ export function createChannelProgressDraftCompositor(params: {
       ) {
         return false;
       }
-      reasoningRawText = mergeReasoningProgressText(reasoningRawText, text, {
-        snapshot: options?.snapshot === true,
-      });
-      const normalized = normalizeReasoningProgressLine(reasoningRawText);
+      const normalized = mergeReasoningProgress(text, options);
       if (!normalized) {
         return false;
       }

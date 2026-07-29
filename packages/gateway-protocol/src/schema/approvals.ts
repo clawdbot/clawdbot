@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN } from "./approval-id.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 export { isWellFormedApprovalId } from "./approval-id.js";
 
@@ -109,6 +110,7 @@ export const PluginApprovalPresentationSchema = closedObject({
   kind: Type.Literal("plugin"),
   title: Type.String({ minLength: 1, maxLength: 80 }),
   description: Type.String({ minLength: 1, maxLength: 512 }),
+  detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16_384 })),
   severity: PluginApprovalSeveritySchema,
   pluginId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -141,8 +143,27 @@ const ApprovalRecordCommonFields = {
   presentation: ApprovalPresentationSchema,
 };
 
+/** Reviewer-safe origin attribution for terminal approval history. */
+const ApprovalHistorySourceAttributionSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
+});
+
+/** Reviewer attribution recorded by the durable approval ledger. */
+const ApprovalHistoryResolverAttributionSchema = closedObject({
+  kind: Type.Union([
+    Type.Literal("device"),
+    Type.Literal("channel"),
+    Type.Literal("runtime"),
+    Type.Literal("system"),
+  ]),
+  id: Type.Optional(NonEmptyString),
+});
+
 const ApprovalResolutionFields = {
   resolvedAtMs: Type.Integer({ minimum: 0 }),
+  source: Type.Optional(ApprovalHistorySourceAttributionSchema),
+  resolver: Type.Optional(ApprovalHistoryResolverAttributionSchema),
 };
 
 /** Approval that has not yet accepted a reviewer decision. */
@@ -208,6 +229,19 @@ export const ApprovalGetParamsSchema = closedObject({ id: ApprovalRecordCommonFi
 /** Current durable state for one authorized approval lookup. */
 export const ApprovalGetResultSchema = closedObject({ approval: ApprovalSnapshotSchema });
 
+/** Cursor-based query for the retained terminal approval ledger. */
+export const ApprovalHistoryParamsSchema = closedObject({
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  kind: Type.Optional(ApprovalKindSchema),
+});
+
+/** Newest-first page from the retained terminal approval ledger. */
+export const ApprovalHistoryResultSchema = closedObject({
+  items: Type.Array(TerminalApprovalSnapshotSchema),
+  nextCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+});
+
 /** Reviewer decision for one approval identified by its exact full id. */
 export const ApprovalResolveParamsSchema = closedObject({
   id: ApprovalRecordCommonFields.id,
@@ -228,32 +262,41 @@ const SessionApprovalEventCommonFields = {
 };
 
 /** Sanitized pending transition delivered only to an opted-in session audience. */
-export const PendingSessionApprovalEventSchema = closedObject({
-  ...SessionApprovalEventCommonFields,
-  phase: Type.Literal("pending"),
-  approval: PendingApprovalSnapshotSchema,
-});
+export const PendingSessionApprovalEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    ...SessionApprovalEventCommonFields,
+    phase: Type.Literal("pending"),
+    approval: PendingApprovalSnapshotSchema,
+  }),
+);
 
 /** Sanitized terminal transition delivered only to an opted-in session audience. */
-export const TerminalSessionApprovalEventSchema = closedObject({
-  ...SessionApprovalEventCommonFields,
-  phase: Type.Literal("terminal"),
-  approval: TerminalApprovalSnapshotSchema,
-});
+export const TerminalSessionApprovalEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    ...SessionApprovalEventCommonFields,
+    phase: Type.Literal("terminal"),
+    approval: TerminalApprovalSnapshotSchema,
+  }),
+);
 
 /** Sanitized approval transition delivered only to an opted-in session audience. */
-export const SessionApprovalEventSchema = Type.Union([
-  PendingSessionApprovalEventSchema,
-  TerminalSessionApprovalEventSchema,
-]);
+export const SessionApprovalEventSchema = withSince(
+  "2026.7",
+  Type.Union([PendingSessionApprovalEventSchema, TerminalSessionApprovalEventSchema]),
+);
 
 /** Authoritative pending approval set returned when a session stream subscribes. */
-export const SessionApprovalReplaySchema = closedObject({
-  sessionKey: NonEmptyString,
-  updatedAtMs: Type.Integer({ minimum: 0 }),
-  approvals: Type.Array(PendingApprovalSnapshotSchema),
-  truncated: Type.Boolean(),
-});
+export const SessionApprovalReplaySchema = withSince(
+  "2026.7",
+  closedObject({
+    sessionKey: NonEmptyString,
+    updatedAtMs: Type.Integer({ minimum: 0 }),
+    approvals: Type.Array(PendingApprovalSnapshotSchema),
+    truncated: Type.Boolean(),
+  }),
+);
 
 // Owner-local wire types derived directly from local schema consts so the
 // public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
@@ -270,6 +313,8 @@ export type PendingApprovalSnapshot = Static<typeof PendingApprovalSnapshotSchem
 export type ApprovalSnapshot = Static<typeof ApprovalSnapshotSchema>;
 export type ApprovalGetParams = Static<typeof ApprovalGetParamsSchema>;
 export type ApprovalGetResult = Static<typeof ApprovalGetResultSchema>;
+export type ApprovalHistoryParams = Static<typeof ApprovalHistoryParamsSchema>;
+export type ApprovalHistoryResult = Static<typeof ApprovalHistoryResultSchema>;
 export type ApprovalResolveParams = Static<typeof ApprovalResolveParamsSchema>;
 export type ApprovalResolveResult = Static<typeof ApprovalResolveResultSchema>;
 export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;

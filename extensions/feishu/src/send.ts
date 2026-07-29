@@ -135,7 +135,7 @@ async function sendFallbackDirect(
   return toFeishuSendResult(response, params.receiveId, resolveFeishuReceiptKind(params.msgType));
 }
 
-async function sendReplyOrFallbackDirect(
+export async function sendReplyOrFallbackDirect(
   client: FeishuCreateMessageClient,
   params: {
     replyToMessageId?: string;

@@ -1,11 +1,13 @@
 import type {
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
+  SystemAgentSetupVerifyResult,
   WizardNextResult,
   WizardStep,
 } from "../../api/types.ts";
 
 export const MODEL_SETUP_DETECT_TIMEOUT_MS = 20_000;
+export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
 const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
 const MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS = 480_000;
 export const MODEL_SETUP_AUTH_START_TIMEOUT_MS = 30_000;
@@ -26,6 +28,14 @@ export type ModelSetupActivationState =
       error: string;
     }
   | { phase: "success"; modelRef: string; latencyMs?: number };
+
+type ModelSetupVerifyFailure = Extract<SystemAgentSetupVerifyResult, { ok: false }>;
+
+export type ModelSetupVerifyState =
+  | { phase: "idle" }
+  | { phase: "checking" }
+  | { phase: "ok"; modelRef: string; latencyMs?: number }
+  | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
 export type ModelSetupWizardState =
   | { phase: "idle" }
@@ -70,6 +80,17 @@ export function mapActivationResult(params: {
     status: result.status && result.status !== "ok" ? result.status : "unknown",
     error: result.error?.trim() || params.fallbackError,
   };
+}
+
+export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetupVerifyState {
+  if (result.ok) {
+    return {
+      phase: "ok",
+      modelRef: result.modelRef,
+      ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+    };
+  }
+  return { phase: "failed", status: result.status, error: result.error };
 }
 
 export function wizardStateFromResult(

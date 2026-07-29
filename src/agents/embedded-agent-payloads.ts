@@ -1,3 +1,5 @@
+import type { MessagePresentation } from "../interactive/payload.js";
+
 /**
  * Channel-facing reply payload emitted by embedded agents. Keep this type
  * small: channel adapters decide how to render text, media, and reply targets.
@@ -14,4 +16,10 @@ export type BlockReplyPayload = {
   replyToId?: string;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  /** Portable controls attached to a harness-owned blocking prompt. */
+  presentation?: MessagePresentation;
+  /** Runtime-authored text is the fallback for the portable presentation. */
+  presentationTextMode?: "fallback";
+  /** Channel-specific routing metadata for runtime-owned interactions. */
+  channelData?: Record<string, unknown>;
 };

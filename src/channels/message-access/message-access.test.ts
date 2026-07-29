@@ -189,6 +189,41 @@ describe("channel message access ingress", () => {
     expect(state.routeFacts[0]).not.toHaveProperty("senderAllowFrom");
   });
 
+  it("translates implicit mention config before shared activation evaluation", async () => {
+    const state = await resolveChannelIngressState(
+      baseInput({
+        conversation: { kind: "group", id: "room-1" },
+        mentionFacts: {
+          canDetectMention: true,
+          wasMentioned: false,
+          implicitMentionKinds: ["reply_to_bot", "bot_thread_participant"],
+        },
+        allowlists: { group: ["sender-1"] },
+      }),
+    );
+    const decision = decideChannelIngress(state, {
+      ...policy,
+      activation: {
+        requireMention: true,
+        allowTextCommands: false,
+        implicitMentions: {
+          replyToBot: false,
+          quotedBot: true,
+          threadParticipation: true,
+        },
+      },
+    });
+
+    expectRecordFields(decision, { admission: "dispatch", decision: "allow" });
+    const activation = decision.graph.gates.find((gate) => gate.phase === "activation")?.activation;
+    expect(activation?.allowedImplicitMentionKinds).toEqual([
+      "quoted_bot",
+      "bot_thread_participant",
+      "native",
+    ]);
+    expect(activation?.effectiveWasMentioned).toBe(true);
+  });
+
   it.each([
     {
       name: "allows origin-subject events for the same normalized actor",

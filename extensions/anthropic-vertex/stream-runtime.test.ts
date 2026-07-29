@@ -1,6 +1,9 @@
 // Anthropic Vertex tests cover stream runtime plugin behavior.
 import { once } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
@@ -171,6 +174,44 @@ describe("createAnthropicVertexStreamFn", () => {
       googleAuth: googleAuthClient,
       region: "global",
     });
+  });
+
+  it("passes bounded ADC credentials to google-auth-library", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-anthropic-vertex-stream-adc-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    const credentials = {
+      type: "service_account",
+      project_id: "vertex-project",
+    };
+    const json = JSON.stringify(credentials);
+    const env = { GOOGLE_APPLICATION_CREDENTIALS: credentialsPath } as NodeJS.ProcessEnv;
+    const { deps, googleAuthCtorMock } = createStreamDeps();
+    try {
+      writeFileSync(credentialsPath, `${json}${" ".repeat(1024 * 1024 - json.length)}`);
+      createAnthropicVertexStreamFnForModel({}, env, deps);
+      expect(googleAuthCtorMock).toHaveBeenCalledWith({
+        scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        credentials,
+        clientOptions: {
+          transporterOptions: { fetchImplementation: expect.any(Function) },
+        },
+      });
+
+      writeFileSync(credentialsPath, `${json}${" ".repeat(1024 * 1024 + 1 - json.length)}`);
+      let readError: unknown;
+      try {
+        createAnthropicVertexStreamFnForModel({}, env, deps);
+      } catch (error) {
+        readError = error;
+      }
+      expect(readError).toMatchObject({
+        name: "FsSafeError",
+        code: "too-large",
+        message: `Anthropic Vertex ADC credentials file at ${credentialsPath} exceeds 1048576 bytes.`,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("uses provider-local proxy-aware fetch without mutating the global window", async () => {

@@ -45,15 +45,15 @@ function categoryInventory(coverageIds: string[]): QaScorecardCategoryCoverageRe
     id: "surface.category",
     taxonomySurfaceId: "surface",
     taxonomyCategoryName: "Category",
-    coverageStatus: "covered",
+    inventoryStatus: "complete",
     profiles: ["release"],
     features: coverageIds.map((coverageId) => ({ name: coverageId, coverageIds: [coverageId] })),
     coverageIds,
-    fulfilledCoverageIds: coverageIds,
-    evidence: [],
+    inventoriedCoverageIds: coverageIds,
+    inventoryRefs: [],
     scenarioRefs: [],
     missingCoverageIds: [],
-    missingEvidenceRefs: [],
+    missingInventoryRefs: [],
   };
 }
 
@@ -82,20 +82,23 @@ async function buildQaProfileScorecardEvidence(params: {
 }
 
 describe("profile scorecard evidence", () => {
-  it("scores partial multi-id feature coverage by covered coverage IDs", async () => {
+  it("scores atomic feature coverage by its one exact coverage ID", async () => {
     const category: QaScorecardCategoryCoverageReport = {
       id: "surface.category",
       taxonomySurfaceId: "surface",
       taxonomyCategoryName: "Category",
-      coverageStatus: "partial",
+      inventoryStatus: "partial",
       profiles: ["release"],
-      features: [{ name: "Multi-id feature", coverageIds: ["coverage.one", "coverage.two"] }],
+      features: [
+        { name: "Covered feature", coverageIds: ["coverage.one"] },
+        { name: "Missing feature", coverageIds: ["coverage.two"] },
+      ],
       coverageIds: ["coverage.one", "coverage.two"],
-      fulfilledCoverageIds: ["coverage.one"],
-      evidence: [],
+      inventoriedCoverageIds: ["coverage.one"],
+      inventoryRefs: [],
       scenarioRefs: [],
       missingCoverageIds: ["coverage.two"],
-      missingEvidenceRefs: [],
+      missingInventoryRefs: [],
     };
 
     const { scorecard } = await buildQaProfileScorecardEvidence({
@@ -117,11 +120,11 @@ describe("profile scorecard evidence", () => {
 
     expect(scorecard.categoryReports[0]?.status).toBe("partial");
     expect(scorecard.categoryReports[0]?.features).toMatchObject({
-      total: 1,
-      fulfilled: 0,
-      partial: 1,
-      missing: 0,
-      fulfillmentPercent: 0,
+      total: 2,
+      fulfilled: 1,
+      partial: 0,
+      missing: 1,
+      fulfillmentPercent: 50,
     });
     expect(scorecard.categoryReports[0]?.coverageIds).toMatchObject({
       total: 2,
@@ -137,11 +140,11 @@ describe("profile scorecard evidence", () => {
       fulfillmentPercent: 50,
     });
     expect(scorecard.features).toMatchObject({
-      total: 1,
-      fulfilled: 0,
-      partial: 1,
-      missing: 0,
-      fulfillmentPercent: 0,
+      total: 2,
+      fulfilled: 1,
+      partial: 0,
+      missing: 1,
+      fulfillmentPercent: 50,
     });
   });
 
@@ -150,18 +153,18 @@ describe("profile scorecard evidence", () => {
       id: "surface.first",
       taxonomySurfaceId: "surface",
       taxonomyCategoryName: "First",
-      coverageStatus: "partial",
+      inventoryStatus: "partial",
       profiles: ["release"],
       features: [
         { name: "Shared", coverageIds: ["coverage.shared"] },
         { name: "Unique", coverageIds: ["coverage.unique"] },
       ],
       coverageIds: ["coverage.shared", "coverage.unique"],
-      fulfilledCoverageIds: ["coverage.shared"],
-      evidence: [],
+      inventoriedCoverageIds: ["coverage.shared"],
+      inventoryRefs: [],
       scenarioRefs: [],
       missingCoverageIds: ["coverage.unique"],
-      missingEvidenceRefs: [],
+      missingInventoryRefs: [],
     };
     const secondCategory: QaScorecardCategoryCoverageReport = {
       ...firstCategory,

@@ -8,8 +8,8 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
+import { buildControlUiAgentFailureText } from "./agent-runner-failure-copy.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCandidatesResult } from "./agent-runner-fallback-candidate.js";
 import type {
@@ -66,10 +66,7 @@ export async function settleAgentFallbackCycle(params: {
       }))
     : [];
   if (!fallbackExhausted) {
-    await cycle.clearRecoveredAutoFallbackPrimaryProbe({
-      provider: fallbackProvider,
-      model: fallbackModel,
-    });
+    await fallbackResult.settleSessionOverride();
   }
   const embeddedError = runResult.meta?.error;
   const deferredLifecycleError = settledLifecycleTerminal?.getDeferredError();
@@ -119,17 +116,17 @@ export async function settleAgentFallbackCycle(params: {
     emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
     const providerRequestError = classifyProviderRequestError(embeddedError);
     turn.replyOperation?.fail("run_failed", embeddedError);
-    const embeddedErrorText = formatErrorMessage(embeddedError).replace(/\.\s*$/, "");
+    const embeddedErrorText = formatErrorMessage(embeddedError);
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: cycle.shouldSurfaceToControlUi
-          ? `⚠️ Agent failed before reply: ${embeddedErrorText}.\nLogs: openclaw logs --follow`
+          ? buildControlUiAgentFailureText(embeddedErrorText)
           : (providerRequestError?.userMessage ?? PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE),
       }),
     };
   }
-  const terminalMetadata = resolveAgentLifecycleTerminalMetadata(runResult.meta);
+  const terminalMetadata = fallbackResult.terminal.metadata;
   let terminalRunFailed = false;
   if (fallbackExhausted) {
     const exhaustionError = new Error(

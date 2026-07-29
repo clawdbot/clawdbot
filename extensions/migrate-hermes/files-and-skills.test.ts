@@ -87,7 +87,41 @@ describe("Hermes migration file and skill items", () => {
     );
   });
 
-  it("honors explicit Hermes home, active profiles, and Windows legacy state", async () => {
+  it("resolves HERMES_HOME through active_profile unless it already names a profile", async () => {
+    const root = await makeTempRoot();
+    const hermesRoot = path.join(root, "hermes");
+    const profileRoot = path.join(hermesRoot, "profiles", "coder");
+    await writeFile(path.join(hermesRoot, "active_profile"), "coder\n");
+    await writeFile(path.join(profileRoot, "memories", "MEMORY.md"), "coder memory\n");
+
+    expect(
+      (
+        await discoverHermesSource(undefined, {
+          env: { HERMES_HOME: hermesRoot },
+          platform: "darwin",
+        })
+      ).root,
+    ).toBe(profileRoot);
+    expect(
+      (
+        await discoverHermesSource(undefined, {
+          env: { HERMES_HOME: profileRoot },
+          platform: "darwin",
+        })
+      ).root,
+    ).toBe(profileRoot);
+    // Supervised default slot pins to the root profile, ignoring active_profile.
+    expect(
+      (
+        await discoverHermesSource(undefined, {
+          env: { HERMES_HOME: hermesRoot, HERMES_S6_SUPERVISED_CHILD: "1" },
+          platform: "darwin",
+        })
+      ).root,
+    ).toBe(hermesRoot);
+  });
+
+  it("honors implicit Hermes active profiles and Windows legacy state", async () => {
     const root = await makeTempRoot();
     const home = path.join(root, "home");
     const defaultRoot = path.join(home, ".hermes");
@@ -95,14 +129,6 @@ describe("Hermes migration file and skill items", () => {
     await writeFile(path.join(defaultRoot, "active_profile"), "coder\n");
     await writeFile(path.join(profileRoot, "config.yaml"), "model: openai/gpt-5.6\n");
 
-    expect(
-      (
-        await discoverHermesSource(undefined, {
-          env: { HERMES_HOME: defaultRoot },
-          platform: "darwin",
-        })
-      ).root,
-    ).toBe(defaultRoot);
     expect(
       (await discoverHermesSource(undefined, { env: { HOME: home }, platform: "darwin" })).root,
     ).toBe(profileRoot);
@@ -210,6 +236,8 @@ describe("Hermes migration file and skill items", () => {
           anthropic: {},
           nous: {},
           "qwen-oauth": {},
+          "qwen-cli": {},
+          "qwen-portal": {},
           [xaiProvider]: {},
           [minimaxProvider]: {},
         },
@@ -231,7 +259,7 @@ describe("Hermes migration file and skill items", () => {
     expect(reauthItems.map((item) => item.reason)).toEqual([
       "Authenticate anthropic in OpenClaw after migration.",
       "Authenticate nous in OpenClaw after migration.",
-      "Authenticate qwen-oauth in OpenClaw after migration.",
+      "Authenticate qwen with an API key after migration: openclaw onboard --auth-choice qwen-api-key.",
       "Authenticate minimax-portal in OpenClaw after migration.",
       "Authenticate xai in OpenClaw after migration.",
     ]);

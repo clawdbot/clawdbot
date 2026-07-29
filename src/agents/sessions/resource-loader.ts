@@ -15,9 +15,10 @@ import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import {
+  clearExtensionCache,
   createExtensionRuntime,
   loadExtensionFromFactory,
-  loadExtensions,
+  loadExtensionsCached,
 } from "./extensions/loader.js";
 import type {
   Extension,
@@ -165,10 +166,6 @@ interface DefaultResourceLoaderOptions {
   };
   systemPromptTransform?: (base: string | undefined) => string | undefined;
   appendSystemPromptTransform?: (base: string[]) => string[];
-  /** @deprecated Public SDK alias. Use systemPromptTransform. */
-  systemPromptOverride?: (base: string | undefined) => string | undefined;
-  /** @deprecated Public SDK alias. Use appendSystemPromptTransform. */
-  appendSystemPromptOverride?: (base: string[]) => string[];
 }
 
 export class DefaultResourceLoader implements ResourceLoader {
@@ -229,6 +226,7 @@ export class DefaultResourceLoader implements ResourceLoader {
   private extensionThemeSourceInfos: Map<string, SourceInfo>;
   private lastPromptPaths: string[];
   private lastThemePaths: string[];
+  private loaded = false;
 
   constructor(options: DefaultResourceLoaderOptions) {
     this.cwd = options.cwd;
@@ -258,9 +256,8 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.promptsOverride = options.promptsOverride;
     this.themesOverride = options.themesOverride;
     this.agentsFilesOverride = options.agentsFilesOverride;
-    this.systemPromptTransform = options.systemPromptTransform ?? options.systemPromptOverride;
-    this.appendSystemPromptTransform =
-      options.appendSystemPromptTransform ?? options.appendSystemPromptOverride;
+    this.systemPromptTransform = options.systemPromptTransform;
+    this.appendSystemPromptTransform = options.appendSystemPromptTransform;
 
     this.extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
     this.skills = [];
@@ -348,6 +345,9 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   async reload(): Promise<void> {
+    if (this.loaded) {
+      clearExtensionCache();
+    }
     await this.settingsManager.reload();
     const resolvedPaths = await this.packageManager.resolve();
     const cliExtensionPaths = await this.packageManager.resolveExtensionSources(
@@ -427,7 +427,7 @@ export class DefaultResourceLoader implements ResourceLoader {
       ? cliEnabledExtensions
       : this.mergePaths(cliEnabledExtensions, enabledExtensions);
 
-    const extensionsResult = await loadExtensions(extensionPaths, this.cwd, this.eventBus);
+    const extensionsResult = await loadExtensionsCached(extensionPaths, this.cwd, this.eventBus);
     const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
     extensionsResult.extensions.push(...inlineExtensions.extensions);
     extensionsResult.errors.push(...inlineExtensions.errors);
@@ -527,6 +527,7 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.appendSystemPrompt = this.appendSystemPromptTransform
       ? this.appendSystemPromptTransform(baseAppend)
       : baseAppend;
+    this.loaded = true;
   }
 
   private normalizeExtensionPaths(

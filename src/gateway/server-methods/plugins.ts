@@ -6,6 +6,7 @@ import {
   isClawHubTrustErrorCode,
   validatePluginsInstallParams,
   validatePluginsListParams,
+  validatePluginsRefreshParams,
   validatePluginsSearchParams,
   validatePluginsSetEnabledParams,
   validatePluginsUninstallParams,
@@ -31,11 +32,18 @@ function pluginPolicyRestartRequired(params: {
 }): boolean {
   const plan = buildGatewayReloadPlan([...params.changedPaths]);
   const mode = resolveGatewayReloadSettings(params.config).mode;
-  return plan.restartGateway || mode === "off" || mode === "restart";
+  return plan.restartGateway || mode === "off";
 }
 
 /** Gateway handlers for plugin inventory, ClawHub search, install, and policy state. */
 export const pluginsHandlers: GatewayRequestHandlers = {
+  "plugins.refresh": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validatePluginsRefreshParams, "plugins.refresh", respond)) {
+      return;
+    }
+    context.notifyPluginMetadataChanged();
+    respond(true, { ok: true }, undefined);
+  },
   "plugins.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validatePluginsListParams, "plugins.list", respond)) {
       return;

@@ -21,6 +21,7 @@ type ProcessController = {
 
 const LOCAL_TUI_SUBCOMMANDS = new Set(["chat", "terminal", "tui"]);
 const WHATSAPP_RESPONSIVENESS_CHECK_ID = "core/doctor/whatsapp-responsiveness";
+const LOCAL_TUI_PROCESS_PROBE_TIMEOUT_MS = 1_000;
 
 function tokenizeCommandLine(command: string): string[] {
   return command.trim().split(/\s+/u).filter(Boolean);
@@ -62,7 +63,8 @@ function listLocalTuiProcesses(): LocalTuiProcess[] {
   }
   const ps = spawnSync("ps", ["-axo", "pid=,command="], {
     encoding: "utf8",
-    timeout: 1000,
+    killSignal: "SIGKILL",
+    timeout: LOCAL_TUI_PROCESS_PROBE_TIMEOUT_MS,
   });
   if (ps.error || ps.status !== 0 || typeof ps.stdout !== "string") {
     return [];

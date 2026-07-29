@@ -10,6 +10,11 @@ import {
 } from "../../scripts/e2e/cron-mcp-cleanup-docker-client.ts";
 
 describe("cron MCP cleanup docker client", () => {
+  it("binds a device identity for the UI-mode gateway client", () => {
+    const source = fs.readFileSync("scripts/e2e/cron-mcp-cleanup-docker-client.ts", "utf8");
+    expect(source).toContain("bindFreshDevice: true");
+  });
+
   it("rejects malformed probe pid wait limits", () => {
     expect(readCronMcpCleanupProbePidWaitMs({})).toBe(120_000);
     expect(readCronMcpCleanupProbePidWaitMs({ OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS: "250" })).toBe(

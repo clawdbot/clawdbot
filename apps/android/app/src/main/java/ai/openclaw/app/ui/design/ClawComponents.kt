@@ -605,14 +605,14 @@ internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
       }
 
       ClawSegmentedControl(
-        options = listOf("Chat", "Voice", "Sessions"),
+        options = listOf("Chat", "Voice", "Threads"),
         selected = selected,
         onSelect = { selected = it },
         modifier = Modifier.fillMaxWidth(),
       )
 
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        ClawSectionHeader(title = "Sessions")
+        ClawSectionHeader(title = "Threads")
         ClawListItem(
           title = "Testing testing 1 2 3",
           subtitle = "14 messages · Android",

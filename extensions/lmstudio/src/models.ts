@@ -60,6 +60,37 @@ const LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS = [
   ...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
 ] as const;
 
+const LMSTUDIO_CONFIGURED_BOOLEAN_COMPAT_FIELDS = [
+  "supportsStore",
+  "supportsPromptCacheKey",
+  "supportsDeveloperRole",
+  "supportsReasoningEffort",
+  "supportsTemperature",
+  "supportsUsageInStreaming",
+  "supportsTools",
+  "supportsStrictMode",
+  "supportsJsonSchemaResponseFormat",
+  "requiresStringContent",
+  "strictMessageKeys",
+  "requiresToolResultName",
+  "requiresAssistantAfterToolResult",
+  "requiresThinkingAsText",
+  "requiresReasoningContentOnAssistantMessages",
+  "requiresOpenAiAnthropicToolPayload",
+] as const satisfies readonly (keyof NonNullable<ModelDefinitionConfig["compat"]>)[];
+
+const LMSTUDIO_CONFIGURED_THINKING_FORMATS = [
+  "openai",
+  "openrouter",
+  "deepseek",
+  "together",
+  "qwen",
+  "qwen-chat-template",
+  "zai",
+] as const satisfies readonly NonNullable<
+  NonNullable<ModelDefinitionConfig["compat"]>["thinkingFormat"]
+>[];
+
 function normalizeReasoningOption(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -221,6 +252,15 @@ export function resolveLoadedContextWindow(
   return contextWindow;
 }
 
+/** Uses the loaded context when present, otherwise the model's advertised maximum. */
+export function resolveLmstudioEffectiveContextWindow(
+  entry: Pick<LmstudioModelWire, "loaded_instances" | "max_context_length">,
+): number | null {
+  return (
+    resolveLoadedContextWindow(entry) ?? asPositiveSafeInteger(entry.max_context_length) ?? null
+  );
+}
+
 function normalizeLmstudioVariantIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -315,6 +355,25 @@ function normalizeConfiguredReasoningEffortMap(value: unknown): Record<string, s
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeConfiguredCompatStringList(value: unknown): string[] | undefined {
+  if (
+    !Array.isArray(value) ||
+    !value.every((entry): entry is string => typeof entry === "string" && entry.length > 0)
+  ) {
+    return undefined;
+  }
+  return [...value];
+}
+
+function isLmstudioConfiguredThinkingFormat(
+  value: unknown,
+): value is (typeof LMSTUDIO_CONFIGURED_THINKING_FORMATS)[number] {
+  return (
+    typeof value === "string" &&
+    LMSTUDIO_CONFIGURED_THINKING_FORMATS.some((format) => format === value)
+  );
+}
+
 function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfig["compat"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -323,11 +382,35 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
   const supportedReasoningEfforts = normalizeReasoningOptions(record.supportedReasoningEfforts);
   const reasoningEffortMap = normalizeConfiguredReasoningEffortMap(record.reasoningEffortMap);
   const compat: NonNullable<ModelDefinitionConfig["compat"]> = {};
-  if (typeof record.supportsUsageInStreaming === "boolean") {
-    compat.supportsUsageInStreaming = record.supportsUsageInStreaming;
+  for (const key of LMSTUDIO_CONFIGURED_BOOLEAN_COMPAT_FIELDS) {
+    const configuredValue = record[key];
+    if (typeof configuredValue === "boolean") {
+      compat[key] = configuredValue;
+    }
   }
-  if (typeof record.supportsReasoningEffort === "boolean") {
-    compat.supportsReasoningEffort = record.supportsReasoningEffort;
+  const visibleReasoningDetailTypes = normalizeConfiguredCompatStringList(
+    record.visibleReasoningDetailTypes,
+  );
+  if (visibleReasoningDetailTypes) {
+    compat.visibleReasoningDetailTypes = visibleReasoningDetailTypes;
+  }
+  const unsupportedToolSchemaKeywords = normalizeConfiguredCompatStringList(
+    record.unsupportedToolSchemaKeywords,
+  );
+  if (unsupportedToolSchemaKeywords) {
+    compat.unsupportedToolSchemaKeywords = unsupportedToolSchemaKeywords;
+  }
+  if (record.maxTokensField === "max_completion_tokens" || record.maxTokensField === "max_tokens") {
+    compat.maxTokensField = record.maxTokensField;
+  }
+  if (isLmstudioConfiguredThinkingFormat(record.thinkingFormat)) {
+    compat.thinkingFormat = record.thinkingFormat;
+  }
+  if (typeof record.toolSchemaProfile === "string") {
+    compat.toolSchemaProfile = record.toolSchemaProfile;
+  }
+  if (typeof record.toolCallArgumentsEncoding === "string") {
+    compat.toolCallArgumentsEncoding = record.toolCallArgumentsEncoding;
   }
   if (supportedReasoningEfforts.length > 0) {
     compat.supportedReasoningEfforts = supportedReasoningEfforts;
@@ -521,10 +604,19 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   const loadedContextWindow = resolveLoadedContextWindow(entry);
   const advertisedContextWindow = asPositiveSafeInteger(entry.max_context_length) ?? null;
   const contextWindow = advertisedContextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
-  // Keep native/advertised context window metadata in catalog, but use a practical
-  // default target for model loading unless callers explicitly override it.
-  const contextTokens = Math.min(contextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
+  // ModelDefinitionConfig keeps the native maximum in contextWindow. Runtime
+  // budgeting and preload prefer contextTokens, so cap that to the loaded instance.
+  const effectiveContextWindow = loadedContextWindow ?? contextWindow;
+  const contextTokens = Math.min(effectiveContextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   const rawDisplayName = entry.display_name?.trim();
+  const reasoningCompat = resolveLmstudioReasoningCompat(entry);
+  const trainedForToolUse = entry.capabilities?.trained_for_tool_use;
+  // Native tool training is a positive capability, not proof that LM Studio's
+  // OpenAI-compatible fallback cannot call tools.
+  const compat =
+    trainedForToolUse === true
+      ? { ...reasoningCompat, supportsTools: trainedForToolUse }
+      : reasoningCompat;
   return {
     id,
     displayName: rawDisplayName && rawDisplayName.length > 0 ? rawDisplayName : id,
@@ -537,10 +629,10 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     reasoning: resolveLmstudioReasoningCapability(entry),
     input: entry.capabilities?.vision ? ["text", "image"] : ["text"],
     cost: SELF_HOSTED_DEFAULT_COST,
-    compat: resolveLmstudioReasoningCompat(entry),
+    compat,
     contextWindow,
     contextTokens,
-    maxTokens: Math.max(1, Math.min(contextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),
+    maxTokens: Math.max(1, Math.min(effectiveContextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),
   };
 }
 

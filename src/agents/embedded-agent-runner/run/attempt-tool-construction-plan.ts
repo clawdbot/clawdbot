@@ -82,26 +82,26 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
 }
 
 /**
- * Adds the message tool to a narrowed allowlist when the caller must support
- * forced source-reply delivery. Wildcard and undefined allowlists already cover
- * message, while an empty allowlist becomes message-only.
+ * Adds host-required tools to a narrowed runtime allowlist. Wildcard and
+ * undefined allowlists already cover every required tool.
  */
 export function mergeForcedEmbeddedAttemptToolsAllow(
   toolsAllow: string[] | undefined,
-  params: { forceMessageTool?: boolean },
+  params: { forceMessageTool?: boolean; forceToolNames?: readonly string[] },
 ): string[] | undefined {
-  if (
-    !params.forceMessageTool ||
-    toolsAllow === undefined ||
-    hasWildcardToolAllowlist(toolsAllow)
-  ) {
+  if (toolsAllow === undefined || hasWildcardToolAllowlist(toolsAllow)) {
     return toolsAllow;
   }
-  if (toolsAllow.length === 0) {
-    return ["message"];
+  const required = [
+    ...(params.forceMessageTool ? ["message"] : []),
+    ...(params.forceToolNames ?? []),
+  ];
+  if (required.length === 0) {
+    return toolsAllow;
   }
   const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
-  return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];
+  const missing = required.filter((name) => !normalized.has(normalizeToolName(name)));
+  return missing.length === 0 ? toolsAllow : [...toolsAllow, ...missing];
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(

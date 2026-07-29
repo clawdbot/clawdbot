@@ -92,6 +92,61 @@ describe("dispatchReplyFromConfig", () => {
     expect(activeDuringOffRun).toBe(false);
   });
 
+  it("keeps block-owned commentary out of the standalone durable progress lane", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+    });
+    const onItemEvent = vi.fn();
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onItemEvent?.({
+        itemId: "commentary-1",
+        kind: "preamble",
+        progressText: "Inspecting the dispatch path.",
+        suppressDurableProgress: true,
+      });
+      await opts?.onBlockReply?.({ text: "Inspecting the dispatch path." });
+      return { text: "Done." } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        suppressDefaultToolProgressMessages: true,
+        commentaryProgressEnabled: true,
+        progressPreambleEnabled: true,
+        commentaryPayloadsEnabled: true,
+        onItemEvent,
+      },
+    });
+
+    expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
+      itemId: "commentary-1",
+      kind: "preamble",
+      progressText: "Inspecting the dispatch path.",
+      suppressDurableProgress: true,
+    });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledExactlyOnceWith({
+      text: "Inspecting the dispatch path.",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "Done." });
+  });
+
   it("forwards channel-owned group progress callbacks while source delivery is suppressed", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -668,7 +723,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
           { step: "Run tests", status: "pending" },
@@ -711,11 +766,11 @@ describe("dispatchReplyFromConfig", () => {
     ) => {
       await opts?.onPlanUpdate?.({
         phase: "update",
-        planSteps: [{ step: "Inspect code", status: "in_progress" }],
+        steps: [{ step: "Inspect code", status: "in_progress" }],
       });
       await opts?.onPlanUpdate?.({
         phase: "update",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
         ],
@@ -794,7 +849,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
           { step: "Run tests", status: "pending" },
@@ -848,7 +903,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
           { step: "Run tests", status: "pending" },
@@ -905,7 +960,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        planSteps: [
+        steps: [
           { step: "Inspect code", status: "completed" },
           { step: "Patch code", status: "in_progress" },
           { step: "Run tests", status: "pending" },

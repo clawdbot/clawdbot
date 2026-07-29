@@ -183,29 +183,4 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
       await fs.rm(baseDir, { recursive: true, force: true });
     }
   });
-
-  it("keeps compaction reserve overrides after disabling runtime retry", () => {
-    const settingsManager = createPreparedEmbeddedAgentSettingsManager({
-      cwd: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              reserveTokensFloor: 50_000,
-              keepRecentTokens: 16_000,
-            },
-          },
-        },
-      },
-      contextTokenBudget: 200_000,
-    });
-
-    expect(settingsManager.getRetryEnabled()).toBe(false);
-    expect(settingsManager.getCompactionSettings()).toEqual({
-      enabled: true,
-      reserveTokens: 50_000,
-      keepRecentTokens: 16_000,
-    });
-  });
 });

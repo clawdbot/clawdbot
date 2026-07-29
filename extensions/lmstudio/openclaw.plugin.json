@@ -6,6 +6,11 @@
   },
   "enabledByDefault": true,
   "providers": ["lmstudio"],
+  "modelCatalog": {
+    "discovery": {
+      "lmstudio": "refreshable"
+    }
+  },
   "providerRequest": {
     "providers": {
       "lmstudio": {
@@ -42,6 +47,8 @@
       "appGuidedSecret": true,
       "choiceLabel": "LM Studio",
       "choiceHint": "Local/self-hosted LM Studio server",
+      "icon": "https://cdn.simpleicons.org/lmstudio",
+      "website": "https://lmstudio.ai/download",
       "optionKey": "lmstudioApiKey",
       "cliFlag": "--lmstudio-api-key",
       "cliOption": "--lmstudio-api-key <key>",

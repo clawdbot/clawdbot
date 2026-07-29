@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
 import { resolveStateDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -109,15 +109,17 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
 }
 
 function resolveVapidSubjectFromEnv(): string {
-  return process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_WEB_PUSH_VAPID_SUBJECT;
+  return (
+    normalizeOptionalString(process.env.OPENCLAW_VAPID_SUBJECT) ?? DEFAULT_WEB_PUSH_VAPID_SUBJECT
+  );
 }
 
 function resolveVapidPublicKeyFromEnv(): string | undefined {
-  return process.env.OPENCLAW_VAPID_PUBLIC_KEY || undefined;
+  return normalizeOptionalString(process.env.OPENCLAW_VAPID_PUBLIC_KEY);
 }
 
 function resolveVapidPrivateKeyFromEnv(): string | undefined {
-  return process.env.OPENCLAW_VAPID_PRIVATE_KEY || undefined;
+  return normalizeOptionalString(process.env.OPENCLAW_VAPID_PRIVATE_KEY);
 }
 
 // --- Subscription CRUD ---

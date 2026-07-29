@@ -28,6 +28,7 @@ type RegistryTestApi = {
   releaseSubagentRun(runId: string): void;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
   testing: {
+    failQueuedSubagentRun(runId: string, error: string): boolean;
     sweepOnceForTests(): Promise<void>;
     runSweeperTickForTests(): Promise<void>;
     setDepsForTest(overrides?: Partial<RegistryDeps>): void;
@@ -49,6 +50,7 @@ type RegistryDeps = {
   resolveAgentTimeoutMs: typeof import("./timeout.js").resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof import("./subagent-registry-state.js").restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
+  maybeWakeRequesterAfterAllChildrenSettled: typeof import("./subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled;
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
   resolveContextEngine?: typeof import("../context-engine/registry.js").resolveContextEngine;
@@ -81,6 +83,8 @@ export async function finalizeInterruptedSubagentRun(params: {
 }
 
 export const testing = {
+  failQueuedSubagentRun: (runId: string, error: string) =>
+    getRegistryTestApi().testing.failQueuedSubagentRun(runId, error),
   sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),
   runSweeperTickForTests: () => getRegistryTestApi().testing.runSweeperTickForTests(),
   setDepsForTest: (overrides?: Partial<RegistryDeps>) =>

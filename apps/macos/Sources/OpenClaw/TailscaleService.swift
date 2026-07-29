@@ -18,8 +18,11 @@ final class TailscaleService {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "tailscale")
 
-    /// Indicates if the Tailscale app is installed on the system.
+    /// Indicates if a Tailscale installation or active daemon was detected.
     private(set) var isInstalled = false
+
+    /// Indicates if the GUI app is available for app-specific actions.
+    private(set) var isAppInstalled = false
 
     /// Indicates if Tailscale is currently running.
     private(set) var isRunning = false
@@ -40,12 +43,14 @@ final class TailscaleService {
     #if DEBUG
     init(
         isInstalled: Bool,
+        isAppInstalled: Bool = false,
         isRunning: Bool,
         tailscaleHostname: String? = nil,
         tailscaleIP: String? = nil,
         statusError: String? = nil)
     {
         self.isInstalled = isInstalled
+        self.isAppInstalled = isAppInstalled
         self.isRunning = isRunning
         self.tailscaleHostname = tailscaleHostname
         self.tailscaleIP = tailscaleIP
@@ -59,7 +64,26 @@ final class TailscaleService {
         return installed
     }
 
-    private struct TailscaleAPIResponse: Codable {
+    func checkCLIInstallation() -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "/usr/local/bin/tailscale",
+            "/usr/local/bin/tailscaled",
+            "/opt/homebrew/bin/tailscale",
+            "/opt/homebrew/bin/tailscaled",
+            "\(home)/go/bin/tailscale",
+            "\(home)/go/bin/tailscaled",
+        ]
+        let installed = Self.hasExecutableCLI(at: candidates)
+        self.logger.info("Tailscale CLI installed: \(installed)")
+        return installed
+    }
+
+    static func hasExecutableCLI(at candidates: [String]) -> Bool {
+        candidates.contains { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    struct TailscaleAPIResponse: Codable {
         let status: String
         let deviceName: String
         let tailnetName: String
@@ -102,13 +126,33 @@ final class TailscaleService {
 
     func checkTailscaleStatus() async {
         let previousIP = self.tailscaleIP
-        self.isInstalled = self.checkAppInstallation()
-        if !self.isInstalled {
-            self.isRunning = false
-            self.tailscaleHostname = nil
-            self.tailscaleIP = nil
-            self.statusError = "Tailscale is not installed"
-        } else if let apiResponse = await fetchTailscaleStatus() {
+        let appInstalled = self.checkAppInstallation()
+        let cliInstalled = self.checkCLIInstallation()
+        let apiResponse = await self.fetchTailscaleStatus()
+        self.applyStatusEvidence(
+            appInstalled: appInstalled,
+            cliInstalled: cliInstalled,
+            apiResponse: apiResponse,
+            fallbackIP: TailscaleNetwork.detectTailnetIPv4())
+
+        if previousIP != self.tailscaleIP {
+            await GatewayEndpointStore.shared.refresh()
+        }
+    }
+
+    func applyStatusEvidence(
+        appInstalled: Bool,
+        cliInstalled: Bool,
+        apiResponse: TailscaleAPIResponse?,
+        fallbackIP: String?)
+    {
+        self.isAppInstalled = appInstalled
+        self.isInstalled = appInstalled || cliInstalled || apiResponse != nil
+        // RFC 6598 space is not Tailscale-exclusive. Only trust an interface
+        // fallback after the app, CLI, or local API proves this installation.
+        let trustedFallbackIP = self.isInstalled ? fallbackIP : nil
+
+        if let apiResponse {
             self.isRunning = apiResponse.status.lowercased() == "running"
 
             if self.isRunning {
@@ -120,7 +164,7 @@ final class TailscaleService {
                     .replacingOccurrences(of: ".tailscale.net", with: "")
 
                 self.tailscaleHostname = "\(deviceName).\(tailnetName).ts.net"
-                self.tailscaleIP = apiResponse.iPv4
+                self.tailscaleIP = apiResponse.iPv4 ?? trustedFallbackIP
                 self.statusError = nil
 
                 self.logger.info(
@@ -130,25 +174,28 @@ final class TailscaleService {
                 self.tailscaleIP = nil
                 self.statusError = "Tailscale is not running"
             }
+        } else if let trustedFallbackIP {
+            self.isRunning = true
+            self.tailscaleHostname = nil
+            self.tailscaleIP = trustedFallbackIP
+            self.statusError = nil
+            self.logger.info("Tailscale interface IP detected (fallback) ip=\(trustedFallbackIP, privacy: .public)")
         } else {
             self.isRunning = false
             self.tailscaleHostname = nil
             self.tailscaleIP = nil
-            self.statusError = "Please start the Tailscale app"
-            self.logger.info("Tailscale API not responding; app likely not running")
-        }
-
-        if self.tailscaleIP == nil, let fallback = TailscaleNetwork.detectTailnetIPv4() {
-            self.tailscaleIP = fallback
-            if !self.isRunning {
-                self.isRunning = true
+            self.statusError = if appInstalled {
+                "Please start the Tailscale app"
+            } else if cliInstalled {
+                "Please start the Tailscale daemon"
+            } else {
+                "Tailscale is not installed"
             }
-            self.statusError = nil
-            self.logger.info("Tailscale interface IP detected (fallback) ip=\(fallback, privacy: .public)")
-        }
-
-        if previousIP != self.tailscaleIP {
-            await GatewayEndpointStore.shared.refresh()
+            if appInstalled {
+                self.logger.info("Tailscale API not responding; app likely not running")
+            } else if cliInstalled {
+                self.logger.info("Tailscale API not responding; CLI daemon likely not running")
+            }
         }
     }
 

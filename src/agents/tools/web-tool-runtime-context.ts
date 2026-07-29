@@ -19,6 +19,7 @@ type WebProviderRuntimeMetadata = RuntimeWebFetchMetadata | RuntimeWebSearchMeta
 type ResolvedWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetadata> = {
   config?: OpenClawConfig;
   preferRuntimeProviders: boolean;
+  providerSelectionId: string;
   runtimeMetadata?: TMetadata;
 };
 
@@ -79,6 +80,7 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
       kind: params.kind,
       providerSelectionId,
     }),
+    providerSelectionId,
     runtimeMetadata,
   };
 }
@@ -98,6 +100,7 @@ export function resolveWebSearchToolRuntimeContext(params: {
   return {
     config: resolved.config,
     preferRuntimeProviders: resolved.preferRuntimeProviders,
+    providerSelectionId: resolved.providerSelectionId,
     runtimeWebSearch: resolved.runtimeMetadata,
   };
 }
@@ -117,6 +120,7 @@ export function resolveWebFetchToolRuntimeContext(params: {
   return {
     config: resolved.config,
     preferRuntimeProviders: resolved.preferRuntimeProviders,
+    providerSelectionId: resolved.providerSelectionId,
     runtimeWebFetch: resolved.runtimeMetadata,
   };
 }

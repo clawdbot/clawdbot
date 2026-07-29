@@ -75,6 +75,7 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
       signal: controller.signal,
     });
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`HTTP ${response.status}`);
     }
     const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
@@ -82,7 +83,9 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     });
     let payload: DocsSearchResponse;
     try {
-      payload = JSON.parse(new TextDecoder().decode(bytes)) as DocsSearchResponse;
+      payload = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      ) as DocsSearchResponse;
     } catch (cause) {
       throw new Error("Docs search response is malformed JSON", { cause });
     }

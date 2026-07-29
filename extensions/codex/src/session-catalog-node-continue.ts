@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexThread } from "./app-server/protocol.js";
+import { withTimeout } from "./app-server/timeout.js";
 import { createCodexCliNodeConversationBindingData } from "./conversation-binding-data.js";
 import { CODEX_CLI_SESSION_RESUME_COMMAND } from "./node-cli-sessions.js";
 import {
@@ -44,6 +45,10 @@ const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_CLI_SESSION_RESUME_COMMAND,
 ] as const;
 
+// Catalog refresh is fail-soft: one unhealthy machine must not hold the whole sidebar.
+// The node invoke keeps running so cold native discovery can warm the next poll.
+const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 8_000;
+
 export type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
 
 export function nodeLabel(node: CatalogNode): string {
@@ -78,6 +83,7 @@ export async function listPairedNode(params: {
   node: CatalogNode;
   query: CodexSessionCatalogParams;
   adoptedSessions: ReadonlyMap<string, AdoptedSessionEntry>;
+  onHost?: (host: CodexSessionCatalogHost) => void;
 }): Promise<CodexSessionCatalogHost> {
   const hostId = `node:${params.node.nodeId}`;
   const common = {
@@ -88,38 +94,59 @@ export async function listPairedNode(params: {
     canContinueCodex: canContinueCodexOnNode(params.node),
   };
   if (params.node.connected !== true) {
-    return {
+    const host = {
       ...common,
       connected: false,
       sessions: [],
       error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
     };
+    params.onHost?.(host);
+    return host;
   }
-  try {
-    const raw = await params.runtime.nodes.invoke({
-      nodeId: params.node.nodeId,
-      command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-      params: {
-        cursor: params.query.cursors?.[hostId],
-        limit: params.query.limitPerHost,
-        searchTerm: params.query.search,
-      },
-      timeoutMs: NODE_INVOKE_TIMEOUT_MS,
-      scopes: ["operator.write"],
-    });
-    const page = filterCatalogPageByTitle(
-      parseCatalogPage(unwrapNodeInvokePayload(raw)),
-      params.query.search,
-    );
-    return {
+  const eventualHost = Promise.resolve()
+    .then(async () => {
+      const raw = await params.runtime.nodes.invoke({
+        nodeId: params.node.nodeId,
+        command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+        params: {
+          cursor: params.query.cursors?.[hostId],
+          limit: params.query.limitPerHost,
+          searchTerm: params.query.search,
+        },
+        timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+        scopes: ["operator.write"],
+      });
+      const page = filterCatalogPageByTitle(
+        parseCatalogPage(unwrapNodeInvokePayload(raw)),
+        params.query.search,
+      );
+      return {
+        ...common,
+        connected: true,
+        ...page,
+        sessions: page.sessions.map((session) => {
+          const adopted = params.adoptedSessions.get(adoptedSourceKey(hostId, session.threadId));
+          return adopted ? Object.assign({}, session, { sessionKey: adopted.key }) : session;
+        }),
+      };
+    })
+    .catch((error: unknown) => ({
       ...common,
       connected: true,
-      ...page,
-      sessions: page.sessions.map((session) => {
-        const adopted = params.adoptedSessions.get(adoptedSourceKey(hostId, session.threadId));
-        return adopted ? Object.assign({}, session, { openClawSessionKey: adopted.key }) : session;
-      }),
-    };
+      sessions: [],
+      error: catalogError("NODE_INVOKE_FAILED", error),
+    }));
+  if (params.onHost) {
+    // Keep the 8s aggregate response while allowing cold app-server discovery
+    // to replace that fail-soft page as soon as the node invoke really settles.
+    void eventualHost.then(params.onHost).catch(() => undefined);
+  }
+  try {
+    return await withTimeout(
+      eventualHost,
+      NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+      "paired node Codex session catalog timed out",
+    );
   } catch (error) {
     return {
       ...common,
@@ -188,12 +215,10 @@ function requireContinuableNodeRecord(record: CodexSessionCatalogSession): void 
     throw new CatalogParamsError("Codex session is archived on the paired node");
   }
   if (!isInteractiveThreadSource(record.source)) {
-    throw new CatalogParamsError(
-      "Codex session is not a non-archived interactive CLI or VS Code session",
-    );
+    throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
   }
   if (record.status === "idle" || record.status === "notLoaded") {
-    // The node App Server is a passive catalog reader, so stored CLI/VS Code
+    // The node App Server is a passive catalog reader, so stored native Codex
     // sessions normally report notLoaded. Node resume serializes OpenClaw turns.
     return;
   }

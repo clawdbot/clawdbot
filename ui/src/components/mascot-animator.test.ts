@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { MascotAnimator } from "./mascot-animator.ts";
 import { staticMascotPose, type MascotMood, type MascotPose } from "./mascot-pose.ts";
@@ -126,6 +127,36 @@ describe("MascotAnimator", () => {
     expect(pose.effect).toBe("zzz");
     expect(pose.mouthRound).toBeGreaterThan(0.8);
     expect(pose.leftEyeOpenness).toBeLessThan(0.1);
+  });
+
+  it("overlays and clears the composer tease expression", () => {
+    const animator = new MascotAnimator(17);
+    animator.setMood("idle", 0);
+    animator.setTease(true, 0);
+
+    expect(animator.poseAt(0)).toMatchObject({ mouthRound: 0.5, gaze: { x: 0, y: 0.6 } });
+
+    animator.setTease(false, 0.1);
+    const cleared = animator.poseAt(0.1);
+    expect(cleared.mouthRound).toBe(0);
+    expect(cleared.gaze).not.toEqual({ x: 0, y: 0.6 });
+  });
+
+  it("plays one bounded catch beat and clears it after 0.8 seconds", () => {
+    const animator = new MascotAnimator(23);
+    animator.setMood("idle", 0);
+    animator.poseAt(0);
+    animator.playCatch(0.1);
+
+    let peakHappyEyes = 0;
+    for (let frame = 0; frame <= 24; frame += 1) {
+      const pose = animator.poseAt(0.1 + frame / 30);
+      expectPoseInBounds(pose);
+      peakHappyEyes = Math.max(peakHappyEyes, pose.happyEyes);
+    }
+    expect(peakHappyEyes).toBeGreaterThan(0.8);
+    expect(animator.poseAt(0.91).happyEyes).toBe(0);
+    expect(animator.poseAt(1.2).happyEyes).toBe(0);
   });
 });
 

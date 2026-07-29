@@ -231,6 +231,7 @@ export async function loginOpenAICodexOAuth(params: {
   const waitForLoginToSettle = new Promise<void>((resolve) => {
     markLoginSettled = resolve;
   });
+  const manualPromptAbort = new AbortController();
   try {
     const { onAuth: baseOnAuth, onPrompt } = params.oauth.createVpsAwareHandlers({
       isRemote,
@@ -240,6 +241,7 @@ export async function loginOpenAICodexOAuth(params: {
       openUrl,
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser...",
       manualPromptMessage: manualInputPromptMessage,
+      manualPromptSignal: manualPromptAbort.signal,
     });
     const onAuth = async (event: Parameters<typeof baseOnAuth>[0]) => {
       browserAuthStarted = true;
@@ -273,6 +275,7 @@ export async function loginOpenAICodexOAuth(params: {
     await prompter.note("Trouble with OAuth? See https://docs.openclaw.ai/start/faq", "OAuth help");
     throw rewrittenError;
   } finally {
+    manualPromptAbort.abort();
     markLoginSettled();
   }
 }

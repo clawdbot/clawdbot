@@ -46,6 +46,7 @@ export type TerminalSessionInfo = {
   cwd: string;
   confined: boolean;
   attached: boolean;
+  owner?: "conn" | `agent:${string}`;
   createdAtMs: number;
 };
 
@@ -76,6 +77,8 @@ type PendingEvent =
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+const TERMINAL_LIVENESS_MAX_CONSECUTIVE_FAILURES = 2;
+const TERMINAL_LIVENESS_FAILURE_RETRY_MS = 5_000;
 // The Gateway owns the 30s open deadline. This longer browser watchdog only
 // recovers a half-open socket when the Gateway's response cannot arrive.
 const TERMINAL_OPEN_WATCHDOG_MS = 35_000;
@@ -111,6 +114,8 @@ export class TerminalConnection {
   private pendingOpenCount = 0;
   private livenessTimer: ReturnType<typeof setTimeout> | null = null;
   private livenessProbeInFlight = false;
+  private livenessProbeFailures = 0;
+  private lastLivenessFailureActivityVersion: number | null = null;
   private lastTerminalActivityAtMs = Date.now();
   private inboundActivityVersion = 0;
 
@@ -199,7 +204,7 @@ export class TerminalConnection {
       if (isTerminalOpenRequestTimeout(error)) {
         // The server should answer first. A later browser timeout means this
         // socket cannot carry the response, so disconnect to cancel ownership.
-        this.client.forceReconnect("terminal open watchdog timeout");
+        this.forceReconnect("terminal open watchdog timeout");
       }
       throw new TerminalOpenTimeoutError(error);
     }
@@ -345,7 +350,7 @@ export class TerminalConnection {
           // would duplicate bytes already rendered before the detected gap.
           stream.recovering = false;
           this.pending.delete(sessionId);
-          this.client.forceReconnect("terminal replay reset unavailable");
+          this.forceReconnect("terminal replay reset unavailable");
           return;
         }
         // The ring may include both bytes already delivered and the gap's
@@ -383,7 +388,7 @@ export class TerminalConnection {
         }
         stream.recovering = false;
         this.pending.delete(sessionId);
-        this.client.forceReconnect("terminal replay failed");
+        this.forceReconnect("terminal replay failed");
       });
   }
 
@@ -448,8 +453,19 @@ export class TerminalConnection {
 
   /** Terminal traffic delays the next probe without resetting a timer per chunk. */
   private noteTerminalActivity(): void {
+    this.resetLivenessProbeFailures();
     this.lastTerminalActivityAtMs = Date.now();
     this.inboundActivityVersion += 1;
+  }
+
+  private forceReconnect(reason: string): void {
+    this.resetLivenessProbeFailures();
+    this.client.forceReconnect(reason);
+  }
+
+  private resetLivenessProbeFailures(): void {
+    this.livenessProbeFailures = 0;
+    this.lastLivenessFailureActivityVersion = null;
   }
 
   private scheduleLivenessCheck(delayMs = TERMINAL_LIVENESS_IDLE_MS): void {
@@ -475,29 +491,52 @@ export class TerminalConnection {
       return;
     }
     const activityBefore = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
+    if (
+      this.lastLivenessFailureActivityVersion !== null &&
+      activityBefore !== this.lastLivenessFailureActivityVersion
+    ) {
+      // A frame arrived since the last failed probe, so the socket is proven alive. Treat it like
+      // any other activity: restart the full idle window instead of immediately re-probing on the
+      // short failure-retry backoff (matches the during-probe activity path).
+      this.resetLivenessProbeFailures();
+      this.lastTerminalActivityAtMs = Date.now();
+      this.scheduleLivenessCheck();
+      return;
+    }
+    let nextDelayMs = TERMINAL_LIVENESS_IDLE_MS;
     this.livenessProbeInFlight = true;
     void this.client
       .request("terminal.list", undefined, { timeoutMs: TERMINAL_LIVENESS_PROBE_TIMEOUT_MS })
       .then(() => {
         // The response itself proves the inbound half of the socket is alive.
+        this.resetLivenessProbeFailures();
         this.lastTerminalActivityAtMs = Date.now();
       })
       .catch(() => {
         if (this.streams.size === 0) {
+          this.resetLivenessProbeFailures();
           return;
         }
         const activityNow = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
-        if (activityNow === activityBefore) {
-          this.lastTerminalActivityAtMs = Date.now();
-          this.client.forceReconnect("terminal liveness timeout");
-        } else {
+        if (activityNow !== activityBefore) {
           // Any valid inbound frame proves the socket is not half-open.
+          this.resetLivenessProbeFailures();
           this.lastTerminalActivityAtMs = Date.now();
+          return;
         }
+        this.livenessProbeFailures += 1;
+        this.lastLivenessFailureActivityVersion = activityNow;
+        if (this.livenessProbeFailures >= TERMINAL_LIVENESS_MAX_CONSECUTIVE_FAILURES) {
+          // One probe cannot distinguish a dead socket from a stalled Gateway event loop.
+          this.forceReconnect("terminal liveness timeout");
+          return;
+        }
+        // Keep the old activity time so the short retry performs another probe.
+        nextDelayMs = TERMINAL_LIVENESS_FAILURE_RETRY_MS;
       })
       .finally(() => {
         this.livenessProbeInFlight = false;
-        this.scheduleLivenessCheck();
+        this.scheduleLivenessCheck(nextDelayMs);
       });
   }
 
@@ -539,6 +578,7 @@ export class TerminalConnection {
   }
 
   private stopLiveness(): void {
+    this.resetLivenessProbeFailures();
     if (this.livenessTimer) {
       clearTimeout(this.livenessTimer);
       this.livenessTimer = null;

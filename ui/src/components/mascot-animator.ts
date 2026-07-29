@@ -21,6 +21,7 @@ const NONZERO_SEED = 0x9e37_79b9_7f4a_7c15n;
 const XORSHIFT_MULTIPLIER = 2_685_821_657_736_338_717n;
 const TAU = Math.PI * 2;
 const BLINK_DURATION = 0.16;
+const CATCH_DURATION = 0.8;
 
 function clamp(value: number, min = 0, max = 1): number {
   return Math.min(Math.max(value, min), max);
@@ -115,6 +116,9 @@ export class MascotAnimator {
   private currentGaze = { x: 0, y: 0 };
   private nextClawSnapAt = 0;
   private nextMoodBeatAt = 0;
+  private teaseActive = false;
+  private teaseChangedAt = 0;
+  private catchStartedAt: number | null = null;
 
   constructor(seed: bigint | number = BigInt(Date.now())) {
     this.rng = new SeededGenerator(seed);
@@ -136,6 +140,15 @@ export class MascotAnimator {
     }
   }
 
+  setTease(active: boolean, time: number): void {
+    this.teaseActive = active;
+    this.teaseChangedAt = time;
+  }
+
+  playCatch(time: number): void {
+    this.catchStartedAt = time;
+  }
+
   poseAt(time: number): MascotPose {
     if (this.startTime === null) {
       this.begin(time);
@@ -154,6 +167,23 @@ export class MascotAnimator {
         this.activeGesture = null;
       } else {
         this.applyGesture(this.activeGesture, pose, progress);
+      }
+    }
+
+    if (this.teaseActive && time >= this.teaseChangedAt) {
+      pose.mouthRound = Math.max(pose.mouthRound, 0.5);
+      pose.gaze = { x: 0, y: 0.6 };
+    }
+    if (this.catchStartedAt !== null) {
+      const progress = (time - this.catchStartedAt) / CATCH_DURATION;
+      if (progress >= 1) {
+        this.catchStartedAt = null;
+      } else if (progress >= 0) {
+        const flash = bell(progress);
+        this.applyGesture("clawSnap", pose, clamp(progress / 0.75));
+        pose.happyEyes = Math.max(pose.happyEyes, 0.9 * flash);
+        pose.mouthCurve = Math.max(pose.mouthCurve, 0.7 * flash);
+        pose.blush = Math.max(pose.blush, 0.65 * flash);
       }
     }
 

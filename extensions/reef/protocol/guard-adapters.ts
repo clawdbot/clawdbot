@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   admitGuardAdapter,
@@ -58,6 +59,7 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
         }),
       });
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`guard HTTP ${response.status}`);
       }
       const envelope = await parseJsonResponse(response);
@@ -113,6 +115,7 @@ export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
         }),
       });
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`guard HTTP ${response.status}`);
       }
       const envelope = await parseJsonResponse(response);
@@ -197,8 +200,4 @@ function hasDuplicateKeys(text: string): boolean {
     keys.add(key);
   }
   return false;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

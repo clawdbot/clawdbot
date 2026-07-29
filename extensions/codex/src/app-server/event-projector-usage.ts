@@ -1,10 +1,45 @@
 import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readNonNegativeInteger, readNumber } from "./event-projector-values.js";
-import type { JsonObject } from "./protocol.js";
+import { readNonNegativeInteger, readNumber, readString } from "./event-projector-values.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 
 function readTokenCount(record: JsonObject, key: string): number | undefined {
   const value = readNonNegativeInteger(record, key);
   return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
+}
+
+function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
+  const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
+  const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
+  return last ? normalizeCodexThreadTokenUsage(last) : undefined;
+}
+
+function readCodexThreadContextSnapshot(params: JsonObject): {
+  modelContextWindow?: number;
+  promptTokens?: number;
+} {
+  const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
+  const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
+  const modelContextWindow = tokenUsage
+    ? readTokenCount(tokenUsage, "modelContextWindow")
+    : undefined;
+  const promptTokens = last ? readTokenCount(last, "inputTokens") : undefined;
+  return {
+    ...(modelContextWindow && modelContextWindow > 0 ? { modelContextWindow } : {}),
+    ...(promptTokens !== undefined ? { promptTokens } : {}),
+  };
+}
+
+export function projectCodexThreadUsageUpdate(
+  params: JsonObject,
+  currentUsage: ReturnType<typeof normalizeUsage>,
+  applyUsage: (usage: ReturnType<typeof normalizeUsage>) => void,
+  emitContext: (context: ReturnType<typeof readCodexThreadContextSnapshot>) => void,
+): void {
+  applyUsage(readCodexThreadTokenUsage(params) ?? currentUsage);
+  const context = readCodexThreadContextSnapshot(params);
+  if (context.modelContextWindow !== undefined || context.promptTokens !== undefined) {
+    emitContext(context);
+  }
 }
 
 export function normalizeCodexThreadTokenUsage(
@@ -74,4 +109,29 @@ export function normalizeCodexResponseTokenUsage(
       totalTokens,
     },
   };
+}
+
+export class CodexResponseCompletionProjection {
+  // Replayed notifications keep one upstream response equal to one model iteration.
+  private readonly responseIds = new Set<string>();
+  usage: ReturnType<typeof normalizeUsage>;
+
+  get modelIterations(): number {
+    return this.responseIds.size;
+  }
+
+  clear(): void {
+    this.usage = undefined;
+  }
+
+  record(params: JsonObject): void {
+    const responseId = readString(params, "responseId");
+    if (responseId) {
+      this.responseIds.add(responseId);
+    }
+    const usage = isJsonObject(params.usage) ? params.usage : undefined;
+    // Every provider completion replaces the prior response snapshot. A final
+    // response with missing or malformed usage must leave freshness unknown.
+    this.usage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
+  }
 }

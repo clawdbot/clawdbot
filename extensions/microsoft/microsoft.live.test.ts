@@ -1,5 +1,5 @@
 // Microsoft tests cover microsoft plugin behavior.
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 

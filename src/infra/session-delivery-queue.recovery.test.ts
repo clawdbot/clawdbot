@@ -1,9 +1,14 @@
 // Covers session delivery queue recovery behavior.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { controlNextRecoverySleep } from "../../test/helpers/infra/delivery-recovery.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
+const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
+
+vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
+
 import {
   deferSessionDelivery,
   failSessionDelivery,
@@ -22,6 +27,11 @@ import {
 } from "./session-delivery-queue.js";
 
 describe("session-delivery queue recovery", () => {
+  beforeEach(() => {
+    sleepMock.mockReset();
+    sleepMock.mockResolvedValue(undefined);
+  });
+
   it("replays and acks pending entries on recovery", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
@@ -267,6 +277,7 @@ describe("session-delivery queue recovery", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
         await enqueueSessionDelivery(
           {
@@ -285,16 +296,9 @@ describe("session-delivery queue recovery", () => {
           tempDir,
         );
 
-        let firstDelivered!: () => void;
-        const firstDeliveredPromise = new Promise<void>((resolve) => {
-          firstDelivered = resolve;
-        });
         const deliveryTimes: number[] = [];
         const deliver = vi.fn(async () => {
           deliveryTimes.push(Date.now());
-          if (deliveryTimes.length === 1) {
-            firstDelivered();
-          }
         });
 
         const recovery = recoverPendingSessionDeliveries({
@@ -306,13 +310,10 @@ describe("session-delivery queue recovery", () => {
             error: vi.fn(),
           },
         });
-        await firstDeliveredPromise;
-        expect(deliver).toHaveBeenCalledTimes(1);
 
-        await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+        await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
         expect(deliver).toHaveBeenCalledTimes(1);
-
-        await vi.advanceTimersByTimeAsync(1);
+        controlledSleep.release();
         const summary = await recovery;
 
         expect(deliver).toHaveBeenCalledTimes(2);
@@ -329,6 +330,7 @@ describe("session-delivery queue recovery", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
         for (const text of ["first", "second", "third"]) {
           await enqueueSessionDelivery(
@@ -341,16 +343,9 @@ describe("session-delivery queue recovery", () => {
           );
         }
 
-        let firstDelivered!: () => void;
-        const firstDeliveredPromise = new Promise<void>((resolve) => {
-          firstDelivered = resolve;
-        });
         const deliveryTimes: number[] = [];
         const deliver = vi.fn(async () => {
           deliveryTimes.push(Date.now());
-          if (deliveryTimes.length === 1) {
-            firstDelivered();
-          }
         });
 
         const recovery = recoverPendingSessionDeliveries({
@@ -363,9 +358,10 @@ describe("session-delivery queue recovery", () => {
             error: vi.fn(),
           },
         });
-        await firstDeliveredPromise;
 
-        await vi.advanceTimersByTimeAsync(1);
+        await expect(controlledSleep.started).resolves.toBe(1);
+        expect(deliver).toHaveBeenCalledTimes(1);
+        controlledSleep.release();
         const summary = await recovery;
 
         expect(deliver).toHaveBeenCalledTimes(1);

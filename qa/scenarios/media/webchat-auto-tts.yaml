@@ -2,8 +2,8 @@ title: WebChat auto TTS delivery
 
 scenario:
   id: webchat-auto-tts
-  surface: media-understanding-and-media-generation
-  category: media-understanding-and-media-generation.text-to-speech-delivery
+  surface: media
+  category: media.text-to-speech-delivery
   coverage:
     primary:
       - media.tts

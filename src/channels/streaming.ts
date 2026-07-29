@@ -5,26 +5,21 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type {
+  BlockStreamingChunkConfig,
+  BlockStreamingCoalesceConfig,
   ChannelStreamingCommandTextMode,
-  ChannelStreamingProgressConfig,
   ChannelStreamingConfig,
+  ChannelStreamingProgressConfig,
   StreamingMode,
+  TextChunkMode,
 } from "../config/types.base.js";
 import {
   DEFAULT_PROGRESS_DRAFT_LABELS as SHARED_PROGRESS_DRAFT_LABELS,
   selectProgressLabel,
 } from "../shared/progress-labels.js";
 import { asBoolean } from "../utils/boolean.js";
-import type { StreamingCompatEntry } from "./streaming-compat-entry.js";
-import { warnFlatStreamingKeyFallback } from "./streaming-flat-key-deprecation.js";
 
-export {
-  resolveChannelStreamingChunkMode,
-  resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingBlockCoalesce,
-  resolveChannelStreamingPreviewChunk,
-} from "./streaming-flat-key-deprecation.js";
-export type { StreamingCompatEntry } from "./streaming-compat-entry.js";
+export type StreamingCompatEntry = { streaming?: unknown };
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -39,12 +34,7 @@ export type {
 } from "../config/types.base.js";
 export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
-// Bundled schemas are nested-only; doctor migrates flat delivery keys and
-// scalar `streaming`. The flat delivery fallback lives wholly in
-// streaming-flat-key-deprecation.ts (re-exported above); after the next
-// release train delete that module, the re-exports, the scalar read in
-// resolveChannelPreviewStreamMode, and the flat StreamingCompatEntry fields.
-// Mode-family aliases (streamMode) are doctor-only and stay unread here.
+// Runtime reads are nested-only; doctor migrates legacy streaming spellings.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -186,10 +176,6 @@ export type AgentPlanStep = {
   status: AgentPlanStepStatus;
 };
 
-/**
- * Plan-event ingress shape for the SDK deprecation window: shipped producers
- * through 2026.7.x sent `steps: string[]`. Remove with the string form.
- */
 export type AgentPlanStepInput = AgentPlanStep | string;
 
 function isAgentPlanStepStatus(value: unknown): value is AgentPlanStepStatus {
@@ -197,25 +183,11 @@ function isAgentPlanStepStatus(value: unknown): value is AgentPlanStepStatus {
 }
 
 /**
- * Normalizes plan-event steps at public ingress boundaries. Legacy string
- * steps become pending typed steps; malformed entries are dropped.
+ * TODO(remove): normalizes the pre-2026.7.2 string plan-step wire shape to
+ * pending typed steps. Bundled producers all emit typed steps, and
+ * @openclaw/codex is force-updated with core, so this only covers a plugin
+ * pinned against an update. Delete once that cannot happen.
  */
-/**
- * Builds both plan-step payload fields for `onPlanUpdate` during the SDK
- * deprecation window: canonical `planSteps` plus the shipped pre-2026.8
- * `steps: string[]` form. Collapse to `planSteps` when the window closes.
- */
-export function buildPlanUpdateStepFields(value: unknown): {
-  steps?: string[];
-  planSteps?: AgentPlanStep[];
-} {
-  const planSteps = normalizeAgentPlanSteps(value);
-  if (!planSteps) {
-    return {};
-  }
-  return { steps: planSteps.map((entry) => entry.step), planSteps };
-}
-
 export function normalizeAgentPlanSteps(value: unknown): AgentPlanStep[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -797,6 +769,33 @@ export function getChannelStreamingConfigObject(
   return streaming ? (streaming as ChannelStreamingConfig) : undefined;
 }
 
+export function resolveChannelStreamingChunkMode(
+  entry: StreamingCompatEntry | null | undefined,
+): TextChunkMode | undefined {
+  const mode = getChannelStreamingConfigObject(entry)?.chunkMode;
+  return mode === "length" || mode === "newline" ? mode : undefined;
+}
+
+export function resolveChannelStreamingBlockEnabled(
+  entry: StreamingCompatEntry | null | undefined,
+): boolean | undefined {
+  return asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled);
+}
+
+export function resolveChannelStreamingBlockCoalesce(
+  entry: StreamingCompatEntry | null | undefined,
+): BlockStreamingCoalesceConfig | undefined {
+  const coalesce = asObjectRecord(getChannelStreamingConfigObject(entry)?.block?.coalesce);
+  return (coalesce as BlockStreamingCoalesceConfig | null) ?? undefined;
+}
+
+export function resolveChannelStreamingPreviewChunk(
+  entry: StreamingCompatEntry | null | undefined,
+): BlockStreamingChunkConfig | undefined {
+  const chunk = asObjectRecord(getChannelStreamingConfigObject(entry)?.preview?.chunk);
+  return (chunk as BlockStreamingChunkConfig | null) ?? undefined;
+}
+
 export function resolveChannelStreamingPreviewToolProgress(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = true,
@@ -880,22 +879,7 @@ export function resolveChannelPreviewStreamMode(
   entry: StreamingCompatEntry | null | undefined,
   defaultMode: "off" | "partial",
 ): StreamingMode {
-  // Scalar `streaming` (mode string or boolean) is rejected by every bundled
-  // channel schema and doctor-migrated to streaming.mode; the read here stays
-  // only for external SDK plugin configs that predate the nested shape.
-  const streamingConfig = getChannelStreamingConfigObject(entry);
-  const parsedStreaming = parsePreviewStreamingMode(streamingConfig?.mode ?? entry?.streaming);
-  if (parsedStreaming) {
-    if (!streamingConfig) {
-      warnFlatStreamingKeyFallback("streaming", "mode");
-    }
-    return parsedStreaming;
-  }
-  if (typeof entry?.streaming === "boolean") {
-    warnFlatStreamingKeyFallback("streaming", "mode");
-    return entry.streaming ? "partial" : "off";
-  }
-  return defaultMode;
+  return parsePreviewStreamingMode(getChannelStreamingConfigObject(entry)?.mode) ?? defaultMode;
 }
 
 export function resolveChannelProgressDraftConfig(
@@ -1202,10 +1186,11 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       next[existingIndex] = replacement;
       return next.slice(-maxLines);
     }
-  }
-  const previous = lines.at(-1);
-  if (previous && normalizeChannelProgressDraftLineIdentity(previous) === normalized) {
-    return lines;
+  } else {
+    const previous = lines.at(-1);
+    if (previous && normalizeChannelProgressDraftLineIdentity(previous) === normalized) {
+      return lines;
+    }
   }
   return [...lines, line].slice(-maxLines);
 }

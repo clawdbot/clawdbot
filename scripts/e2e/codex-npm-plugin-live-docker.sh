@@ -47,6 +47,15 @@ if [[ -z "$SESSION_STORE_CONTRACT" ]]; then
     SESSION_STORE_CONTRACT="legacy-json"
   fi
 fi
+BINDING_STORE_CONTRACT="${OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT:-}"
+if [[ -z "$BINDING_STORE_CONTRACT" ]]; then
+  if [[ -f "$CANDIDATE_ROOT/extensions/codex/src/app-server/session-binding-meta.ts" ]]; then
+    BINDING_STORE_CONTRACT="plugin-kv"
+  else
+    # Frozen targets before the binding-store migration persist a session sidecar.
+    BINDING_STORE_CONTRACT="legacy-sidecar"
+  fi
+fi
 run_log=""
 
 cleanup() {
@@ -155,6 +164,7 @@ if ! docker_e2e_run_with_harness \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-openai/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="$CODEX_PLUGIN_SPEC" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT="$BINDING_STORE_CONTRACT" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT="$SESSION_STORE_CONTRACT" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES=$ASSERT_MAX_TEXT_FILE_BYTES" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES=$ASSERT_MAX_ERROR_TAIL_BYTES" \
@@ -226,6 +236,9 @@ dump_debug_logs() {
     /tmp/openclaw-codex-agent-turn1.err \
     /tmp/openclaw-codex-agent-turn2.json \
     /tmp/openclaw-codex-agent-turn2.err \
+    /tmp/openclaw-codex-followthrough.json \
+    /tmp/openclaw-codex-followthrough.log \
+    /tmp/openclaw-codex-followthrough.err \
     /tmp/openclaw-codex-plugin-uninstall.log \
     /tmp/openclaw-codex-plugins-list-after-uninstall.json \
     /tmp/openclaw-codex-agent-after-uninstall.json \
@@ -340,6 +353,70 @@ run_agent_turn \
   /tmp/openclaw-codex-agent.err
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$SESSION_ID" "$MODEL_REF"
+
+FOLLOWTHROUGH_SESSION_ID="${SESSION_ID}-followthrough"
+FOLLOWTHROUGH_PROGRESS_MARKER="${SUCCESS_MARKER}-FOLLOWTHROUGH-PROGRESS"
+FOLLOWTHROUGH_COMPLETE_MARKER="${SUCCESS_MARKER}-FOLLOWTHROUGH-COMPLETE"
+FOLLOWTHROUGH_WORKSPACE="${OPENCLAW_STATE_DIR:?missing OPENCLAW_STATE_DIR}/workspace"
+FOLLOWTHROUGH_ARTIFACT="$FOLLOWTHROUGH_WORKSPACE/codex-progress-followthrough.txt"
+FOLLOWTHROUGH_SUFFIX="$(node -e 'process.stdout.write(crypto.randomUUID().replaceAll("-", "").slice(0, 12))')"
+mkdir -p "$FOLLOWTHROUGH_WORKSPACE"
+printf 'qa_alpha=amber-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_ALPHA.md"
+printf 'qa_beta=violet-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_BETA.md"
+printf 'qa_gamma=silver-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_GAMMA.md"
+rm -f "$FOLLOWTHROUGH_ARTIFACT"
+
+FOLLOWTHROUGH_PROMPT="$(cat <<PROMPT
+Live release follow-through check.
+
+First call message(action=send) without passing final and send exactly
+$FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. The final field must be
+omitted, not false. Make this progress send your only tool call in this step,
+and wait for its result before calling any other tool.
+
+Only after that send succeeds, read FOLLOWTHROUGH_ALPHA.md,
+FOLLOWTHROUGH_BETA.md, and FOLLOWTHROUGH_GAMMA.md from the workspace. Write
+their three complete file lines byte-for-byte, including each key= prefix, to
+./codex-progress-followthrough.txt in alpha, beta, gamma order. Write exactly
+one newline after each line, including the final line.
+
+Only after the artifact write succeeds, call message(action=send) with
+final=true and send exactly $FOLLOWTHROUGH_COMPLETE_MARKER. Do not expose the
+hidden values in either visible message.
+PROMPT
+)"
+
+echo "Running Codex progress follow-through regression turn..."
+OPENCLAW_PACKAGE_ROOT="$(openclaw_e2e_package_root "$NPM_CONFIG_PREFIX")"
+if node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs \
+  "$OPENCLAW_PACKAGE_ROOT" \
+  "$FOLLOWTHROUGH_SESSION_ID" \
+  "$MODEL_REF" \
+  "$AGENT_TURN_TIMEOUT_SECONDS" \
+  /tmp/openclaw-codex-followthrough.json \
+  "$FOLLOWTHROUGH_PROMPT" \
+  >/tmp/openclaw-codex-followthrough.log \
+  2>/tmp/openclaw-codex-followthrough.err </dev/null; then
+  followthrough_status=0
+else
+  followthrough_status=$?
+fi
+echo "followthrough_agent_status: $followthrough_status stdout_bytes=$(wc -c </tmp/openclaw-codex-followthrough.json 2>/dev/null || printf 0) stderr_bytes=$(wc -c </tmp/openclaw-codex-followthrough.err 2>/dev/null || printf 0)"
+if [ "$followthrough_status" -ne 0 ]; then
+  dump_debug_logs "$followthrough_status"
+  exit "$followthrough_status"
+fi
+node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs \
+  assert-followthrough \
+  "$FOLLOWTHROUGH_PROGRESS_MARKER" \
+  "$FOLLOWTHROUGH_COMPLETE_MARKER" \
+  "$FOLLOWTHROUGH_SESSION_ID" \
+  "$MODEL_REF" \
+  "$FOLLOWTHROUGH_ARTIFACT" \
+  "$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_ALPHA.md" \
+  "$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_BETA.md" \
+  "$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_GAMMA.md"
+echo "followthrough_reply: ${FOLLOWTHROUGH_PROGRESS_MARKER} -> ${FOLLOWTHROUGH_COMPLETE_MARKER}"
 echo "TRANSCRIPT_END"
 
 echo "Uninstalling Codex plugin and verifying the configured harness now fails..."

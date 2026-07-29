@@ -4,6 +4,7 @@ import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import pLimit, { type LimitFunction } from "p-limit";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { escapeRegExp } from "../shared/regexp.js";
 import { readJsonIfExists } from "./json-files.js";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
@@ -59,6 +60,14 @@ const OMITTED_PLUGIN_SDK_TEST_FILES = new Set([
   "dist/plugin-sdk/test-env.js",
   "dist/plugin-sdk/test-fixtures.d.ts",
   "dist/plugin-sdk/test-fixtures.js",
+  "dist/plugin-sdk/test-live.d.ts",
+  "dist/plugin-sdk/test-live.js",
+  "dist/plugin-sdk/test-live-auth.d.ts",
+  "dist/plugin-sdk/test-live-auth.js",
+  "dist/plugin-sdk/test-media-generation.d.ts",
+  "dist/plugin-sdk/test-media-generation.js",
+  "dist/plugin-sdk/test-media-understanding.d.ts",
+  "dist/plugin-sdk/test-media-understanding.js",
   "dist/plugin-sdk/test-node-mocks.d.ts",
   "dist/plugin-sdk/test-node-mocks.js",
 ]);
@@ -106,10 +115,6 @@ function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
 
   const pluginDependencyDir = parts[3] ?? "";
   return pluginDependencyDir.toLowerCase() === "node_modules";
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
 }
 
 function compilePackageFilesExclusionPattern(pattern: string): RegExp {

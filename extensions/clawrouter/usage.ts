@@ -82,7 +82,9 @@ async function readClawRouterUsagePayload(
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`ClawRouter usage response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder().decode(buffer)) as ClawRouterUsagePayload;
+  return JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(buffer),
+  ) as ClawRouterUsagePayload;
 }
 
 export async function fetchClawRouterUsage(params: {
@@ -113,6 +115,7 @@ export async function fetchClawRouterUsage(params: {
   );
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
     }
     const payload = await readClawRouterUsagePayload(response, params.timeoutMs);

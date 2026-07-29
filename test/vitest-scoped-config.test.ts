@@ -9,7 +9,7 @@ import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-conf
 import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
-import { agentsCoreIsolatedTestFiles } from "./vitest/vitest.agents-paths.mjs";
+import { agentVitestProjectOwners } from "./vitest/vitest.agents-paths.mjs";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
 import { createAutoReplyReplyVitestConfig } from "./vitest/vitest.auto-reply-reply.config.ts";
@@ -17,6 +17,8 @@ import { createAutoReplyTopLevelVitestConfig } from "./vitest/vitest.auto-reply-
 import { createAutoReplyVitestConfig } from "./vitest/vitest.auto-reply.config.ts";
 import bundledVitestConfig from "./vitest/vitest.bundled.config.ts";
 import { createChannelsVitestConfig } from "./vitest/vitest.channels.config.ts";
+import { cliProcessTestFiles } from "./vitest/vitest.cli-process-paths.mjs";
+import { createCliProcessVitestConfig } from "./vitest/vitest.cli-process.config.ts";
 import { createCliVitestConfig } from "./vitest/vitest.cli.config.ts";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
@@ -521,6 +523,7 @@ describe("createScopedVitestConfig", () => {
 describe("scoped vitest configs", () => {
   const defaultChannelsConfig = createChannelsVitestConfig({});
   const defaultAcpConfig = createAcpVitestConfig({});
+  const defaultCliProcessConfig = createCliProcessVitestConfig({});
   const defaultCliConfig = createCliVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
   const defaultExtensionAcpxConfig = createExtensionAcpxVitestConfig({});
@@ -611,6 +614,19 @@ describe("scoped vitest configs", () => {
     expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
     expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
     expectForkedIsolatedRunner(defaultInfraConfig);
+    expectForkedIsolatedRunner(defaultCliProcessConfig);
+  });
+
+  it("keeps process-launching CLI files out of the shared CLI graph", () => {
+    expect(requireTestConfig(defaultCliConfig).exclude).toEqual(
+      expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
+    );
+    expect(requireTestConfig(defaultCliProcessConfig).include).toEqual(cliProcessTestFiles);
+    expect(requireTestConfig(defaultCliProcessConfig).fileParallelism).toBe(false);
+  });
+
+  it("keeps native SQLite runtime config tests in forked workers", () => {
+    expectForkedNonIsolatedRunner(defaultRuntimeConfig);
   });
 
   it("keeps process, runtime config, and tooling lanes off the openclaw runtime setup", () => {
@@ -647,7 +663,7 @@ describe("scoped vitest configs", () => {
     const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
     const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
 
-    const scopedIsolatedFiles = agentsCoreIsolatedTestFiles.map((file) =>
+    const scopedIsolatedFiles = agentVitestProjectOwners.coreIsolated.include.map((file) =>
       file.replace("src/agents/", ""),
     );
     expect(sharedConfig.exclude).toEqual(expect.arrayContaining(scopedIsolatedFiles));
@@ -714,8 +730,8 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
-  it("serializes Telegram extension files that share process globals", () => {
-    expectThreadedNonIsolatedRunner(defaultExtensionTelegramConfig);
+  it("serializes and isolates Telegram extension files with conflicting mocks", () => {
+    expectThreadedIsolatedRunner(defaultExtensionTelegramConfig);
     expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
   });
 
@@ -866,6 +882,11 @@ describe("scoped vitest configs", () => {
   it("normalizes memory extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionMemoryConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
+      "test/setup.ts",
+      "test/setup.extensions.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
     expect(testConfig.include).toEqual([
       "memory-core/**/*.test.ts",
       "memory-lancedb/**/*.test.ts",

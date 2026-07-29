@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 
-vi.mock("../tts/tts.js", () => ({
+vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 

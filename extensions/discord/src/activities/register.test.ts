@@ -1,7 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerDiscordActivities } from "./register.js";
 import { getDiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
+import { openDiscordActivityStores } from "./store.js";
 import { createMemoryKeyedStore } from "./test-helpers.test-support.js";
 
 afterEach(() => {
@@ -29,6 +31,18 @@ function createApi(config: Record<string, unknown>) {
 }
 
 describe("Discord Activities registration", () => {
+  it("requires atomic plugin state updates", () => {
+    const openKeyedStore = <T>() => {
+      const store: PluginStateKeyedStore<T> = createMemoryKeyedStore<T>();
+      store.update = undefined;
+      return store;
+    };
+
+    expect(() => openDiscordActivityStores(openKeyedStore)).toThrow(
+      "Discord Activities require atomic plugin state updates",
+    );
+  });
+
   it("registers no route, tool, or runtime when unconfigured", () => {
     const test = createApi({ channels: { discord: { token: "test" } } });
     registerDiscordActivities(test.api);

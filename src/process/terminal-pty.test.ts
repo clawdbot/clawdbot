@@ -49,7 +49,9 @@ describe("terminal PTY teardown", () => {
   it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
     const { handle, pty } = await spawnFakePty();
     handle.kill(signal);
-    expect(mocks.signalProcessTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL");
+    expect(mocks.signalProcessTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL", {
+      detached: true,
+    });
     expect(pty.kill).not.toHaveBeenCalled();
   });
 
@@ -124,6 +126,28 @@ describe("terminal PTY invocation", () => {
       expect.objectContaining({
         name: "screen-256color",
         env: expect.objectContaining({ TERM: "screen-256color" }),
+      }),
+    );
+  });
+
+  it("canonicalizes a case-insensitive Windows TERM key", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    await spawnTerminalPty({
+      file: "powershell.exe",
+      args: [],
+      env: { Term: "screen-256color" },
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "powershell.exe",
+      [],
+      expect.objectContaining({
+        name: "screen-256color",
+        env: { TERM: "screen-256color" },
       }),
     );
   });
