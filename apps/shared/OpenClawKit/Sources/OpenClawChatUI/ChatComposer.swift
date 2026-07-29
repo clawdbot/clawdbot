@@ -1,3 +1,4 @@
+import CoreTransferable
 import Foundation
 import Observation
 import SwiftUI
@@ -16,6 +17,23 @@ import UIKit
 /// Sendable. This wrapper is only used for one detached JPEG encoding pass.
 private struct OpenClawSendableCameraImage: @unchecked Sendable {
     let value: UIImage
+}
+
+private struct OpenClawVideoTransfer: Sendable, Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { video in
+            SentTransferredFile(video.url)
+        } importing: { received in
+            let fileExtension = received.file.pathExtension
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-picker-video-\(UUID().uuidString)")
+                .appendingPathExtension(fileExtension.isEmpty ? "mov" : fileExtension)
+            try FileManager.default.copyItem(at: received.file, to: destination)
+            return OpenClawVideoTransfer(url: destination)
+        }
+    }
 }
 #endif
 
@@ -133,7 +151,7 @@ struct OpenClawChatComposer: View {
             }
             .fileImporter(
                 isPresented: self.fileImporterPresentation,
-                allowedContentTypes: [.image],
+                allowedContentTypes: [.image, .movie, .audiovisualContent],
                 allowsMultipleSelection: true,
                 onCompletion: { result in
                     let owner = self.fileImporterOwner
@@ -144,7 +162,7 @@ struct OpenClawChatComposer: View {
                 isPresented: self.photoPickerPresentation,
                 selection: self.$pickerItems,
                 maxSelectionCount: 8,
-                matching: .images)
+                matching: .any(of: [.images, .videos]))
             .onChange(of: self.pickerItems) { _, items in
                 guard !items.isEmpty else { return }
                 let owner = self.photoPickerOwner
@@ -648,7 +666,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 CompactChatAttachmentLabel()
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
@@ -660,7 +678,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 Image(systemName: "paperclip")
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -673,7 +691,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 CompactChatAttachmentLabel()
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
@@ -685,7 +703,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 Image(systemName: "paperclip")
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -1421,10 +1439,10 @@ extension OpenClawChatComposer {
     private func pickFilesMac() {
         guard self.isAttachmentInputEnabled else { return }
         let panel = NSOpenPanel()
-        panel.title = "Select image attachments"
+        panel.title = "Select attachments"
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = [.image, .movie, .audiovisualContent]
         panel.begin { resp in
             guard resp == .OK else { return }
             self.viewModel.addAttachments(urls: panel.urls)
@@ -1547,16 +1565,30 @@ extension OpenClawChatComposer {
                 guard self.viewModel === owner.viewModel,
                       owner.viewModel.isCurrentSession(owner.session)
                 else { break }
-                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
-                let type = item.supportedContentTypes.first ?? .image
+                let type = item.supportedContentTypes.first(where: {
+                    $0.conforms(to: .movie) || $0.conforms(to: .image)
+                }) ?? item.supportedContentTypes.first ?? .image
                 let ext = type.preferredFilenameExtension ?? "jpg"
                 let mime = type.preferredMIMEType ?? "image/jpeg"
-                let name = "photo-\(UUID().uuidString.prefix(8)).\(ext)"
-                await owner.viewModel.addImageAttachment(
-                    data: data,
-                    fileName: name,
-                    mimeType: mime,
-                    for: owner.session)
+                let prefix = type.conforms(to: .movie) ? "video" : "photo"
+                let name = "\(prefix)-\(UUID().uuidString.prefix(8)).\(ext)"
+                if type.conforms(to: .movie) {
+                    guard let transfer = try await item.loadTransferable(type: OpenClawVideoTransfer.self)
+                    else { continue }
+                    defer { try? FileManager.default.removeItem(at: transfer.url) }
+                    await owner.viewModel.addVideoAttachment(
+                        url: transfer.url,
+                        fileName: name,
+                        mimeType: mime,
+                        expectedSession: owner.session)
+                } else {
+                    guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                    await owner.viewModel.addImageAttachment(
+                        data: data,
+                        fileName: name,
+                        mimeType: mime,
+                        for: owner.session)
+                }
             } catch {
                 guard self.viewModel === owner.viewModel,
                       owner.viewModel.isCurrentSession(owner.session)
