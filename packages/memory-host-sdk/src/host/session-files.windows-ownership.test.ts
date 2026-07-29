@@ -229,7 +229,9 @@ describe("memory session directory ownership", () => {
           transcriptSource: "sqlite",
         }),
       );
-      expect(entries).not.toContainEqual(expect.objectContaining({ sessionFile: otherSessionFile }));
+      expect(entries).not.toContainEqual(
+        expect.objectContaining({ sessionFile: otherSessionFile }),
+      );
     } finally {
       platform.mockRestore();
     }
@@ -258,7 +260,9 @@ describe("memory session directory ownership", () => {
           transcriptSource: "sqlite",
         }),
       );
-      expect(entries).not.toContainEqual(expect.objectContaining({ sessionFile: otherSessionFile }));
+      expect(entries).not.toContainEqual(
+        expect.objectContaining({ sessionFile: otherSessionFile }),
+      );
     } finally {
       platform.mockRestore();
     }

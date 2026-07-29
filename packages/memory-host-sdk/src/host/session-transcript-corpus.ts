@@ -204,9 +204,7 @@ function resolveSessionStoreTranscriptCorpusSource(
       ? relativeAgentPath.split(path.sep).at(0)
       : undefined;
     const rootAgentId = rootAgentSegment
-      ? extractAgentIdFromSessionsDir(
-          path.join(canonicalAgentsRoot, rootAgentSegment, "sessions"),
-        )
+      ? extractAgentIdFromSessionsDir(path.join(canonicalAgentsRoot, rootAgentSegment, "sessions"))
       : null;
     const pathAgentId = extractAgentIdFromSessionPath(sessionFile);
     // Every path below agents/<id> belongs to that agent, including custom
