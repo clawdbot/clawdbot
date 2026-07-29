@@ -44,7 +44,7 @@ function looksLikePem(input: string): boolean {
  * doing any crypto. Bounds length for every form and checks the decoded byte
  * count on the raw path; full ASN.1 validation stays with `createPublicKey`.
  */
-export function isPlausibleEd25519PublicKeyInput(input: unknown): input is string {
+function isPlausibleEd25519PublicKeyInput(input: unknown): input is string {
   if (typeof input !== "string" || input.length === 0) {
     return false;
   }
@@ -66,7 +66,7 @@ export function isPlausibleEd25519PublicKeyInput(input: unknown): input is strin
  * Mirrors the base64url-then-base64 tolerance of the verify path, so the cheap
  * pre-check never rejects an input the real path would have accepted.
  */
-export function isPlausibleEd25519SignatureInput(input: unknown): input is string {
+function isPlausibleEd25519SignatureInput(input: unknown): input is string {
   if (typeof input !== "string" || input.length === 0) {
     return false;
   }
