@@ -3240,8 +3240,7 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("shows the download fallback when a video format cannot play", () => {
-    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("");
+  it("shows the download fallback when the video element emits an error", () => {
     const container = document.body.appendChild(document.createElement("div"));
     container.dataset.mediaPlayerTestFixture = "";
 
@@ -3267,6 +3266,7 @@ describe("grouped chat rendering", () => {
     );
 
     const card = expectElement(container, ".chat-assistant-attachment-card--video", HTMLElement);
+    expectElement(card, "video", HTMLVideoElement).dispatchEvent(new Event("error"));
     expect(card.hasAttribute("data-unplayable")).toBe(true);
     expect(card.querySelector(".chat-assistant-video-fallback")?.textContent).toContain(
       "Can't play this format — download instead.",

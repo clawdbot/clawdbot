@@ -333,20 +333,8 @@ function markVideoUnplayable(media: HTMLVideoElement, unplayable: boolean): void
   videoCardFor(media)?.toggleAttribute("data-unplayable", unplayable);
 }
 
-function syncVideoSource(
-  media: HTMLVideoElement,
-  source: string,
-  sourceIdentity: string,
-  mimeType?: string,
-): void {
+function syncVideoSource(media: HTMLVideoElement, source: string, sourceIdentity: string): void {
   getChatMediaSourceController(media).updateSource(media, source, sourceIdentity);
-  if (
-    mimeType?.trim() &&
-    !media.canPlayType(mimeType) &&
-    !videoCardFor(media)?.hasAttribute("data-metadata-loaded")
-  ) {
-    markVideoUnplayable(media, true);
-  }
 }
 
 function recoverVideoSource(media: HTMLVideoElement): boolean {
@@ -483,7 +471,7 @@ export function renderAssistantAttachments(
                   preload="metadata"
                   ${ref((element) => {
                     if (element instanceof HTMLVideoElement) {
-                      syncVideoSource(element, attachmentUrl, attachment.url, attachment.mimeType);
+                      syncVideoSource(element, attachmentUrl, attachment.url);
                     }
                   })}
                   @loadedmetadata=${(event: Event) => {
