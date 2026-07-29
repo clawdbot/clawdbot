@@ -640,6 +640,7 @@ function renderChatModelReasoningSelect(params: {
         aria-label="${t("chat.selectors.model")}, ${t(
           "chat.selectors.thinkingLevel",
         )}: ${triggerTitle}"
+        title="${t("chat.selectors.thinkingLevel")}: ${triggerThinking}"
         aria-disabled=${disabled ? "true" : "false"}
         @click=${(event: MouseEvent) => {
           if (disabled) {
