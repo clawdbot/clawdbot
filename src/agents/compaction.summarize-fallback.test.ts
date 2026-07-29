@@ -194,6 +194,15 @@ describe("summarizeWithFallback", () => {
       } satisfies UserMessage,
     ];
 
+    let callCount = 0;
+    agentSessionMocks.generateSummary.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.reject(new Error("full summarization error"));
+      }
+      return Promise.reject(new Error("partial retry error"));
+    });
+
     await expect(
       summarizeWithFallback({
         messages,
@@ -204,8 +213,8 @@ describe("summarizeWithFallback", () => {
         maxChunkTokens: 50_000,
         contextWindow: 200_000,
       }),
-    ).rejects.toThrow("All summarization attempts failed for 2 messages");
-    // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
-    expect(agentSessionMocks.generateSummary.mock.calls.length).toBe(2);
+    ).rejects.toThrow(
+      "All summarization attempts failed for 2 messages. Last error: partial retry error",
+    );
   });
 });

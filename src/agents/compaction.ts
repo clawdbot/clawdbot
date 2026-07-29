@@ -266,16 +266,16 @@ async function summarizeWithFallbackResult(params: {
 
   // Try full summarization first
   let partialSummaryFallback: string | undefined;
-  let fullError: unknown;
+  let lastError: unknown;
   try {
     return { kind: "summary", text: await summarizeChunks(params) };
   } catch (err) {
-    fullError = err;
+    lastError = err;
     if (params.signal.aborted) {
-      throw fullError;
+      throw lastError;
     }
-    log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
-    partialSummaryFallback = (fullError as PartialSummaryError).partialSummary;
+    log.warn(`Full summarization failed: ${formatErrorMessage(lastError)}`);
+    partialSummaryFallback = (lastError as PartialSummaryError).partialSummary;
   }
 
   // Fallback 1: Summarize only small messages, note oversized ones.
@@ -296,14 +296,15 @@ async function summarizeWithFallbackResult(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return { kind: "summary", text: partialSummary + notes };
     } catch (partialError) {
+      lastError = partialError;
       if (params.signal.aborted) {
-        throw partialError;
+        throw lastError;
       }
-      log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
+      log.warn(`Partial summarization also failed: ${formatErrorMessage(lastError)}`);
       // Prefer the oversized retry's partial summary over the full attempt's,
       // since it covers the non-oversized transcript. Append oversized notes
       // so the model knows large content was filtered.
-      const retryPartial = (partialError as PartialSummaryError).partialSummary;
+      const retryPartial = (lastError as PartialSummaryError).partialSummary;
       if (retryPartial) {
         const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
         partialSummaryFallback = retryPartial + notes;
@@ -322,8 +323,8 @@ async function summarizeWithFallbackResult(params: {
   throw new CompactionError(
     "summarization_failed",
     `All summarization attempts failed for ${messages.length} messages. ` +
-      `Last error: ${fullError instanceof Error ? fullError.message : String(fullError)}`,
-    fullError instanceof Error ? fullError : undefined,
+      `Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    lastError instanceof Error ? lastError : undefined,
   );
 }
 

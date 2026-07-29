@@ -11,7 +11,6 @@ export * from "./harness/messages.js";
 export * from "./harness/prompt-template-arguments.js";
 export { buildSessionContext } from "./harness/session/session.js";
 export { uuidv7 } from "./harness/session/uuid.js";
-export { CompactionError } from "./harness/types.js";
 export type {
   BranchSummaryResult,
   FileOperations,

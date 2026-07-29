@@ -50,7 +50,6 @@ export {
   COMPACTION_SUMMARY_SUFFIX,
   DEFAULT_COMPACTION_SETTINGS,
 } from "../../packages/agent-core/src/index.js";
-export { CompactionError } from "../../packages/agent-core/src/index.js";
 export type {
   AfterToolCallResult,
   AfterToolOutcomeContext,
