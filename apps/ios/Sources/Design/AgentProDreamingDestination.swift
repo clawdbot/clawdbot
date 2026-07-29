@@ -486,12 +486,12 @@ struct AgentProDreamingDestination: View {
         }
     }
 
-    private func detailMetric(label: String, value: String) -> some View {
+    private func detailMetric(label: OpenClawTextValue, value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label)
+            label.text
                 .font(OpenClawType.caption2Medium)
                 .foregroundStyle(.secondary)
-            Text(value)
+            Text(verbatim: value)
                 .font(OpenClawType.subheadSemiBold)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)

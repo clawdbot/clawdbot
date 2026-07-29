@@ -29,6 +29,7 @@ import {
 import {
   diagnosticLogger as diag,
   getLastDiagnosticActivityAt,
+  logMessageQueuedWithBacklogPolicy,
   markDiagnosticActivity as markActivity,
   resetDiagnosticActivityForTest,
 } from "./diagnostic-runtime.js";
@@ -236,6 +237,17 @@ function pushLimitedDiagnosticLabel(labels: string[], label: string, limit = 5):
   }
 }
 
+function resolveDiagnosticQueuedBacklog(state: {
+  activeQueuedTurn?: boolean;
+  queueDepth: number;
+  state: SessionStateValue;
+}): number {
+  return Math.max(
+    0,
+    state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
+  );
+}
+
 function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
   let activeCount = 0;
   let waitingCount = 0;
@@ -252,10 +264,7 @@ function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
       waitingCount += 1;
       pushLimitedDiagnosticLabel(waitingLabels, formatDiagnosticWorkLabel(state, now));
     }
-    const queuedBacklog = Math.max(
-      0,
-      state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
-    );
+    const queuedBacklog = resolveDiagnosticQueuedBacklog(state);
     if (queuedBacklog > 0) {
       pushLimitedDiagnosticLabel(queuedLabels, formatDiagnosticWorkLabel(state, now));
     }
@@ -663,31 +672,7 @@ export function logMessageQueued(params: {
   channel?: string;
   source: string;
 }) {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  const state = getDiagnosticSessionState(params);
-  state.queueDepth += 1;
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-        state.sessionKey ?? "unknown"
-      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
-    );
-  }
-  emitDiagnosticEvent({
-    type: "message.queued",
-    sessionId: state.sessionId,
-    sessionKey: state.sessionKey,
-    channel: params.channel,
-    source: params.source,
-    queueDepth: state.queueDepth,
-  });
-  markActivity();
+  logMessageQueuedWithBacklogPolicy(params, true);
 }
 
 export function logMessageReceived(params: {
@@ -1002,9 +987,10 @@ export function logSessionAttention(
   );
   const stuckSessionAbortMs =
     params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs);
+  const queueDepth = resolveDiagnosticQueuedBacklog(state);
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
-    queueDepth: state.queueDepth,
+    queueDepth,
     activity,
     staleMs: params.thresholdMs,
     stuckSessionAbortMs,
@@ -1070,11 +1056,11 @@ export function logSessionAttention(
   const message = `${label}: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
     state.sessionKey ?? "unknown"
   } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
-    state.queueDepth
+    queueDepth
   } reason=${classification.reason} classification=${classification.classification}${
     classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
   }${detailFields ? ` ${detailFields}` : ""} recovery=${recoveryEligible ? "checking" : "none"}`;
-  if (classification.eventType === "session.long_running" && state.queueDepth <= 0) {
+  if (classification.eventType === "session.long_running" && queueDepth <= 0) {
     diag.debug(message);
   } else {
     diag.warn(message);
@@ -1084,7 +1070,7 @@ export function logSessionAttention(
     sessionKey: state.sessionKey,
     state: params.state,
     ageMs: params.ageMs,
-    queueDepth: state.queueDepth,
+    queueDepth,
     reason: classification.reason,
     ...sessionAttentionFields({ classification, activity }),
   };
@@ -1137,6 +1123,7 @@ export function logToolLoopAction(
     action: "warn" | "block";
     detector:
       | "generic_repeat"
+      | "argument_churn"
       | "unknown_tool_repeat"
       | "known_poll_no_progress"
       | "global_circuit_breaker"
@@ -1339,7 +1326,7 @@ export function startDiagnosticHeartbeat(
             sessionKey: state.sessionKey,
             sessionFile: state.sessionFile,
             ageMs: attentionAgeMs,
-            queueDepth: state.queueDepth,
+            queueDepth: resolveDiagnosticQueuedBacklog(state),
             expectedState: state.state,
             stateGeneration: state.generation,
             ...(activeAbortEligible

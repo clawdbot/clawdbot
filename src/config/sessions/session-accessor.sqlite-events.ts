@@ -30,6 +30,7 @@ export async function publishSqliteTranscriptUpdate(
       agentId: resolved.agentId,
       sessionId: resolved.sessionId,
       sessionKey: resolved.sessionKey,
+      storePath: resolved.path,
     },
   });
 }

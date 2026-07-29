@@ -5,6 +5,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  listAgentEntries,
+  readAgentRosterProperty,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
@@ -263,7 +268,8 @@ function normalizeConfigModelRefsForWrite(
 ): OpenClawConfig {
   const providerNormalized = normalizeModelProviderConfigsForWrite(cfg, providerConfigNormalizer);
   const defaults = providerNormalized.agents?.defaults;
-  const agentsList = providerNormalized.agents?.list;
+  const agentsList = listAgentEntries(providerNormalized);
+  const roster = readAgentRosterProperty(providerNormalized);
 
   let nextDefaults = defaults;
   if (defaults) {
@@ -295,7 +301,11 @@ function normalizeConfigModelRefsForWrite(
     agents: {
       ...providerNormalized.agents,
       ...(nextDefaults ? { defaults: nextDefaults } : {}),
-      ...(nextAgentsList !== undefined ? { list: nextAgentsList as typeof agentsList } : {}),
+      ...(nextAgentsList !== agentsList && roster?.kind === "entries"
+        ? { entries: toAgentEntriesRecord(nextAgentsList as typeof agentsList) }
+        : nextAgentsList !== agentsList && roster?.kind === "list"
+          ? { list: nextAgentsList as typeof agentsList }
+          : {}),
     },
   };
 }

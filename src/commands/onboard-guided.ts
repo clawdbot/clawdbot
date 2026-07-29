@@ -240,6 +240,7 @@ async function runGuidedOnboardingFlow(
         t("wizard.guided.detectedCandidate", {
           label: candidate.label,
           detail: candidate.detail,
+          recommended: "",
         }),
       );
       await prompter.note(candidates.join("\n"), t("wizard.guided.detectedTitle"));
@@ -286,7 +287,10 @@ async function runGuidedOnboardingFlow(
       });
       if (attempt.kind === "success") {
         resultLines = activationLines(attempt.result);
-        successLabel = candidate.label;
+        successLabel =
+          candidate.kind === "existing-model"
+            ? `${candidate.label} (${candidate.modelRef})`
+            : candidate.label;
         break;
       }
       // The verification probe runs outside the configured workspace (setup never
@@ -435,6 +439,10 @@ async function runGuidedOnboardingFlow(
   } else {
     // Announced default: apply the same setup plan the conversational "yes"
     // would, then hand off to the hatch instead of parking in the OpenClaw chat.
+    const { ensureOnboardingAgent } = await import("./onboard-agent.js");
+    // Only fresh-file creation is a side effect here. Pre-roster authored persistence
+    // remains doctor-owned; the injected main roster is intentionally not flattened.
+    await ensureOnboardingAgent({ config: existingConfig, workspace, baseConfig: existingConfig });
     const applySetup =
       deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));

@@ -11,6 +11,7 @@ export async function collectDeepCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
   deep: boolean;
+  workspaceDir?: string;
   summaryCache?: Map<string, Promise<unknown>>;
 }): Promise<SecurityAuditFinding[]> {
   if (!params.deep) {
@@ -26,6 +27,7 @@ export async function collectDeepCodeSafetyFindings(params: {
     ...(await auditDeep.collectInstalledSkillsCodeSafetyFindings({
       cfg: params.cfg,
       stateDir: params.stateDir,
+      workspaceDir: params.workspaceDir,
       summaryCache: params.summaryCache,
     })),
   ];

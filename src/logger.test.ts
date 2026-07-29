@@ -10,8 +10,9 @@ import {
   setLoggerOverride,
   stripRedundantSubsystemPrefixForConsole,
 } from "./logging.js";
+import { flushLogger } from "./logging/logger.js";
 import type { RuntimeEnv } from "./runtime.js";
-import { withTempDirSync } from "./test-helpers/temp-dir.js";
+import { withTempDir } from "./test-helpers/temp-dir.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
@@ -48,31 +49,35 @@ describe("logger helpers", () => {
     logVerboseLocal.mockRestore();
   });
 
-  it("writes to configured log file at configured level", () => {
-    withTempDirSync({ prefix: "openclaw-log-test-" }, (dir) => {
+  it("writes to configured log file at configured level", async () => {
+    await withTempDir({ prefix: "openclaw-log-test-" }, async (dir) => {
       const logPath = path.join(dir, "openclaw.log");
       setLoggerOverride({ level: "info", file: logPath });
       fs.writeFileSync(logPath, "");
       logInfo("hello");
       logDebug("debug-only"); // may be filtered depending on level mapping
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
       const content = fs.readFileSync(logPath, "utf-8");
       expect(content.length).toBeGreaterThan(0);
     });
   });
 
-  it("filters messages below configured level", () => {
-    withTempDirSync({ prefix: "openclaw-log-test-" }, (dir) => {
+  it("filters messages below configured level", async () => {
+    await withTempDir({ prefix: "openclaw-log-test-" }, async (dir) => {
       const logPath = path.join(dir, "openclaw.log");
       setLoggerOverride({ level: "warn", file: logPath });
       logInfo("info-only");
       logWarn("warn-only");
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
       const content = fs.readFileSync(logPath, "utf-8");
       expect(content).toContain("warn-only");
     });
   });
 
-  it("uses daily rolling log files and prunes old ones", () => {
-    withTempDirSync({ prefix: "openclaw-log-test-" }, (dir) => {
+  it("uses daily rolling log files and prunes old ones", async () => {
+    await withTempDir({ prefix: "openclaw-log-test-" }, async (dir) => {
       resetLogger();
       const today = localDateString(new Date());
       const todayPath = path.join(dir, `openclaw-${today}.log`);
@@ -84,6 +89,8 @@ describe("logger helpers", () => {
       fs.utimesSync(oldPath, new Date(0), new Date(0));
 
       logInfo("roll-me");
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
 
       expect(fs.existsSync(todayPath)).toBe(true);
       expect(fs.readFileSync(todayPath, "utf-8")).toContain("roll-me");

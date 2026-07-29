@@ -1,6 +1,7 @@
 // Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
 import {
+  hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -21,10 +22,6 @@ type CollectGatewayConfigFindingsOptions = {
   collectDangerousConfigFlags?: CollectDangerousConfigFlags;
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 export function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
@@ -254,28 +251,6 @@ export function collectGatewayConfigFindings(
       severity: "info",
       title: "Tailscale Serve exposure enabled",
       detail: `gateway.tailscale.mode="serve" exposes the Gateway to your tailnet (loopback behind Tailscale).`,
-    });
-  }
-
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
-    findings.push({
-      checkId: "gateway.control_ui.insecure_auth",
-      severity: "warn",
-      title: "Control UI insecure auth toggle enabled",
-      detail:
-        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
-      remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
-    });
-  }
-
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    findings.push({
-      checkId: "gateway.control_ui.device_auth_disabled",
-      severity: "critical",
-      title: "DANGEROUS: Control UI device auth disabled",
-      detail:
-        "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
-      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
     });
   }
 

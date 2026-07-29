@@ -31,7 +31,7 @@ import {
 } from "./owner-notice.js";
 import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
-import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
+import { reefSetupAdapter, reefSetupContract, reefSetupWizard } from "./setup.js";
 import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
 import {
   ReefInboxConnection,
@@ -116,6 +116,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
   reload: { configPrefixes: ["channels.reef"] },
   configSchema: buildChannelConfigSchema(ReefChannelConfigSchema),
   setup: reefSetupAdapter,
+  setupContract: reefSetupContract,
   setupWizard: reefSetupWizard as never,
   config: {
     listAccountIds: () => ["default"],

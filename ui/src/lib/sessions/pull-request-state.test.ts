@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createSessionCapability } from "./index.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
@@ -16,7 +17,7 @@ function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListR
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot = {
     client: client as GatewayBrowserClient | null,
-    connected: true,
+    phase: "connected" as ApplicationGatewayPhase,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello: null,
@@ -36,7 +37,11 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish(connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) {
-      snapshot = { ...snapshot, client: nextClient, connected };
+      snapshot = {
+        ...snapshot,
+        client: nextClient,
+        phase: connected ? "connected" : "reconnecting",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -49,24 +54,25 @@ describe("session pull-request state", () => {
     const harness = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionCapability(harness.gateway);
     const listener = vi.fn();
+    const summary = { numbers: [111532], state: "open" as const };
     sessions.subscribe(listener);
 
-    sessions.setOpenPullRequest("agent:main:pr-session", true);
-    expect(sessions.hasOpenPullRequest("agent:main:pr-session")).toBe(true);
+    sessions.setPullRequestSummary("agent:main:pr-session", summary);
+    expect(sessions.pullRequestSummary("agent:main:pr-session")).toEqual(summary);
     expect(listener).toHaveBeenCalledTimes(1);
 
-    sessions.setOpenPullRequest("agent:main:pr-session", true);
+    sessions.setPullRequestSummary("agent:main:pr-session", summary);
     expect(listener).toHaveBeenCalledTimes(1);
 
     const publicationsBeforeReplacement = listener.mock.calls.length;
     harness.publish(true, {} as GatewayBrowserClient);
-    expect(sessions.hasOpenPullRequest("agent:main:pr-session")).toBe(false);
+    expect(sessions.pullRequestSummary("agent:main:pr-session")).toBeUndefined();
     expect(listener.mock.calls.length).toBeGreaterThan(publicationsBeforeReplacement);
 
-    sessions.setOpenPullRequest("agent:main:pr-session", true);
+    sessions.setPullRequestSummary("agent:main:pr-session", summary);
     const publicationsBeforeDisconnect = listener.mock.calls.length;
     harness.publish(false);
-    expect(sessions.hasOpenPullRequest("agent:main:pr-session")).toBe(false);
+    expect(sessions.pullRequestSummary("agent:main:pr-session")).toBeUndefined();
     expect(listener.mock.calls.length).toBeGreaterThan(publicationsBeforeDisconnect);
 
     sessions.dispose();
@@ -77,13 +83,13 @@ describe("session pull-request state", () => {
       createGatewayHarness({} as GatewayBrowserClient).gateway,
     );
     const key = "agent:main:shared-session";
-    const olderEpoch = sessions.captureOpenPullRequestEpoch(key);
-    const newerEpoch = sessions.captureOpenPullRequestEpoch(key);
+    const olderEpoch = sessions.capturePullRequestEpoch(key);
+    const newerEpoch = sessions.capturePullRequestEpoch(key);
 
-    sessions.setOpenPullRequest(key, true, newerEpoch);
-    sessions.setOpenPullRequest(key, false, olderEpoch);
+    sessions.setPullRequestSummary(key, { numbers: [111532], state: "draft" }, newerEpoch);
+    sessions.setPullRequestSummary(key, undefined, olderEpoch);
 
-    expect(sessions.hasOpenPullRequest(key)).toBe(true);
+    expect(sessions.pullRequestSummary(key)).toEqual({ numbers: [111532], state: "draft" });
     sessions.dispose();
   });
 
@@ -101,14 +107,14 @@ describe("session pull-request state", () => {
     const sessions = createSessionCapability(
       createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
     );
-    const epoch = sessions.captureOpenPullRequestEpoch(key);
-    sessions.setOpenPullRequest(key, true, epoch);
+    const epoch = sessions.capturePullRequestEpoch(key);
+    sessions.setPullRequestSummary(key, { numbers: [111532], state: "open" }, epoch);
 
     await expect(sessions.delete(key)).resolves.toEqual({ deleted: true });
-    expect(sessions.hasOpenPullRequest(key)).toBe(false);
+    expect(sessions.pullRequestSummary(key)).toBeUndefined();
 
-    sessions.setOpenPullRequest(key, true, epoch);
-    expect(sessions.hasOpenPullRequest(key)).toBe(false);
+    sessions.setPullRequestSummary(key, { numbers: [111532], state: "open" }, epoch);
+    expect(sessions.pullRequestSummary(key)).toBeUndefined();
     sessions.dispose();
   });
 });

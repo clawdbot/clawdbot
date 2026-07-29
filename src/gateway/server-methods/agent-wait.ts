@@ -1,26 +1,14 @@
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateAgentWaitParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { validateAgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
   params,
   respond,
   context,
 }) => {
-  if (!validateAgentWaitParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid agent.wait params: ${formatValidationErrors(validateAgentWaitParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params, validateAgentWaitParams, "agent.wait", respond)) {
     return;
   }
   const runId = (params.runId ?? "").trim();

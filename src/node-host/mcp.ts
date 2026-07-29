@@ -40,7 +40,7 @@ type NodeHostMcpClient = {
   callTool(
     params: { name: string; arguments?: Record<string, unknown> },
     resultSchema?: undefined,
-    options?: { timeout?: number },
+    options?: { timeout?: number; signal?: AbortSignal },
   ): Promise<CallToolResult>;
   close(): Promise<void>;
 };
@@ -84,6 +84,7 @@ export type NodeHostMcpManager = {
     tool: string;
     arguments?: Record<string, unknown>;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<CallToolResult>;
   close(): Promise<void>;
 };
@@ -101,7 +102,7 @@ type ListedNodeMcpTool = {
 };
 
 function defaultWarn(message: string): void {
-  process.stderr.write(`${message}\n`);
+  console.warn(message);
 }
 
 function formatMcpError(error: unknown): string {
@@ -397,6 +398,7 @@ export async function startNodeHostMcpManager(
           undefined,
           {
             timeout: Math.min(resolveCallTimeoutMs(params.timeoutMs), session.toolCallTimeoutMs),
+            ...(params.signal ? { signal: params.signal } : {}),
           },
         );
       } catch (error) {

@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
 import { icon } from "../components/icons.ts";
+import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -44,15 +45,6 @@ function measureRoutedRender<T>(routeId: string, render: () => T): T {
     console.debug("[openclaw] routed render", { routeId, durationMs });
   }
   return result;
-}
-
-function renderPending() {
-  return html`
-    <section class="card lazy-view-state lazy-view-state--loading" role="status">
-      <div class="card-title">${t("lazyView.loadingTitle")}</div>
-      <div class="card-sub">${t("common.loading")}</div>
-    </section>
-  `;
 }
 
 /**
@@ -171,7 +163,7 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
           routeId,
         )
       : selection.showPending
-        ? renderPending()
+        ? renderLoadingState()
         : nothing;
   }
   const routeModule = renderedMatch.module;

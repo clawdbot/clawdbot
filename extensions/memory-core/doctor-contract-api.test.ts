@@ -1108,7 +1108,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
   });
 
-  it("imports persistent legacy dreaming state and ignores transient locks", async () => {
+  it("migrates and recovers persistent legacy dreaming state", async () => {
     const dreamsDir = path.join(workspaceDir, "memory", ".dreams");
     const dailyPath = path.join(dreamsDir, "daily-ingestion.json");
     const sessionPath = path.join(dreamsDir, "session-ingestion.json");
@@ -1256,18 +1256,82 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Retained acknowledged Memory Core phase signals"),
     ]);
 
+    const canonicalDaily = await dreamingTesting.readDailyIngestionState(workspaceDir);
+    const canonicalSession = await dreamingTesting.readSessionIngestionState(workspaceDir);
+    const canonicalRecall = await shortTermTesting.readRecallStore(
+      workspaceDir,
+      "2026-04-05T12:00:00.000Z",
+    );
+    const canonicalPhase = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      "2026-04-05T13:00:00.000Z",
+    );
+
     const changedDaily = JSON.parse(await fs.readFile(dailyPath, "utf8")) as {
       files: Record<string, { mtimeMs: number }>;
     };
     changedDaily.files["memory/2026-04-05.md"]!.mtimeMs = 999;
-    await fs.writeFile(dailyPath, JSON.stringify(changedDaily), "utf8");
+    const changedDailyContents = JSON.stringify(changedDaily);
+    await fs.writeFile(dailyPath, changedDailyContents, "utf8");
+
+    const changedSession = JSON.parse(await fs.readFile(sessionPath, "utf8")) as {
+      seenMessages: Record<string, string[]>;
+    };
+    changedSession.seenMessages["main/session.jsonl"]!.push("seen-c");
+    const changedSessionContents = JSON.stringify(changedSession);
+    await fs.writeFile(sessionPath, changedSessionContents, "utf8");
+
+    const changedRecall = JSON.parse(await fs.readFile(recallPath, "utf8")) as {
+      entries: Record<string, { recallCount: number }>;
+    };
+    changedRecall.entries["memory:memory/2026-04-05.md:1:1"]!.recallCount = 99;
+    const changedRecallContents = JSON.stringify(changedRecall);
+    await fs.writeFile(recallPath, changedRecallContents, "utf8");
+
+    const changedPhase = JSON.parse(await fs.readFile(phasePath, "utf8")) as {
+      entries: Record<string, { lightHits: number }>;
+    };
+    changedPhase.entries["memory:memory/2026-04-05.md:1:1"]!.lightHits = 99;
+    const changedPhaseContents = JSON.stringify(changedPhase);
+    await fs.writeFile(phasePath, changedPhaseContents, "utf8");
+
     const conflictResult = await migration.migrateLegacyState(migrationParams());
-    expect(conflictResult.changes).toEqual([]);
-    expect(conflictResult.warnings).toEqual([
-      expect.stringContaining("SQLite rows conflict with the legacy source"),
+    expect(conflictResult.changes).toEqual([
+      "Resolved Memory Core daily ingestion legacy conflict by keeping canonical SQLite plugin state",
+      expect.stringContaining("Archived Memory Core daily ingestion conflicting legacy source"),
+      "Resolved Memory Core session ingestion legacy conflict by keeping canonical SQLite plugin state",
+      expect.stringContaining("Archived Memory Core session ingestion conflicting legacy source"),
+      "Resolved Memory Core short-term recall legacy conflict by keeping canonical SQLite plugin state",
+      expect.stringContaining("Archived Memory Core short-term recall conflicting legacy source"),
+      "Resolved Memory Core phase signals legacy conflict by keeping canonical SQLite plugin state",
+      expect.stringContaining("Archived Memory Core phase signals conflicting legacy source"),
     ]);
-    expect(conflictResult.notices).toHaveLength(3);
-    await expect(fs.access(dailyPath)).resolves.toBeUndefined();
+    expect(conflictResult.warnings).toEqual([]);
+    expect(conflictResult.notices).toBeUndefined();
+
+    for (const [sourcePath, archivePath, contents] of [
+      [dailyPath, `${dailyPath}.migrated.3`, changedDailyContents],
+      [sessionPath, `${sessionPath}.migrated.2`, changedSessionContents],
+      [recallPath, `${recallPath}.migrated.2`, changedRecallContents],
+      [phasePath, `${phasePath}.migrated.2`, changedPhaseContents],
+    ] as const) {
+      await expect(fs.access(sourcePath)).rejects.toThrow();
+      await expect(fs.readFile(archivePath, "utf8")).resolves.toBe(contents);
+    }
+
+    expect(await dreamingTesting.readDailyIngestionState(workspaceDir)).toEqual(canonicalDaily);
+    expect(await dreamingTesting.readSessionIngestionState(workspaceDir)).toEqual(canonicalSession);
+    expect(
+      await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T12:00:00.000Z"),
+    ).toEqual(canonicalRecall);
+    expect(
+      await shortTermTesting.readPhaseSignalStore(workspaceDir, "2026-04-05T13:00:00.000Z"),
+    ).toEqual(canonicalPhase);
+
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
   });
 
   it("leaves invalid legacy JSON in place", async () => {
@@ -1364,14 +1428,16 @@ describe("memory-core doctor dreaming migration", () => {
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              fts: { tokenizer: "trigram" },
-            },
+      memory: {
+        search: {
+          store: {
+            fts: { tokenizer: "trigram" },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     } as unknown as OpenClawConfig;
@@ -1389,14 +1455,16 @@ describe("memory-core doctor dreaming migration", () => {
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: path.join(rootDir, "custom-memory", "{agentId}.sqlite"),
-            },
+      memory: {
+        search: {
+          store: {
+            path: path.join(rootDir, "custom-memory", "{agentId}.sqlite"),
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     } as unknown as OpenClawConfig;
@@ -1447,14 +1515,16 @@ describe("memory-core doctor dreaming migration", () => {
           path: topLevelPath,
         },
       },
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: path.join(rootDir, "default-memory", "{agentId}.sqlite"),
-            },
+      memory: {
+        search: {
+          store: {
+            path: path.join(rootDir, "default-memory", "{agentId}.sqlite"),
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     } as unknown as OpenClawConfig;
@@ -1497,14 +1567,16 @@ describe("memory-core doctor dreaming migration", () => {
     );
     await writeLegacyMemorySidecar(legacyPath);
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: legacyPath,
-            },
+      memory: {
+        search: {
+          store: {
+            path: legacyPath,
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     } as unknown as OpenClawConfig;
@@ -1552,14 +1624,16 @@ describe("memory-core doctor dreaming migration", () => {
     const workAgentPath = path.join(stateDir, "agents", "work", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: legacyPath,
-            },
+      memory: {
+        search: {
+          store: {
+            path: legacyPath,
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [
           { id: "main", workspace: workspaceDir },
           { id: "work", workspace: path.join(rootDir, "work") },
@@ -1620,16 +1694,18 @@ describe("memory-core doctor dreaming migration", () => {
       db.close();
     }
     const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              vector: {
-                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-              },
+      memory: {
+        search: {
+          store: {
+            vector: {
+              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     };
@@ -1678,16 +1754,18 @@ describe("memory-core doctor dreaming migration", () => {
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
     const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              vector: {
-                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-              },
+      memory: {
+        search: {
+          store: {
+            vector: {
+              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     };
@@ -1713,23 +1791,25 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
-  it("archives legacy vector sidecars when vector search is disabled", async () => {
+  it("archives legacy vector sidecars when memory search is disabled", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
     const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              vector: {
-                enabled: false,
-                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-              },
+      memory: {
+        search: {
+          provider: "none",
+          store: {
+            vector: {
+              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     };
@@ -1752,17 +1832,19 @@ describe("memory-core doctor dreaming migration", () => {
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
     const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "none",
-            store: {
-              vector: {
-                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-              },
+      memory: {
+        search: {
+          provider: "none",
+          store: {
+            vector: {
+              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     };
@@ -1785,17 +1867,19 @@ describe("memory-core doctor dreaming migration", () => {
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: legacyPath,
-              vector: {
-                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-              },
+      memory: {
+        search: {
+          store: {
+            path: legacyPath,
+            vector: {
+              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     } as unknown as OpenClawConfig;
@@ -1839,17 +1923,19 @@ describe("memory-core doctor dreaming migration", () => {
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
     await writeLegacyMemorySidecar(retryPath, { vector: "vec0" });
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: legacyPath,
-              vector: {
-                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-              },
+      memory: {
+        search: {
+          store: {
+            path: legacyPath,
+            vector: {
+              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     } as unknown as OpenClawConfig;
@@ -1862,16 +1948,18 @@ describe("memory-core doctor dreaming migration", () => {
     expect(alternateRetry).toBeDefined();
     const alternateRetryPath = path.join(stateDir, "memory", alternateRetry ?? "");
     const repairedConfig: OpenClawConfig = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              vector: {
-                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-              },
+      memory: {
+        search: {
+          store: {
+            vector: {
+              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     };
@@ -1951,14 +2039,16 @@ describe("memory-core doctor dreaming migration", () => {
     await writeLegacyMemorySidecar(legacyPath);
     await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: legacyPath,
-            },
+      memory: {
+        search: {
+          store: {
+            path: legacyPath,
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     } as unknown as OpenClawConfig;
@@ -1992,14 +2082,16 @@ describe("memory-core doctor dreaming migration", () => {
     await writeLegacyMemorySidecar(legacyPath);
     await fs.mkdir(agentPath, { recursive: true });
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: legacyPath,
-            },
+      memory: {
+        search: {
+          store: {
+            path: legacyPath,
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main", workspace: workspaceDir }],
       },
     } as unknown as OpenClawConfig;

@@ -2,11 +2,11 @@ title: Docker package install evidence
 
 scenario:
   id: docker-package-install
-  surface: docker-podman-hosting
-  category: docker-podman-hosting.image-release-and-validation
+  surface: containers
+  category: containers.image-release-and-validation
   coverage:
     secondary:
-      - docker.package-artifact-generation
+      - containers.docker-e2e-package-artifact-generation
       - cli.package-manager-installs
   objective: Build the real OpenClaw package artifact, install and execute it in the scheduler-selected bare container image, and record exact package, image, and container identities.
   successCriteria:

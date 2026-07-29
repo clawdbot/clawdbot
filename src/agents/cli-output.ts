@@ -7,13 +7,19 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentPlanStep } from "../channels/streaming.js";
-import type { CliBackendConfig } from "../config/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type {
+  CliBackendConfig,
+  CliBackendParseJsonlEvent,
+  CliBackendParsedJsonlEvent,
+} from "../plugins/cli-backend.types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
+import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
 export type CliUsage = {
   input?: number;
@@ -46,9 +52,12 @@ export type CliOutput = {
   text: string;
   rawText?: string;
   sessionId?: string;
+  /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
+  resumeCheckpointId?: string;
   usage?: CliUsage;
   /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
   diagnosticUsage?: CliUsage;
+  toolSummary?: ToolSummaryTrace;
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
   diagnostics?: {
@@ -279,8 +288,14 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
   };
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  const totalInput = pick("input_tokens") ?? pick("inputTokens");
-  const output = pick("output_tokens") ?? pick("outputTokens");
+  // Chat Completions calls these prompt/completion tokens; preserve existing CLI-field precedence.
+  const totalInput =
+    pick("input_tokens") ?? pick("inputTokens") ?? pick("prompt_tokens") ?? pick("promptTokens");
+  const output =
+    pick("output_tokens") ??
+    pick("outputTokens") ??
+    pick("completion_tokens") ??
+    pick("completionTokens");
   const nestedCached =
     readNestedCached("input_tokens_details") ?? readNestedCached("prompt_tokens_details");
   const cacheRead =
@@ -497,6 +512,22 @@ function pickCliSessionId(
     }
   }
   return undefined;
+}
+
+function pickCliResumeCheckpointId(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+}): string | undefined {
+  if (
+    !isClaudeStreamJsonDialect(params) ||
+    params.parsed.type !== "assistant" ||
+    params.parsed.parent_tool_use_id != null
+  ) {
+    return undefined;
+  }
+  const checkpointId = typeof params.parsed.uuid === "string" ? params.parsed.uuid.trim() : "";
+  return checkpointId || undefined;
 }
 
 function shouldUnwrapNestedCliResultText(params: {
@@ -1176,12 +1207,15 @@ function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): string |
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onPlanUpdate?: (update: CliPlanUpdate) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onDisplayToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
   onAssistantMessage?: (message: unknown) => void;
@@ -1189,8 +1223,10 @@ export function createCliJsonlStreamingParser(params: {
 }) {
   let lineBuffer = "";
   let assistantText = "";
+  let customThinkingText = "";
   let pendingClaudeText = "";
   let sessionId: string | undefined;
+  let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
   let diagnosticUsage: CliUsage | undefined;
   let output: CliOutput | null = null;
@@ -1198,6 +1234,7 @@ export function createCliJsonlStreamingParser(params: {
   let rawChars = 0;
   let rawLines = 0;
   const texts: string[] = [];
+  let sawCustomJsonlEvent = false;
   const toolTracker = createToolUseTracker();
   const outputLimits = resolveCliStreamJsonOutputLimits(params.backend);
   // Classification is keyed on consumer presence so reclassified pre-tool text
@@ -1230,6 +1267,128 @@ export function createCliJsonlStreamingParser(params: {
     if (text) {
       params.onCommentaryText?.(text);
     }
+  };
+
+  const updateSessionId = (nextSessionId: string | undefined) => {
+    const normalized = nextSessionId?.trim();
+    if (!normalized || normalized === sessionId) {
+      return;
+    }
+    sessionId = normalized;
+    params.onSessionId?.(normalized);
+  };
+
+  const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
+    if (output?.errorText && event.kind !== "sessionId" && event.kind !== "result") {
+      return;
+    }
+    sawCustomJsonlEvent = true;
+    if (event.kind === "sessionId") {
+      updateSessionId(event.sessionId);
+      if (output) {
+        output = { ...output, sessionId };
+      }
+      return;
+    }
+    if (event.kind === "text") {
+      if (!event.text) {
+        return;
+      }
+      assistantText = `${assistantText}${event.text}`;
+      params.onAssistantDelta({
+        text: assistantText,
+        delta: event.text,
+        sessionId,
+        usage,
+      });
+      return;
+    }
+    if (event.kind === "thinking") {
+      if (!event.text || !params.onThinkingDelta) {
+        return;
+      }
+      customThinkingText = `${customThinkingText}${event.text}`;
+      params.onThinkingDelta({
+        text: customThinkingText,
+        delta: event.text,
+        isReasoningSnapshot: true,
+      });
+      return;
+    }
+    if (event.kind === "toolStart") {
+      emitToolStartOnce(
+        toolTracker,
+        event.toolCallId,
+        event.name,
+        "tool_use",
+        event.args ?? {},
+        params.onDisplayToolUseStart ?? params.onToolUseStart,
+      );
+      return;
+    }
+    if (event.kind === "toolResult") {
+      if (event.name) {
+        toolTracker.nameById.set(event.toolCallId, event.name);
+      }
+      emitToolResultOnce(
+        toolTracker,
+        event.toolCallId,
+        event.isError === true,
+        event.result,
+        params.onDisplayToolResult ?? params.onToolResult,
+      );
+      return;
+    }
+    updateSessionId(event.sessionId);
+    if (event.usage) {
+      usage = event.usage;
+      params.onUsage?.(event.usage, true);
+    }
+    const existingErrorText = output?.errorText;
+    const eventText = event.text?.trim() ?? "";
+    const existingText = output?.text.trim() ?? "";
+    const streamedText = assistantText.trim();
+    const delegatedText = texts.join("\n").trim();
+    const resultText = existingErrorText
+      ? existingText || delegatedText || streamedText
+      : eventText || existingText || delegatedText || streamedText;
+    const errorText = existingErrorText || event.errorText;
+    output = {
+      ...output,
+      text: resultText,
+      sessionId,
+      usage,
+      ...(errorText ? { errorText } : {}),
+    };
+  };
+
+  const handleCustomJsonlLine = (line: string): boolean => {
+    if (parseErrorText) {
+      return true;
+    }
+    if (!params.parseJsonlEvent) {
+      return false;
+    }
+    let parsed: ReturnType<CliBackendParseJsonlEvent>;
+    try {
+      parsed = params.parseJsonlEvent(line, {
+        backendId: params.providerId,
+        backend: params.backend,
+      });
+    } catch (error) {
+      parseErrorText = truncateUtf16Safe(
+        `CLI backend ${params.providerId} JSONL parser failed: ${formatErrorMessage(error)}`,
+        500,
+      );
+      return true;
+    }
+    if (parsed == null) {
+      return false;
+    }
+    for (const event of Array.isArray(parsed) ? parsed : [parsed]) {
+      handleCustomJsonlEvent(event);
+    }
+    return true;
   };
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
@@ -1265,6 +1424,7 @@ export function createCliJsonlStreamingParser(params: {
       usage = nextUsage ?? usage;
     }
     if (parsed.type === "assistant" && isRecord(parsed.message)) {
+      resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
       params.onAssistantMessage?.(parsed.message);
     }
     const geminiErrorText = isGeminiStreamJsonDialect(params)
@@ -1316,6 +1476,7 @@ export function createCliJsonlStreamingParser(params: {
       output = {
         ...result,
         text,
+        ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
       return;
@@ -1455,6 +1616,9 @@ export function createCliJsonlStreamingParser(params: {
         lineBuffer = "";
         return;
       }
+      if (handleCustomJsonlLine(line)) {
+        continue;
+      }
       for (const parsed of parseJsonRecordCandidates(line)) {
         handleParsedRecord(parsed);
       }
@@ -1465,6 +1629,9 @@ export function createCliJsonlStreamingParser(params: {
     const tail = lineBuffer.trim();
     lineBuffer = "";
     if (!tail) {
+      return;
+    }
+    if (handleCustomJsonlLine(tail)) {
       return;
     }
     for (const parsed of parseJsonRecordCandidates(tail)) {
@@ -1516,11 +1683,21 @@ export function createCliJsonlStreamingParser(params: {
       if (output) {
         return output;
       }
+      if (sawCustomJsonlEvent) {
+        return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
+      }
       if (isStreamJsonDialect(params) && assistantText.trim()) {
-        return { text: assistantText.trim(), sessionId, usage };
+        return {
+          text: assistantText.trim(),
+          sessionId,
+          usage,
+          ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        };
       }
       const text = texts.join("\n").trim();
-      return text ? { text, sessionId, usage } : null;
+      return text
+        ? { text, sessionId, usage, ...(resumeCheckpointId ? { resumeCheckpointId } : {}) }
+        : null;
     },
   };
 }
@@ -1537,6 +1714,7 @@ function parseCliJsonl(
     return null;
   }
   let sessionId: string | undefined;
+  let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
   const texts: string[] = [];
   let streamJsonText = "";
@@ -1549,6 +1727,8 @@ function parseCliJsonl(
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }
+      resumeCheckpointId =
+        pickCliResumeCheckpointId({ backend, providerId, parsed }) ?? resumeCheckpointId;
       const nextUsage = readCliUsage(parsed);
       const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
       if (shouldUseUsage) {
@@ -1589,11 +1769,18 @@ function parseCliJsonl(
       });
       if (claudeResult) {
         if (claudeResult.text || claudeResult.errorText) {
-          return claudeResult;
+          return {
+            ...claudeResult,
+            ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+          };
         }
         // Live sessions reparse the completed JSONL transcript, so preserve
         // streamed text here as well as in the incremental parser above.
-        return { ...claudeResult, text: streamJsonText.trim() || texts.join("\n").trim() };
+        return {
+          ...claudeResult,
+          text: streamJsonText.trim() || texts.join("\n").trim(),
+          ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        };
       }
 
       const claudeDelta = parseClaudeCliStreamingDelta({
@@ -1622,7 +1809,12 @@ function parseCliJsonl(
     return { text: "", sessionId, usage, errorText: geminiErrorText };
   }
   if (streamJsonDialect && (streamJsonText.trim() || sawGeminiStructuredOutput)) {
-    return { text: streamJsonText.trim(), sessionId, usage };
+    return {
+      text: streamJsonText.trim(),
+      sessionId,
+      usage,
+      ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+    };
   }
   if (streamJsonDialect) {
     return { text: "", sessionId, usage, errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR };

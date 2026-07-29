@@ -160,6 +160,12 @@ type ChannelOutboundNormalizePayloadParams = {
   accountId?: string | null;
 };
 
+type ChannelOutboundNormalizePayloadBatchParams = {
+  payloads: readonly { index: number; payload: ReplyPayload }[];
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+};
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;
@@ -167,6 +173,8 @@ export type ChannelOutboundAdapter = {
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
+  /** Preserve model-authored Markdown details blocks for a native channel renderer. */
+  preserveMarkdownDetails?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
   textChunkLimit?: number;
   /**
    * Reserve the exact provider id used by the next single-message send.
@@ -189,6 +197,10 @@ export type ChannelOutboundAdapter = {
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
   normalizePayload?: (params: ChannelOutboundNormalizePayloadParams) => ReplyPayload | null;
+  /** Normalize an ordered batch in place. Return one entry per input; null suppresses that send. */
+  normalizePayloadBatch?: (
+    params: ChannelOutboundNormalizePayloadBatchParams,
+  ) => ReadonlyArray<ReplyPayload | null>;
   sendTextOnlyErrorPayloads?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {

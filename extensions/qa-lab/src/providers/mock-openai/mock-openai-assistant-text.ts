@@ -46,12 +46,32 @@ import {
   extractSnackPreference,
   isSnackRecallPrompt,
 } from "./mock-openai-tooling.js";
+
+function readCompletedImageGenerationMediaPath(prompt: string): string | undefined {
+  const eventStart = prompt.lastIndexOf("[Internal task completion event]");
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = prompt.slice(eventStart);
+  if (
+    !/^source:\s*image_generation\s*$/im.test(completionEvent) ||
+    !/^status:\s*completed successfully\s*$/im.test(completionEvent)
+  ) {
+    return undefined;
+  }
+  return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
+}
+
 export function buildAssistantText(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
 ) {
   const prompt = extractLastUserText(input);
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(prompt);
+  if (completedImageMediaPath) {
+    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
+  }
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =
     toolOutput ||

@@ -369,7 +369,10 @@ describe("noteAuthProfileHealth", () => {
   });
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
-      cfg: { channels: { telegram: { enabled: true } } } as OpenClawConfig,
+      cfg: {
+        agents: { entries: { main: { default: true } } },
+        channels: { telegram: { enabled: true } },
+      } as OpenClawConfig,
       prompter: {} as DoctorPrompter,
       allowKeychainPrompt: false,
     });

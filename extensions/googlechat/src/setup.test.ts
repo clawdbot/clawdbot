@@ -6,6 +6,7 @@ import {
   createStartAccountContext,
   expectLifecyclePatch,
   expectPendingUntilAbort,
+  installChannelDmPolicyContractSuite,
   startAccountAndTrackLifecycle,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
@@ -252,25 +253,18 @@ describe("googlechat setup", () => {
     expect(result.cfg.channels?.googlechat?.audience).toBe("https://example.com/googlechat");
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      googlechatSetupWizard.dmPolicy?.getCurrent(
-        {
-          channels: {
-            googlechat: {
-              dmPolicy: "disabled",
-              accounts: {
-                alerts: {
-                  serviceAccount: { client_email: "bot@example.com" },
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        "alerts",
-      ),
-    ).toBe("allowlist");
+  installChannelDmPolicyContractSuite({
+    dmPolicy: googlechatSetupWizard.dmPolicy!,
+    cases: [
+      {
+        name: "Google Chat named accounts",
+        channel: "googlechat",
+        accountId: "alerts",
+        accountConfig: { serviceAccount: { client_email: "bot@example.com" } },
+        inheritedAllowFrom: ["users/123"],
+        defaultAccount: {},
+      },
+    ],
   });
 
   it("reports configured state for the selected account instead of any account", async () => {
@@ -318,40 +312,6 @@ describe("googlechat setup", () => {
     expect(status.configured).toBe(false);
   });
 
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(googlechatSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
-      policyKey: "channels.googlechat.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.googlechat.accounts.alerts.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg = {
-      channels: {
-        googlechat: {
-          defaultAccount: "alerts",
-          dmPolicy: "disabled",
-          accounts: {
-            alerts: {
-              serviceAccount: { client_email: "bot@example.com" },
-              dmPolicy: "allowlist",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(googlechatSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
-    expect(googlechatSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.googlechat.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.googlechat.accounts.alerts.allowFrom",
-    });
-
-    const next = googlechatSetupWizard.dmPolicy?.setPolicy(cfg, "open");
-    expect(next?.channels?.googlechat?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dmPolicy).toBe("open");
-  });
-
   it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
     const prompter = createTestWizardPrompter({
       note: vi.fn(async () => {}),
@@ -378,29 +338,6 @@ describe("googlechat setup", () => {
 
     expect(next?.channels?.googlechat?.allowFrom).toEqual(["users/root"]);
     expect(next?.channels?.googlechat?.accounts?.alerts?.allowFrom).toEqual(["users/123456789"]);
-  });
-
-  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = googlechatSetupWizard.dmPolicy?.setPolicy(
-      {
-        channels: {
-          googlechat: {
-            allowFrom: ["users/123"],
-            accounts: {
-              alerts: {
-                serviceAccount: { client_email: "bot@example.com" },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "open",
-      "alerts",
-    );
-
-    expect(next?.channels?.googlechat?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dmPolicy).toBe("open");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.allowFrom).toEqual(["users/123", "*"]);
   });
 
   it("keeps startAccount pending until abort, then unregisters", async () => {
@@ -659,7 +596,7 @@ describe("resolveGoogleChatAccount", () => {
         googlechat: {
           accounts: {
             default: {
-              serviceAccountRef: {
+              serviceAccount: {
                 source: "env",
                 provider: "test",
                 id: "default-sa",

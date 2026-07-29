@@ -4,9 +4,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-policy
+      - matrix.mention-gates
   execution:
-    profiles: { "matrix:all": 42, "matrix:transport": 41 }
     kind: flow
     channel: matrix
     timeoutMs: 45000

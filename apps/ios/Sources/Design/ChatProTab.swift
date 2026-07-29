@@ -27,6 +27,11 @@ struct ChatProTab: View {
         let fileURL: URL
     }
 
+    private struct SessionDashboardPresentation: Identifiable {
+        let id = UUID()
+        let sessionKey: String
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
@@ -37,6 +42,7 @@ struct ChatProTab: View {
     @State private var showsBackgroundTasks = false
     @State private var showsSessions = false
     @State private var showsNewSessionOptions = false
+    @State private var sessionDashboardPresentation: SessionDashboardPresentation?
     // Transport can start unscoped while the UI uses its "main" fallback.
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
@@ -182,6 +188,11 @@ struct ChatProTab: View {
                     .presentationDragIndicator(.visible)
                 }
             }
+            .sheet(item: self.$sessionDashboardPresentation) { presentation in
+                NavigationStack {
+                    SessionDashboardScreen(sessionKey: presentation.sessionKey)
+                }
+            }
             .alert(
                 String(localized: "Unable to Export Transcript"),
                 isPresented: self.$showsTranscriptExportError)
@@ -224,11 +235,16 @@ struct ChatProTab: View {
                     ? self.dictationControl
                     : nil,
                 voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech)
+                speech: self.speech,
+                mediaPlaybackAllowed: {
+                    !self.appModel.talkMode.isEnabled &&
+                        !self.appModel.talkMode.hasActivePushToTalkSession &&
+                        !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
+                })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
-                    .environment(\.openClawAssistantBubblesInCleanChrome, true)
-                    .id(ObjectIdentifier(viewModel))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .environment(\.openClawAssistantBubblesInCleanChrome, true)
+                .id(ObjectIdentifier(viewModel))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ContentUnavailableView(
                 "Preparing Chat",
@@ -274,12 +290,12 @@ struct ChatProTab: View {
     }
 
     private var headerAgentIdentity: some View {
-        HStack {
-            self.headerAgentIdentityControl
-        }
-        .frame(minHeight: 44)
-        .accessibilityIdentifier("chat-agent-identity")
-        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+        HStack { self.headerAgentIdentityControl }
+            .frame(minHeight: 44)
+            .accessibilityElement(children: .contain) // Keep the parent reachable and its child actionable.
+            .accessibilityIdentifier("chat-agent-identity")
+            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
+            .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
     @ViewBuilder
@@ -628,6 +644,19 @@ struct ChatProTab: View {
                     Image(systemName: "rectangle.stack")
                 }
             }
+
+            Button {
+                guard let sessionKey = self.viewModel?.sessionKey else { return }
+                self.sessionDashboardPresentation = SessionDashboardPresentation(sessionKey: sessionKey)
+            } label: {
+                Label {
+                    Text("Dashboard")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "rectangle.grid.2x2")
+                }
+            }
+            .disabled(self.viewModel == nil)
 
             Divider()
 

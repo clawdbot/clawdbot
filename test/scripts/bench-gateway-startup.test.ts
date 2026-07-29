@@ -47,6 +47,7 @@ describe("gateway startup benchmark script", () => {
     expect(helpResult.stdout).toContain("OpenClaw Gateway startup benchmark");
     expect(helpResult.stdout).toContain("--case <id>");
     expect(helpResult.stdout).toContain("--cpu-prof-dir <dir>");
+    expect(helpResult.stdout).toContain("--heap-prof-dir <dir>");
     expect(helpResult.stdout).toContain("default (gateway default)");
     expect(helpResult.stdout).not.toContain("[gateway-startup-bench]");
     expect(helpResult.stderr).toBe("");
@@ -63,12 +64,15 @@ describe("gateway startup benchmark script", () => {
         "--output",
         "startup.json",
         "--json",
+        "--heap-prof-dir",
+        "profiles",
         "--runs",
         "2",
       ]),
     ).toMatchObject({
       cases: [{ id: "default" }],
       json: true,
+      heapProfDir: "profiles",
       output: "startup.json",
       runs: 2,
     });
@@ -444,6 +448,33 @@ describe("gateway startup benchmark script", () => {
         ),
       ) as { activation?: { onStartup?: boolean } };
       expect(manifest.activation?.onStartup).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("builds a deterministic prepared-runtime catalog stall case", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
+    try {
+      const benchCase = testing.parseOptions(["--case", "preparedRuntimeCatalogStall"]).cases[0];
+      if (!benchCase) {
+        throw new Error("expected prepared runtime catalog stall case");
+      }
+      const configPath = testing.writeConfig(root, benchCase);
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+        plugins?: { allow?: string[]; load?: { paths?: string[] } };
+      };
+      const pluginId = config.plugins?.allow?.[0];
+      expect(pluginId).toBe("bench-plugin-01");
+      const pluginDir = path.join(root, "plugins", pluginId ?? "missing");
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf8"),
+      ) as { providers?: string[] };
+      const source = fs.readFileSync(path.join(pluginDir, "index.cjs"), "utf8");
+
+      expect(manifest.providers).toEqual(["bench-catalog-stall"]);
+      expect(source).toContain("api.registerProvider");
+      expect(source).toContain("Date.now() + 2000");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

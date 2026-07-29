@@ -2,13 +2,16 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { setCommandJsonMode } from "../program/json-mode.js";
 import { applyParentDefaultHelpAction } from "../program/parent-default-help.js";
+import { isCronMachineOutput } from "./output-mode.js";
 import {
   registerCronAddCommand,
   registerCronListCommand,
   registerCronStatusCommand,
 } from "./register.cron-add.js";
 import { registerCronEditCommand } from "./register.cron-edit.js";
+import { registerCronScratchCommand } from "./register.cron-scratch.js";
 import { registerCronSimpleCommands } from "./register.cron-simple.js";
 
 export function registerCronCli(program: Command) {
@@ -25,7 +28,9 @@ export function registerCronCli(program: Command) {
   registerCronListCommand(cron);
   registerCronAddCommand(cron);
   registerCronSimpleCommands(cron);
+  registerCronScratchCommand(cron);
   registerCronEditCommand(cron);
+  setCommandJsonMode(cron, "output", ({ argv }) => isCronMachineOutput(argv));
 
   applyParentDefaultHelpAction(cron);
 }

@@ -229,10 +229,12 @@ describe("googlechatPlugin outbound", () => {
     ]);
   });
 
-  it("chunks outbound text without requiring Google Chat runtime initialization", () => {
+  it("renders and chunks outbound text without requiring Google Chat runtime initialization", () => {
     const chunker = googlechatOutboundAdapter.base.chunker;
 
-    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+    expect(chunker("**alpha** [docs](https://example.com)", 32_000)).toEqual([
+      "*alpha* <https://example.com|docs>",
+    ]);
   });
 });
 
@@ -584,5 +586,9 @@ describe("googlechatPlugin outbound sanitizeText", () => {
   it("preserves ordinary assistant prose untouched", () => {
     const text = "El pipeline tiene 3 deals abiertos por USD 12.000.";
     expect(sanitizeText({ text })).toBe(text);
+  });
+
+  it("keeps CommonMark intact until chunks reach the send boundary", () => {
+    expect(sanitizeText({ text: "**bold** and ~~gone~~" })).toBe("**bold** and ~~gone~~");
   });
 });

@@ -7,6 +7,7 @@ import {
   enableTailscaleFunnel,
   enableTailscaleServe,
   getTailnetHostname,
+  getTailnetHostnameAfterServe,
   hasTailscaleFunnelRouteForPort,
 } from "../infra/tailscale.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
@@ -55,7 +56,11 @@ export async function startGatewayTailscaleExposure(params: {
     } else {
       await enableTailscaleFunnel(params.port);
     }
-    const host = await getTailnetHostname().catch(() => null);
+    const host = await (
+      params.tailscaleMode === "serve" && !preservedFunnel
+        ? getTailnetHostnameAfterServe()
+        : getTailnetHostname()
+    ).catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
       const publicHost = resolveTailscalePublishedHost({

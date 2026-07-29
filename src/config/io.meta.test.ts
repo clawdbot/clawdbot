@@ -5,17 +5,15 @@ import { computeModelPolicyAllowlist } from "./model-policy-allowlist-migration.
 
 describe("config write metadata stamping", () => {
   it("stamps every declared auto-managed meta path", () => {
-    const stamped = stampConfigWriteMetadata({});
+    const stamped = stampConfigWriteMetadata({}, undefined, undefined, {});
 
     expect(AUTO_MANAGED_CONFIG_META_PATHS).toEqual([
       ["meta", "lastTouchedVersion"],
-      ["meta", "lastTouchedAt"],
+      ["meta", "migrations", "modelPolicyAllowlist"],
     ]);
 
-    for (const [parent, field] of AUTO_MANAGED_CONFIG_META_PATHS) {
-      expect(parent).toBe("meta");
-      expect(typeof stamped.meta?.[field]).toBe("string");
-    }
+    expect(typeof stamped.meta?.lastTouchedVersion).toBe("string");
+    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
   });
 
   it("preserves a legacy model restriction before an unrelated write updates version metadata", () => {

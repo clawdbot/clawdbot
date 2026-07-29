@@ -45,14 +45,10 @@ function createConfig(
   extras?: Partial<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>,
 ): OpenClawConfig {
   return {
+    messages: { ackReaction: "👀", ackReactionScope: "all" },
     channels: {
       whatsapp: {
         reactionLevel,
-        ackReaction: {
-          emoji: "👀",
-          direct: true,
-          group: "mentions",
-        },
         ...extras,
       },
     },
@@ -137,18 +133,15 @@ describe("maybeSendAckReaction", () => {
     expectAckReactionSent("work", cfg);
   });
 
-  it("uses the agent identity emoji when WhatsApp ackReaction has no emoji", async () => {
+  it("uses the canonical emoji preserved from agent identity", async () => {
     const cfg = {
       agents: {
-        list: [{ id: "agent", identity: { emoji: "🔥" } }],
+        entries: { agent: { identity: { emoji: "🔥" } } },
       },
+      messages: { ackReaction: "🔥", ackReactionScope: "all" },
       channels: {
         whatsapp: {
           reactionLevel: "ack",
-          ackReaction: {
-            direct: true,
-            group: "mentions",
-          },
         },
       },
     } as OpenClawConfig;
@@ -190,13 +183,7 @@ describe("maybeSendAckReaction", () => {
   });
 
   it("uses the sender LID as the group reaction participant when no sender JID is available", async () => {
-    const cfg = createConfig("ack", {
-      ackReaction: {
-        emoji: "👀",
-        direct: true,
-        group: "always",
-      },
-    });
+    const cfg = createConfig("ack");
     const ackReaction = await runAckReaction({
       cfg,
       msg: createMessage({

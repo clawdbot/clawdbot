@@ -5,6 +5,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 
@@ -121,6 +122,7 @@ describe("gateway usage helpers", () => {
 
   beforeEach(() => {
     testApi.costUsageCache.clear();
+    testApi.sessionsUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -150,6 +152,8 @@ describe("gateway usage helpers", () => {
     [{ endDate: "2026-2-5" }, "invalid endDate"],
     [{ startDate: 0 }, "invalid startDate"],
     [{ endDate: [] }, "invalid endDate"],
+    [{ startDate: "2026-02-01" }, "startDate and endDate must be provided together"],
+    [{ endDate: "2026-02-01" }, "startDate and endDate must be provided together"],
     [{ startDate: "2026-02-01", endDate: "2026-13-01" }, "invalid endDate"],
     [{ startDate: "2026-02-03", endDate: "2026-02-02" }, "startDate must not be after endDate"],
   ])("resolveDateRange rejects invalid explicit ranges", (params, error) => {
@@ -244,6 +248,31 @@ describe("gateway usage helpers", () => {
       expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["usage.cost", { startDate: "2026-02-01" }],
+    ["usage.cost", { endDate: "2026-02-01" }],
+    ["sessions.usage", { startDate: "2026-02-01" }],
+    ["sessions.usage", { endDate: "2026-02-01" }],
+  ] as const)("%s rejects an incomplete explicit date range", async (method, params) => {
+    const respond = vi.fn();
+    await expectDefined(
+      usageHandlers[method],
+      "usageHandlers[method] test invariant",
+    )({
+      respond,
+      params,
+      context: { getRuntimeConfig: vi.fn(() => ({})) },
+    } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "startDate and endDate must be provided together"),
+    );
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+    expect(vi.mocked(discoverAllSessions)).not.toHaveBeenCalled();
+  });
 
   it("parseUtcOffsetToMinutes supports whole-hour and half-hour offsets", () => {
     expect(testApi.parseUtcOffsetToMinutes("UTC-4")).toBe(-240);
@@ -473,11 +502,14 @@ describe("gateway usage helpers", () => {
       },
     });
 
-    const config = {} as OpenClawConfig;
+    const config = {
+      agents: { entries: { ops: { default: true } } },
+    } as OpenClawConfig;
     await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
 
-    const entry = testApi.costUsageCache.get("agent:__default__:1-2:gateway");
+    const entry = testApi.costUsageCache.get("agent:ops:1-2:gateway");
     expect(entry?.updatedAt).toBe(Date.now());
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("ops");
 
     await vi.advanceTimersByTimeAsync(29_999);
     await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
@@ -715,7 +747,7 @@ describe("gateway usage helpers", () => {
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
 
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBeUndefined();
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("main");
     expect(defaultRespond.mock.calls[0]?.[1]).toMatchObject({
       totals: { totalTokens: 10, totalCost: 1 },
     });
@@ -753,8 +785,7 @@ describe("gateway usage helpers", () => {
       context,
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
 
-    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(4);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[3]?.[0]?.agentId).toBe("main");
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(3);
     expect(mainRespond.mock.calls[0]?.[1]).toMatchObject({
       totals: { totalTokens: 10, totalCost: 1 },
     });
