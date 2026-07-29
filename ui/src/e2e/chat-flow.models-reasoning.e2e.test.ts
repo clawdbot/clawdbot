@@ -226,6 +226,137 @@ suite.define(() => {
     }
   });
 
+  it("shows one canonical default model with matching inherited reasoning", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
+      (id) => ({ id, label: id }),
+    );
+    const agentsList = {
+      agents: [
+        {
+          id: "main",
+          model: { primary: "openai/gpt-5.6-sol" },
+          name: "Main",
+          thinkingDefault: "medium",
+          thinkingLevels,
+          thinkingOptions: thinkingLevels.map((level) => level.label),
+        },
+      ],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+    };
+    const sessionsList = {
+      count: 2,
+      defaults: {
+        contextTokens: null,
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        thinkingDefault: "medium",
+        thinkingLevels,
+        thinkingOptions: thinkingLevels.map((level) => level.label),
+      },
+      path: "",
+      sessions: [
+        {
+          key: "agent:main:session-default",
+          kind: "direct",
+          label: "Default Sol",
+          updatedAt: 2,
+        },
+        {
+          key: "agent:main:session-explicit",
+          kind: "direct",
+          label: "Explicit Sol",
+          model: "gpt-5.6-sol",
+          modelProvider: "openai",
+          updatedAt: 1,
+        },
+      ],
+      ts: Date.now(),
+    };
+    const models = [
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+    ];
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": agentsList,
+        "chat.startup": {
+          agentsList,
+          messages: [],
+          metadata: { models },
+          sessionId: "control-ui-profile-default-proof",
+          thinkingLevel: null,
+        },
+        "sessions.list": sessionsList,
+      },
+      models,
+      sessionKey: "agent:main:session-default",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const main = page.getByRole("main");
+      const modelSelect = main.locator('[data-chat-model-select="true"]').first();
+      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+      const expectedThinkingValues = thinkingLevels.map((level) => level.id).join(",");
+
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await modelSelect.textContent()).toContain("GPT-5.6 Sol");
+      expect(await modelSelect.textContent()).not.toContain("@openai:");
+      await modelSelect.click();
+      await main.locator('[data-chat-model-provider="openai"]').click();
+      await expect
+        .poll(() => main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
+        .toBe(1);
+      expect(
+        (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
+      ).not.toContain("@openai:");
+      await expect
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toBe(expectedThinkingValues);
+      const defaultThinkingValue = await modelSelect.getAttribute("data-chat-thinking-value");
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/default-sol.png`, fullPage: true });
+      }
+
+      await page.keyboard.press("Escape");
+      await page
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-explicit"] a.sidebar-recent-session__link',
+        )
+        .click();
+      await page.locator(".sidebar-recent-session--active").getByText("Explicit Sol").waitFor({
+        timeout: 10_000,
+      });
+      await modelSelect.click();
+      await main.locator('[data-chat-model-provider="openai"]').click();
+      await expect
+        .poll(() => main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
+        .toBe(1);
+      await expect
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toBe(expectedThinkingValues);
+      expect(await modelSelect.getAttribute("data-chat-thinking-value")).toBe(defaultThinkingValue);
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/explicit-sol.png`, fullPage: true });
+      }
+
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("shows a pending send while a model override update is still pending", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
