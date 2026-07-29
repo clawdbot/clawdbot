@@ -305,7 +305,7 @@ private fun RenderMarkdownDisclosure(
   isStreaming: Boolean,
 ) {
   var isExpanded by rememberSaveable { mutableStateOf(disclosure.isExpanded) }
-  val summarySource = if (disclosure.summary == "Details") nativeString("Details") else disclosure.summary
+  val summarySource = chatMarkdownDisclosureSummarySource(disclosure.summary) { nativeString("Details") }
   val summary =
     remember(summarySource, inlineStyles.linkColor) {
       buildChatInlineMarkdown(summarySource, linkColor = inlineStyles.linkColor)
@@ -745,11 +745,16 @@ internal sealed interface ChatMarkdownRenderBlock {
   ) : ChatMarkdownRenderBlock
 
   data class Disclosure(
-    val summary: String,
+    val summary: String?,
     val isExpanded: Boolean,
     val blocks: List<ChatMarkdownRenderBlock>,
   ) : ChatMarkdownRenderBlock
 }
+
+internal fun chatMarkdownDisclosureSummarySource(
+  authoredSummary: String?,
+  localizedDefault: () -> String,
+): String = authoredSummary ?: localizedDefault()
 
 internal fun parseChatMarkdownBlocks(text: String): List<ChatMarkdownRenderBlock> {
   val document = parseChatMarkdown(text)
@@ -1006,7 +1011,7 @@ private class DisclosureTokenizer {
 
 private fun foldDisclosureTokens(tokens: List<DisclosureToken>): List<ChatMarkdownRenderBlock> {
   data class Frame(
-    var summary: String = "Details",
+    var summary: String? = null,
     val isExpanded: Boolean,
     val blocks: MutableList<ChatMarkdownRenderBlock> = mutableListOf(),
   )

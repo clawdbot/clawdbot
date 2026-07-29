@@ -15,7 +15,7 @@ enum ChatMarkdownBlock: Equatable {
 }
 
 struct ChatMarkdownDisclosure: Equatable {
-    let summary: String
+    let summary: String?
     let isExpanded: Bool
     let blocks: [ChatMarkdownBlock]
 }
@@ -418,7 +418,7 @@ enum ChatMarkdownBlockSegmenter {
 
     private static func foldDisclosures(_ unfolded: [UnfoldedBlock]) -> [ChatMarkdownBlock] {
         struct Frame {
-            var summary = "Details"
+            var summary: String? = nil
             let isExpanded: Bool
             var blocks: [ChatMarkdownBlock] = []
         }

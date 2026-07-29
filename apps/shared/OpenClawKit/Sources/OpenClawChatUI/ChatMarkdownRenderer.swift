@@ -7,6 +7,13 @@ public enum ChatMarkdownVariant: String, CaseIterable, Sendable {
     case compact
 }
 
+func chatMarkdownDisclosureSummarySource(
+    _ authoredSummary: String?,
+    localizedDefault: () -> String) -> String
+{
+    authoredSummary ?? localizedDefault()
+}
+
 /// Shared native Markdown rendering for app-owned chat surfaces outside the
 /// full OpenClaw chat transcript.
 @MainActor
@@ -273,9 +280,9 @@ struct ChatMarkdownRenderSnapshot {
         case let .disclosure(disclosure):
             .disclosure(ChatMarkdownRenderedDisclosure(
                 summary: ChatMarkdownProse(
-                    markdown: disclosure.summary == "Details"
-                        ? String(localized: "Details")
-                        : disclosure.summary,
+                    markdown: chatMarkdownDisclosureSummarySource(disclosure.summary) {
+                        String(localized: "Details")
+                    },
                     isComplete: true,
                     preparesReveal: false),
                 isExpanded: disclosure.isExpanded,

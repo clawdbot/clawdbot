@@ -79,13 +79,35 @@ struct ChatMarkdownBlockSegmenterTests {
         })
     }
 
-    @Test func `details without summary use default label`() {
-        #expect(self.segments("<details>\n\nBody\n\n</details>") == [
-            .disclosure(ChatMarkdownDisclosure(
-                summary: "Details",
-                isExpanded: false,
-                blocks: [.prose("Body")])),
-        ])
+    @Test func `authored Details summary does not use localized fallback`() throws {
+        guard case let .disclosure(disclosure) = try #require(self.segments(
+            "<details>\n<summary>Details</summary>\n\nBody\n\n</details>").first)
+        else {
+            Issue.record("expected disclosure")
+            return
+        }
+        var fallbackEvaluated = false
+        let rendered = chatMarkdownDisclosureSummarySource(disclosure.summary) {
+            fallbackEvaluated = true
+            return "Localized details"
+        }
+
+        #expect(disclosure.summary == "Details")
+        #expect(rendered == "Details")
+        #expect(!fallbackEvaluated)
+    }
+
+    @Test func `details without summary use localized default label`() throws {
+        guard case let .disclosure(disclosure) = try #require(
+            self.segments("<details>\n\nBody\n\n</details>").first)
+        else {
+            Issue.record("expected disclosure")
+            return
+        }
+
+        #expect(disclosure.summary == nil)
+        #expect(chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" }
+            == "Localized details")
     }
 
     @Test func `details body keeps native list and fence blocks`() throws {

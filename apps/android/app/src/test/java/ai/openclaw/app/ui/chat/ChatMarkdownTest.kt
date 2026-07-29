@@ -45,7 +45,7 @@ class ChatMarkdownTest {
     assertEquals("**Why**", collapsed.summary)
     assertEquals(false, collapsed.isExpanded)
     assertTrue((collapsed.blocks.single() as ChatMarkdownRenderBlock.CommonMark).node is Paragraph)
-    val renderedSummary = buildChatInlineMarkdown(collapsed.summary)
+    val renderedSummary = buildChatInlineMarkdown(checkNotNull(collapsed.summary))
     assertEquals("Why", renderedSummary.text)
     assertTrue(renderedSummary.spanStyles.any { it.item.fontWeight == FontWeight.SemiBold })
     assertEquals("More", expanded.summary)
@@ -53,11 +53,32 @@ class ChatMarkdownTest {
   }
 
   @Test
-  fun detailsWithoutSummaryUseDefaultLabel() {
+  fun authoredDetailsSummaryDoesNotUseLocalizedFallback() {
+    val disclosure =
+      parseChatMarkdownBlocks("<details>\n<summary>Details</summary>\n\nBody\n\n</details>")
+        .single() as ChatMarkdownRenderBlock.Disclosure
+    var fallbackEvaluated = false
+    val rendered =
+      chatMarkdownDisclosureSummarySource(disclosure.summary) {
+        fallbackEvaluated = true
+        "Localized details"
+      }
+
+    assertEquals("Details", disclosure.summary)
+    assertEquals("Details", rendered)
+    assertEquals(false, fallbackEvaluated)
+  }
+
+  @Test
+  fun detailsWithoutSummaryUseLocalizedDefaultLabel() {
     val disclosure =
       parseChatMarkdownBlocks("<details>\n\nBody\n\n</details>").single() as ChatMarkdownRenderBlock.Disclosure
 
-    assertEquals("Details", disclosure.summary)
+    assertNull(disclosure.summary)
+    assertEquals(
+      "Localized details",
+      chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" },
+    )
   }
 
   @Test
