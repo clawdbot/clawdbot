@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractInboundMedia } from "./zalo-js.js";
+import { extractInboundMedia } from "./inbound-media.js";
 
 describe("extractInboundMedia", () => {
   it("returns null for plain string content (text message)", () => {
@@ -29,7 +29,7 @@ describe("extractInboundMedia", () => {
     ).toBeNull();
   });
 
-  it("extracts media when content.type === \"photo\"", () => {
+  it('extracts media when content.type === "photo"', () => {
     const result = extractInboundMedia({
       type: "photo",
       href: "https://photo-stal-1.zdn.vn/abc/def.jpg",

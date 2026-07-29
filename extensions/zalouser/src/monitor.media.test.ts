@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveInboundImageContentType } from "./monitor.js";
+import { resolveInboundImageContentType } from "./inbound-media.js";
 
 describe("resolveInboundImageContentType", () => {
   it("trusts a detected image/* MIME from saveRemoteMedia", () => {
@@ -19,29 +19,24 @@ describe("resolveInboundImageContentType", () => {
         "https://photo-stal-22.zdn.vn/gr/abc/photo.jpg",
       ),
     ).toBe("image/jpeg");
-    expect(
-      resolveInboundImageContentType("application/octet-stream", "https://x/y.png"),
-    ).toBe("image/png");
-    expect(
-      resolveInboundImageContentType("application/octet-stream", "https://x/y.WEBP"),
-    ).toBe("image/webp");
+    expect(resolveInboundImageContentType("application/octet-stream", "https://x/y.png")).toBe(
+      "image/png",
+    );
+    expect(resolveInboundImageContentType("application/octet-stream", "https://x/y.WEBP")).toBe(
+      "image/webp",
+    );
   });
 
   it("falls back to image/jpeg when both detected MIME and URL extension are absent", () => {
     expect(resolveInboundImageContentType(undefined, "https://x/path/no-extension")).toBe(
       "image/jpeg",
     );
-    expect(resolveInboundImageContentType("", "https://x/path/no-extension")).toBe(
-      "image/jpeg",
-    );
+    expect(resolveInboundImageContentType("", "https://x/path/no-extension")).toBe("image/jpeg");
   });
 
   it("ignores query string when parsing URL extension", () => {
     expect(
-      resolveInboundImageContentType(
-        "application/octet-stream",
-        "https://x/y.png?token=abc&v=1",
-      ),
+      resolveInboundImageContentType("application/octet-stream", "https://x/y.png?token=abc&v=1"),
     ).toBe("image/png");
   });
 

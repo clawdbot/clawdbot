@@ -12,6 +12,7 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 // Zalouser plugin module implements monitor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
@@ -22,7 +23,6 @@ import {
   resolveSendableOutboundReplyParts,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   resolveDefaultGroupPolicy,
@@ -39,6 +39,7 @@ import {
   findZalouserGroupEntry,
   isZalouserGroupEntryAllowed,
 } from "./group-policy.js";
+import { resolveInboundImageContentType } from "./inbound-media.js";
 import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
@@ -982,39 +983,6 @@ export async function monitorZalouserProvider(
   return { stop };
 }
 
-export const testing = {
-  processMessage: async (params: {
-    message: ZaloInboundMessage;
-    account: ResolvedZalouserAccount;
-    config: OpenClawConfig;
-    runtime: RuntimeEnv;
-    historyState?: {
-      historyLimit?: number;
-      groupHistories?: Map<string, HistoryEntry[]>;
-    };
-    statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  }) => {
-    const historyLimit = Math.max(
-      0,
-      params.historyState?.historyLimit ??
-        params.account.config.historyLimit ??
-        params.config.messages?.groupChat?.historyLimit ??
-        DEFAULT_GROUP_HISTORY_LIMIT,
-    );
-    const groupHistories = params.historyState?.groupHistories ?? new Map<string, HistoryEntry[]>();
-    await processMessage(
-      params.message,
-      params.account,
-      params.config,
-      getZalouserRuntime(),
-      params.runtime,
-      { historyLimit, groupHistories },
-      params.statusSink,
-    );
-  },
-};
-export { testing as __testing };
-
 /**
  * Download an inbound Zalo photo attachment to a local file via
  * `saveRemoteMedia` so the kernel media pipeline can build the standard
@@ -1065,32 +1033,6 @@ async function resolveInboundMediaFacts(params: {
   }
 }
 
-/**
- * Resolve a real `image/*` MIME for an inbound Zalo photo even when the CDN
- * returns `application/octet-stream`. Picks from the URL extension first,
- * falls back to `image/jpeg` (most common Zalo photo format).
- *
- * Exported via __testing only; not part of the public plugin surface.
- */
-export function resolveInboundImageContentType(detected: string | undefined, url: string): string {
-  if (detected && detected.startsWith("image/")) {
-    return detected;
-  }
-  const match = url.match(/\.([a-z]+)(?:\?|$)/i);
-  const ext = (match?.[1] ?? "jpg").toLowerCase();
-  const extMap: Record<string, string> = {
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    png: "image/png",
-    gif: "image/gif",
-    webp: "image/webp",
-    bmp: "image/bmp",
-  };
-  return extMap[ext] ?? "image/jpeg";
-}
-
-// Re-export internal helper for unit tests only - keep out of public surface
-// by attaching to the testing namespace.
 type InboundMediaFact = ReturnType<typeof toInboundMediaFacts>[number];
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
