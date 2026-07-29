@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
-  it.each(["active", "side"] as const)(
+  it.each(["active", "side", "setup-metadata"] as const)(
     "adopts an ingress-persisted %s-branch user without broadcasting a duplicate",
     (branch) => {
       const updates: InternalSessionTranscriptUpdate[] = [];
@@ -45,7 +45,16 @@ describe("guardSessionManager transcript updates", () => {
           appendParentId: existingId,
           appendMode: "side",
         });
+      } else if (branch === "setup-metadata") {
+        sm.appendModelChange("openai", "gpt-5.5");
+        sm.appendThinkingLevelChange("off");
+        sm.appendCustomEntry("model-snapshot", {
+          modelApi: "openai-responses",
+          modelId: "gpt-5.5",
+          provider: "openai",
+        });
       }
+      const appendParentId = sm.getAppendParentId();
       Object.assign(sm, {
         getSessionFile: () => "/tmp/openclaw-canonical-user-events.jsonl",
       });
@@ -68,6 +77,7 @@ describe("guardSessionManager transcript updates", () => {
       });
 
       expect(runtimeId).toBe(existingId);
+      expect(sm.getAppendParentId()).toBe(appendParentId);
       expect(
         sm
           .getEntries()

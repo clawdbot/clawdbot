@@ -623,6 +623,55 @@ describe("SessionManager.open", () => {
     ).toHaveLength(1);
   });
 
+  it("adopts a persisted user across context-free session setup metadata", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-runtime-user-setup-metadata";
+    const sessionKey = "agent:main:dashboard:sqlite-runtime-user-setup-metadata";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    const marker = formatSqliteSessionFileMarker(scope);
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-setup-metadata:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "pre-persisted-user",
+      message: userMessage,
+      now: 1,
+    });
+
+    const sessionManager = openMarker(marker, sessionKey, dir);
+    sessionManager.appendModelChange("openai", "gpt-5.5");
+    sessionManager.appendThinkingLevelChange("off");
+    const metadataId = sessionManager.appendCustomEntry("model-snapshot", {
+      modelApi: "openai-responses",
+      modelId: "gpt-5.5",
+      provider: "openai",
+    });
+
+    expect(sessionManager.appendMessage(userMessage)).toBe("pre-persisted-user");
+    expect(sessionManager.getAppendParentId()).toBe(metadataId);
+
+    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    const events = await loadTranscriptEvents(scope);
+    expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
+      parentId: metadataId,
+    });
+    expect(
+      events.filter(
+        (event) =>
+          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+            "user" &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            userMessage.idempotencyKey,
+      ),
+    ).toHaveLength(1);
+  });
+
   it("reuses a pre-persisted user as the canonical SQLite parent", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");

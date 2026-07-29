@@ -691,7 +691,7 @@ export function installSessionToolResultGuard(
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
     const entryId = originalAppend(message as never, options);
-    if (entryId === appendParentEntryId) {
+    if (sessionManager.getAppendParentId() === appendParentEntryId) {
       return { entryId };
     }
     void opts?.onMessagePersisted?.(message);
