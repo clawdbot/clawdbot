@@ -6,6 +6,7 @@ import {
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import type { GatewayPendingRequest } from "./pending-request.js";
+import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "./timeouts.js";
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -438,6 +439,15 @@ export class GatewayProtocolClient<TPlan> {
     }
     this.connectSent = true;
     this.clearHandshakeTimer();
+    // The challenge timer ends before asynchronous device preparation. Keep
+    // the same socket supervised until hello so a silent peer cannot strand it.
+    this.handshakeTimer = setTimeout(() => {
+      this.handshakeTimer = null;
+      if (this.isActive(socket, generation) && !this.helloReceived) {
+        socket.close(4000, "connect timeout");
+      }
+    }, DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+    this.handshakeTimer.unref?.();
     let planOrPromise: TPlan | Promise<TPlan>;
     try {
       planOrPromise = this.opts.buildConnectPlan({
@@ -491,6 +501,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.clearHandshakeTimer();
         this.connectFailure = undefined;
         this.reconnectSupervisor.reset();
         this.recordTiming("hello", generation, plan);
