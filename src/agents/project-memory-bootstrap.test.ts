@@ -127,6 +127,15 @@ describe("project memory bootstrap", () => {
     expect(both[0]?.content).not.toContain("Unterminated fact");
   });
 
+  it("leaves context files with missing or blank paths for the prompt renderer to ignore", () => {
+    const contextFiles = [
+      { path: undefined as unknown as string, content: "Missing path" },
+      { path: "   ", content: "Blank path" },
+    ];
+
+    expect(filterProjectScopedCuratedContextFiles({ contextFiles })).toEqual(contextFiles);
+  });
+
   it("uses the dedicated curated listing instead of a daily-note-crowded search", async () => {
     runtimeMocks.search.mockResolvedValue(
       Array.from({ length: 100 }, (_, index) => ({

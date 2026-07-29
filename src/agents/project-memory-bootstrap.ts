@@ -11,7 +11,10 @@ import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 const PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS = 2_000;
 const PROJECT_MEMORY_ENTRY_MAX_CHARS = 600;
 
-function isCuratedProjectContextPath(value: string): boolean {
+function isCuratedProjectContextPath(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
   const basename = value.replaceAll("\\", "/").split("/").at(-1)?.toUpperCase();
   return basename === "MEMORY.MD" || basename === "USER.MD";
 }
