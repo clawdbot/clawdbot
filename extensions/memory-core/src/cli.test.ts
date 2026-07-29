@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -43,7 +43,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 async function seedCliBackfillTranscript(sessionId: string, days: string[]): Promise<void> {
   const agentId = "main";
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const sessionsDir = resolveTestSessionTranscriptsDirForAgent(agentId);
   const storePath = path.join(sessionsDir, "sessions.json");
   const sessionKey = `agent:${agentId}:cli-session-backfill:${sessionId}`;
   const entry = { sessionId, updatedAt: Date.parse(`${days.at(-1)}T12:00:00.000Z`) };

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -31,25 +30,25 @@ import {
   writeSessionIngestionState,
   type SessionIngestionMessage,
 } from "./dreaming-phases.js";
-import {
-  clearMemoryCoreWorkspaceNamespace,
-  readMemoryCoreWorkspaceEntries,
-  SESSION_BACKFILL_REWIND_NAMESPACE,
-  writeMemoryCoreWorkspaceEntry,
-} from "./dreaming-state.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+import {
+  drainSessionBackfill,
+  normalizeSessionBackfillSelection,
+  recordSessionBackfillRewindBatch,
+  rewindSessionBackfillIngestionState,
+} from "./session-backfill-lifecycle.js";
 import {
   readShortTermRecallEntries,
   recordGroundedShortTermCandidates,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 
-const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 const SESSION_BACKFILL_QUERY_PREFIX = "__dreaming_session_backfill__";
 const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 const TOP_CANDIDATE_LIMIT = 5;
-const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_SESSION_BACKFILL_APPLY_BATCHES = 10_000;
+
+export { normalizeSessionBackfillSelection } from "./session-backfill-lifecycle.js";
 
 export type MemorySessionBackfillOptions = {
   agent?: string;
@@ -129,7 +128,7 @@ export type SessionBackfillResult = {
   };
 };
 
-export type SessionBackfillBatchProgress = {
+type SessionBackfillBatchProgress = {
   batch: number;
   days: number;
   candidates: number;
@@ -141,19 +140,9 @@ type SessionBackfillContinuation = {
   hasMore: boolean;
 };
 
-type SessionBackfillExecution = {
+export type SessionBackfillExecution = {
   result: SessionBackfillResult;
   continuation: SessionBackfillContinuation;
-};
-
-type SessionBackfillRewindBatch = {
-  version: 1;
-  candidates: Array<{
-    contentIndex: number;
-    hash: string;
-    scope: string;
-    stateKey: string;
-  }>;
 };
 
 export type RunSessionBackfillParams = {
@@ -169,57 +158,6 @@ export type RunSessionBackfillParams = {
   nowMs?: number;
   timezone?: string;
 };
-
-function normalizeMemoryDay(value: string | undefined, flag: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const day = value.trim();
-  if (!MEMORY_DAY_RE.test(day)) {
-    throw new Error(`${flag} must use YYYY-MM-DD.`);
-  }
-  const parsed = new Date(`${day}T00:00:00.000Z`);
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
-    throw new Error(`${flag} must be a valid calendar day.`);
-  }
-  return day;
-}
-
-function resolveLimitDays(value: number | undefined): number {
-  if (value === undefined) {
-    return DEFAULT_SESSION_BACKFILL_LIMIT_DAYS;
-  }
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error("--limit-days must be a positive integer.");
-  }
-  return value;
-}
-
-export function normalizeSessionBackfillSelection(
-  params: Pick<RunSessionBackfillParams, "from" | "to" | "limitDays">,
-  labels: { from: string; to: string; limitDays: string } = {
-    from: "--from",
-    to: "--to",
-    limitDays: "--limit-days",
-  },
-): { from?: string; to?: string; limitDays: number } {
-  const from = normalizeMemoryDay(params.from, labels.from);
-  const to = normalizeMemoryDay(params.to, labels.to);
-  if (from !== undefined && to !== undefined && from > to) {
-    throw new Error(`${labels.from} must not be after ${labels.to}.`);
-  }
-  let limitDays: number;
-  try {
-    limitDays = resolveLimitDays(params.limitDays);
-  } catch {
-    throw new Error(`${labels.limitDays} must be a positive integer.`);
-  }
-  return {
-    ...(from !== undefined ? { from } : {}),
-    ...(to !== undefined ? { to } : {}),
-    limitDays,
-  };
-}
 
 function sourceFromCorpusEntry(entry: SessionTranscriptCorpusEntry): SessionBackfillSource | null {
   if (
@@ -457,112 +395,6 @@ async function collectSessionBackfillCandidates(params: {
     byDay.set(candidate.day, bucket);
   }
   return { byDay, scans };
-}
-
-async function recordSessionBackfillRewindBatch(params: {
-  workspaceDir: string;
-  days: Array<{ candidates: SessionBackfillCandidate[] }>;
-}): Promise<void> {
-  const candidates = params.days.flatMap((day) =>
-    day.candidates.map((candidate) => ({
-      contentIndex: candidate.contentIndex,
-      hash: candidate.hash,
-      scope: candidate.scope,
-      stateKey: candidate.stateKey,
-    })),
-  );
-  if (candidates.length === 0) {
-    return;
-  }
-  const key = createHash("sha256").update(JSON.stringify(candidates)).digest("hex");
-  await writeMemoryCoreWorkspaceEntry<SessionBackfillRewindBatch>({
-    namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-    workspaceDir: params.workspaceDir,
-    key,
-    value: { version: 1, candidates },
-  });
-}
-
-function isSessionBackfillRewindCandidate(
-  value: unknown,
-): value is SessionBackfillRewindBatch["candidates"][number] {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    Number.isInteger(candidate.contentIndex) &&
-    (candidate.contentIndex as number) >= 0 &&
-    typeof candidate.hash === "string" &&
-    candidate.hash.length > 0 &&
-    typeof candidate.scope === "string" &&
-    candidate.scope.length > 0 &&
-    typeof candidate.stateKey === "string" &&
-    candidate.stateKey.length > 0
-  );
-}
-
-async function rewindSessionBackfillIngestionState(workspaceDir: string): Promise<number> {
-  const entries = await readMemoryCoreWorkspaceEntries<SessionBackfillRewindBatch>({
-    namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-    workspaceDir,
-  });
-  const candidates = entries.flatMap((entry) =>
-    entry.value?.version === 1 && Array.isArray(entry.value.candidates)
-      ? entry.value.candidates.filter(isSessionBackfillRewindCandidate)
-      : [],
-  );
-  if (candidates.length === 0) {
-    await clearMemoryCoreWorkspaceNamespace({
-      namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-      workspaceDir,
-    });
-    return 0;
-  }
-
-  const state = await readSessionIngestionState(workspaceDir);
-  const removedHashesByScope = new Map<string, Set<string>>();
-  const rewindLineByStateKey = new Map<string, number>();
-  for (const candidate of candidates) {
-    const hashes = removedHashesByScope.get(candidate.scope) ?? new Set<string>();
-    hashes.add(candidate.hash);
-    removedHashesByScope.set(candidate.scope, hashes);
-    rewindLineByStateKey.set(
-      candidate.stateKey,
-      Math.min(
-        rewindLineByStateKey.get(candidate.stateKey) ?? candidate.contentIndex,
-        candidate.contentIndex,
-      ),
-    );
-  }
-
-  const seenMessages = { ...state.seenMessages };
-  for (const [scope, removedHashes] of removedHashesByScope) {
-    const remaining = (seenMessages[scope] ?? []).filter((hash) => !removedHashes.has(hash));
-    if (remaining.length > 0) {
-      seenMessages[scope] = remaining;
-    } else {
-      delete seenMessages[scope];
-    }
-  }
-  const files = { ...state.files };
-  // Rollback intentionally reopens only the journaled backfill range. Every
-  // non-backfill hash stays tracked, so later live-ingestion work remains skipped.
-  for (const [stateKey, lastContentLine] of rewindLineByStateKey) {
-    const current = files[stateKey];
-    if (current) {
-      files[stateKey] = {
-        ...current,
-        lastContentLine: Math.min(current.lastContentLine, lastContentLine),
-      };
-    }
-  }
-  await writeSessionIngestionState(workspaceDir, { ...state, files, seenMessages });
-  await clearMemoryCoreWorkspaceNamespace({
-    namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-    workspaceDir,
-  });
-  return candidates.length;
 }
 
 function mergeSessionBackfillFileProgress(params: {
@@ -815,7 +647,17 @@ async function executeSessionBackfillCore(
   }
 
   if (params.apply) {
-    await recordSessionBackfillRewindBatch({ workspaceDir, days: selectedDays });
+    await recordSessionBackfillRewindBatch({
+      workspaceDir,
+      candidates: selectedDays.flatMap((day) =>
+        day.candidates.map((candidate) => ({
+          contentIndex: candidate.contentIndex,
+          hash: candidate.hash,
+          scope: candidate.scope,
+          stateKey: candidate.stateKey,
+        })),
+      ),
+    });
     if (selectedDays.length > 0) {
       stagedEntries = await applySessionBackfillDays({
         workspaceDir,
@@ -878,66 +720,11 @@ export async function runSessionBackfill(
     return (await executeSessionBackfillCore(params)).result;
   }
 
-  const batches: SessionBackfillExecution[] = [];
-  for (let batch = 1; batch <= MAX_SESSION_BACKFILL_APPLY_BATCHES; batch += 1) {
-    const execution = await executeSessionBackfillCore(params);
-    batches.push(execution);
-    if (!execution.continuation.hasMore) {
-      return aggregateSessionBackfillBatches(batches);
-    }
-    if (!execution.continuation.advanced) {
-      throw new Error(
-        `Memory session-backfill stopped after ${batch} batches because the ingestion cursor did not advance.`,
-      );
-    }
-  }
-  throw new Error(
-    `Memory session-backfill exceeded the ${MAX_SESSION_BACKFILL_APPLY_BATCHES}-batch safety limit.`,
-  );
-}
-
-function aggregateSessionBackfillBatches(
-  executions: SessionBackfillExecution[],
-): SessionBackfillResult {
-  const first = executions[0]?.result;
-  if (!first) {
-    throw new Error("Memory session-backfill completed without executing a batch.");
-  }
-  const days = new Map<string, SessionBackfillDay>();
-  for (const execution of executions) {
-    for (const day of execution.result.days) {
-      const current = days.get(day.day);
-      days.set(day.day, {
-        day: day.day,
-        candidateCount: (current?.candidateCount ?? 0) + day.candidateCount,
-        topCandidates: [...(current?.topCandidates ?? []), ...day.topCandidates].slice(
-          0,
-          TOP_CANDIDATE_LIMIT,
-        ),
-      });
-    }
-  }
-  return {
-    ...first,
-    days: [...days.values()].toSorted((a, b) => a.day.localeCompare(b.day)),
-    candidateCount: executions.reduce((sum, execution) => sum + execution.result.candidateCount, 0),
-    stagedEntries: executions.reduce((sum, execution) => sum + execution.result.stagedEntries, 0),
-    writtenDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.writtenDiaryEntries,
-      0,
-    ),
-    replacedDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.replacedDiaryEntries,
-      0,
-    ),
-    batchCount: executions.length,
-    batches: executions.map((execution, index) => ({
-      batch: index + 1,
-      days: execution.result.days.length,
-      candidates: execution.result.candidateCount,
-      stagedEntries: execution.result.stagedEntries,
-    })),
-  };
+  return await drainSessionBackfill({
+    executeBatch: () => executeSessionBackfillCore(params),
+    maxBatches: MAX_SESSION_BACKFILL_APPLY_BATCHES,
+    topCandidateLimit: TOP_CANDIDATE_LIMIT,
+  });
 }
 
 export async function executeSessionBackfillBatch(
