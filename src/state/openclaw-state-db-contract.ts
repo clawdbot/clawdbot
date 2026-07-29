@@ -11,6 +11,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "agentic_os_runtime_snapshots",
   "model_catalog_remote",
   "sidebar_sections",
+  "skill_workshop_proposal_events",
   "skill_workshop_proposal_origin_runs",
   "skill_workshop_proposal_rollbacks",
   "skill_workshop_proposals",

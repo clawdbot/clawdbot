@@ -40,14 +40,6 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     thinkingLevel: "off",
     fastMode: false,
     configBusy: false,
-    configConnected: true,
-    configLoading: false,
-    configSaving: false,
-    configApplying: false,
-    configUpdating: false,
-    configNeedsApply: false,
-    configRawDraftPending: false,
-    configAutoSaveStatus: "idle",
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
     mutationBlockedReason: null,
@@ -83,9 +75,6 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onDefaultModelsReset: () => undefined,
     onThinkingChange: () => undefined,
     onFastModeChange: () => undefined,
-    onApplyConfig: () => undefined,
-    onRetrySaveConfig: () => undefined,
-    onDiscardConfig: () => undefined,
     ...overrides,
   };
 }
@@ -175,44 +164,6 @@ describe("renderModelProviders", () => {
 
     expect(groups).toHaveLength(2);
     expect([...groups].every((group) => group.disabled)).toBe(true);
-  });
-
-  it("surfaces autosave failures beside model behavior and retries", () => {
-    const onRetrySaveConfig = vi.fn();
-    const container = mount(props({ configAutoSaveStatus: "error", onRetrySaveConfig }));
-
-    const status = container.querySelector(".config-toolbar__status");
-    expect(text(status)).toContain("Save failed");
-    button(status!, "Retry")?.click();
-    expect(onRetrySaveConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows the apply banner beside model behavior and wires its action", () => {
-    const onApplyConfig = vi.fn();
-    const container = mount(props({ configNeedsApply: true, onApplyConfig }));
-
-    const banner = container.querySelector(".config-apply-banner");
-    expect(text(banner)).toContain("Saved to openclaw.json");
-    const applyButton = button(banner!, "Restart & apply");
-    expect(applyButton?.disabled).toBe(false);
-    applyButton?.click();
-    expect(onApplyConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ["config loading", { configLoading: true }],
-    ["config saving", { configSaving: true }],
-    ["config applying", { configApplying: true }],
-    ["an update", { configUpdating: true }],
-    ["autosave", { configAutoSaveStatus: "saving" as const }],
-    ["a raw draft", { configRawDraftPending: true }],
-    ["disconnection", { configConnected: false }],
-  ])("gates apply while %s is pending", (_label, overrides) => {
-    const container = mount(props({ configNeedsApply: true, ...overrides }));
-
-    expect(
-      container.querySelector<HTMLButtonElement>(".config-apply-banner button")?.disabled,
-    ).toBe(true);
   });
 
   it("keeps model behavior available while provider data loads", () => {

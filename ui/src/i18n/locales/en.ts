@@ -1420,11 +1420,11 @@ export const en: TranslationMap = {
     open: "Open",
     applying: "Applying…",
     autoSaveSaving: "Saving…",
+    autoSaveSaved: "Saved",
     autoSaveFailed: "Save failed",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
-    applyBannerText: "Saved to openclaw.json — restart the gateway to apply.",
-    applyBannerAction: "Restart & apply",
+    applyChanges: "Apply changes",
     rawDiscard: "Discard",
     rawDraftBlocksApply:
       "Unsaved raw config edits — save or discard them in the Raw editor before restarting.",
@@ -2224,9 +2224,17 @@ export const en: TranslationMap = {
       },
       schedule: {
         title: "Sleep schedule",
+        lightDescription:
+          "Sorts fresh short-term notes and stages promising candidates without changing long-term memory.",
+        remDescription:
+          "Reflects on themes and recurring ideas across recent activity to strengthen ranking without changing long-term memory.",
+        deepDescription:
+          "Scores staged candidates, promotes the keepers into long-term memory (MEMORY.md), and writes the dream diary.",
         nextRun: "next {time}",
         lastRun: "last {time}",
         notScheduled: "Not scheduled",
+        learnMore: "How dreaming works",
+        openDocs: "Open dreaming guide",
       },
       activity: {
         title: "Activity",
@@ -2245,6 +2253,10 @@ export const en: TranslationMap = {
         healthy: "Ready",
         unavailable: "Unavailable",
         notChecked: "Not checked",
+        notCheckedDescription: "Embedding readiness has not been checked yet.",
+        checking: "Checking…",
+        test: "Test",
+        testing: "Testing…",
       },
       shortcuts: {
         title: "Explore memory",
@@ -2309,6 +2321,8 @@ export const en: TranslationMap = {
       memoryWiki: {
         title: "Memory wiki",
       },
+      toggleAriaLabel: "Enable or disable {plugin}",
+      changeFailed: "Could not update {plugin}",
       stateUnknown: "Unknown",
       manage: "Enable or disable add-ons",
       manageLink: "Open Plugins",
@@ -2779,6 +2793,9 @@ export const en: TranslationMap = {
       next: "Next",
       apply: "Apply",
       applying: "Applying…",
+      evaluate: "Evaluate",
+      evaluating: "Evaluating…",
+      evaluated: "Evaluated",
       revise: "Revise",
       tweak: "Tweak",
       opening: "Opening…",
@@ -2811,6 +2828,35 @@ export const en: TranslationMap = {
       loading: "Loading proposal…",
       supportFilesTitle: "Support files",
       clickToPreview: "· click to preview",
+    },
+    evaluation: {
+      title: "Evaluation",
+      version: "Proposal {version}",
+      completedAt: "Completed {time}",
+      status: {
+        completed: "Completed",
+        skipped: "Skipped",
+        error: "Error",
+      },
+      decision: {
+        pass: "Pass",
+        revise: "Revise",
+        block: "Block",
+      },
+      severity: {
+        info: "Info",
+        warn: "Warning",
+        critical: "Critical",
+      },
+      evaluatorVersion: "Evaluator {version}",
+      mode: "Mode {mode}",
+      findings: "Findings",
+      metrics: "Metrics",
+      fileLine: "{file}:{line}",
+      errors: {
+        revisionHashUnavailable: "The current proposal revision could not be identified.",
+        revisionChanged: "The proposal revision changed during evaluation.",
+      },
     },
     empty: {
       searchTitle: "No matching proposals",
@@ -2872,6 +2918,8 @@ export const en: TranslationMap = {
       comeWithIt: "come with it.",
       useIt: "Use it",
       addToSkills: "Add to your skills",
+      evaluate: "Evaluate",
+      runChecks: "Run proposal checks",
       tweakIt: "Tweak it",
       askAgent: "Ask the agent to change something",
       skipping: "Skipping…",

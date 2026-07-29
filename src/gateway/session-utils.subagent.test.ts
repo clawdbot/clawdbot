@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { canonicalSubagentRunFixtures } from "../agents/subagent-registry.persistence.test-support.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
@@ -829,7 +830,7 @@ describe("listSessionsFromStore subagent metadata", () => {
           OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         () => {
-          saveSubagentRegistryToSqlite(persistedRuns);
+          saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           const result = listSessionsFromStore({
             cfg,
             storePath: "/tmp/sessions.json",
@@ -920,7 +921,7 @@ describe("listSessionsFromStore subagent metadata", () => {
           OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         () => {
-          saveSubagentRegistryToSqlite(persistedRuns);
+          saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           return listSessionsFromStore({
             cfg,
             storePath: "/tmp/sessions.json",

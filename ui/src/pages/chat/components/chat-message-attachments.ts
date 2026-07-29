@@ -101,7 +101,11 @@ export function resolveAssistantAttachmentAvailability(
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
-  if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
+  // Bootstrap has no client roots yet; authenticated Gateway metadata remains authoritative.
+  if (
+    localMediaPreviewRoots.length > 0 &&
+    !isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)
+  ) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
   }
   const normalizedAuthToken = authToken?.trim() ?? "";

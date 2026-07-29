@@ -1,22 +1,5 @@
-import type {
-  MeetingBrowserHealth,
-  MeetingBrowserTab,
-  MeetingSessionRecord,
-  MeetingTranscriptSnapshot,
-} from "openclaw/plugin-sdk/meeting-runtime";
-import type { ZoomMeetingsMode, ZoomMeetingsTransport } from "../config.js";
-
-export type ZoomMeetingsTranscriptSnapshot = MeetingTranscriptSnapshot;
-
-export type ZoomMeetingsJoinRequest = {
-  url: string;
-  transport?: ZoomMeetingsTransport;
-  mode?: ZoomMeetingsMode;
-  message?: string;
-  requesterSessionKey?: string;
-  agentId?: string;
-  timeoutMs?: number;
-};
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type { ZoomMeetingsConfig, ZoomMeetingsMode, ZoomMeetingsTransport } from "../config.js";
 
 type ZoomMeetingsManualActionReason =
   | "zoom-login-required"
@@ -37,67 +20,19 @@ type ZoomMeetingsSpeechBlockedReason =
   | "audio-bridge-unavailable"
   | "zoom-microphone-muted";
 
-export type ZoomMeetingsChromeHealth = MeetingBrowserHealth<
-  ZoomMeetingsManualActionReason,
-  ZoomMeetingsSpeechBlockedReason
-> & {
-  inCall?: boolean;
-  meetingEnded?: boolean;
-  micMuted?: boolean;
-  cameraOff?: boolean;
-  lobbyWaiting?: boolean;
-  captionCaptureRequested?: boolean;
-  captioning?: boolean;
-  captionsEnabledAttempted?: boolean;
-  transcriptLines?: number;
-  lastCaptionAt?: string;
-  lastCaptionSpeaker?: string;
-  lastCaptionText?: string;
-  recentTranscript?: Array<{
-    at?: string;
-    speaker?: string;
-    text: string;
-  }>;
-  audioInputRouted?: boolean;
-  audioInputDeviceLabel?: string;
-  audioInputRouteError?: string;
-  audioOutputRouted?: boolean;
-  audioOutputDeviceLabel?: string;
-  audioOutputRouteError?: string;
-  audioOutputRouteRetryable?: boolean;
-  providerConnected?: boolean;
-  realtimeReady?: boolean;
-  audioInputActive?: boolean;
-  audioOutputActive?: boolean;
-  lastInputAt?: string;
-  lastOutputAt?: string;
-  lastInputBytes?: number;
-  lastOutputBytes?: number;
-  bridgeClosed?: boolean;
-  browserUrl?: string;
-  browserTitle?: string;
-  status?: string;
-  notes?: string[];
-};
-
-export type ZoomMeetingsBrowserTab = MeetingBrowserTab;
-
-export type ZoomMeetingsSession = MeetingSessionRecord<ZoomMeetingsTransport, ZoomMeetingsMode> & {
-  chrome?: {
-    audioBackend: "blackhole-2ch";
-    launched: boolean;
-    nodeId?: string;
-    browserProfile?: string;
-    browserTab?: ZoomMeetingsBrowserTab;
-    audioBridge?: {
-      type: "command-pair" | "node-command-pair";
-      provider?: string;
-    };
-    health?: ZoomMeetingsChromeHealth;
-  };
-};
-
-export type ZoomMeetingsJoinResult = {
-  session: ZoomMeetingsSession;
-  spoken?: boolean;
-};
+export type ZoomMeetingsPluginTypes = ReturnType<
+  typeof MeetingPlatformAdapter.pluginTypes<
+    ZoomMeetingsConfig,
+    ZoomMeetingsTransport,
+    ZoomMeetingsMode,
+    ZoomMeetingsManualActionReason,
+    ZoomMeetingsSpeechBlockedReason,
+    { meetingEnded?: boolean }
+  >
+>;
+export type ZoomMeetingsTranscriptSnapshot = ZoomMeetingsPluginTypes["TranscriptSnapshot"];
+export type ZoomMeetingsJoinRequest = ZoomMeetingsPluginTypes["JoinRequest"];
+export type ZoomMeetingsChromeHealth = ZoomMeetingsPluginTypes["ChromeHealth"];
+export type ZoomMeetingsBrowserTab = ZoomMeetingsPluginTypes["BrowserTab"];
+export type ZoomMeetingsSession = ZoomMeetingsPluginTypes["Session"];
+export type ZoomMeetingsJoinResult = ZoomMeetingsPluginTypes["JoinResult"];

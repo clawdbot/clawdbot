@@ -5,8 +5,10 @@ import {
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getZalouserRuntime } from "./runtime.js";
 import type { ZaloInboundMessage } from "./types.js";
 import { normalizeZaloInboundMessage } from "./zalo-js.js";
@@ -48,14 +50,6 @@ class ZalouserIngressPayloadError extends Error {
     super(message, options);
     this.name = "ZalouserIngressPayloadError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function inspectZalouserIngressMessage(message: unknown): {

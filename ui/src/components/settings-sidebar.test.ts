@@ -9,6 +9,17 @@ import "./tooltip.ts";
 
 let container: HTMLDivElement;
 
+const saveIndicator = () => ({
+  status: "idle" as const,
+  lastError: null,
+  needsApply: false,
+  applying: false,
+  applyDisabled: false,
+  onRetry: vi.fn(),
+  onReload: vi.fn(),
+  onApply: vi.fn(),
+});
+
 beforeEach(async () => {
   await i18n.setLocale("en");
   container = document.createElement("div");
@@ -40,6 +51,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -76,6 +88,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -119,6 +132,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -166,6 +180,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -216,6 +231,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -255,6 +271,7 @@ describe("settings sidebar search", () => {
             rerender();
           },
           preloadTimers: new Map(),
+          saveIndicator: saveIndicator(),
         }),
         container,
       );
@@ -332,6 +349,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -366,6 +384,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -399,14 +418,17 @@ describe("settings sidebar search", () => {
           onNavigate: vi.fn(),
           onSearchQueryChange: vi.fn(),
           preloadTimers: new Map(),
+          saveIndicator: { ...saveIndicator(), status: "saving" },
         }),
         container,
       );
 
     renderSidebar(false, null, 3);
     expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
 
     renderSidebar(true, "connection refused?token=settings-secret", 3);
+    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.hasAttribute("title")).toBe(false);
     expect(

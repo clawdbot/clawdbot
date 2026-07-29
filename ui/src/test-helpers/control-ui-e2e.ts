@@ -1,6 +1,6 @@
 // Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
@@ -98,6 +98,7 @@ export async function waitForControlUiSettingsTakeover(
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js"), "utf8");
 const commonJsOptimizeDeps = [
   "highlight.js/lib/core",
   "highlight.js/lib/languages/bash",
@@ -436,13 +437,16 @@ export function createControlUiMockGatewayInitScript(
     protocolVersion: PROTOCOL_VERSION,
     scenario: normalizeScenario(scenario),
   };
-  return `(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}); })();`;
+  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse); })();`;
 }
 
-function installControlUiMockGateway(input: {
-  protocolVersion: number;
-  scenario: NormalizedControlUiMockGatewayScenario;
-}) {
+function installControlUiMockGateway(
+  input: {
+    protocolVersion: number;
+    scenario: NormalizedControlUiMockGatewayScenario;
+  },
+  parseJson5: (raw: string) => unknown,
+) {
   type BrowserRequest = { id: string; method: string; params?: unknown };
   type BrowserFrame = {
     id?: unknown;
@@ -1004,9 +1008,9 @@ function installControlUiMockGateway(input: {
         }
         let parsedConfig: unknown = configuredConfig.config;
         try {
-          parsedConfig = JSON.parse(configState.raw) as unknown;
+          parsedConfig = parseJson5(configState.raw);
         } catch {
-          // JSON5-only raw keeps the last parseable config object.
+          // Invalid raw keeps the last valid fixture object for generic mock scenarios.
         }
         return {
           ...configuredConfig,
@@ -1044,8 +1048,22 @@ function installControlUiMockGateway(input: {
           };
           persistConfigState();
         }
-        // Like the real gateway, ack with the persisted snapshot hash.
-        return { ok: true, hash: mockConfigHash() };
+        let parsedConfig: unknown = baseConfigResponse.config;
+        try {
+          parsedConfig = parseJson5(configState.raw);
+        } catch {
+          // Invalid raw keeps the last valid fixture object for generic mock scenarios.
+        }
+        const configured = configuredResponse(method, params);
+        const configuredAck = isRecord(configured.value) ? configured.value : {};
+        // Like the real gateway, return the persisted config and its new hash.
+        return {
+          ...configuredAck,
+          ok: true,
+          path: baseConfigResponse.path,
+          hash: mockConfigHash(),
+          config: parsedConfig,
+        };
       }
     }
     const configured = configuredResponse(method, params);

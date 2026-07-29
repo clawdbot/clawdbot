@@ -1146,6 +1146,19 @@ export interface SkillUsage {
   use_count: number;
 }
 
+export interface SkillWorkshopProposalEvents {
+  actor_json: string;
+  correlation_id: string | null;
+  event_id: string;
+  event_type: string;
+  occurred_at: string;
+  payload_json: string | null;
+  proposal_id: string;
+  proposed_version: string;
+  revision_hash: string;
+  sequence: Generated<number>;
+}
+
 export interface SkillWorkshopProposalOriginRuns {
   mutation_count: number;
   position: number;
@@ -1622,6 +1635,7 @@ export interface DB {
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
+  skill_workshop_proposal_events: SkillWorkshopProposalEvents;
   skill_workshop_proposal_origin_runs: SkillWorkshopProposalOriginRuns;
   skill_workshop_proposal_rollbacks: SkillWorkshopProposalRollbacks;
   skill_workshop_proposals: SkillWorkshopProposals;

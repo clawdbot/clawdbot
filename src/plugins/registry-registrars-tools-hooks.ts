@@ -391,7 +391,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: { priority?: number; registrationId?: string; timeoutMs?: number },
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -459,6 +459,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
+      ...(opts?.registrationId ? { registrationId: opts.registrationId } : {}),
       hookName: effectiveHookName,
       handler: effectiveHandler,
       priority: opts?.priority,

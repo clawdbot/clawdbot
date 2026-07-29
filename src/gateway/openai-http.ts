@@ -283,7 +283,7 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
+  params: { runId: string; model: string; content: string },
 ) {
   writeSse(res, {
     id: params.runId,
@@ -294,7 +294,7 @@ function writeAssistantContentChunk(
       {
         index: 0,
         delta: { content: params.content },
-        finish_reason: params.finishReason,
+        finish_reason: null,
       },
     ],
   });
@@ -1292,7 +1292,6 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: null,
       });
       return;
     }
@@ -1370,7 +1369,6 @@ export async function handleOpenAiHttpRequest(
               runId,
               model,
               content: commentary,
-              finishReason: null,
             });
           }
         }
@@ -1400,7 +1398,6 @@ export async function handleOpenAiHttpRequest(
           runId,
           model,
           content,
-          finishReason: null,
         });
       }
       requestFinalize();
@@ -1436,9 +1433,7 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: "stop",
       });
-      wroteStopChunk = true;
       finalUsage = {
         prompt_tokens: 0,
         completion_tokens: 0,
