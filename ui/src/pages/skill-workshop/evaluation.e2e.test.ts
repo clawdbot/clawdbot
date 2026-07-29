@@ -1,3 +1,5 @@
+import { copyFile, mkdir, rm } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -13,6 +15,10 @@ const describeBrowser = canRunPlaywrightChromium(chromiumExecutablePath) ? descr
 const DRAFT_HASH = "a".repeat(64);
 const REVISION_HASH = "b".repeat(64);
 const ISO_NOW = "2026-07-29T10:00:00.000Z";
+const configuredArtifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactDir = configuredArtifactDir
+  ? path.join(path.resolve(process.cwd(), configuredArtifactDir), "skill-workshop-evaluation")
+  : undefined;
 
 let browser: Browser | null = null;
 let server: ControlUiE2eServer | null = null;
@@ -72,6 +78,9 @@ function inspectResult(withEvaluation: boolean) {
 
 describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
   beforeAll(async () => {
+    if (artifactDir) {
+      await mkdir(artifactDir, { recursive: true });
+    }
     browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
     server = await startControlUiE2eServer();
   });
@@ -88,11 +97,20 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
     ["mobile", { width: 390, height: 844 }],
   ] as const)(
     "evaluates the current draft and renders outcomes on %s",
-    async (_viewportName, viewport) => {
+    async (viewportName, viewport) => {
       if (!browser || !server) {
         throw new Error("Expected browser test fixtures");
       }
-      const page = await browser.newPage({ viewport });
+      const rawVideoDir = artifactDir ? path.join(artifactDir, `${viewportName}-raw`) : undefined;
+      if (rawVideoDir) {
+        await rm(rawVideoDir, { force: true, recursive: true });
+        await mkdir(rawVideoDir, { recursive: true });
+      }
+      const context = await browser.newContext({
+        viewport,
+        ...(rawVideoDir ? { recordVideo: { dir: rawVideoDir, size: viewport } } : {}),
+      });
+      const page = await context.newPage();
       try {
         const gateway = await installMockGateway(page, {
           assistantAgentId: "research",
@@ -130,6 +148,12 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
         expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(
           await page.evaluate(() => window.innerWidth + 1),
         );
+        if (artifactDir) {
+          await page.screenshot({
+            fullPage: true,
+            path: path.join(artifactDir, `${viewportName}-before.png`),
+          });
+        }
         await evaluate.click();
 
         const request = await gateway.waitForRequest("skills.proposals.evaluate");
@@ -149,8 +173,19 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
         expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(
           await page.evaluate(() => window.innerWidth + 1),
         );
+        if (artifactDir) {
+          await page.screenshot({
+            fullPage: true,
+            path: path.join(artifactDir, `${viewportName}-result.png`),
+          });
+        }
       } finally {
-        await page.close();
+        const video = page.video();
+        await context.close();
+        if (artifactDir && rawVideoDir && video) {
+          await copyFile(await video.path(), path.join(artifactDir, `${viewportName}.webm`));
+          await rm(rawVideoDir, { force: true, recursive: true });
+        }
       }
     },
   );
