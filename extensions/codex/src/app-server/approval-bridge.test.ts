@@ -197,6 +197,41 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
+  it.each([
+    ["item/commandExecution/requestApproval", "cmd-policy-allow", { command: "gh run view 1" }],
+    [
+      "item/fileChange/requestApproval",
+      "patch-policy-allow",
+      { reason: "write memory/2026-07-29.md" },
+    ],
+  ] as const)(
+    "auto-accepts %s when the promoted OpenClaw tool policy allows it",
+    async (method, itemId, requestFields) => {
+      const params = createParams();
+
+      const result = await handleCodexAppServerApprovalRequest({
+        method,
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId,
+          ...requestFields,
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        autoApproveOpenClawToolPolicy: true,
+      });
+
+      expect(result).toEqual({ decision: "accept" });
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+      findApprovalEvent(params, {
+        status: "approved",
+        message: "Codex app-server approval accepted by OpenClaw tool policy.",
+      });
+    },
+  );
+
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
     const params = createParams();
     mockCallGatewayTool
@@ -248,6 +283,11 @@ describe("Codex app-server approval bridge", () => {
         agentId: "main",
         sessionKey: "agent:main:session-1",
         channelId: "chat-1",
+        workspaceDir: undefined,
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat-1",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "thread-ts",
       },
     });
     findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });

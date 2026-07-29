@@ -76,6 +76,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
     "allowedEvents" | "generation" | "relayId"
   >;
   autoApprove?: boolean;
+  autoApproveOpenClawToolPolicy?: boolean;
   signal?: AbortSignal;
   onNativeToolFailureDisposition?: (
     itemId: string,
@@ -133,6 +134,18 @@ export async function handleCodexAppServerApprovalRequest(params: {
         message: approvalResolutionMessage(policyOutcome.outcome),
       });
       return buildApprovalResponse(params.method, context.requestParams, policyOutcome.outcome);
+    }
+    if (params.autoApproveOpenClawToolPolicy === true && policyOutcome?.outcome === "allowed") {
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "resolved",
+        kind: context.kind,
+        status: "approved",
+        title: context.title,
+        ...context.eventDetails,
+        ...approvalEventScope(params.method, "approved-once"),
+        message: "Codex app-server approval accepted by OpenClaw tool policy.",
+      });
+      return buildApprovalResponse(params.method, context.requestParams, "approved-once");
     }
     if (params.autoApprove === true) {
       emitApprovalEvent(params.paramsForRun, {
@@ -396,7 +409,7 @@ type ApprovalPolicyOutcome =
       failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     }
   | { outcome: "approved-once" | "approved-session" }
-  | { outcome: "no-decision" };
+  | { outcome: "allowed" };
 
 async function runOpenClawToolPolicyForApprovalRequest(params: {
   method: string;
@@ -441,7 +454,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     return { outcome: nativeRelayOutcome.outcome };
   }
   if (nativeRelayOutcome?.handled) {
-    return { outcome: "no-decision" };
+    return { outcome: "allowed" };
   }
   const hookChannelId = buildAgentHookContextChannelFields({
     sessionKey: params.paramsForRun.sessionKey,
@@ -465,6 +478,13 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       ...(params.paramsForRun.sessionId ? { sessionId: params.paramsForRun.sessionId } : {}),
       ...(params.paramsForRun.runId ? { runId: params.paramsForRun.runId } : {}),
       ...(hookChannelId ? { channelId: hookChannelId } : {}),
+      trigger: params.paramsForRun.trigger,
+      approvalReviewerDeviceId: params.paramsForRun.approvalReviewerDeviceId,
+      turnSourceChannel: params.paramsForRun.messageChannel ?? params.paramsForRun.messageProvider,
+      turnSourceTo:
+        params.paramsForRun.currentMessagingTarget ?? params.paramsForRun.currentChannelId,
+      turnSourceAccountId: params.paramsForRun.agentAccountId,
+      turnSourceThreadId: params.paramsForRun.currentThreadTs,
     },
   });
   if (outcome.blocked) {
@@ -490,7 +510,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       outcome: "approved-once",
     };
   }
-  return undefined;
+  return { outcome: "allowed" };
 }
 
 async function runNativeRelayToolPolicyForApprovalRequest(params: {
