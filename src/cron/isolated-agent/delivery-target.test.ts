@@ -604,8 +604,8 @@ describe("resolveDeliveryTarget", () => {
       {
         directory: {
           listGroups: async () => [
-            { id: "channel:ops-a", name: "ops", rank: 1 },
-            { id: "channel:ops-b", name: "ops", rank: 2 },
+            { kind: "group", id: "channel:ops-a", name: "ops", rank: 1 },
+            { kind: "group", id: "channel:ops-b", name: "ops", rank: 2 },
           ],
         },
       },

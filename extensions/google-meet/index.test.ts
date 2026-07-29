@@ -18,7 +18,10 @@ import {
   type MeetingRealtimeAudioTransport,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
-import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceProviderPlugin,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { testing as googleMeetPluginTesting } from "./index.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
@@ -108,9 +111,9 @@ function createTestMeetVoiceProvider(
   options: {
     defaultModel?: string;
     supportsToolResultContinuation?: true;
-    handleBargeIn?: ReturnType<typeof vi.fn>;
-    sendUserMessage?: ReturnType<typeof vi.fn>;
-    triggerGreeting?: ReturnType<typeof vi.fn>;
+    handleBargeIn?: RealtimeVoiceBridge["handleBargeIn"];
+    sendUserMessage?: RealtimeVoiceBridge["sendUserMessage"];
+    triggerGreeting?: RealtimeVoiceBridge["triggerGreeting"];
     onCreateBridge?: (request: TestMeetVoiceBridgeRequest) => void;
   } = {},
 ) {
