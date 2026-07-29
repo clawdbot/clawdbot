@@ -52,6 +52,24 @@ struct DashboardGatewayCatalogTests {
         #expect(entries[0].name == "127.0.0.1")
     }
 
+    @Test func `catalog deduplicates configured SSH endpoint before resolution`() throws {
+        let tunnelURL = try #require(URL(string: "ws://127.0.0.1:18789"))
+        let profile = MacGatewayCatalogProfile(
+            profile: MacGatewayProfile(id: "loopback", name: "127.0.0.1", url: tunnelURL),
+            canPromote: true)
+
+        let entries = DashboardGatewayCatalog.entries(
+            mode: .remote,
+            primaryRemoteURL: tunnelURL,
+            resolvedRemoteURL: nil,
+            resolvedRemoteHostLabel: nil,
+            profiles: [profile],
+            primaryHealth: .unknown)
+
+        #expect(entries.map(\.id) == ["primary"])
+        #expect(entries[0].name == "127.0.0.1")
+    }
+
     @Test @MainActor func `catalog maps only connected control state to healthy`() {
         #expect(DashboardGatewayCatalog.primaryHealth(for: .connected) == .ok)
         #expect(DashboardGatewayCatalog.primaryHealth(for: .disconnected) == .unknown)

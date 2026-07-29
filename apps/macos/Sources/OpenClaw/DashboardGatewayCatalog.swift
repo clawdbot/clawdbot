@@ -107,7 +107,6 @@ enum DashboardGatewayCatalog {
     static func loadEntries() async throws -> [DashboardGatewayEntry] {
         let state = AppStateStore.shared
         let root = OpenClawConfigFile.loadDict()
-        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
         let connectivity = GatewayConnectivityCoordinator.shared
         let resolvedRemoteURL: URL? = if case let .ready(mode, url, _, _, _) = connectivity.endpointState,
@@ -119,7 +118,7 @@ enum DashboardGatewayCatalog {
         }
         return self.entries(
             mode: state.connectionMode,
-            primaryRemoteURL: resolution.transport == .direct ? resolution.directURL : nil,
+            primaryRemoteURL: GatewayRemoteConfig.resolveGatewayUrl(root: root),
             resolvedRemoteURL: resolvedRemoteURL,
             resolvedRemoteHostLabel: connectivity.resolvedHostLabel,
             profiles: profiles,
