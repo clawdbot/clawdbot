@@ -15,7 +15,20 @@ import {
 } from "../meeting-bot/plugin-shell.js";
 import { resolveMeetingProbeTimeoutMs } from "../meeting-bot/runtime-probes.js";
 
-export const MeetingPlatformAdapter = {
+type MeetingPlatformAdapterFacade = typeof MeetingPlatformAdapterCore & {
+  createChromeRuntimeBindings: typeof createMeetingChromeRuntimeBindings;
+  createCliMetadata: typeof createMeetingPluginCliMetadata;
+  createPluginChromeTransport: typeof createMeetingPluginChromeTransport;
+  createPluginConfigSchema: typeof createMeetingPluginConfigSchema;
+  createPluginNodeHostHandler: typeof createMeetingPluginNodeHostHandler;
+  createPluginNodeInvokePolicy: typeof createMeetingPluginNodeInvokePolicy;
+  createPluginShellEntry: typeof createMeetingPluginShellEntry;
+  pluginTypes: typeof createMeetingPluginTypes;
+  registerPluginCli: typeof registerMeetingPluginCli;
+  resolveProbeTimeoutMs: typeof resolveMeetingProbeTimeoutMs;
+};
+
+export const MeetingPlatformAdapter: MeetingPlatformAdapterFacade = {
   ...MeetingPlatformAdapterCore,
   createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
   createCliMetadata: createMeetingPluginCliMetadata,

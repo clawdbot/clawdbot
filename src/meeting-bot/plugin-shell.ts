@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { Type } from "typebox";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -182,7 +181,6 @@ type MeetingPluginShellEntryOptions<
   | "toolDescription"
   | "toolLabel"
   | "toolName"
-  | "toolParameters"
   | "transcriptSource"
   | "unknownActionMessage"
 > & {
@@ -197,7 +195,6 @@ type MeetingPluginShellEntryOptions<
     logger: OpenClawPluginApi["logger"];
     runtime: OpenClawPluginApi["runtime"];
   }) => Runtime;
-  sessionLabel: string;
   transcriptSource: { aliases?: readonly string[]; id: string };
 };
 
@@ -223,17 +220,6 @@ export function createMeetingPluginShellEntry<
     toolDescription: `Join and manage ${options.browserGuestLabel} browser guests. Guest admission, tenant sign-in, and media permissions may require manual action in the OpenClaw Chrome profile.`,
     toolLabel: options.platform.displayName,
     toolName,
-    toolParameters: Type.Object({
-      action: Type.String({ enum: ["join", "leave", "status", "transcript", "speak"] }),
-      url: Type.Optional(Type.String({ description: `${options.browserGuestLabel} URL` })),
-      transport: Type.Optional(Type.String({ enum: ["chrome", "chrome-node"] })),
-      mode: Type.Optional(Type.String({ enum: ["agent", "bidi", "transcribe"] })),
-      sessionId: Type.Optional(Type.String({ description: `${options.sessionLabel} session ID` })),
-      sinceIndex: Type.Optional(
-        Type.Integer({ minimum: 0, description: "Resume transcript from this index" }),
-      ),
-      message: Type.Optional(Type.String({ description: "Instructions to speak" })),
-    }),
     transcriptSource: { ...options.transcriptSource, name: options.platform.displayName },
     unknownActionMessage: `unknown ${toolName} action`,
     createRuntime: ({ api, config }) =>
