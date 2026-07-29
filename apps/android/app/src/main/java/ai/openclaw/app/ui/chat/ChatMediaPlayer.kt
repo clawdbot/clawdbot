@@ -76,6 +76,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 internal class ChatMediaPlaybackClaims<T>(
+  private val pause: (T) -> Unit,
   private val release: (T) -> Unit,
 ) {
   var active: T? = null
@@ -96,6 +97,12 @@ internal class ChatMediaPlaybackClaims<T>(
     return true
   }
 
+  fun pauseIf(predicate: (T) -> Boolean): Boolean {
+    val current = active?.takeIf(predicate) ?: return false
+    pause(current)
+    return true
+  }
+
   fun releaseActive() {
     val previous = active ?: return
     active = null
@@ -104,15 +111,20 @@ internal class ChatMediaPlaybackClaims<T>(
 }
 
 private object ChatMediaPlaybackArbiter {
-  private data class ActivePlayback(
-    val player: ExoPlayer,
-    val audioManager: AudioManager,
-    val focusRequest: AudioFocusRequest,
-    val onReleased: () -> Unit,
+  private data class AudioFocusHandle(
+    val manager: AudioManager,
+    val request: AudioFocusRequest,
   )
 
+  private class ActivePlayback(
+    val player: ExoPlayer,
+    val onReleased: () -> Unit,
+  ) {
+    var audioFocus: AudioFocusHandle? = null
+  }
+
   private val mainHandler = Handler(Looper.getMainLooper())
-  private val claims = ChatMediaPlaybackClaims<ActivePlayback>(::stopAndRelease)
+  private val claims = ChatMediaPlaybackClaims<ActivePlayback>(::pauseAndAbandon, ::stopAndRelease)
   private var playbackIntentGeneration = 0L
 
   @Synchronized
@@ -131,9 +143,21 @@ private object ChatMediaPlaybackArbiter {
   }
 
   @Synchronized
-  fun stopAll() {
+  fun pauseAll() {
     playbackIntentGeneration += 1L
-    claims.releaseActive()
+    claims.pauseIf { true }
+  }
+
+  @Synchronized
+  fun registerPrepared(
+    player: ExoPlayer,
+    intentGeneration: Long,
+    onReleased: () -> Unit,
+  ): Boolean {
+    if (playbackIntentGeneration != intentGeneration) return false
+    if (claims.active?.player === player) return true
+    claims.claim(ActivePlayback(player = player, onReleased = onReleased))
+    return true
   }
 
   @Synchronized
@@ -144,7 +168,8 @@ private object ChatMediaPlaybackArbiter {
     onReleased: () -> Unit,
   ): Boolean {
     if (playbackIntentGeneration != intentGeneration) return false
-    if (claims.active?.player === player) return true
+    val existing = claims.active?.takeIf { it.player === player }
+    if (existing?.audioFocus != null) return true
 
     val audioManager = context.getSystemService(AudioManager::class.java)
     val focusRequest =
@@ -165,26 +190,25 @@ private object ChatMediaPlaybackArbiter {
     if (audioManager.requestAudioFocus(focusRequest) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
       return false
     }
-    claims.claim(
-      ActivePlayback(
-        player = player,
-        audioManager = audioManager,
-        focusRequest = focusRequest,
-        onReleased = onReleased,
-      ),
-    )
+    val playback = existing ?: ActivePlayback(player = player, onReleased = onReleased).also(claims::claim)
+    playback.audioFocus = AudioFocusHandle(manager = audioManager, request = focusRequest)
     return true
   }
 
   @Synchronized
-  fun pause(player: ExoPlayer): Boolean = release(player)
+  fun pause(player: ExoPlayer): Boolean = claims.pauseIf { it.player === player }
 
   @Synchronized
   fun release(player: ExoPlayer): Boolean = claims.releaseIf { it.player === player }
 
-  private fun stopAndRelease(playback: ActivePlayback) {
+  private fun pauseAndAbandon(playback: ActivePlayback) {
     playback.player.pause()
-    playback.audioManager.abandonAudioFocusRequest(playback.focusRequest)
+    playback.audioFocus?.let { focus -> focus.manager.abandonAudioFocusRequest(focus.request) }
+    playback.audioFocus = null
+  }
+
+  private fun stopAndRelease(playback: ActivePlayback) {
+    pauseAndAbandon(playback)
     playback.player.release()
     playback.onReleased()
   }
@@ -270,28 +294,32 @@ private fun ChatMediaPlayerCard(
       onReleased = { clearPlayerState(requested, requestedFile) },
     )
 
+  fun registerPrepared(
+    prepared: ExoPlayer,
+    preparedFile: File?,
+    intentGeneration: Long,
+  ): Boolean =
+    ChatMediaPlaybackArbiter.registerPrepared(
+      player = prepared,
+      intentGeneration = intentGeneration,
+      onReleased = { clearPlayerState(prepared, preparedFile) },
+    )
+
   fun pause() {
     player?.let(ChatMediaPlaybackArbiter::pause)
   }
 
   fun play() {
     if (playbackBlocked) return
-    var existing = player
-    if (existing != null && error != null) {
-      val existingFile = tempFile
-      if (!ChatMediaPlaybackArbiter.release(existing)) {
-        disposeUnclaimedPlayer(existing, existingFile)
-      }
-      existing = null
-    }
+    val existing = player
     if (existing != null) {
       val intentGeneration = ChatMediaPlaybackArbiter.claimPlaybackIntent(preservePlayer = existing)
       playbackIntent = intentGeneration
+      error = null
       if (requestPlayback(existing, tempFile, intentGeneration)) {
         if (existing.playbackState == Player.STATE_ENDED) existing.seekToDefaultPosition()
         existing.play()
       } else {
-        disposeUnclaimedPlayer(existing, tempFile)
         error = nativeString("Audio playback is unavailable")
       }
       return
@@ -353,7 +381,7 @@ private fun ChatMediaPlayerCard(
 
           override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
-              ChatMediaPlaybackArbiter.release(created)
+              ChatMediaPlaybackArbiter.pause(created)
             }
           }
 
@@ -367,13 +395,17 @@ private fun ChatMediaPlayerCard(
       )
       player = created
       loading = false
+      if (!registerPrepared(created, prepared.tempFile, intentGeneration)) {
+        disposeUnclaimedPlayer(created, prepared.tempFile)
+        return@launch
+      }
       val shouldPlay =
         !currentPlaybackBlocked &&
           lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
       if (shouldPlay && requestPlayback(created, prepared.tempFile, intentGeneration)) {
         created.play()
-      } else {
-        disposeUnclaimedPlayer(created, prepared.tempFile)
+      } else if (shouldPlay) {
+        error = nativeString("Audio playback is unavailable")
       }
     }
   }
@@ -387,12 +419,12 @@ private fun ChatMediaPlayerCard(
     }
   }
   LaunchedEffect(playbackBlocked) {
-    if (playbackBlocked) ChatMediaPlaybackArbiter.stopAll()
+    if (playbackBlocked) ChatMediaPlaybackArbiter.pauseAll()
   }
   DisposableEffect(lifecycleOwner, player) {
     val observer =
       LifecycleEventObserver { _, event ->
-        if (event == Lifecycle.Event.ON_STOP) ChatMediaPlaybackArbiter.stopAll()
+        if (event == Lifecycle.Event.ON_STOP) ChatMediaPlaybackArbiter.pauseAll()
       }
     lifecycleOwner.lifecycle.addObserver(observer)
     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }

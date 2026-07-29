@@ -18,21 +18,35 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class ChatMediaPlayerTest {
+  private class FakePlayer(
+    var positionMs: Long = 0L,
+  ) {
+    var paused = false
+    var released = false
+    var playCount = 0
+
+    fun pause() {
+      paused = true
+    }
+
+    fun play() {
+      paused = false
+      playCount += 1
+    }
+
+    fun release() {
+      released = true
+    }
+  }
+
   @get:Rule
   val composeRule = createComposeRule()
 
   @Test
   fun claimHandoffReleasesPreviousPlaybackInstance() {
-    class FakePlayer {
-      var released = false
-
-      fun release() {
-        released = true
-      }
-    }
     val first = FakePlayer()
     val second = FakePlayer()
-    val claims = ChatMediaPlaybackClaims<FakePlayer>(FakePlayer::release)
+    val claims = ChatMediaPlaybackClaims<FakePlayer>(FakePlayer::pause, FakePlayer::release)
 
     claims.claim(first)
     claims.claim(second)
@@ -40,6 +54,25 @@ class ChatMediaPlayerTest {
     assertTrue(first.released)
     assertFalse(second.released)
     assertSame(second, claims.active)
+  }
+
+  @Test
+  fun pauseThenPlayResumesPositionWithoutRedownload() {
+    var downloadCount = 0
+    val player = FakePlayer(positionMs = 4_200L).also { downloadCount += 1 }
+    val claims = ChatMediaPlaybackClaims<FakePlayer>(FakePlayer::pause, FakePlayer::release)
+
+    claims.claim(player)
+    claims.pauseIf { it === player }
+    claims.claim(player)
+    player.play()
+
+    assertEquals(1, downloadCount)
+    assertEquals(4_200L, player.positionMs)
+    assertEquals(1, player.playCount)
+    assertFalse(player.paused)
+    assertFalse(player.released)
+    assertSame(player, claims.active)
   }
 
   @Test
