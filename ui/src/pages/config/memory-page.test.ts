@@ -86,9 +86,10 @@ function createPage(params: {
   const request = vi.fn((method: string, payload?: { agentId?: string; probe?: boolean }) => {
     if (method === "plugins.list") {
       const call = listCalls++;
-      const result = params.listCatalog
-        ? params.listCatalog(call)
-        : Promise.resolve({ plugins: params.catalog ?? [] });
+      const result: Promise<{ plugins: readonly PluginCatalogItem[]; mutationAllowed?: boolean }> =
+        params.listCatalog
+          ? params.listCatalog(call)
+          : Promise.resolve({ plugins: params.catalog ?? [] });
       return result.then((catalog) => ({
         ...catalog,
         diagnostics: [],
