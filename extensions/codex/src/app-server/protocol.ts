@@ -95,28 +95,6 @@ export type CodexCommandExecResponse = {
   stderr: string;
 };
 
-/** Native app-server filesystem read over the existing JSON-RPC transport. */
-export type CodexFsReadFileParams = {
-  path: string;
-};
-
-export type CodexFsReadFileResponse = {
-  dataBase64: string;
-};
-
-/** Constant-size remote file revision returned by the native metadata RPC. */
-export type CodexFsGetMetadataParams = {
-  path: string;
-};
-
-export type CodexFsGetMetadataResponse = {
-  isDirectory: boolean;
-  isFile: boolean;
-  isSymlink: boolean;
-  createdAtMs: number;
-  modifiedAtMs: number;
-};
-
 export type CodexUserInput =
   | {
       type: "text";
@@ -754,8 +732,6 @@ type CodexAppServerRequestParamsOverride = {
   "app/read": CodexAppsReadParams;
   "command/exec": CodexCommandExecParams;
   "environment/add": { environmentId: string; execServerUrl: string };
-  "fs/getMetadata": CodexFsGetMetadataParams;
-  "fs/readFile": CodexFsReadFileParams;
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
   "thread/delete": CodexThreadDeleteParams;
@@ -790,8 +766,6 @@ type CodexAppServerRequestResultMap = {
   "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
-  "fs/getMetadata": CodexFsGetMetadataResponse;
-  "fs/readFile": CodexFsReadFileResponse;
   "hooks/list": CodexHooksListResponse;
   "marketplace/add": JsonValue;
   "mcpServerStatus/list": CodexMcpProtocol.CodexListMcpServerStatusResponse;

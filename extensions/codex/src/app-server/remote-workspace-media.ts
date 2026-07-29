@@ -2,11 +2,7 @@ import path from "node:path";
 import { root } from "openclaw/plugin-sdk/file-access-runtime";
 import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import type {
-  CodexCommandExecParams,
-  CodexCommandExecResponse,
-  CodexFsReadFileResponse,
-} from "./protocol.js";
+import type { CodexCommandExecParams, CodexCommandExecResponse } from "./protocol.js";
 import {
   isCodexPassThroughMediaSource,
   mapCodexAppServerLocalWorkspacePath,
@@ -79,13 +75,17 @@ const MESSAGE_MEDIA_KEYS = [
 const MESSAGE_MEDIA_ARRAY_KEYS = ["mediaUrls", "media_urls", "imageUrls", "image_urls"] as const;
 const ATTACHMENT_MEDIA_KEYS = ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"] as const;
 
+type CodexRemoteWorkspaceFileResponse = {
+  dataBase64: string;
+};
+
 export type CodexRemoteWorkspaceFileReader = (params: {
   path: string;
   maxBytes: number;
   workspaceRoot?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
-}) => Promise<CodexFsReadFileResponse>;
+}) => Promise<CodexRemoteWorkspaceFileResponse>;
 
 type CodexBoundedRemoteCommandClient = {
   request: (
@@ -103,7 +103,7 @@ export async function readBoundedCodexRemoteWorkspaceFile(params: {
   workspaceRoot?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
-}): Promise<CodexFsReadFileResponse> {
+}): Promise<CodexRemoteWorkspaceFileResponse> {
   if (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0) {
     throw new Error("Codex remote workspace upload requires a valid media byte limit.");
   }
