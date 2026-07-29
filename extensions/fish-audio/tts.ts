@@ -206,7 +206,7 @@ type FishAudioVoicePayload = {
 
 function parseVoiceItem(value: unknown): SpeechVoiceOption | undefined {
   const item = asObject(value);
-  const id = trimToUndefined(item?._id);
+  const id = trimToUndefined(item?.["_id"]);
   if (!id) {
     return undefined;
   }
