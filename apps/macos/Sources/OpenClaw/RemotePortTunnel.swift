@@ -233,18 +233,21 @@ final class RemotePortTunnel: @unchecked Sendable {
         guard process.isRunning else { return }
         let processIdentifier = process.processIdentifier
         let processGroupIdentifier = getpgid(processIdentifier)
-        process.terminate()
+        if processGroupIdentifier == processIdentifier {
+            _ = Darwin.kill(-processGroupIdentifier, SIGTERM)
+        } else {
+            process.terminate()
+        }
         let gracefulDeadline = Date().addingTimeInterval(0.25)
         while process.isRunning, Date() < gracefulDeadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
-        if process.isRunning {
-            // Foundation normally launches this SSH as its own process-group leader.
-            // Escalate that group so ProxyCommand-style descendants cannot survive.
-            let signalTarget = processGroupIdentifier == processIdentifier
-                ? -processIdentifier
-                : processIdentifier
-            _ = Darwin.kill(signalTarget, SIGKILL)
+        if processGroupIdentifier == processIdentifier {
+            // The SSH leader may exit on TERM while a ProxyCommand-style descendant
+            // survives. Escalate the captured group independently of Process.isRunning.
+            _ = Darwin.kill(-processGroupIdentifier, SIGKILL)
+        } else if process.isRunning {
+            _ = Darwin.kill(processIdentifier, SIGKILL)
         }
         process.waitUntilExit()
     }

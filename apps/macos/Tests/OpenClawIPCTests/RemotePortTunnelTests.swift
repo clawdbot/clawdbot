@@ -61,7 +61,6 @@ struct RemotePortTunnelTests {
         process.arguments = [
             "-c",
             """
-            trap '' TERM
             /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; while :; do :; done' &
             while [ ! -s "$CHILD_PID_FILE" ]; do :; done
             echo ready > "$READY_FILE"
@@ -88,7 +87,7 @@ struct RemotePortTunnelTests {
         #expect(ContinuousClock.now - startedAt < .seconds(2))
         #expect(!process.isRunning)
         #expect(process.terminationReason == .uncaughtSignal)
-        #expect(process.terminationStatus == SIGKILL)
+        #expect(process.terminationStatus == SIGTERM)
         #expect(awaitProcessExit(childPID))
     }
 
