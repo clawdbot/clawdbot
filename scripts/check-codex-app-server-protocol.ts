@@ -82,6 +82,19 @@ const checks: Array<{ file: string; snippets: string[] }> = [
     snippets: ["apps: Array<ConnectorMetadata>", "missingAppIds: Array<string>"],
   },
   {
+    file: "v2/CommandExecParams.ts",
+    snippets: [
+      "command: Array<string>",
+      "outputBytesCap?: number | null",
+      "timeoutMs?: number | null",
+      "env?: { [key in string]?: string | null } | null",
+    ],
+  },
+  {
+    file: "v2/CommandExecResponse.ts",
+    snippets: ["exitCode: number", "stdout: string", "stderr: string"],
+  },
+  {
     file: "v2/ConfigBatchWriteParams.ts",
     snippets: [
       "edits: Array<ConfigEdit>",
@@ -292,6 +305,8 @@ import type { AppsListParams } from ${JSON.stringify(generatedImport("v2/AppsLis
 import type { AppsListResponse } from ${JSON.stringify(generatedImport("v2/AppsListResponse.ts"))};
 import type { AppsReadParams } from ${JSON.stringify(generatedImport("v2/AppsReadParams.ts"))};
 import type { AppsReadResponse } from ${JSON.stringify(generatedImport("v2/AppsReadResponse.ts"))};
+import type { CommandExecParams } from ${JSON.stringify(generatedImport("v2/CommandExecParams.ts"))};
+import type { CommandExecResponse } from ${JSON.stringify(generatedImport("v2/CommandExecResponse.ts"))};
 import type { ConfigBatchWriteParams } from ${JSON.stringify(generatedImport("v2/ConfigBatchWriteParams.ts"))};
 import type { ConfigEdit } from ${JSON.stringify(generatedImport("v2/ConfigEdit.ts"))};
 import type { ConfigValueWriteParams } from ${JSON.stringify(generatedImport("v2/ConfigValueWriteParams.ts"))};
@@ -330,6 +345,11 @@ declare const openClawAppsReadParams: CodexAppServerRequestParams<"app/read">;
 const generatedAppsReadParams: AppsReadParams = openClawAppsReadParams;
 declare const openClawAppSummary: v2.AppSummary;
 const generatedAppSummary: AppSummary = openClawAppSummary;
+declare const openClawCommandExecParams: CodexAppServerRequestParams<"command/exec">;
+const generatedCommandExecParams: CommandExecParams = openClawCommandExecParams;
+declare const generatedNullableCommandExecParams: CommandExecParams;
+const openClawNullableCommandExecParams: CodexAppServerRequestParams<"command/exec"> =
+  generatedNullableCommandExecParams;
 declare const openClawConfigBatchWriteParams: CodexAppServerRequestParams<"config/batchWrite">;
 const generatedConfigBatchWriteParams: ConfigBatchWriteParams = openClawConfigBatchWriteParams;
 declare const openClawConfigEdit: CodexConfigEdit;
@@ -372,6 +392,9 @@ const openClawAppsReadResponse: CodexAppServerRequestResult<"app/read"> =
   generatedAppsReadResponse;
 declare const generatedAppSummaryResponse: AppSummary;
 const openClawAppSummaryResponse: v2.AppSummary = generatedAppSummaryResponse;
+declare const generatedCommandExecResponse: CommandExecResponse;
+const openClawCommandExecResponse: CodexAppServerRequestResult<"command/exec"> =
+  generatedCommandExecResponse;
 declare const generatedConfigWriteResponse: ConfigWriteResponse;
 const openClawConfigBatchWriteResponse: CodexAppServerRequestResult<"config/batchWrite"> =
   generatedConfigWriteResponse;
