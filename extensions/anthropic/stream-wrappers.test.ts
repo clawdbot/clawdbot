@@ -301,6 +301,41 @@ describe("anthropic stream wrappers", () => {
     });
   });
 
+  it("applies fast-mode pricing without crashing when a model arrives without a cost object", () => {
+    const captured: {
+      headers?: Record<string, string>;
+      model?: { cost?: { input: number; output: number; cacheRead: number; cacheWrite: number } };
+      payload?: Record<string, unknown>;
+    } = {};
+    const base: StreamFn = (model, _context, options) => {
+      captured.headers = options?.headers;
+      captured.model = model as typeof captured.model;
+      const payload = {} as Record<string, unknown>;
+      options?.onPayload?.(payload as never, model as never);
+      captured.payload = payload;
+      return {} as never;
+    };
+    const wrapper = createAnthropicFastModeWrapper(base, true);
+    void wrapper(
+      {
+        provider: "anthropic",
+        api: "anthropic-messages",
+        id: "claude-opus-5",
+      } as never,
+      {} as never,
+      { apiKey: "sk-ant-api03-test-key" } as never,
+    );
+
+    expect(captured.headers?.["anthropic-beta"]).toContain("fast-mode-2026-02-01");
+    expect(captured.payload).toEqual({ speed: "fast" });
+    expect(captured.model?.cost).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
   it.each([
     {
       label: "OAuth",

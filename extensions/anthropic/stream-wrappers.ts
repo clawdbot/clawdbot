@@ -98,13 +98,19 @@ function isDirectAnthropicApiModel(model: Parameters<StreamFn>[0]): boolean {
 }
 
 function applyAnthropicFastModePricing(model: Parameters<StreamFn>[0]): Parameters<StreamFn>[0] {
+  const baseCost = model.cost ?? {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  };
   return {
     ...model,
     cost: {
-      input: model.cost.input * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-      output: model.cost.output * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-      cacheRead: model.cost.cacheRead * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-      cacheWrite: model.cost.cacheWrite * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
+      input: baseCost.input * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
+      output: baseCost.output * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
+      cacheRead: baseCost.cacheRead * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
+      cacheWrite: baseCost.cacheWrite * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
     },
   };
 }

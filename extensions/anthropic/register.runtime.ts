@@ -804,7 +804,11 @@ function applyAnthropicOpus5Cost(params: {
   if (!isAnthropicOpus5Model(params.modelId)) {
     return undefined;
   }
-  if (modelCostsEqual(params.model.cost, ANTHROPIC_OPUS_5_COST)) {
+  const existing = params.model.cost;
+  if (
+    existing &&
+    modelCostsEqual(existing, ANTHROPIC_OPUS_5_COST)
+  ) {
     return undefined;
   }
   return { ...params.model, cost: ANTHROPIC_OPUS_5_COST };
@@ -818,7 +822,8 @@ function applyAnthropicSonnet5Cost(params: {
     return undefined;
   }
   const cost = resolveAnthropicSonnet5Cost();
-  if (modelCostsEqual(params.model.cost, cost)) {
+  const existing = params.model.cost;
+  if (existing && modelCostsEqual(existing, cost)) {
     return undefined;
   }
   return { ...params.model, cost };
