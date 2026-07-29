@@ -1696,6 +1696,22 @@
     "target": "多用户模式"
   },
   {
+    "source": "Multiplayer memory design",
+    "target": "多人记忆设计"
+  },
+  {
+    "source": "Memory architecture",
+    "target": "记忆架构"
+  },
+  {
+    "source": "Context engine",
+    "target": "上下文引擎"
+  },
+  {
+    "source": "Access groups",
+    "target": "访问组"
+  },
+  {
     "source": "The main session",
     "target": "主会话"
   },
