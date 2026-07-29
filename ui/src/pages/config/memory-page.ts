@@ -131,6 +131,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private support: DreamingConfigPathSupport = "unknown";
 
   private connection: CatalogConnection | null = null;
+  private catalogRequest = 0;
   private overviewRequest: {
     connection: CatalogConnection;
     agentId: string;
@@ -292,16 +293,17 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private async loadCatalog(client: GatewayClient, connection: CatalogConnection) {
+    const request = ++this.catalogRequest;
     try {
       const result = await loadPluginCatalog(client);
-      this.applyCatalog(connection, { kind: "ready", plugins: result.plugins });
+      this.applyCatalog(connection, request, { kind: "ready", plugins: result.plugins });
     } catch {
-      this.applyCatalog(connection, { kind: "unavailable" });
+      this.applyCatalog(connection, request, { kind: "unavailable" });
     }
   }
 
-  private applyCatalog(connection: CatalogConnection, catalog: MemoryCatalog) {
-    if (!this.isConnected || this.connection !== connection) {
+  private applyCatalog(connection: CatalogConnection, request: number, catalog: MemoryCatalog) {
+    if (!this.isConnected || this.connection !== connection || this.catalogRequest !== request) {
       return;
     }
     this.catalog = catalog;

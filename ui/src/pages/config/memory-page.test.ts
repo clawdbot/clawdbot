@@ -520,6 +520,44 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
+  it("ignores an older catalog reload from a parallel add-on mutation", async () => {
+    const firstReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+    const secondReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
+    const { element, request } = createPage({
+      configObject: {},
+      listCatalog: (call) => {
+        if (call === 0) {
+          return Promise.resolve({ plugins: initial });
+        }
+        return call === 1 ? firstReload.promise : secondReload.promise;
+      },
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      toggleAddon(element, "Active memory", false);
+      toggleAddon(element, "Memory wiki", true);
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
+      );
+
+      secondReload.resolve({
+        plugins: [addon("active-memory", false), addon("memory-wiki", true)],
+      });
+      await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true));
+
+      firstReload.resolve({
+        plugins: [addon("active-memory", false), addon("memory-wiki", false)],
+      });
+      await firstReload.promise;
+      await element.updateComplete;
+      expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
+    } finally {
+      element.remove();
+    }
+  });
+
   it("reconciles the catalog without reporting a rejected toggle when config refresh fails", async () => {
     const refresh = vi.fn(() => Promise.reject(new Error("config refresh failed")));
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
