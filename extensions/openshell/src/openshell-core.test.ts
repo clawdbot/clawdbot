@@ -265,6 +265,7 @@ describe("openshell backend manager", () => {
     const first = await createBackend("agent:main");
     const repeated = await createBackend("agent:main");
     const other = await createBackend("agent:other");
+    const workspaceScoped = await createBackend(`agent:main:workspace:${"a".repeat(32)}`);
     const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
     const adoptedLegacy = await createBackend("agent:main", [legacyRuntimeId]);
     const punctuationLegacyRuntimeId = "openclaw-agent-foo-bar-baz-ab401a99";
@@ -278,6 +279,9 @@ describe("openshell backend manager", () => {
     expect(first.runtimeId).toHaveLength(19);
     expect(repeated.runtimeId).toBe(first.runtimeId);
     expect(other.runtimeId).not.toBe(first.runtimeId);
+    expect(workspaceScoped.runtimeId).toMatch(/^oc-[a-z0-9]{16}$/u);
+    expect(workspaceScoped.runtimeId).toHaveLength(19);
+    expect(workspaceScoped.runtimeId).not.toBe(first.runtimeId);
     expect(adoptedLegacy.runtimeId).toBe(legacyRuntimeId);
     expect(adoptedPunctuationLegacy.runtimeId).toBe(punctuationLegacyRuntimeId);
     expect(ignoresUnknown.runtimeId).toBe(first.runtimeId);
@@ -1453,6 +1457,12 @@ describe("openshell fs bridges", () => {
 
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
       Buffer.from("inside"),
+    );
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt", maxBytes: 6 })).resolves.toEqual(
+      Buffer.from("inside"),
+    );
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt", maxBytes: 5 })).rejects.toThrow(
+      "Sandbox boundary checks failed",
     );
   });
 

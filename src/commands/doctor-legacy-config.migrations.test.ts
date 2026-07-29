@@ -356,7 +356,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           token: "secretref-env:DISCORD_BOT_TOKEN",
           accounts: {
             work: {
-              token: "secretref-env:DISCORD_WORK_TOKEN",
+              token: "__env__:DISCORD_WORK_TOKEN",
             },
           },
         },
@@ -378,7 +378,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved channels.discord.accounts.default.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
     );
     expect(res.changes).toContain(
-      "Moved channels.discord.accounts.work.token secretref-env:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
+      "Moved channels.discord.accounts.work.token __env__:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
     );
   });
 

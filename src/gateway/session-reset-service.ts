@@ -354,9 +354,10 @@ async function ensureSessionRuntimeCleanup(params: {
 }) {
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
   // commands such as status must not load the embedded-agent barrel.
-  const [embeddedAgent, mcpTools] = await Promise.all([
+  const [embeddedAgent, mcpTools, { clearFinishedSessionsForScopes }] = await Promise.all([
     import("../agents/embedded-agent.js"),
     import("../agents/agent-bundle-mcp-tools.js"),
+    import("../agents/bash-process-registry.js"),
   ]);
   params.assertCurrent?.();
   const closeTrackedBrowserTabs = async () => {
@@ -381,6 +382,12 @@ async function ensureSessionRuntimeCleanup(params: {
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
+  // Process scopes may use the requested alias, canonical key, or session id.
+  // Clear only completed records so reset/delete cannot erase another scope's
+  // output or hide a background process whose owner has not confirmed exit.
+  const processScopeKeys = new Set(queueKeys);
+  processScopeKeys.add(params.key);
+  clearFinishedSessionsForScopes(processScopeKeys);
   clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
   });
@@ -1369,6 +1376,7 @@ export async function performGatewaySessionReset(params: {
             abortedLastRun: false,
             thinkingLevel: currentEntry?.thinkingLevel,
             fastMode: currentEntry?.fastMode,
+            toolOverrides: currentEntry?.toolOverrides,
             verboseLevel: currentEntry?.verboseLevel,
             traceLevel: currentEntry?.traceLevel,
             reasoningLevel: currentEntry?.reasoningLevel,

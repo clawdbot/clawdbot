@@ -24,6 +24,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
+import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -941,6 +942,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const gateway = this.context?.gateway;
     if (
       this.submitting ||
+      this.requiresModelSetup() ||
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknown) ||
       (!message && !hasAttachments) ||
@@ -1009,6 +1011,20 @@ class NewSessionPage extends OpenClawLightDomElement {
       return false;
     }
     return true;
+  }
+
+  private requiresModelSetup(): boolean {
+    const selectedAgent = this.selectedAgent();
+    return requiresChatModelSetup({
+      catalog:
+        catalog.isTarget(this.data) ||
+        Boolean(this.cloudProfileId) ||
+        Boolean(this.pendingCloud.sessionKey),
+      connected: this.gatewayConnected,
+      agentsLoaded: this.context?.agents.state.agentsList !== null,
+      selectedAgentFound: selectedAgent !== undefined,
+      agentModel: selectedAgent?.model?.primary,
+    });
   }
 
   private async submit() {
@@ -1706,6 +1722,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       assistantAvatarUrl: identity?.avatarUrl ?? null,
       hint: t("newSession.hint"),
       composer: this.renderDraftBlock(),
+      modelSetupRequired: this.requiresModelSetup(),
+      onModelSetup: () => this.context?.navigate("model-setup"),
       sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.agentId || "main",

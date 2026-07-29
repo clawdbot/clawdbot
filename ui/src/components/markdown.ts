@@ -483,7 +483,10 @@ function appendMarkdownTruncationNotice(truncated: {
   total: number;
 }): string {
   const notice = truncated.truncated
-    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    ? `\n\n${t("chat.markdown.truncated", {
+        total: String(truncated.total),
+        shown: String(truncated.text.length),
+      })}`
     : "";
   return `${truncated.text}${notice}`;
 }

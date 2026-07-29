@@ -45,49 +45,75 @@ type ControlUiRouteTarget = {
   search?: string;
 };
 
+// Cold Vite route chunks can monopolize Chromium on loaded CI hosts. Keep the
+// wait browser-local, but allow enough time for the router to finish committing.
+const CONTROL_UI_ROUTE_TIMEOUT_MS = 60_000;
+
 /**
  * Wait for the browser router to commit a route, not merely update the URL.
  * Browser-local polling keeps readiness independent of host-side CDP scheduling.
  */
 export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTarget) {
-  const handle = await page.waitForFunction(
-    (expected) => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime?: {
-          router: {
-            getState: () => {
-              status: string;
-              resolvedLocation: { pathname: string } | null;
-              matches: { routeId: string }[];
-              pendingMatches: unknown[];
+  try {
+    const handle = await page.waitForFunction(
+      (expected) => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            router: {
+              getState: () => {
+                status: string;
+                resolvedLocation: { pathname: string } | null;
+                matches: { routeId: string }[];
+                pendingMatches: unknown[];
+              };
             };
           };
         };
+        const state = app.runtime?.router.getState();
+        const pathname = window.location.pathname;
+        return (
+          state?.status === "success" &&
+          state.matches[0]?.routeId === expected.routeId &&
+          state.resolvedLocation?.pathname === pathname &&
+          state.pendingMatches.length === 0 &&
+          (expected.pathname === undefined || pathname === expected.pathname) &&
+          (expected.pathnamePrefix === undefined || pathname.startsWith(expected.pathnamePrefix)) &&
+          (expected.search === undefined || window.location.search === expected.search) &&
+          (expected.hash === undefined || window.location.hash === expected.hash)
+        );
+      },
+      target,
+      { timeout: CONTROL_UI_ROUTE_TIMEOUT_MS },
+    );
+    await handle.dispose();
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime?: {
+          router: {
+            getState: () => unknown;
+          };
+        };
       };
-      const state = app.runtime?.router.getState();
-      const pathname = window.location.pathname;
-      return (
-        state?.status === "success" &&
-        state.matches[0]?.routeId === expected.routeId &&
-        state.resolvedLocation?.pathname === pathname &&
-        state.pendingMatches.length === 0 &&
-        (expected.pathname === undefined || pathname === expected.pathname) &&
-        (expected.pathnamePrefix === undefined || pathname.startsWith(expected.pathnamePrefix)) &&
-        (expected.search === undefined || window.location.search === expected.search) &&
-        (expected.hash === undefined || window.location.hash === expected.hash)
-      );
-    },
-    target,
-    { timeout: 30_000 },
-  );
-  await handle.dispose();
+      return {
+        hash: window.location.hash,
+        pathname: window.location.pathname,
+        router: app.runtime?.router.getState() ?? null,
+        search: window.location.search,
+      };
+    });
+    throw new Error(
+      `Control UI route did not settle at ${JSON.stringify(target)}; current state: ${JSON.stringify(state)}`,
+      { cause: error },
+    );
+  }
 }
 
 export async function waitForControlUiSettingsTakeover(
   page: Page,
-  pathname = "/settings/general",
+  pathname = "/settings/appearance",
 ): Promise<{ search: Locator; sidebar: Locator }> {
-  await waitForControlUiRoute(page, { pathname, routeId: "config" });
+  await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
   const appSidebar = page.locator("openclaw-app-sidebar");
   const sidebar = page.locator(".settings-sidebar");
   const search = sidebar.getByRole("searchbox", { name: "Search settings" });
@@ -124,6 +150,7 @@ export type MockGatewayRequest = {
 };
 
 export type ControlUiMockGatewayScenario = {
+  agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
   basePath?: string;
@@ -372,6 +399,8 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    agentModel:
+      scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
@@ -740,6 +769,35 @@ function installControlUiMockGateway(
     return { found: true, value: matchingCase.response };
   }
 
+  function applyScenarioAgentModel(method: string, value: unknown): unknown {
+    if (!scenario.agentModel || !isRecord(value)) {
+      return value;
+    }
+    const applyAgentsList = (agentsList: unknown): unknown => {
+      if (!isRecord(agentsList) || !Array.isArray(agentsList.agents)) {
+        return agentsList;
+      }
+      return {
+        ...agentsList,
+        agents: agentsList.agents.map((agent) =>
+          isRecord(agent) && !hasOwn(agent, "model")
+            ? { ...agent, model: { primary: scenario.agentModel } }
+            : agent,
+        ),
+      };
+    };
+    if (method === "agents.list") {
+      return applyAgentsList(value);
+    }
+    if (method === "chat.startup" && hasOwn(value, "agentsList")) {
+      return {
+        ...value,
+        agentsList: applyAgentsList(value.agentsList),
+      };
+    }
+    return value;
+  }
+
   /** Transcript fields a scenario configured on chat.history, replayed onto the
    * chat.startup payload so both bootstrap paths serve the same conversation. */
   function configuredHistoryTranscript(): Record<string, unknown> {
@@ -788,7 +846,14 @@ function installControlUiMockGateway(
       return;
     }
     const patch = { ...sessionPatches.get(params.key) };
-    for (const key of ["model", "thinkingLevel", "fastMode", "category", "pinned"] as const) {
+    for (const key of [
+      "model",
+      "thinkingLevel",
+      "fastMode",
+      "category",
+      "pinned",
+      "toolOverrides",
+    ] as const) {
       if (hasOwn(params, key)) {
         patch[key] = params[key];
       }
@@ -1068,12 +1133,13 @@ function installControlUiMockGateway(
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
+      const configuredValue = applyScenarioAgentModel(method, configured.value);
       if (method === "sessions.create" || method === "sessions.catalog.continue") {
-        recordMaterializedSession(params, configured.value);
+        recordMaterializedSession(params, configuredValue);
       }
       return method === "sessions.list"
-        ? applySessionPatches(configured.value, params)
-        : configured.value;
+        ? applySessionPatches(configuredValue, params)
+        : configuredValue;
     }
     switch (method) {
       case "connect":
@@ -1126,6 +1192,7 @@ function installControlUiMockGateway(
             {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
+              ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
               name: scenario.assistantName,
               ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
               workspaceGit: scenario.workspaceGit,
@@ -1178,6 +1245,7 @@ function installControlUiMockGateway(
               {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
+                ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
                 name: scenario.assistantName,
                 ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
                 workspaceGit: scenario.workspaceGit,
@@ -1496,7 +1564,10 @@ function installControlUiMockGateway(
       if (!response) {
         throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
       }
-      const resolvedPayload = payload ?? buildResponse(response.method, response.params);
+      const resolvedPayload = applyScenarioAgentModel(
+        response.method,
+        payload ?? buildResponse(response.method, response.params),
+      );
       if (
         response.method === "sessions.create" ||
         response.method === "sessions.catalog.continue"

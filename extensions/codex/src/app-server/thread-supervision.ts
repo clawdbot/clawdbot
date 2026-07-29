@@ -13,7 +13,10 @@ import {
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { attestCodexPluginThreadApps } from "./plugin-thread-attestation.js";
+import {
+  attestCodexPluginThreadApps,
+  discardUnattestedCodexPluginThread,
+} from "./plugin-thread-attestation.js";
 import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
@@ -216,13 +219,13 @@ export async function materializePendingSupervisionBranch(
           }),
         );
       } catch (error) {
-        // The canonical branch has not reached a turn, so persistent threads
-        // require delete rather than archive; the forked probe has a rollout.
-        const finalCleanupConfirmed = await cleanUnmaterializedSupervisionThread(
-          params.client,
-          finalThreadId,
-          startParams.ephemeral === true,
-        );
+        // The fresh persistent branch has no rollout yet; delete it before
+        // archiving the probe, and retain both for recovery if cleanup fails.
+        const finalCleanupConfirmed = await discardUnattestedCodexPluginThread({
+          client: params.client,
+          threadId: finalThreadId,
+          ephemeral: startParams.ephemeral === true,
+        });
         if (
           !finalCleanupConfirmed ||
           !(await archiveSupervisionArtifact(params.client, probeThreadId))
@@ -671,37 +674,6 @@ async function archiveSupervisionArtifact(
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
     });
     embeddedAgentLog.warn("failed to archive temporary Codex supervision thread", {
-      threadId,
-      error,
-    });
-    return false;
-  }
-}
-
-async function cleanUnmaterializedSupervisionThread(
-  client: CodexAppServerClient,
-  threadId: string,
-  ephemeral: boolean,
-): Promise<boolean> {
-  if (ephemeral) {
-    return unsubscribeCodexThreadBestEffort(client, {
-      threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-  }
-  try {
-    await client.request(
-      "thread/delete",
-      { threadId },
-      { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
-    );
-    return true;
-  } catch (error) {
-    await unsubscribeCodexThreadBestEffort(client, {
-      threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-    embeddedAgentLog.warn("failed to delete unmaterialized Codex supervision thread", {
       threadId,
       error,
     });

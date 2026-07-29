@@ -1954,6 +1954,7 @@ describe("agent request events", () => {
           mediaRef: "media://inbound/offloaded",
           id: "offloaded",
           path: "/media/inbound/offloaded.png",
+          kind: "image",
           mimeType: "image/png",
           label: "offloaded.png",
           sizeBytes: 2_100_000,

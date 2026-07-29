@@ -657,6 +657,24 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway LaunchAgent");
   });
 
+  it("re-enables and bootstraps a parked LaunchAgent during non-interactive repair", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValue(true);
+    service.readRuntime
+      .mockResolvedValueOnce({ status: "unknown", missingSupervision: true })
+      .mockResolvedValue({ status: "running" });
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await runNonInteractiveRepair();
+
+    expect(launchd.repairLaunchAgentBootstrap).toHaveBeenCalledWith({
+      env: process.env,
+    });
+    expect(service.install).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith("Gateway LaunchAgent repaired.", "Gateway LaunchAgent");
+  });
+
   it("reports macOS GUI-session runtime instead of install guidance for a not-loaded LaunchAgent", async () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValue(false);

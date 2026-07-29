@@ -40,6 +40,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { BoardChatDockSize } from "./board-session-surface.ts";
+import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
@@ -66,10 +67,9 @@ import type { ChatSessionScrollPosition } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
-  // One lifecycle-owned minute tick refreshes both relative labels and external PR state.
+  // Relative labels still need a minute tick; external PR state is server-pushed.
   readonly minutePoll = new PollController(this, 60_000, () => {
     this.requestUpdate();
-    void this.refreshSessionPullRequests();
   });
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ChatPageContext;
@@ -104,6 +104,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) boardProvider?: BoardProvider;
 
   protected readonly chatState = new ChatStateController<ChatPageHost>(this);
+  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
+    this.requestUpdate(),
+  );
   protected readonly transcript = new ChatTranscriptController(this);
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
@@ -285,7 +288,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   protected sessionPullRequestsRateLimited = false;
-  protected sessionPullRequestsRequestVersion = 0;
   protected sessionPullRequestsExpanded = false;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();

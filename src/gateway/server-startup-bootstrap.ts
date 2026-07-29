@@ -61,6 +61,13 @@ type WorkerEnvironmentStartupLoader = () => Promise<
   typeof import("./server-worker-environment-startup.js")
 >;
 
+function publishGatewayPluginRuntimeConfigAtStartup(params: {
+  runtimeConfig: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+}): void {
+  setAppliedRuntimeConfigSnapshot(params.runtimeConfig, params.sourceConfig);
+}
+
 export async function prepareGatewayServerBootstrap(input: {
   port: number;
   opts: GatewayServerOptions;
@@ -494,6 +501,13 @@ export async function prepareGatewayServerBootstrap(input: {
     runtimePluginsLoaded,
     ambientAutostartSuppressedChannelIds,
   } = pluginBootstrap;
+  // Plugin activation can return a new runtime config object. Publish that exact object before
+  // prepared owners are created so request-time exact-owner lookups cannot see the pre-activation
+  // snapshot and reject the Gateway's own model catalog.
+  publishGatewayPluginRuntimeConfigAtStartup({
+    runtimeConfig: gatewayPluginConfigAtStart,
+    sourceConfig: startupLastGoodSnapshot.sourceConfig,
+  });
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
     config: startupActivationSourceConfig,
@@ -559,3 +573,7 @@ export async function prepareGatewayServerBootstrap(input: {
     activateRuntimeSecrets,
   };
 }
+
+export const testing = {
+  publishGatewayPluginRuntimeConfigAtStartup,
+};

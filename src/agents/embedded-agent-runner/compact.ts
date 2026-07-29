@@ -46,6 +46,7 @@ import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
+import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -167,10 +168,15 @@ export async function compactEmbeddedAgentSessionDirect(
         cwd: requestedParams.cwd,
       }) ?? null;
     const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
+    const activeProjectKeys = prepareEmbeddedSessionActiveProjectKeys(
+      requestedParams.sessionId,
+      projectKey,
+    );
     const preparedModelRuntime = Object.freeze({
       ...preparedModelRuntimeOwnerSnapshot,
       repoRoot,
       projectKey,
+      activeProjectKeys,
     });
     // Fallback policy and every attempt consume the same generation as model/auth discovery.
     // A reload may have committed while session targeting was resolved above.

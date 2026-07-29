@@ -92,6 +92,7 @@ function isPluginRootPath(params: {
   rootPath: string;
   targetPath: string;
   rootRealPath: string;
+  realpathCache: Map<string, string>;
   rejectHardlinks?: boolean;
   targetMustExist?: boolean;
 }): boolean {
@@ -100,7 +101,7 @@ function isPluginRootPath(params: {
   if (!isPathInside(resolvedRootPath, resolvedTargetPath)) {
     return false;
   }
-  const targetRealPath = safeRealpathSync(resolvedTargetPath);
+  const targetRealPath = safeRealpathSync(resolvedTargetPath, params.realpathCache);
   if (!targetRealPath) {
     return params.targetMustExist !== true;
   }
@@ -124,6 +125,7 @@ function resolveManifestPluginSourcePath(params: {
   entry: string;
   rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
+  realpathCache: Map<string, string>;
 }): string | undefined {
   const pushDiagnostic = () => {
     params.diagnostics.push({
@@ -140,13 +142,14 @@ function resolveManifestPluginSourcePath(params: {
   }
 
   const rootPath = path.resolve(params.rootDir);
-  const rootRealPath = safeRealpathSync(rootPath) ?? rootPath;
+  const rootRealPath = safeRealpathSync(rootPath, params.realpathCache) ?? rootPath;
   const sourcePath = path.resolve(rootPath, params.entry);
   if (
     !isPluginRootPath({
       rootPath,
       targetPath: sourcePath,
       rootRealPath,
+      realpathCache: params.realpathCache,
       rejectHardlinks: params.rejectHardlinks,
       targetMustExist: fs.existsSync(sourcePath),
     })
@@ -161,6 +164,7 @@ function resolveManifestPluginSourcePath(params: {
       rootPath,
       targetPath: resolvedSourcePath,
       rootRealPath,
+      realpathCache: params.realpathCache,
       rejectHardlinks: params.rejectHardlinks,
       targetMustExist: fs.existsSync(resolvedSourcePath),
     })
@@ -512,6 +516,7 @@ function buildRecord(params: {
   manifestPath: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks: boolean;
+  realpathCache: Map<string, string>;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
@@ -577,6 +582,7 @@ function buildRecord(params: {
           entry: providerSourceEntry.entry,
           rejectHardlinks: params.rejectHardlinks,
           diagnostics: params.diagnostics,
+          realpathCache: params.realpathCache,
         })
       : undefined,
     modelSupport: params.manifest.modelSupport,
@@ -1160,6 +1166,7 @@ export function loadPluginManifestRegistry(
           manifestPath: manifestRes.manifestPath,
           diagnostics,
           rejectHardlinks,
+          realpathCache,
           schemaCacheKey,
           configSchema,
           trustedOfficialInstall: isTrustedOfficialPluginInstall({

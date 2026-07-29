@@ -68,6 +68,7 @@ const CURRENT_TRAIN_METHODS = [
   "channels.pairing.list",
   "channels.pairing.approve",
   "channels.pairing.dismiss",
+  "controlUi.sessionPullRequests.subscribe",
   "cron.scratch.get",
   "cron.scratch.set",
   "memory.search",

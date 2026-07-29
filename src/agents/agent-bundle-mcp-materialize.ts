@@ -195,6 +195,9 @@ function serverAllowsUtilityTool(
   server: McpToolCatalog["servers"][string],
   operation: string,
 ): boolean {
+  if (server.deniedToolNames?.includes(operation)) {
+    return false;
+  }
   const include = server.toolFilter?.include ?? [];
   const exclude = server.toolFilter?.exclude ?? [];
   if (

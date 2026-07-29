@@ -1369,6 +1369,32 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(true);
   });
 
+  it("shares an in-flight connection until session readiness", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onReady = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onReady,
+    });
+    const firstConnect = bridge.connect();
+    const secondConnect = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+
+    await Promise.all([firstConnect, secondConnect]);
+    expect(onReady).toHaveBeenCalledOnce();
+    bridge.close();
+  });
+
   it("suppresses auto responses before draining queued initial greeting audio", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridgeRef: { current?: RealtimeVoiceBridge } = {};
@@ -1595,6 +1621,136 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(onError).not.toHaveBeenCalled();
     bridge.close();
+  });
+
+  it("ignores late events from a socket replaced by reconnect", async () => {
+    vi.useFakeTimers();
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio,
+      onClearAudio: vi.fn(),
+      onClose,
+      onError,
+    });
+    const connecting = bridge.connect();
+    const firstSocket = FakeWebSocket.instances[0];
+    if (!firstSocket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    firstSocket.readyState = FakeWebSocket.CLOSED;
+    firstSocket.emit("close", 1006, Buffer.from("transient drop"));
+    firstSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          delta: Buffer.from("late audio").toString("base64"),
+        }),
+      ),
+    );
+    firstSocket.emit("error", new Error("late retry-wait failure"));
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const secondSocket = FakeWebSocket.instances[1];
+    if (!secondSocket) {
+      throw new Error("expected bridge to reconnect");
+    }
+    secondSocket.readyState = FakeWebSocket.OPEN;
+    secondSocket.emit("open");
+    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await vi.waitFor(() => expect(bridge.isConnected()).toBe(true));
+
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    firstSocket.emit("error", new Error("late socket failure"));
+    firstSocket.emit("close", 1006, Buffer.from("late socket close"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    bridge.close();
+  });
+
+  it("exhausts retries when sockets open but never become provider-ready", async () => {
+    vi.useFakeTimers();
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+      onError,
+      onEvent,
+    });
+    const connecting = bridge.connect();
+    const firstSocket = FakeWebSocket.instances[0];
+    if (!firstSocket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    firstSocket.readyState = FakeWebSocket.CLOSED;
+    firstSocket.emit("close", 1006, Buffer.from("transient drop"));
+
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      await vi.waitFor(() =>
+        expect(onEvent).toHaveBeenCalledWith({
+          direction: "client",
+          type: "session.reconnect.scheduled",
+          detail: `reason=websocket-close attempt=${attempt} delayMs=${1000 * 2 ** (attempt - 1)}`,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(1000 * 2 ** (attempt - 1));
+      const retrySocket = FakeWebSocket.instances[attempt];
+      if (!retrySocket) {
+        throw new Error(`expected reconnect socket ${attempt}`);
+      }
+      retrySocket.readyState = FakeWebSocket.OPEN;
+      retrySocket.emit("open");
+      retrySocket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "error",
+            error: { message: `retry startup failure ${attempt}` },
+          }),
+        ),
+      );
+    }
+
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledWith("error"));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledTimes(5);
+    expect(FakeWebSocket.instances).toHaveLength(6);
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "session.reconnect.exhausted",
+      detail: "reason=websocket-close attempts=5",
+    });
+
+    bridge.close();
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
@@ -2056,10 +2212,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     }
 
     bridge.close();
+    bridge.close();
 
     await expect(connecting).resolves.toBeUndefined();
     expect(socket.closed).toBe(true);
     expect(socket.terminated).toBe(false);
+    expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("completed");
   });
 

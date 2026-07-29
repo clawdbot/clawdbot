@@ -504,7 +504,9 @@ describe("qa mock openai server", () => {
 
     const initialText = initialBody.output?.[0]?.content?.[0]?.text ?? "";
     expect(initialText).toContain("QA-STRANDED-85714");
-    expect(initialText.length).toBeGreaterThanOrEqual(120);
+    expect(initialText).toContain("近 7 日營收較前期增加");
+    expect(initialText).toHaveLength(167);
+    expect(initialText.match(/[.!?]+(?:\s|$)/g) ?? []).toHaveLength(0);
     expect(outputItems(initialBody).some((item) => item.type === "function_call")).toBe(false);
 
     const retryBody = await expectResponsesJson(server, {
@@ -525,7 +527,7 @@ describe("qa mock openai server", () => {
     const toolCall = outputToolCall(retryBody, "message");
     expect(outputToolArgsFromItem(toolCall)).toEqual({
       action: "send",
-      message: "QA-STRANDED-85714",
+      message: initialText,
     });
   });
 

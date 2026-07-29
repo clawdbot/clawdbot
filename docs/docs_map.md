@@ -5860,7 +5860,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Marketplace choices
   - H2: Bundled macOS marketplace
   - H3: Shared plugin cache
-  - H2: Remote catalog limit
+  - H2: Remote marketplaces
   - H2: Configuration reference
   - H2: What OpenClaw checks
   - H2: macOS permissions
@@ -5893,6 +5893,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supervision and safe continuation
   - H2: Visible replies and heartbeats
   - H2: Hook boundaries
+  - H2: Experimental sandbox process streaming
   - H2: V1 support contract
   - H2: Native permissions and MCP elicitations
   - H2: Queue steering
@@ -6711,6 +6712,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/fireworks
 - Headings:
   - H1: Fireworks plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/fish-audio.md
+
+- Route: /plugins/reference/fish-audio
+- Headings:
+  - H1: Fish Audio plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -8228,6 +8238,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Built-in catalog
   - H2: Custom Fireworks model ids
   - H2: Related
+
+## providers/fish-audio.md
+
+- Route: /providers/fish-audio
+- Headings:
+  - H2: Hosted S2.1
+  - H3: Hosted models
+  - H3: Expressive speech
+  - H3: Voice selection and cloning
+  - H2: Local S2 Pro on macOS
+  - H3: Local reference voice
+  - H2: Troubleshooting
 
 ## providers/github-copilot.md
 

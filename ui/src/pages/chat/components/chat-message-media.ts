@@ -2,7 +2,10 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
-import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
+import {
+  getMediaFileExtension,
+  hasVideoMediaFileExtension,
+} from "../../../lib/media-file-extension.ts";
 
 export type PairingQrExpiryNotice = {
   title: string;
@@ -356,8 +359,7 @@ function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
     return true;
   }
-  const ext = getMediaFileExtension(path);
-  return ext !== undefined && ["m4v", "mov", "mp4", "webm"].includes(ext);
+  return hasVideoMediaFileExtension(path);
 }
 
 function labelForMediaPath(mediaPath: string): string {
