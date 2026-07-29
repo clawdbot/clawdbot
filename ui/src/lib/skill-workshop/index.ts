@@ -11,6 +11,44 @@ type SkillWorkshopFile = {
   contents: string;
 };
 
+export type SkillWorkshopEvaluationFinding = {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  message: string;
+  file?: string;
+  line?: number;
+};
+
+export type SkillWorkshopEvaluationResult = {
+  summary?: string;
+  findings?: SkillWorkshopEvaluationFinding[];
+  metrics?: Record<string, string | number | boolean>;
+  evaluatorVersion?: string;
+  mode?: string;
+  decision?: "pass" | "revise" | "block";
+  decisionReason?: string;
+};
+
+export type SkillWorkshopEvaluationOutcome = {
+  pluginId: string;
+  pluginVersion?: string;
+  evaluatorId: string;
+  status: "completed" | "skipped" | "error";
+  result?: SkillWorkshopEvaluationResult;
+  error?: string;
+};
+
+export type SkillWorkshopEvaluation = {
+  id: string;
+  proposedVersion: string;
+  draftHash: string;
+  trigger: "manual" | "apply";
+  startedAt: string;
+  completedAt: string;
+  correlationId?: string;
+  outcomes: SkillWorkshopEvaluationOutcome[];
+};
+
 export type SkillWorkshopProposal = {
   key: string;
   slug: string;
@@ -25,6 +63,8 @@ export type SkillWorkshopProposal = {
     messageId?: string;
   };
   version: number;
+  draftHash: string | null;
+  evaluation?: SkillWorkshopEvaluation;
   createdAt: number;
   updatedAt?: number;
   recencyGroup: "today" | "yesterday" | "earlier";
@@ -34,7 +74,7 @@ export type SkillWorkshopProposal = {
 };
 
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
-export type SkillWorkshopAction = "apply" | "revise" | "reject";
+export type SkillWorkshopAction = "apply" | "evaluate" | "revise" | "reject";
 export type SkillWorkshopMode = "board" | "today";
 
 export type SkillWorkshopActionBusy = {
