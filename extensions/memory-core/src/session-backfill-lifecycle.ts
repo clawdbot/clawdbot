@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readSessionIngestionState, writeSessionIngestionState } from "./dreaming-phases.js";
 import {
-  clearMemoryCoreWorkspaceNamespace,
+  deleteMemoryCoreWorkspaceEntry,
   readMemoryCoreWorkspaceEntries,
   SESSION_BACKFILL_REWIND_NAMESPACE,
   writeMemoryCoreWorkspaceEntry,
@@ -13,6 +13,8 @@ import type {
 
 const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+// Batch keys are SHA-256 hex digests, so this colon-delimited marker cannot collide.
+const SESSION_BACKFILL_BASELINE_KEY_PREFIX = "complete-baseline:";
 
 type SessionBackfillRewindCandidate = {
   contentIndex: number;
@@ -24,6 +26,12 @@ type SessionBackfillRewindCandidate = {
 type SessionBackfillRewindBatch = {
   version: 1;
   candidates: SessionBackfillRewindCandidate[];
+};
+
+type SessionBackfillBaseline = {
+  version: 1;
+  complete: true;
+  agentId: string;
 };
 
 function normalizeMemoryDay(value: string | undefined, flag: string): string | undefined {
@@ -81,6 +89,18 @@ export async function recordSessionBackfillRewindBatch(params: {
   });
 }
 
+export async function markSessionBackfillRewindBaseline(params: {
+  workspaceDir: string;
+  agentId: string;
+}): Promise<void> {
+  await writeMemoryCoreWorkspaceEntry<SessionBackfillBaseline>({
+    namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
+    workspaceDir: params.workspaceDir,
+    key: `${SESSION_BACKFILL_BASELINE_KEY_PREFIX}${params.agentId}`,
+    value: { version: 1, complete: true, agentId: params.agentId },
+  });
+}
+
 function isSessionBackfillRewindCandidate(value: unknown): value is SessionBackfillRewindCandidate {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -98,25 +118,43 @@ function isSessionBackfillRewindCandidate(value: unknown): value is SessionBackf
   );
 }
 
-export async function rewindSessionBackfillIngestionState(workspaceDir: string): Promise<number> {
-  const entries = await readMemoryCoreWorkspaceEntries<SessionBackfillRewindBatch>({
+function isSessionBackfillRewindBatch(
+  value: SessionBackfillRewindBatch | SessionBackfillBaseline,
+): value is SessionBackfillRewindBatch {
+  return value.version === 1 && "candidates" in value && Array.isArray(value.candidates);
+}
+
+export async function rewindSessionBackfillIngestionState(params: {
+  workspaceDir: string;
+  agentId: string;
+}): Promise<{
+  completeCoverage: boolean;
+  rewoundCandidates: number;
+}> {
+  const entries = await readMemoryCoreWorkspaceEntries<
+    SessionBackfillRewindBatch | SessionBackfillBaseline
+  >({
     namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-    workspaceDir,
+    workspaceDir: params.workspaceDir,
   });
-  const candidates = entries.flatMap((entry) =>
-    entry.value?.version === 1 && Array.isArray(entry.value.candidates)
+  const completeCoverage = entries.some(
+    (entry) =>
+      entry.key === `${SESSION_BACKFILL_BASELINE_KEY_PREFIX}${params.agentId}` &&
+      "complete" in entry.value &&
+      entry.value.agentId === params.agentId,
+  );
+  const batchEntries = entries.filter((entry) => isSessionBackfillRewindBatch(entry.value));
+  const candidates = batchEntries.flatMap((entry) =>
+    isSessionBackfillRewindBatch(entry.value)
       ? entry.value.candidates.filter(isSessionBackfillRewindCandidate)
       : [],
   );
   if (candidates.length === 0) {
-    await clearMemoryCoreWorkspaceNamespace({
-      namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-      workspaceDir,
-    });
-    return 0;
+    await deleteSessionBackfillRewindBatches(params.workspaceDir, batchEntries);
+    return { completeCoverage, rewoundCandidates: 0 };
   }
 
-  const state = await readSessionIngestionState(workspaceDir);
+  const state = await readSessionIngestionState(params.workspaceDir);
   const removedHashesByScope = new Map<string, Set<string>>();
   const rewindLineByStateKey = new Map<string, number>();
   for (const candidate of candidates) {
@@ -153,12 +191,24 @@ export async function rewindSessionBackfillIngestionState(workspaceDir: string):
       };
     }
   }
-  await writeSessionIngestionState(workspaceDir, { ...state, files, seenMessages });
-  await clearMemoryCoreWorkspaceNamespace({
-    namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-    workspaceDir,
-  });
-  return candidates.length;
+  await writeSessionIngestionState(params.workspaceDir, { ...state, files, seenMessages });
+  await deleteSessionBackfillRewindBatches(params.workspaceDir, batchEntries);
+  return { completeCoverage, rewoundCandidates: candidates.length };
+}
+
+async function deleteSessionBackfillRewindBatches(
+  workspaceDir: string,
+  entries: Array<{ key: string }>,
+): Promise<void> {
+  await Promise.all(
+    entries.map((entry) =>
+      deleteMemoryCoreWorkspaceEntry({
+        namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
+        workspaceDir,
+        key: entry.key,
+      }),
+    ),
+  );
 }
 
 function belongsToAgentFileState(key: string, agentId: string): boolean {

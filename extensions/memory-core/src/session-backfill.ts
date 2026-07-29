@@ -38,6 +38,7 @@ import type {
 } from "./session-backfill-contract.js";
 import {
   drainSessionBackfill,
+  markSessionBackfillRewindBaseline,
   normalizeSessionBackfillSelection,
   recordSessionBackfillRewindBatch,
   resetSessionBackfillIngestionState,
@@ -538,12 +539,16 @@ async function executeSessionBackfillCore(
       removeBackfillDiaryEntries({ workspaceDir }),
       removeGroundedShortTermCandidates({ workspaceDir }),
     ]);
-    const rewoundCandidates = await rewindSessionBackfillIngestionState(workspaceDir);
-    if (rewoundCandidates === 0 && (diary.removed > 0 || staged.removed > 0)) {
+    const rewind = await rewindSessionBackfillIngestionState({
+      workspaceDir,
+      agentId: params.agentId,
+    });
+    if (!rewind.completeCoverage && (diary.removed > 0 || staged.removed > 0)) {
       // Applies from before the rewind journal shipped have no owned offsets to restore.
       // Without this agent-scoped reset, rollback deletes artifacts but re-apply finds nothing.
       await resetSessionBackfillIngestionState({ workspaceDir, agentId: params.agentId });
     }
+    await markSessionBackfillRewindBaseline({ workspaceDir, agentId: params.agentId });
     return {
       result: {
         agentId: params.agentId,
