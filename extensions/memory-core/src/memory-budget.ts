@@ -22,6 +22,8 @@ const PROMOTION_ENTRY_MARKER_RE = /^<!--\s*openclaw-memory-promotion:.*-->\s*$/i
 
 const ATX_HEADING_RE = /^#{1,6}(?:[ \t]|$)/;
 
+const SETEXT_HEADING_UNDERLINE_RE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+
 /**
  * Default budget for MEMORY.md content on disk, in characters. Chosen to
  * stay safely below the bootstrap injection cap (~12KB per file at the
@@ -58,6 +60,22 @@ function startsGeneratedPromotionSubsection(lines: string[], index: number): boo
   return false;
 }
 
+function takeSetextHeadingLines(lines: string[]): string[] | undefined {
+  let start = lines.length;
+  while (start > 1 && lines[start - 1]?.trim().length !== 0) {
+    start -= 1;
+  }
+  if (start === lines.length) {
+    return undefined;
+  }
+  const headingLines = lines.slice(start);
+  if (headingLines.some((line) => PROMOTION_ENTRY_MARKER_RE.test(line))) {
+    return undefined;
+  }
+  lines.splice(start);
+  return headingLines;
+}
+
 function parseMemoryBlocks(content: string): MemoryBlock[] {
   if (content.length === 0) {
     return [];
@@ -84,6 +102,14 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
   };
 
   for (const [index, line] of lines.entries()) {
+    if (currentKind === "promotion" && SETEXT_HEADING_UNDERLINE_RE.test(line)) {
+      const headingLines = takeSetextHeadingLines(currentLines);
+      if (headingLines) {
+        flush();
+        currentLines = [...headingLines, line];
+        continue;
+      }
+    }
     const continuesPromotionBody =
       currentKind === "promotion" && startsGeneratedPromotionSubsection(lines, index);
     if (ATX_HEADING_RE.test(line) && !continuesPromotionBody) {

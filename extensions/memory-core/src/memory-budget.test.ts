@@ -296,6 +296,25 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).toContain("Notes I keep under a bare heading.");
   });
 
+  it.each(["---", "==="])(
+    "preserves a user Setext heading with a `%s` underline under a promotion section",
+    (underline) => {
+      const existing =
+        `${promotionSection("2026-04-10", 400)}\n\n` +
+        `My Durable Notes\n${underline}\nKeep this user-authored paragraph.\n\n` +
+        promotionSection("2026-04-20", 400);
+      const newSection = `\n${promotionSection("2026-04-29", 400)}`;
+      const result = compactMemoryForBudget({
+        existingMemory: existing,
+        newSection,
+        budgetChars: 900,
+      });
+      expect(result.droppedDates).toContain("2026-04-10");
+      expect(result.compacted).toContain(`My Durable Notes\n${underline}`);
+      expect(result.compacted).toContain("Keep this user-authored paragraph.");
+    },
+  );
+
   it("exposes a sane default budget below the bootstrap injection cap", () => {
     // Bootstrap injection is capped at 12_000 chars per file (see
     // src/agents/embedded-agent-helpers/bootstrap.ts). The MEMORY.md budget
