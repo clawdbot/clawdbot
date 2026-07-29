@@ -2,11 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
-import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import "../../components/tooltip.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import "../../components/tooltip.ts";
+import { formatDurationCompact } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildUsageCostWindows,

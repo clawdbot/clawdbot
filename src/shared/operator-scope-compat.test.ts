@@ -58,6 +58,25 @@ describe("roleScopesAllow", () => {
     ).toBe(true);
   });
 
+  it("treats operator.talk as satisfied by talk/write/admin scopes", () => {
+    for (const allowedScope of ["operator.talk", "operator.write", "operator.admin"]) {
+      expect(
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.talk"],
+          allowedScopes: [allowedScope],
+        }),
+      ).toBe(true);
+    }
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.talk"],
+        allowedScopes: ["operator.read"],
+      }),
+    ).toBe(false);
+  });
+
   it("treats operator.approvals/operator.pairing as satisfied by operator.admin", () => {
     expect(
       roleScopesAllow({

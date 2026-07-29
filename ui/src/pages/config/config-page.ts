@@ -879,8 +879,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       saving: configState.configSaving,
       applying: configState.configApplying,
       updating: this.isUpdateBusy(),
-      autoSaveStatus: configState.configAutoSaveStatus,
-      needsApply: configState.configNeedsApply,
       connected: configState.connected,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
@@ -903,7 +901,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
       onSave: () => void runtimeConfig.save(),
-      onApply: () => void runtimeConfig.apply(),
       onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
       version:
@@ -1093,23 +1090,10 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private renderQuickConfig() {
-    const runtimeConfig = this.context.runtimeConfig;
     return renderQuickSettings({
       locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
       onLocaleChange: (locale) => this.setLocale(locale),
       onModelsClick: () => this.navigate("model-providers"),
-      connected: runtimeConfig.state.connected,
-      configLoading: runtimeConfig.state.configLoading,
-      configSaving: runtimeConfig.state.configSaving,
-      configApplying: runtimeConfig.state.configApplying,
-      configUpdating: this.isUpdateBusy(),
-      configNeedsApply: runtimeConfig.state.configNeedsApply,
-      configRawDraftPending:
-        runtimeConfig.state.configFormMode === "raw" && runtimeConfig.state.configFormDirty,
-      configAutoSaveStatus: runtimeConfig.state.configAutoSaveStatus,
-      onApplyConfig: () => void runtimeConfig.apply(),
-      onRetrySaveConfig: () => void runtimeConfig.save(),
-      onDiscardConfig: () => void runtimeConfig.discardDraft(),
     });
   }
 

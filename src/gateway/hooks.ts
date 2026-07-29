@@ -13,6 +13,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
+  commitHookTransformMappingReload,
   hasHookTemplateExpressions,
   type HookMappingResolved,
   resolveHookMappings,
@@ -108,6 +109,10 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       allowedSessionKeyPrefixes,
     },
   };
+}
+
+export function commitHooksConfigReload(): void {
+  commitHookTransformMappingReload();
 }
 
 function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<string> {

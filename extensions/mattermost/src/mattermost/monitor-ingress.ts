@@ -4,6 +4,7 @@ import {
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { getMattermostRuntime } from "../runtime.js";
@@ -53,10 +54,6 @@ class MattermostIngressPermanentError extends Error {
     super(message, options);
     this.name = "MattermostIngressPermanentError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseRawObject(raw: string, subject: string): Record<string, unknown> {

@@ -22,6 +22,7 @@ import {
   remapChunkLines,
   retryTransientMemoryRead,
   runWithConcurrency,
+  stripMemoryAnnotationCarriers,
   type MemoryChunk,
   type MemorySource,
   type MemoryEntryProvenance,
@@ -1126,8 +1127,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const perEntry =
       options.source === "memory" &&
       (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
+    const indexingContent =
+      options.source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
     const baseChunks = filterNonEmptyMemoryChunks(
-      chunkMarkdown(content, {
+      chunkMarkdown(indexingContent, {
         ...this.settings.chunking,
         perEntry,
       }),

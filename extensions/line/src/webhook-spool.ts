@@ -8,6 +8,7 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { getLineRuntime } from "./runtime.js";
 
@@ -71,10 +72,6 @@ type LineWebhookSpool = {
   start: () => void;
   stop: () => Promise<void>;
 };
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 /** Message ids preserve the shipped replay-guard keyspace; other events use LINE's delivery id. */
 function eventIdFor(event: unknown): string {

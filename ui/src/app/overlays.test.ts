@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover application-owned overlay races.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   approval,
@@ -25,6 +26,24 @@ vi.mock("../lib/nodes/index.ts", () => ({
 }));
 
 const VERIFICATION_POLL_MS = 250;
+
+function installUpdateTranslations() {
+  const translations: Record<string, string> = {
+    "updates.coalescedRestart":
+      "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
+    "updates.status": "Update {status}: {reason}. {guidance}",
+    "updates.failureReasons.managedServiceHandoffAlreadyRunning":
+      "Another managed update is already running. Wait for it to complete, then refresh update status.",
+  };
+  return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    const template = translations[key] ?? key;
+    return template.replace(/\{(\w+)\}/g, (_match, name: string) => params?.[name] ?? `{${name}}`);
+  });
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("device-auth upgrade migration", () => {
   beforeEach(() => {
@@ -838,6 +857,7 @@ describe("application update overlays", () => {
   });
 
   it("surfaces a coalesced restart while reconnect verification remains active", async () => {
+    installUpdateTranslations();
     const request = vi.fn<RequestFn>().mockResolvedValue({
       ok: true,
       restart: { coalesced: true },
@@ -879,6 +899,7 @@ describe("application update overlays", () => {
   });
 
   it("reports a concurrent managed update as rejected", async () => {
+    installUpdateTranslations();
     const request = vi.fn<RequestFn>().mockResolvedValue({
       ok: false,
       handoff: { status: "already-running" },

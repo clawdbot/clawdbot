@@ -224,6 +224,9 @@ channels.start --params '{"channel":"<id>"}'`
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `subagent-interrupted-resume`
   subsystems.
+- **Reply hooks:** automatically delivered replies from resumed main-session
+  turns run the normal `reply_payload_sending` hook before channel delivery,
+  with the recovered session, run, account, and conversation context.
 
 ## What is not resumed
 

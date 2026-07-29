@@ -2010,6 +2010,49 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(finishChoice?.finish_reason).toBe("stop");
   });
 
+  it.each([
+    { name: "successful completion", fail: false, expected: "hello" },
+    { name: "internal agent error", fail: true, expected: "Error: internal error" },
+  ])(
+    "separates streamed content from the terminal finish for an official SDK $name",
+    async ({ fail, expected }) => {
+      agentCommand.mockClear();
+      if (fail) {
+        agentCommand.mockRejectedValueOnce(new Error("private upstream failure"));
+      } else {
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["he", "llo"],
+            text: expected,
+          })) as never);
+      }
+
+      const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+        model: "openclaw",
+        messages: [{ role: "user", content: "Return a complete streamed response." }],
+        stream: true,
+      });
+      const choices: Array<{
+        delta: { content?: string | null };
+        finish_reason: string | null;
+      }> = [];
+      for await (const chunk of stream) {
+        choices.push(...chunk.choices);
+      }
+
+      const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
+      expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);
+      expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+
+      const terminalChoices = choices.filter((choice) => choice.finish_reason === "stop");
+      expect(terminalChoices).toHaveLength(1);
+      expect(terminalChoices[0]?.delta).toEqual({});
+      expect(choices.at(-1)).toEqual(terminalChoices[0]);
+    },
+  );
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {
@@ -2045,6 +2088,18 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .filter((v): v is string => typeof v === "string")
           .join("");
         expect(allContent).toBe("hello");
+        const contentChoices = jsonChunks
+          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .filter(
+            (choice) =>
+              typeof (choice.delta as Record<string, unknown> | undefined)?.content === "string",
+          );
+        expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+        const stopChoices = jsonChunks
+          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .filter((choice) => choice.finish_reason === "stop");
+        expect(stopChoices).toHaveLength(1);
+        expect(stopChoices[0]?.delta).toEqual({});
         const usageChunks = jsonChunks.filter((c) => "usage" in c);
         expect(usageChunks).toHaveLength(0);
       }
@@ -2383,12 +2438,19 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const errorChunks = errorData
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const stopChoice = errorChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .find((choice) => choice.finish_reason === "stop");
-        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
-          "Error: internal error",
+        const choices = errorChunks.flatMap(
+          (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
         );
+        const errorContentChoice = choices.find(
+          (choice) =>
+            (choice.delta as Record<string, unknown> | undefined)?.content ===
+            "Error: internal error",
+        );
+        expect(errorContentChoice?.finish_reason).toBeNull();
+        const stopChoices = choices.filter((choice) => choice.finish_reason === "stop");
+        expect(stopChoices).toHaveLength(1);
+        expect(stopChoices[0]?.delta).toEqual({});
+        expect(choices.at(-1)).toEqual(stopChoices[0]);
       }
     } finally {
       // shared server

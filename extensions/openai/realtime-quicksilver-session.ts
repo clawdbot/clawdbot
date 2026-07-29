@@ -344,6 +344,11 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       }
       return;
     }
+    // WebRTC carries media separately; only the direct backend bridge consumes
+    // Frameless output_audio.delta events received on the provider WebSocket.
+    if (event.kind === "audio") {
+      return;
+    }
     const delegationInput = event.prompt;
     if (!delegationInput.trim()) {
       params.logger.debug?.("OpenAI GPT-Live ignored an empty client delegation");

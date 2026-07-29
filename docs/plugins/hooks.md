@@ -93,6 +93,14 @@ receive a cancellation signal. The hook dispatch can release its Gateway
 admission while that plugin work is still in progress. Plugins that own
 long-running work must provide their own cancellation and shutdown lifecycle.
 
+Policy hooks `before_tool_call` and `before_install` use a 15-second default per
+handler. A timeout fails closed: the tool call or installation is rejected
+instead of continuing without a policy decision.
+
+`gateway_stop` uses a five-second default per handler. Timed-out handlers are
+logged and shutdown continues so plugin cleanup cannot consume the Gateway
+process watchdog.
+
 Outbound modifying hooks `message_sending` and `reply_payload_sending` use a
 15-second default per handler. If one times out, OpenClaw logs the plugin error
 and continues with the latest payload so the serialized delivery lane can
@@ -654,8 +662,9 @@ across equivalent finalize decisions, and `maxAttempts` caps how many extra
 passes the host will allow before continuing with the natural final answer.
 
 Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
-`before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-`agent_end`, or `before_agent_run`) must set:
+`agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`,
+`llm_output`, `before_agent_finalize`, `agent_end`, or `before_agent_run`) must
+set:
 
 ```json
 {
@@ -671,8 +680,11 @@ Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
 }
 ```
 
-Prompt-mutating hooks and durable next-turn injections can be disabled per
-plugin with `plugins.entries.<id>.hooks.allowPromptInjection=false`.
+`agent_turn_prepare` and `before_prompt_build` also mutate prompt construction,
+so they require conversation access and remain subject to
+`plugins.entries.<id>.hooks.allowPromptInjection`. Prompt-mutating hooks and
+durable next-turn injections can be disabled per plugin by setting that option
+to `false`.
 
 ### Session extensions and next-turn injections
 

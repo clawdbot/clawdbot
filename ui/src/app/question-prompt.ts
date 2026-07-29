@@ -6,6 +6,7 @@ import type {
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
+import { t } from "../i18n/index.ts";
 
 type QuestionClient = {
   request: (method: string, params?: unknown) => Promise<unknown>;
@@ -633,7 +634,7 @@ async function resolveQuestionPrompt(
     return;
   }
   if (!client) {
-    prompt.error = "Not connected. Try again after reconnecting.";
+    prompt.error = t("chat.questions.disconnected");
     prompt.revision = ++state.revision;
     state.onChange();
     return;

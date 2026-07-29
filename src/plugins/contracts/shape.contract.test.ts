@@ -8,7 +8,17 @@ import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {
   it("keeps hook-only, plain capability, and hybrid capability shapes explicit", () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const { config, registry } = createPluginRegistryFixture({
+      plugins: {
+        entries: {
+          "hook-only": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
+      },
+    });
 
     registerVirtualTestPlugin({
       registry,

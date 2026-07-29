@@ -213,8 +213,9 @@ export function maybeEmitFailureAlert(
     // Suppress failed-run duplicates without disabling global skipped alerts.
     return;
   }
-  const isBestEffort = params.job.delivery?.bestEffort === true;
-  if (isBestEffort) {
+  // Best-effort delivery suppresses inherited alert noise, not an independently
+  // configured job alert that the operator explicitly requested.
+  if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
   const now = params.occurredAtMs ?? state.deps.nowMs();

@@ -91,13 +91,13 @@ function summarizeQmdStderr(raw: string): string {
 function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((item) => typeof item !== "object" || item === null || Array.isArray(item))
+    ) {
       return null;
     }
     return parsed.map((item) => {
-      if (typeof item !== "object" || item === null) {
-        return item as QmdQueryResult;
-      }
       const record = item as Record<string, unknown>;
       const docid = typeof record.docid === "string" ? record.docid : undefined;
       const score =
