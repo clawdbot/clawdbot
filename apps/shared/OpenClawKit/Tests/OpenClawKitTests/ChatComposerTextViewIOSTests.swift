@@ -34,5 +34,33 @@ struct ChatComposerTextViewIOSTests {
         #expect(textView.text == "\n\nsecond")
         #expect(textView.selectedRange == NSRange(location: 1, length: 0))
     }
+
+    @Test func physicalArrowKeysRouteThroughTheFocusedEditor() {
+        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
+        var upContexts: [Bool] = []
+        var downCalls = 0
+        textView.onHistoryUp = { caretOnFirstLine in
+            upContexts.append(caretOnFirstLine)
+            return true
+        }
+        textView.onHistoryDown = {
+            downCalls += 1
+            return true
+        }
+        textView.text = "first\nsecond"
+
+        textView.selectedRange = NSRange(location: 2, length: 0)
+        #expect(textView.handleHardwareKey(.keyboardUpArrow, modifierFlags: []))
+
+        textView.selectedRange = NSRange(location: 8, length: 0)
+        #expect(textView.handleHardwareKey(.keyboardUpArrow, modifierFlags: []))
+        #expect(textView.handleHardwareKey(.keyboardDownArrow, modifierFlags: []))
+
+        #expect(upContexts == [true, false])
+        #expect(downCalls == 1)
+        #expect(!textView.handleHardwareKey(.keyboardUpArrow, modifierFlags: .shift))
+        #expect(textView.handleHardwareKey(.keyboardUpArrow, modifierFlags: .alphaShift))
+        #expect(!textView.handleHardwareKey(.keyboardReturnOrEnter, modifierFlags: []))
+    }
 }
 #endif

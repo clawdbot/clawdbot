@@ -10,22 +10,26 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     var minHeight: CGFloat
     var maxHeight: CGFloat
     var onFocusChange: (Bool) -> Void
+    var onHistoryUp: (Bool) -> Bool
+    var onHistoryDown: () -> Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
-    func makeUIView(context: Context) -> UITextView {
+    func makeUIView(context: Context) -> ChatComposerUITextView {
         let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
         textView.delegate = context.coordinator
         textView.text = self.text
+        self.configureHistoryHandlers(textView)
         return textView
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ textView: ChatComposerUITextView, context: Context) {
         context.coordinator.parent = self
         textView.isEditable = self.isEnabled
         textView.isSelectable = self.isEnabled
+        self.configureHistoryHandlers(textView)
 
         if self.shouldFocus, self.isEnabled, !textView.isFirstResponder {
             textView.becomeFirstResponder()
@@ -50,9 +54,14 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         context.coordinator.lastReportedText = self.text
     }
 
+    private func configureHistoryHandlers(_ textView: ChatComposerUITextView) {
+        textView.onHistoryUp = self.onHistoryUp
+        textView.onHistoryDown = self.onHistoryDown
+    }
+
     func sizeThatFits(
         _ proposal: ProposedViewSize,
-        uiView: UITextView,
+        uiView: ChatComposerUITextView,
         context _: Context) -> CGSize?
     {
         guard let width = proposal.width else { return nil }
@@ -90,11 +99,52 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     }
 }
 
+@MainActor
+final class ChatComposerUITextView: UITextView {
+    var onHistoryUp: ((Bool) -> Bool)?
+    var onHistoryDown: (() -> Bool)?
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        var unhandledPresses = presses
+        for press in presses {
+            guard let key = press.key else { continue }
+            if self.handleHardwareKey(key.keyCode, modifierFlags: key.modifierFlags) {
+                unhandledPresses.remove(press)
+            }
+        }
+        guard !unhandledPresses.isEmpty else { return }
+        super.pressesBegan(unhandledPresses, with: event)
+    }
+
+    /// Internal for focused responder-level keyboard routing coverage.
+    func handleHardwareKey(
+        _ keyCode: UIKeyboardHIDUsage,
+        modifierFlags: UIKeyModifierFlags) -> Bool
+    {
+        let commandModifiers: UIKeyModifierFlags = [.shift, .control, .alternate, .command]
+        guard modifierFlags.intersection(commandModifiers).isEmpty else { return false }
+        switch keyCode {
+        case .keyboardUpArrow:
+            return self.onHistoryUp?(self.caretOnFirstLine) == true
+        case .keyboardDownArrow:
+            return self.onHistoryDown?() == true
+        default:
+            return false
+        }
+    }
+
+    private var caretOnFirstLine: Bool {
+        let location = min(max(self.selectedRange.location, 0), (self.text as NSString).length)
+        let prefix = (self.text as NSString).substring(to: location)
+        return !prefix.contains("\n") && !prefix.contains("\r")
+    }
+}
+
 enum ChatComposerTextViewIOSFactory {
     /// Internal for @testable import coverage of native multiline input defaults.
     @MainActor
-    static func makeConfiguredTextView() -> UITextView {
-        let textView = UITextView()
+    static func makeConfiguredTextView() -> ChatComposerUITextView {
+        let textView = ChatComposerUITextView()
         textView.backgroundColor = .clear
         textView.font = OpenClawChatTypography.bodyUIFont
         textView.adjustsFontForContentSizeCategory = true

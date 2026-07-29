@@ -947,6 +947,14 @@ struct OpenClawChatComposer: View {
                 maxHeight: self.textMaxHeight,
                 onFocusChange: { focused in
                     self.isFocused = focused
+                },
+                onHistoryUp: { caretOnFirstLine in
+                    guard !self.isSlashPopoverPresented else { return false }
+                    return self.viewModel.recallPreviousInput(caretOnFirstLine: caretOnFirstLine)
+                },
+                onHistoryDown: {
+                    guard !self.isSlashPopoverPresented else { return false }
+                    return self.viewModel.recallNextInput()
                 })
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
@@ -959,18 +967,6 @@ struct OpenClawChatComposer: View {
                     } else {
                         self.setSlashPanelPresented(false)
                     }
-                }
-                // Keep history recall on physical arrow keys while native
-                // UITextView owns Return, selection, and marked-text input.
-                .onKeyPress(.upArrow) {
-                    guard !self.isSlashPopoverPresented else { return .ignored }
-                    return self.viewModel.recallPreviousInput(caretOnFirstLine: false)
-                        ? .handled
-                        : .ignored
-                }
-                .onKeyPress(.downArrow) {
-                    guard !self.isSlashPopoverPresented else { return .ignored }
-                    return self.viewModel.recallNextInput() ? .handled : .ignored
                 }
             #else
             TextField(
