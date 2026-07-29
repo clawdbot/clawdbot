@@ -1,9 +1,37 @@
 // web_fetch visibility tests cover hidden HTML and invisible Unicode stripping
 // before extracted content reaches the model.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 
 describe("sanitizeHtml", () => {
+  it("reuses compiled CSS property matchers across styled elements", async () => {
+    const styledElements = 256;
+    const html = Array.from(
+      { length: styledElements },
+      (_, index) => `<p style="color:rgb(12,34,56)">Visible ${index}</p>`,
+    ).join("");
+    const NativeRegExp = globalThis.RegExp;
+    const regexpConstructor = vi.spyOn(globalThis, "RegExp").mockImplementation(function (
+      pattern?: string | RegExp,
+      flags?: string,
+    ) {
+      return Reflect.construct(NativeRegExp, [pattern, flags]);
+    });
+
+    try {
+      const result = await sanitizeHtml(html);
+      const perElementStyleMatchers = regexpConstructor.mock.calls.filter(
+        ([pattern]) => typeof pattern === "string" && pattern.startsWith("(?:^|;)\\s*"),
+      );
+
+      expect(result).toContain("Visible 0");
+      expect(result).toContain(`Visible ${styledElements - 1}`);
+      expect(perElementStyleMatchers).toHaveLength(0);
+    } finally {
+      regexpConstructor.mockRestore();
+    }
+  });
+
   it("strips display:none elements", async () => {
     const html = '<p>Visible</p><p style="display:none">Hidden</p>';
     const result = await sanitizeHtml(html);
@@ -65,22 +93,93 @@ describe("sanitizeHtml", () => {
     expect(result).not.toContain("Scaled");
   });
 
-  it("strips transform:scale(0, 0) elements", async () => {
-    const html = '<p>Show</p><div style="transform:scale(0, 0)">Scaled</div>';
+  it.each([
+    "scale(0, 0)",
+    "scale(0, 1)",
+    "scale(1, 0)",
+    "scale(-0, 1)",
+    "scale(+0, 1)",
+    "scale(.0, 1)",
+    "scale(0.0, 1)",
+    "scale(0e2, 1)",
+    "scale(0e-400, 1)",
+    "scale (0)",
+    "sCaLe\t( 0 )",
+    "scale(\f0\t,\n1\r)",
+    "scale(0%, 100%)",
+    "scaleX(0)",
+    "scaleY(0)",
+    "scaleX(-0.0)",
+    "scaleX(0e-400)",
+    "scaleY(0%)",
+    "scaleY(-0.00e-400)",
+    "scale3d(0, 0, 0)",
+    "scale3d(0, 1, 1)",
+    "scale3d(0.00e-400, 1, 1)",
+    "scale3d(1, 0, 1)",
+    "scale3d(.0, 100%, 1)",
+    "SCALE3D(1, +0, -1)",
+    "sCaLe( +0.00e-2 , 1 )",
+    "ScAlEx( 0% )",
+    "scale3d(\t1,\t-0.0,\t1 )",
+    "translateX(10px) scale(0, 1)",
+    "rotate(10deg) scale3d(1, 0, 1)",
+  ])("strips elements whose transform collapses a visible axis: %s", async (transform) => {
+    const html = `<p>Visible</p><div style="transform:${transform}">Hidden prompt</div>`;
     const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Scaled");
+
+    expect(result).toContain("Visible");
+    expect(result).not.toContain("Hidden prompt");
   });
 
-  it("strips transform:scale3d(0, 0, 0) elements", async () => {
-    const html = '<p>Show</p><div style="transform:scale3d(0, 0, 0)">Scaled</div>';
+  it.each([
+    "scale(1)",
+    "scale(-1)",
+    "scale(0.1)",
+    "scale(1e-2)",
+    "scale(1e-400)",
+    "scale(.0001e-400, 1)",
+    "scale (0, 1)",
+    "scale (+0)",
+    "scale (0%)",
+    "éscale(0)",
+    "é-scale(0)",
+    "ſcale(0)",
+    "scale(\u00a00)",
+    "scale(0\u00a0)",
+    "scale(0,\u00a01)",
+    "scaleX\u00a0(0)",
+    "scale(10%)",
+    "scale(-1, 1)",
+    "scale(1, -1)",
+    "scale3d(1, 1, 0)",
+    "scale3d(-1, 1, 0)",
+    "scale3d(0.1, 1, 0)",
+    "scale3d(1e-400, 1, 1)",
+    "scale3d (0, 0, 0)",
+    "scale3d(0,\u00a01,1)",
+    "scaleX(1e-400)",
+    "scaleX(1e-400%)",
+    "scaleX (0)",
+    "scaleY(-1e-400)",
+    "scaleY\t(0)",
+    "scaleZ(0)",
+    "ScAlEz( +0.0 )",
+    "scale(0px, 1)",
+    "scale(0., 1)",
+    "custom-scale(0)",
+    "-scale(0)",
+    "scale(0, 1, 2)",
+    "scale3d(0, 1)",
+    "scale3d(0, 1, 1, 1)",
+    "scaleX(0, 1)",
+    "rotate(10deg) scale(-1, 1)",
+  ])("preserves elements whose visible axes are not collapsed: %s", async (transform) => {
+    const html = `<p>Visible</p><div style="transform:${transform}">Visible transform</div>`;
     const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Scaled");
-  });
 
-  it("strips transform:scaleX(0) elements", async () => {
-    const html = '<p>Show</p><div style="transform:scaleX(0)">Scaled</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Scaled");
+    expect(result).toContain("Visible");
+    expect(result).toContain("Visible transform");
   });
 
   it("strips transform:translateX far-offscreen elements", async () => {
