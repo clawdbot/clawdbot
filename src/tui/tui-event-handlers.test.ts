@@ -555,7 +555,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("appends the tool-error summary to the abort line when present", () => {
-    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-validation-loop" },
     });
 
@@ -569,6 +569,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledWith(
       "run aborted: edit tool validation failed: edits: must have required properties edits",
     );
+    expect(loadHistory).not.toHaveBeenCalled();
   });
 
   it("sanitizes untrusted abort diagnostics before rendering", () => {

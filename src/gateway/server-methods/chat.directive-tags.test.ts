@@ -1997,6 +1997,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     const { context, send } = createChatRequestFixture();
+    let terminalClaimedBeforeBroadcast = false;
+    vi.mocked(context.broadcast).mockImplementation((event, payload) => {
+      if (
+        event === "chat" &&
+        typeof payload === "object" &&
+        payload !== null &&
+        "state" in payload &&
+        payload.state === "final"
+      ) {
+        terminalClaimedBeforeBroadcast =
+          context.chatAbortControllers.get("idem-agent-source-reply")?.chatTerminalBroadcasted ===
+          true;
+      }
+    });
 
     const broadcast = await send({
       idempotencyKey: "idem-agent-source-reply",
@@ -2019,6 +2033,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
       mirrorIdempotencyKey,
     ]);
+    expect(terminalClaimedBeforeBroadcast).toBe(true);
   });
 
   it("broadcasts agent-run status notices without source reply mirrors", async () => {

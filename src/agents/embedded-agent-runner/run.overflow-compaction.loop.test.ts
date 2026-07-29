@@ -692,10 +692,7 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("emits [session-key:missing] when sessionKey is missing on overflow path", async () => {
-    // Same overflow trigger as the first test but with empty sessionKey — the
-    // enqueueSystemEvent gate should skip and leave a breadcrumb via the
-    // canonical session-key skip helper.
+  it("falls back to sessionId when sessionKey is empty on overflow path", async () => {
     mockOverflowRetrySuccess({
       runEmbeddedAttempt: mockedRunEmbeddedAttempt,
       compactDirect: mockedCompactDirect,
@@ -703,15 +700,11 @@ describe("overflow compaction in run loop", () => {
 
     await runEmbeddedAgent({ ...baseParams, sessionKey: "" });
 
-    // The mid-turn [context-pressure:fire] anchor still emits (it uses
-    // sessionKey ?? sessionId as a display value, not as a gate).
-    expect(mockedLog.warn).toHaveBeenCalledWith(
-      expect.stringContaining("[context-pressure:fire] mid-turn trigger=overflow"),
+    expectLogIncludes(
+      mockedLog.warn,
+      "[context-pressure:fire] mid-turn trigger=overflow attempt=1/3 tokens=?k/200k sessionKey=test-session",
     );
-    // But the system-event enqueue was skipped → canonical breadcrumb emitted.
-    expect(mockedLog.warn).toHaveBeenCalledWith(
-      expect.stringContaining("[session-key:missing] site=pi-runner.overflow-compaction"),
-    );
+    expectLogExcludes(mockedLog.warn, "[session-key:missing] site=pi-runner.overflow-compaction");
   });
 
   it("does not suppress an unpersisted reasoning continuation after precheck compaction", async () => {

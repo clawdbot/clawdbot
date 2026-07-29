@@ -136,6 +136,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
   deliveredReplies: readonly DeliveredReply[];
   emitFirstAssistantServerTiming: () => void;
   foldCommandBlocks: boolean;
+  markTerminalBroadcasted: () => void;
   persistUserTurnTranscript: () => Promise<void>;
   session: Pick<
     PreparedChatSendSession,
@@ -149,6 +150,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
     deliveredReplies,
     emitFirstAssistantServerTiming,
     foldCommandBlocks,
+    markTerminalBroadcasted,
     persistUserTurnTranscript,
     session,
     suppressReplies,
@@ -167,6 +169,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
         ts: Date.now(),
       },
     });
+    markTerminalBroadcasted();
     broadcastChatFinal({
       context,
       runId: clientRunId,
@@ -369,6 +372,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
   if (hasVisibleAssistantFinalMessage(message)) {
     emitFirstAssistantServerTiming();
   }
+  markTerminalBroadcasted();
   broadcastChatFinal({
     context,
     runId: clientRunId,

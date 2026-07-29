@@ -1,4 +1,5 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { hasRawToolValidationOutput } from "../agents/tool-error-summary.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   isAssistantTextContentType,
@@ -70,24 +71,6 @@ function projectEmptyAssistantErrorMessages(
     if (message.role !== "assistant" || message.stopReason !== "error") {
       return message;
     }
-    const hasDisplayableStructuredContent =
-      Array.isArray(message.content) &&
-      message.content.some((block) => {
-        if (!block || typeof block !== "object" || Array.isArray(block)) {
-          return false;
-        }
-        const type = (block as { type?: unknown }).type;
-        return (
-          !isAssistantTextContentType(type) &&
-          type !== "thinking" &&
-          type !== "reasoning" &&
-          type !== "redacted_thinking"
-        );
-      });
-    if (hasDisplayableStructuredContent) {
-      changed = true;
-      return sanitizeAssistantErrorDisplayMessage(message);
-    }
     const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
       .message as Record<string, unknown>;
     const visibleTexts: string[] = [];
@@ -108,10 +91,33 @@ function projectEmptyAssistantErrorMessages(
       visibleTexts.push(sanitized.text);
     }
     const nonEmptyVisibleTexts = visibleTexts.map((text) => text.trim()).filter(Boolean);
+    const hasUnsafeValidationOutput = nonEmptyVisibleTexts.some(hasRawToolValidationOutput);
+    const hasDisplayableStructuredContent =
+      Array.isArray(message.content) &&
+      message.content.some((block) => {
+        if (!block || typeof block !== "object" || Array.isArray(block)) {
+          return false;
+        }
+        const type = (block as { type?: unknown }).type;
+        return (
+          !isAssistantTextContentType(type) &&
+          type !== "thinking" &&
+          type !== "reasoning" &&
+          type !== "redacted_thinking"
+        );
+      });
+    if (hasDisplayableStructuredContent && !hasUnsafeValidationOutput) {
+      changed = true;
+      return sanitizeAssistantErrorDisplayMessage(message);
+    }
     const hasVisibleReplyText = nonEmptyVisibleTexts.some(
       (text) => text !== STREAM_ERROR_FALLBACK_TEXT && !isSuppressedControlReplyText(text),
     );
-    if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleReplyText) {
+    if (
+      !hasUnsafeValidationOutput &&
+      !shouldDropAssistantHistoryMessage(sanitized) &&
+      hasVisibleReplyText
+    ) {
       changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
     }

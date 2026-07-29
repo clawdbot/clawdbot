@@ -1818,6 +1818,24 @@ describe("EmbeddedTuiBackend", () => {
     });
     await flushMicrotasks();
 
+    expect(
+      events.some(
+        (event) =>
+          event.event === "chat" &&
+          ["aborted", "error", "final"].includes((event.payload as { state?: string }).state ?? ""),
+      ),
+    ).toBe(false);
+
+    registeredListener?.({
+      runId: "run-validation-loop-finishing",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "LLM request failed.",
+      },
+    });
+    await flushMicrotasks();
+
     expect(events).toContainEqual({
       event: "chat",
       payload: {
@@ -1837,6 +1855,144 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
 
     expect(JSON.stringify(events)).not.toContain("Received arguments");
+  });
+
+  it("allows deferred validation candidates to recover through fallback", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "recover with fallback",
+      runId: "run-validation-fallback-recovery",
+    });
+
+    registeredListener?.({
+      runId: "run-validation-fallback-recovery",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    registeredListener?.({
+      runId: "run-validation-fallback-recovery",
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    registeredListener?.({
+      runId: "run-validation-fallback-recovery",
+      stream: "assistant",
+      data: { text: "Recovered with fallback" },
+    });
+    registeredListener?.({
+      runId: "run-validation-fallback-recovery",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    pending.resolve({
+      payloads: [{ text: "Recovered with fallback" }],
+      meta: { stopReason: "end_turn" },
+    });
+    await flushMicrotasks();
+
+    expect(
+      events.filter(
+        (event) =>
+          event.event === "chat" &&
+          ["aborted", "error", "final"].includes((event.payload as { state?: string }).state ?? ""),
+      ),
+    ).toEqual([
+      {
+        event: "chat",
+        payload: {
+          runId: "run-validation-fallback-recovery",
+          sessionKey: "agent:main:main",
+          state: "final",
+          stopReason: "end_turn",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Recovered with fallback" }],
+            timestamp: expect.any(Number),
+          },
+        },
+      },
+    ]);
+  });
+
+  it("retains validation summaries across summary-less lifecycle errors", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "repeat invalid arguments",
+      runId: "run-validation-loop-summaryless-error",
+    });
+
+    registeredListener?.({
+      runId: "run-validation-loop-summaryless-error",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    registeredListener?.({
+      runId: "run-validation-loop-summaryless-error",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "LLM request failed.",
+      },
+    });
+
+    pending.resolve({
+      payloads: [{ text: "LLM request failed." }],
+      meta: { stopReason: "error" },
+    });
+    await flushMicrotasks();
+
+    expect(
+      events.filter(
+        (event) =>
+          event.event === "chat" && (event.payload as { state?: string }).state !== "delta",
+      ),
+    ).toEqual([
+      {
+        event: "chat",
+        payload: {
+          runId: "run-validation-loop-summaryless-error",
+          sessionKey: "agent:main:main",
+          state: "aborted",
+          errorMessage: "edit tool validation failed: invalid arguments",
+        },
+      },
+    ]);
   });
 
   it.each([
@@ -1915,6 +2071,14 @@ describe("EmbeddedTuiBackend", () => {
       runId: "run-unsafe-abort",
     });
 
+    registeredListener?.({
+      runId: "run-unsafe-abort",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
     registeredListener?.({
       runId: "run-unsafe-abort",
       stream: "lifecycle",

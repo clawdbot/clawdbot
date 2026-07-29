@@ -843,7 +843,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     },
   );
 
-  it("runs visible turns with the session id returned by admission", async () => {
+  it("runs visible turns with the session identity returned by admission", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "pre-compact-session",
@@ -888,7 +888,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
     expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
-    expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
+    expect((call as AgentRunParams).sessionFile).toBe("main");
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {

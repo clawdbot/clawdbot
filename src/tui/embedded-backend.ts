@@ -1347,6 +1347,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.toolErrorSummary = undefined;
     } else if (evt.stream === "tool" && evt.data?.phase === "result") {
       run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
+    } else if (evt.stream === "lifecycle" && lifecyclePhase === "start") {
+      run.toolErrorSummary = undefined;
     }
 
     const assistantLiveChatInput =
@@ -1371,12 +1373,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
-    const toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+    if (Object.hasOwn(evt.data ?? {}, "toolErrorSummary")) {
+      run.toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+    }
+    const toolErrorSummary = run.toolErrorSummary;
     if (phase === "finishing") {
-      if (toolErrorSummary) {
-        this.emitChatAborted(evt.runId, run, toolErrorSummary);
-        return;
-      }
       run.finishing = true;
       run.markQueuedRunReady();
       run.lifecycleStopReason =
@@ -1385,7 +1386,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     if (phase === "end") {
       run.finishing = false;
-      if (aborted) {
+      if (aborted || toolErrorSummary) {
         this.emitChatAborted(evt.runId, run, toolErrorSummary);
         return;
       }

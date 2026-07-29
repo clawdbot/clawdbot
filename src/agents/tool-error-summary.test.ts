@@ -46,6 +46,14 @@ describe("readToolValidationErrorSummary", () => {
     expect(readToolValidationErrorSummary("edit tool validation failed: path: invalid")).toBe(
       "edit tool validation failed: path: invalid",
     );
+    expect(
+      readToolValidationErrorSummary(
+        "Validation failed for tool edit: Received arguments: SECRET_TOKEN",
+      ),
+    ).toBeUndefined();
+    expect(
+      readToolValidationErrorSummary("Stopped after 2 identical failed edit tool calls"),
+    ).toBeUndefined();
     expect(readToolValidationErrorSummary("edit failed\nsecret")).toBeUndefined();
     expect(readToolValidationErrorSummary(`edit failed: ${"x".repeat(200)}`)).toBeUndefined();
   });

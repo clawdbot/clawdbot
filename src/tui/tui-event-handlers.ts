@@ -362,7 +362,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId, {
-        hasDisplayableFinal: hasDisplayableAbortedText,
+        hasDisplayableFinal: hasDisplayableAbortedText || Boolean(diagnostic),
       });
     }
     if (evt.state === "error") {

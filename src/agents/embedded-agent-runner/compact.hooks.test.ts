@@ -1006,7 +1006,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("disables continuation tools when rebuilding nested compaction tools", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
     });
 

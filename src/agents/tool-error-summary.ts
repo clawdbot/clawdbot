@@ -27,6 +27,7 @@ export function isExecLikeToolName(toolName: string): boolean {
 }
 
 const MAX_ABORT_SUMMARY_LENGTH = 160;
+const REPEATED_TOOL_VALIDATION_LOOP_RE = /Stopped after \d+ identical failed .* tool calls/;
 
 function hasUnsafeSummaryCharacter(value: string): boolean {
   for (const char of value) {
@@ -44,10 +45,24 @@ export function readToolValidationErrorSummary(value: unknown): string | undefin
     return undefined;
   }
   const summary = value.trim();
-  if (!summary || summary.length > MAX_ABORT_SUMMARY_LENGTH || hasUnsafeSummaryCharacter(summary)) {
+  if (
+    !summary ||
+    summary.length > MAX_ABORT_SUMMARY_LENGTH ||
+    hasUnsafeSummaryCharacter(summary) ||
+    hasRawToolValidationOutput(summary)
+  ) {
     return undefined;
   }
   return summary;
+}
+
+/** Detects validator output that may embed model-supplied tool arguments. */
+export function hasRawToolValidationOutput(value: string): boolean {
+  return (
+    value.includes("Received arguments") ||
+    value.includes("Validation failed for tool") ||
+    REPEATED_TOOL_VALIDATION_LOOP_RE.test(value)
+  );
 }
 
 /** Builds a static diagnostic from typed pre-execution validation provenance. */

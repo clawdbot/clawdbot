@@ -15,12 +15,14 @@ import { createTaskRecord } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import type { AgentEventHandlerOptions } from "./server-chat.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 
 function waitForFast<T>(
@@ -202,6 +204,127 @@ describe("startGatewayEventSubscriptions", () => {
 
     await unsubs.agentUnsub();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("captures active chat.send ownership before lazy lifecycle dispatch", async () => {
+    const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    const params = createParams();
+    const entry: ChatAbortControllerEntry = {
+      controller: new AbortController(),
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1,
+      expiresAtMs: 2,
+    };
+    params.chatAbortControllers.set("run-chat-send", entry);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({
+      runId: "run-chat-send",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        toolErrorSummary: "edit tool validation failed: edits: must be an array",
+      },
+    });
+    expect(entry.toolErrorSummary).toBe("edit tool validation failed: edits: must be an array");
+    entry.registrationCleanupRequested = true;
+    await waitForFast(() => expect(handler).toHaveBeenCalledOnce());
+
+    const options = agentEventHandlerMocks.create.mock.calls[0]?.[0] as
+      | AgentEventHandlerOptions
+      | undefined;
+    expect(options?.isChatSendRunActive?.("run-chat-send")).toBe(false);
+    expect(options?.wasChatSendActiveAtTerminalObservation?.("run-chat-send")).toBe(true);
+    expect(options?.wasChatSendTerminalBroadcasted?.("run-chat-send")).toBe(false);
+    expect(
+      options?.resolveRunToolErrorSummary?.({
+        runId: "run-chat-send",
+        clientRunId: "run-chat-send",
+      }),
+    ).toBe("edit tool validation failed: edits: must be an array");
+    options?.markChatSendTerminalBroadcasted?.({
+      runId: "run-chat-send",
+      clientRunId: "run-chat-send",
+    });
+
+    expect(entry.chatTerminalBroadcasted).toBe(true);
+    expect(options?.wasChatSendTerminalBroadcasted?.("run-chat-send")).toBe(true);
+  });
+
+  it("rejects raw validation output before lazy lifecycle dispatch", async () => {
+    const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    const params = createParams();
+    const entry: ChatAbortControllerEntry = {
+      controller: new AbortController(),
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1,
+      expiresAtMs: 2,
+      toolErrorSummary: "edit tool validation failed: invalid arguments",
+    };
+    params.chatAbortControllers.set("run-raw-validation", entry);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({
+      runId: "run-raw-validation",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        toolErrorSummary: "Validation failed for tool edit: Received arguments: SECRET_TOKEN",
+      },
+    });
+
+    expect(entry.toolErrorSummary).toBeUndefined();
+    await waitForFast(() => expect(handler).toHaveBeenCalledOnce());
+  });
+
+  it("keeps ingress validation state authoritative across delayed dispatch", async () => {
+    const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    const params = createParams();
+    const entry: ChatAbortControllerEntry = {
+      controller: new AbortController(),
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1,
+      expiresAtMs: 2,
+      toolErrorSummary: "edit tool validation failed: invalid arguments",
+    };
+    params.chatAbortControllers.set("run-ordered-validation", entry);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({
+      runId: "run-ordered-validation",
+      stream: "assistant",
+      data: { text: "retrying" },
+    });
+    expect(entry.toolErrorSummary).toBeUndefined();
+
+    emitAgentEvent({
+      runId: "run-ordered-validation",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    expect(entry.toolErrorSummary).toBe("edit tool validation failed: invalid arguments");
+
+    emitAgentEvent({
+      runId: "run-ordered-validation",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        toolErrorSummary: "Validation failed for tool edit: Received arguments: SECRET_TOKEN",
+      },
+    });
+    expect(entry.toolErrorSummary).toBeUndefined();
+
+    await waitForFast(() => expect(handler).toHaveBeenCalledTimes(3));
+    expect(entry.toolErrorSummary).toBeUndefined();
   });
 
   it("logs transcript handler failures", async () => {

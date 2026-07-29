@@ -170,6 +170,40 @@ export function broadcastChatError(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+export function broadcastChatAborted(params: {
+  context: ChatBroadcastContext;
+  runId: string;
+  sessionKey: string;
+  agentId?: string;
+  errorMessage?: string;
+}): void {
+  const seq = nextChatSeq(params.context, params.runId);
+  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
+  const payload = {
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
+    seq,
+    state: "aborted" as const,
+    errorMessage: params.errorMessage,
+  };
+  params.context.broadcast("chat", payload, {
+    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
+      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+      sessionKey: params.sessionKey,
+      agentId: payloadAgentId,
+    }),
+  });
+  sendGlobalAwareNodeChatPayload({
+    context: params.context,
+    sessionKey: params.sessionKey,
+    agentId: payloadAgentId,
+    event: "chat",
+    payload,
+  });
+  params.context.agentRunSeq.delete(params.runId);
+}
+
 export function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined): boolean {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
 }

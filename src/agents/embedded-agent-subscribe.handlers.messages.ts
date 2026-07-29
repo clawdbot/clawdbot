@@ -46,7 +46,7 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
-import { summarizeToolValidationError } from "./tool-error-summary.js";
+import { hasRawToolValidationOutput, summarizeToolValidationError } from "./tool-error-summary.js";
 import {
   hasNonzeroUsage,
   makeZeroUsageSnapshot,
@@ -163,8 +163,6 @@ export function resetPendingAssistantUsage(
   ctx.state.assistantUsageCommitted = false;
 }
 
-const REPEATED_TOOL_VALIDATION_LOOP_RE = /Stopped after \d+ identical failed .* tool calls/;
-
 function shouldSuppressValidationLoopAssistantOutput(params: {
   message: AssistantMessage;
   assistantRecord?: Record<string, unknown>;
@@ -186,11 +184,7 @@ function shouldSuppressValidationLoopAssistantOutput(params: {
   ]
     .filter(Boolean)
     .join("\n");
-  return (
-    candidateText.includes("Received arguments") ||
-    candidateText.includes("Validation failed for tool") ||
-    REPEATED_TOOL_VALIDATION_LOOP_RE.test(candidateText)
-  );
+  return hasRawToolValidationOutput(candidateText);
 }
 
 function resetMessageEndStreamingState(ctx: EmbeddedAgentSubscribeContext): void {
