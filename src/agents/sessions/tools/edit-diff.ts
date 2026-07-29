@@ -551,13 +551,17 @@ function restoreReplacedLineEndings(
   replacedLines: string[],
   fallback: LineTerminator,
 ): string {
+  const addedLines = splitLinesWithTerminators(addedText);
+  // Align from the end so the boundary before untouched content keeps the
+  // terminator of the last replaced line when replacements collapse lines.
+  const sourceOffset = Math.max(0, replacedLines.length - addedLines.length);
   let result = "";
-  for (const [index, line] of splitLinesWithTerminators(addedText).entries()) {
+  for (const [index, line] of addedLines.entries()) {
     if (!line.endsWith("\n")) {
       result += line;
       continue;
     }
-    const source = replacedLines[index] ?? replacedLines.at(-1);
+    const source = replacedLines[sourceOffset + index] ?? replacedLines.at(-1);
     result += line.replace(/\r?\n$/, "") + (getLineTerminator(source) ?? fallback);
   }
   return result;
@@ -580,7 +584,7 @@ export function restoreOriginalLineEndings(
       const removedAfter = getRemovedLineCount(parts[index + 1]);
       const replacedLines = removedBefore
         ? originalLines.slice(originalIndex - removedBefore, originalIndex)
-        : originalLines.slice(originalIndex, originalIndex + removedAfter);
+        : originalLines.slice(originalIndex, originalIndex + Math.max(removedAfter, 1));
       result += restoreReplacedLineEndings(part.value, replacedLines, ending);
       continue;
     }

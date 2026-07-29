@@ -733,6 +733,24 @@ describe("edit tool", () => {
       expected: "prefix\ralpha\rbeta\r",
     },
     {
+      name: "uses the retained target terminator for a prefixed line",
+      original: "alpha\r\nbeta\ngamma\n",
+      edits: [{ oldText: "beta", newText: "prefix\nbeta" }],
+      expected: "alpha\r\nprefix\nbeta\ngamma\n",
+    },
+    {
+      name: "keeps the trailing boundary when replacement collapses mixed lines",
+      original: "alpha\r\nbeta\ngamma\n",
+      edits: [{ oldText: "alpha\nbeta", newText: "merged" }],
+      expected: "merged\ngamma\n",
+    },
+    {
+      name: "aligns an unterminated replacement at end of file",
+      original: "h1\r\nh2\r\none\ntwo",
+      edits: [{ oldText: "one\ntwo", newText: "x\ny" }],
+      expected: "h1\r\nh2\r\nx\ny",
+    },
+    {
       name: "keeps trailing CRLF lines when the first line ends with LF",
       original: "alpha\nbeta\r\ngamma\r\n",
       edits: [{ oldText: "alpha", newText: "ALPHA" }],
