@@ -8,7 +8,11 @@ const prepareModelRuntimeSnapshotMock = vi.fn(async (_params: unknown) => ({}));
 const refreshPreparedModelRuntimeSnapshotsMock = vi.fn(
   async (
     _cfg: OpenClawConfig,
-    _options?: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string },
+    _options?: {
+      gatewayLifecycle?: boolean;
+      defaultWorkspaceDir?: string;
+      catalogMode?: "live" | "static";
+    },
   ) => {},
 );
 
@@ -22,7 +26,11 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
   publishPreparedModelRuntimeSnapshot: (params: unknown) => prepareModelRuntimeSnapshotMock(params),
   refreshPreparedModelRuntimeSnapshots: (
     cfg: OpenClawConfig,
-    options?: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string },
+    options?: {
+      gatewayLifecycle?: boolean;
+      defaultWorkspaceDir?: string;
+      catalogMode?: "live" | "static";
+    },
   ) => refreshPreparedModelRuntimeSnapshotsMock(cfg, options),
 }));
 
@@ -64,6 +72,7 @@ describe("gateway startup primary model warmup", () => {
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
       gatewayLifecycle: true,
+      catalogMode: "static",
     });
   });
 
@@ -76,6 +85,7 @@ describe("gateway startup primary model warmup", () => {
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
       gatewayLifecycle: true,
+      catalogMode: "static",
     });
   });
 
@@ -124,12 +134,6 @@ describe("gateway startup primary model warmup", () => {
           model: {
             primary: "codex-cli/gpt-5.5",
           },
-          cliBackends: {
-            "codex-cli": {
-              command: "codex",
-              args: ["exec"],
-            },
-          },
         },
       },
     } as OpenClawConfig;
@@ -137,6 +141,7 @@ describe("gateway startup primary model warmup", () => {
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
       gatewayLifecycle: true,
+      catalogMode: "static",
     });
   });
 
@@ -150,6 +155,7 @@ describe("gateway startup primary model warmup", () => {
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
       gatewayLifecycle: true,
+      catalogMode: "static",
       defaultWorkspaceDir: "/tmp/explicit-workspace",
     });
   });

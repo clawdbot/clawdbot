@@ -101,6 +101,7 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
 
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
 const COMPUTER_REPLAY_SAFE_ACTIONS = new Set(["screenshot", "wait"]);
+const MOBILE_UI_REPLAY_SAFE_ACTIONS = new Set(["observe"]);
 const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
 const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
 
@@ -361,6 +362,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       return action !== "group_list";
     case "computer":
       return action == null || !COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
+    case "mobile_ui":
+      return action == null || !MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "subagents":
       return action === "cancel" || action === "kill" || action === "steer";
     case "session_status":
@@ -410,6 +413,8 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
       return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
     case "computer":
       return action != null && COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
+    case "mobile_ui":
+      return action != null && MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":
       return action === "list" || action === "inspect";
     case "transcripts":

@@ -109,6 +109,9 @@ docs/internal/
 tmp/
 IDENTITY.md
 USER.md
+# Keep packaged workspace templates visible to Git-aware remote syncs.
+!docs/reference/templates/IDENTITY.md
+!docs/reference/templates/USER.md
 # Exception: oc-path real-world test fixtures need to be tracked even
 # though the bare names match the local-untracked rule above.
 !extensions/oc-path/src/oc-path/tests/fixtures/real/IDENTITY.md
@@ -133,6 +136,8 @@ USER.md
 .agents/skills/*
 !.agents/skills/agent-transcript/
 !.agents/skills/agent-transcript/**
+!.agents/skills/auto-qa/
+!.agents/skills/auto-qa/**
 !.agents/skills/autoreview/
 !.agents/skills/autoreview/**
 !.agents/skills/channel-message-flows/
@@ -230,7 +235,10 @@ USER.md
 package-lock.json
 !.github/release/clawhub-cli/package-lock.json
 !src/commands/copilot-sdk-install-manifest/package-lock.json
-.claude/
+.claude/*
+# Track the shared Claude Code project config (worktree auto-install hook); keep
+# everything else under .claude/ (worktrees, skills, settings.local.json) ignored.
+!.claude/settings.json
 .agent/
 skills-lock.json
 

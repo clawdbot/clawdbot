@@ -63,13 +63,13 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-let runWithModelFallback: typeof import("./model-fallback.js").runWithModelFallback;
+let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ runWithModelFallback } = await import("./model-fallback.js"));
+  ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
 });
 
 beforeEach(() => {
@@ -322,7 +322,7 @@ function mockPrimaryFailureThenFallbackSuccess(
 function mockPrimaryPromptErrorThenFallbackSuccess(errorMessage: string) {
   mockPrimaryFailureThenFallbackSuccess(() =>
     makeEmbeddedRunnerAttempt({
-      promptError: new Error(errorMessage),
+      terminal: { kind: "failed", source: "prompt", error: new Error(errorMessage) },
     }),
   );
 }
@@ -331,12 +331,16 @@ function mockPrimarySuspendingPromptErrorThenFallbackSuccess(sessionId: string) 
   mockPrimaryFailureThenFallbackSuccess(() =>
     makeEmbeddedRunnerAttempt({
       sessionIdUsed: sessionId,
-      promptError: new FailoverError(RATE_LIMIT_ERROR_MESSAGE, {
-        reason: "rate_limit",
-        provider: "openai",
-        model: "mock-1",
-        suspend: true,
-      }),
+      terminal: {
+        kind: "failed",
+        source: "prompt",
+        error: new FailoverError(RATE_LIMIT_ERROR_MESSAGE, {
+          reason: "rate_limit",
+          provider: "openai",
+          model: "mock-1",
+          suspend: true,
+        }),
+      },
     }),
   );
 }
@@ -909,11 +913,13 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       await writeMultiProfileAuthStore(agentDir, { openAiProfileCount: 2 });
       mockPrimaryFailureThenFallbackSuccess(() => {
         return makeEmbeddedRunnerAttempt({
-          promptError: Object.assign(
-            new Error("You've reached your Codex subscription usage limit."),
-            { status: 429 as const },
-          ),
-          promptErrorSource: "prompt",
+          terminal: {
+            kind: "failed",
+            source: "prompt",
+            error: Object.assign(new Error("You've reached your Codex subscription usage limit."), {
+              status: 429 as const,
+            }),
+          },
         });
       });
 

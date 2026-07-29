@@ -36,7 +36,7 @@ describe("channel-streaming", () => {
     vi.useRealTimers();
   });
 
-  it("reads canonical nested streaming config first", () => {
+  it("reads canonical nested streaming config", () => {
     const entry = {
       streaming: {
         chunkMode: "newline",
@@ -51,11 +51,6 @@ describe("channel-streaming", () => {
           commandText: "status",
         },
       },
-      chunkMode: "length",
-      blockStreaming: false,
-      nativeStreaming: false,
-      blockStreamingCoalesce: { minChars: 5, maxChars: 15, idleMs: 100 },
-      draftChunk: { minChars: 2, maxChars: 4, breakPreference: "paragraph" },
     } as const;
 
     expect(getChannelStreamingConfigObject(entry)).toEqual(entry.streaming);
@@ -120,53 +115,19 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
-  it("resolves flat delivery keys when no nested streaming config exists", () => {
-    // Bundled channel schemas are nested-only. Flat delivery keys remain
-    // compatibility fallbacks for external SDK plugins; mode-family aliases
-    // are doctor-only and stay unread.
-    const entry = {
-      chunkMode: "newline",
-      blockStreaming: true,
-      nativeStreaming: true,
-      blockStreamingCoalesce: { minChars: 120, maxChars: 240, idleMs: 500 },
-      draftChunk: { minChars: 8, maxChars: 16, breakPreference: "newline" },
-    } as never;
-
-    expect(getChannelStreamingConfigObject(entry)).toBeUndefined();
-    expect(resolveChannelStreamingChunkMode(entry)).toBe("newline");
-    expect(resolveChannelStreamingNativeTransport(entry)).toBeUndefined();
-    expect(resolveChannelStreamingBlockEnabled(entry)).toBe(true);
-    expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({
-      minChars: 120,
-      maxChars: 240,
-      idleMs: 500,
-    });
-    expect(resolveChannelStreamingPreviewChunk(entry)).toEqual({
-      minChars: 8,
-      maxChars: 16,
-      breakPreference: "newline",
-    });
-    expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(true);
-  });
-
   it("preserves progress as a first-class preview mode", () => {
-    expect(resolveChannelPreviewStreamMode({ streaming: "progress" }, "off")).toBe("progress");
     expect(resolveChannelPreviewStreamMode({ streaming: { mode: "progress" } }, "off")).toBe(
       "progress",
     );
   });
 
   it("keeps block preview mode separate from block delivery", () => {
-    expect(resolveChannelStreamingBlockEnabled({ streaming: "block" })).toBeUndefined();
     expect(resolveChannelStreamingBlockEnabled({ streaming: { mode: "block" } })).toBeUndefined();
     expect(
       resolveChannelStreamingBlockEnabled({
         streaming: { mode: "block", block: { enabled: true } },
       }),
     ).toBe(true);
-    expect(resolveChannelStreamingBlockEnabled({ streaming: "block", blockStreaming: false })).toBe(
-      false,
-    );
   });
 
   it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {

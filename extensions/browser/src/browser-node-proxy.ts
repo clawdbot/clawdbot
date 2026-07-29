@@ -1,4 +1,9 @@
 import crypto from "node:crypto";
+import {
+  addTimerTimeoutGraceMs,
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isBrowserControlHostUnavailableError } from "./browser-node-fallback.js";
 import {
@@ -33,6 +38,7 @@ type BrowserProxyRequest = ((params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  signal?: AbortSignal;
 }) => Promise<unknown>) & {
   isHostFallbackActive: () => boolean;
 };
@@ -62,12 +68,20 @@ async function callBrowserProxy(params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  signal?: AbortSignal;
 }): Promise<BrowserProxySuccess> {
-  const proxyTimeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? Math.max(1, Math.floor(params.timeoutMs))
-      : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
-  const gatewayTimeoutMs = proxyTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
+  // Reserve both watchdog windows before clamping so timer saturation cannot
+  // make an outer watchdog expire alongside the browser action.
+  const proxyTimeoutMs = Math.min(
+    resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS),
+    MAX_TIMER_TIMEOUT_MS - 2 * BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS,
+  );
+  const nodeInvokeTimeoutMs =
+    addTimerTimeoutGraceMs(proxyTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
+    proxyTimeoutMs;
+  const gatewayTimeoutMs =
+    addTimerTimeoutGraceMs(nodeInvokeTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
+    nodeInvokeTimeoutMs;
   let payload: { payload?: unknown; payloadJSON?: unknown } | null;
   try {
     payload = await callGatewayTool<{ payload?: unknown; payloadJSON?: unknown }>(
@@ -76,9 +90,9 @@ async function callBrowserProxy(params: {
       {
         nodeId: params.nodeId,
         command: "browser.proxy",
-        // node.invoke owns a separate watchdog from browser.proxy. Keep both
-        // bounded, with enough outer slack for the proxy result to cross back.
-        timeoutMs: gatewayTimeoutMs,
+        // Keep the browser action, node watchdog, and Gateway RPC on distinct
+        // budgets so a detailed node timeout can cross both outer boundaries.
+        timeoutMs: nodeInvokeTimeoutMs,
         params: {
           method: params.method,
           path: params.path,
@@ -90,7 +104,10 @@ async function callBrowserProxy(params: {
         },
         idempotencyKey: crypto.randomUUID(),
       },
-      { scopes: ["operator.admin"] },
+      {
+        scopes: ["operator.admin"],
+        ...(params.signal ? { signal: params.signal } : {}),
+      },
     );
   } catch (error) {
     if (params.markControlHostUnavailable && isBrowserControlHostUnavailableError(error)) {
@@ -124,23 +141,31 @@ async function callLocalBrowserControl(params: Parameters<BrowserProxyRequest>[0
     method: params.method,
     body: params.body === undefined ? undefined : JSON.stringify(params.body),
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
 }
 
 export function createBrowserNodeProxyRequest(params: {
   nodeTarget: { nodeId: string; label?: string };
   allowAutomaticHostFallback: boolean;
+  signal?: AbortSignal;
 }): BrowserProxyRequest {
   let hostFallbackActive = false;
   const dispatch = async (request: Parameters<BrowserProxyRequest>[0]) => {
+    // Bind cancellation once so every node action and its safe host fallback
+    // inherit their execution signal without overriding an explicit request.
+    const requestWithSignal =
+      request.signal || params.signal
+        ? { ...request, signal: request.signal ?? params.signal }
+        : request;
     if (hostFallbackActive) {
-      return await callLocalBrowserControl(request);
+      return await callLocalBrowserControl(requestWithSignal);
     }
     try {
       const proxy = await callBrowserProxy({
         nodeId: params.nodeTarget.nodeId,
         markControlHostUnavailable: params.allowAutomaticHostFallback,
-        ...request,
+        ...requestWithSignal,
       });
       const mapping = await persistBrowserProxyFiles(proxy.files);
       applyBrowserProxyPaths(proxy.result, mapping);
@@ -158,7 +183,7 @@ export function createBrowserNodeProxyRequest(params: {
       logger.warn(
         `browser node ${params.nodeTarget.label ?? params.nodeTarget.nodeId} control host unavailable; falling back to Gateway host`,
       );
-      return await callLocalBrowserControl(request);
+      return await callLocalBrowserControl(requestWithSignal);
     }
   };
   return Object.assign(dispatch, {

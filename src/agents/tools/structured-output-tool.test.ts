@@ -21,6 +21,27 @@ describe("structured_output", () => {
     expect(testing.readSwarmStructuredOutput("run-1")?.structured).toEqual({ answer: "yes" });
   });
 
+  it("publishes a provider-valid schema while accepting any JSON result", () => {
+    const tool = createStructuredOutputTool({
+      runId: "run-json-value",
+      schema: {},
+    });
+    expect(tool.parameters).toEqual({
+      type: "object",
+      required: ["result"],
+      properties: {
+        result: {
+          type: ["object", "array", "string", "number", "boolean", "null"],
+        },
+      },
+      additionalProperties: false,
+    });
+    for (const result of [{ answer: "yes" }, ["yes"], "yes", 1, true, null]) {
+      expect(Value.Check(tool.parameters, { result })).toBe(true);
+    }
+    expect(Value.Check(tool.parameters, { result: undefined })).toBe(false);
+  });
+
   it("nudges once then freezes schemaError", async () => {
     const tool = createStructuredOutputTool({
       runId: "run-2",

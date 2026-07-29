@@ -217,12 +217,16 @@ function mimeTypeFromUrl(url: string): string | undefined {
 }
 
 function inferAttachmentKind(url: string): {
-  kind: "image" | "audio" | "video" | "document";
+  kind: Extract<MessageContentItem, { type: "attachment" }>["attachment"]["kind"];
   mimeType?: string;
   label: string;
 } {
   const mimeType = mimeTypeFromUrl(url);
-  const kind = mediaKindFromMime(mimeType) ?? "document";
+  const inferredKind = mediaKindFromMime(mimeType);
+  const kind =
+    !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+      ? "document"
+      : inferredKind;
   const label = (() => {
     try {
       if (/^https?:\/\//i.test(url)) {
@@ -460,6 +464,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           label?: unknown;
           mimeType?: unknown;
           isVoiceNote?: unknown;
+          width?: unknown;
+          height?: unknown;
         };
         if (
           typeof attachment.url !== "string" ||
@@ -480,6 +486,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
               label: attachment.label,
               ...(typeof attachment.mimeType === "string" ? { mimeType: attachment.mimeType } : {}),
               ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
+              ...(typeof attachment.width === "number" && attachment.width > 0
+                ? { width: attachment.width }
+                : {}),
+              ...(typeof attachment.height === "number" && attachment.height > 0
+                ? { height: attachment.height }
+                : {}),
             },
           },
         ];

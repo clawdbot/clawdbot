@@ -51,7 +51,9 @@ Recommended workflow:
 3. Update `apps/android/CHANGELOG.md`, then run `pnpm android:version:sync` again if needed.
 4. Run `MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull` to materialize encrypted Android signing assets from `apps-signing`.
 5. Run `pnpm android:release:preflight` to validate Play auth, signing, synced versioning, and release notes.
-6. Run `pnpm android:screenshots` to refresh raw Google Play screenshots with the script-managed no-cutout emulator.
+6. Run `pnpm android:screenshots` to refresh phone and Wear OS Google Play
+   screenshots with the script-managed Pixel 2 and Wear OS Large Round
+   emulators.
 7. Run `pnpm android:release:archive` to produce the signed phone Play AAB, Wear AAB, and third-party APK.
 8. Run `pnpm android:release:upload` to upload metadata, screenshots, the phone AAB, and the Wear AAB to their phone and `wear:` tracks in one atomic Google Play edit.
 9. For a regular final or correction OpenClaw release, let `OpenClaw Release Publish` dispatch the protected `Android Release` workflow. It builds the signed third-party APK from the exact tag and attaches the verified APK, checksum manifest, and GitHub provenance before the release draft can publish. Before tagging a correction with its own package version, increment the pinned `versionCode`; the workflow verifies it is higher than the preceding final or correction APK. A same-commit fallback correction reuses the base release's verified APK and adds provenance for the correction tag.

@@ -356,7 +356,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -386,7 +386,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -426,7 +426,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -455,7 +455,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -1176,11 +1176,17 @@ describe("buildGuardedModelFetch", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     } as unknown as Model<"openai-responses">;
+    const body = JSON.stringify({ model: "gpt-5.5", stream: true });
+    const parse = vi.spyOn(JSON, "parse");
 
     const response = await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
     });
 
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
     await expect(response.text()).resolves.toBe(
       'event: response.created\n\ndata: {"ok": true}\n\n',
     );

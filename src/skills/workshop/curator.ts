@@ -16,6 +16,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { readSkillProposalManifest, readSkillProposalRecord } from "./store.js";
 import type { SkillProposalRecord } from "./types.js";
 
@@ -440,6 +441,9 @@ async function runSkillCuratorSweep(
 
       return { stale, archived, pinnedSkipped };
     }, options);
+    if (result.archived > 0) {
+      bumpSkillsSnapshotVersion({ reason: "workshop" });
+    }
     const sweepResult: SkillCuratorSweepResult = {
       examined: curated.length,
       ...result,
@@ -611,6 +615,7 @@ export function restoreCuratedSkill(skill: string, options: CuratorOptions = {})
   if (!firstSkillFile) {
     throw new Error(`Archived curated skill not found: ${skill}`);
   }
+  bumpSkillsSnapshotVersion({ reason: "workshop", changedPath: firstSkillFile });
   // Archive and restore are snapshot-bound transitions: running sessions retain
   // their current skill snapshot until a new session or agent run builds one.
   return getSkillCuratorStatus(options).skills.find((entry) => entry.skillFile === firstSkillFile)!;

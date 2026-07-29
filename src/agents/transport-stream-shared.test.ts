@@ -1,6 +1,3 @@
-// Transport stream shared tests cover payload sanitization, header merging, and
-// final/error stream termination helpers used by provider transports.
-import { describe, expect, it, vi } from "vitest";
 import {
   assignTransportErrorDetails,
   failTransportStream,
@@ -8,7 +5,13 @@ import {
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
-} from "./transport-stream-shared.js";
+} from "@openclaw/ai/transports";
+import OpenAI from "openai";
+// Transport stream shared tests cover payload sanitization, header merging, and
+// final/error stream termination helpers used by provider transports.
+import { describe, expect, it, vi } from "vitest";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("transport stream shared helpers", () => {
   it("sanitizes unpaired surrogate code units", () => {
@@ -76,6 +79,61 @@ describe("transport stream shared helpers", () => {
     expect(end).toHaveBeenCalledTimes(1);
   });
 
+  it("rethrows the abort reason so its code reaches the persisted message", () => {
+    // The reason carries the caller's coded AbortError; synthesizing a fresh
+    // Error here would strip `code` and force consumers back onto error text.
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("agent run aborted for restart"), {
+      name: "AbortError",
+      code: "OPENCLAW_RESTART_ABORT",
+    });
+    controller.abort(reason);
+    const output: { stopReason: string; errorMessage?: string; errorCode?: string } = {
+      stopReason: "stop",
+    };
+
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push: vi.fn(), end: vi.fn() },
+        output,
+        signal: controller.signal,
+      }),
+    ).toThrow(reason);
+
+    failTransportStream({
+      stream: { push: vi.fn(), end: vi.fn() },
+      output,
+      signal: controller.signal,
+      error: reason,
+    });
+    expect(output.stopReason).toBe("aborted");
+    expect(output.errorCode).toBe("OPENCLAW_RESTART_ABORT");
+  });
+
+  it.each([
+    ["a non-Error abort reason", () => "stringy reason"],
+    // Node's default abort reason. It is an Error, but an uncoded one, so it
+    // carries nothing the synthetic error does not.
+    ["a default uncoded abort reason", () => undefined],
+    ["an uncoded Error abort reason", () => new Error("some upstream failure")],
+  ])("falls back to the synthetic abort error for %s", (_label, makeReason) => {
+    const controller = new AbortController();
+    const reason = makeReason();
+    if (reason === undefined) {
+      controller.abort();
+    } else {
+      controller.abort(reason);
+    }
+
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push: vi.fn(), end: vi.fn() },
+        output: { stopReason: "stop" },
+        signal: controller.signal,
+      }),
+    ).toThrow("Request was aborted");
+  });
+
   it("marks transport stream failures and runs cleanup", () => {
     // Failure finalization mutates the output message before emitting it so
     // downstream transcript consumers see the same error state as the stream.
@@ -113,5 +171,38 @@ describe("transport stream shared helpers", () => {
       expect(output.stopReason).toBe("error");
       expect(output.errorMessage).toBeTruthy();
     }
+  });
+
+  it("extracts Undici codes through the OpenAI SDK error wrapper", () => {
+    const socketError = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:65534"), {
+      code: "ECONNREFUSED",
+    });
+    const fetchError = new TypeError("fetch failed", { cause: socketError });
+    const sdkError = new OpenAI.APIConnectionError({ cause: fetchError });
+    const output = makeAssistantMessageFixture({ stopReason: "stop", content: [] });
+
+    assignTransportErrorDetails(output, sdkError);
+
+    expect(output.errorCode).toBe("ECONNREFUSED");
+    expect(classifyAssistantFailoverReason(output)).toBe("timeout");
+  });
+
+  it("prefers top-level errorCode over nested cause codes", () => {
+    const output: { stopReason: string; errorCode?: string } = { stopReason: "stop" };
+    assignTransportErrorDetails(output, {
+      errorCode: "TOP_LEVEL",
+      code: "MIDDLE",
+      cause: { code: "CAUSE_CODE", cause: { code: "DEEP_CAUSE_CODE" } },
+    });
+    expect(output.errorCode).toBe("TOP_LEVEL");
+  });
+
+  it("stops traversing cyclic cause chains", () => {
+    const error: { cause?: unknown } = {};
+    error.cause = error;
+    const output: { stopReason: string; errorCode?: string } = { stopReason: "stop" };
+
+    expect(() => assignTransportErrorDetails(output, error)).not.toThrow();
+    expect(output.errorCode).toBeUndefined();
   });
 });

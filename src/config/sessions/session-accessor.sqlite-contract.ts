@@ -1,10 +1,10 @@
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type {
   DeletedAgentSessionEntryPurgeParams,
+  DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleMutation,
+  ResetSessionEntryLifecycleParams,
   ResetSessionEntryLifecycleResult,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
@@ -13,12 +13,15 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-} from "./store.js";
+} from "./session-accessor.lifecycle-types.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
   agentId?: string;
   clone?: boolean;
+  /** Fixed-store ownership is explicit; omitted values use the storage resolver's legacy-main contract. */
+  defaultAgentId?: string;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   readConsistency?: "latest";
@@ -41,7 +44,7 @@ type SessionTranscriptRuntimeScope = SessionAccessScope & {
 
 export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "sessionKey"> & {
   sessionKey?: string;
-  sessionEntry?: Pick<SessionEntry, "sessionFile"> & Partial<Pick<SessionEntry, "sessionId">>;
+  sessionEntry?: Partial<Pick<SessionEntry, "sessionId">>;
 };
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
@@ -87,6 +90,11 @@ export type SessionTranscriptEventRow = {
 };
 
 export type {
+  ForkSessionEntryFromParentTargetParams,
+  ForkSessionEntryFromParentTargetResult,
+  ForkSessionFromParentTranscriptParams,
+  ForkSessionFromParentTranscriptResult,
+  SessionParentForkDecision,
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaLimits,
@@ -130,7 +138,6 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
 
 export type SessionTranscriptTurnWriteContext = {
   agentId?: string;
-  sessionFile: string;
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
@@ -171,112 +178,11 @@ export type SessionEntryReplacementUpdate<T> = {
   result: T;
 };
 
-export type SessionParentForkDecision =
-  | {
-      status: "fork";
-      maxTokens: number;
-      parentTokens?: number;
-    }
-  | {
-      status: "skip";
-      reason: "parent-too-large";
-      maxTokens: number;
-      parentTokens: number;
-      message: string;
-    };
-
-type ParentForkedSessionTranscript = {
-  sessionFile: string;
-  sessionId: string;
-};
-
-export type ForkSessionFromParentTranscriptResult =
-  | {
-      status: "created";
-      transcript: ParentForkedSessionTranscript;
-    }
-  | { status: "missing-parent" }
-  | { status: "failed" };
-
-export type ForkSessionFromParentTranscriptParams = {
-  agentId?: string;
-  parentEntry: SessionEntry;
-  parentSessionKey: string;
-  sessionKey: string;
-  storePath: string;
-
-  /** Stable target identity for lifecycle-owned hidden or resumable sessions. */
-  targetSessionId?: string;
-
-  /** Cross-agent forks land the child transcript in the target agent's store. */
-  targetStorePath?: string;
-};
-
-export type ForkSessionEntryFromParentTargetResult =
-  | {
-      status: "forked";
-      fork: ParentForkedSessionTranscript;
-      parentEntry: SessionEntry;
-      sessionEntry: SessionEntry;
-      decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-    }
-  | {
-      status: "skipped";
-      reason: "existing-entry" | "decision-skip";
-      parentEntry?: SessionEntry;
-      sessionEntry: SessionEntry;
-      decision?: SessionParentForkDecision;
-    }
-  | { status: "missing-entry" }
-  | { status: "missing-parent" }
-  | { status: "failed" };
-
-export type ForkSessionEntryFromParentTargetParams = {
-  agentId?: string;
-  decisionSkipPatch?: (params: {
-    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-  }) => Partial<SessionEntry> | null;
-  fallbackEntry?: SessionEntry;
-  parentTarget: SessionLifecycleStoreTarget;
-  patch?: (params: {
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-    fork: ParentForkedSessionTranscript;
-    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-  }) => Partial<SessionEntry>;
-  sessionTarget: SessionLifecycleStoreTarget;
-  skipForkWhen?: (entry: SessionEntry) => boolean;
-  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
-  storePath: string;
-};
-
-export type ResetSessionEntryLifecycleParams = {
-  afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
-  agentId?: string;
-  buildNextEntry: (context: {
-    currentEntry?: SessionEntry;
-    primaryKey: string;
-  }) => Promise<SessionEntry> | SessionEntry;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-};
-
-export type DeleteSessionEntryLifecycleParams = {
-  agentId?: string;
-  archiveTranscript: boolean;
-  expectedEntry?: SessionEntry;
-  expectedSessionId?: string | null;
-  expectedLifecycleRevision?: string;
-  expectedUpdatedAt?: number;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-};
-
 export type {
   DeletedAgentSessionEntryPurgeParams,
+  DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
+  ResetSessionEntryLifecycleParams,
   ResetSessionEntryLifecycleResult,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,

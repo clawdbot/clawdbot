@@ -5,7 +5,7 @@
  * sandbox media paths, or workspace helpers without depending on broad agent barrels.
  */
 export { getApiKeyForModel, requireApiKey } from "../model-auth.js";
-export { runWithImageModelFallback } from "../model-fallback.js";
+export { runWithImageModelFallback } from "../model-fallback-image.js";
 export {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,

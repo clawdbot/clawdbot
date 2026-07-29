@@ -1,11 +1,16 @@
 import { createServer } from "node:http";
+import {
+  createAzureOpenAIResponsesTransportStreamFn,
+  createOpenAICompletionsTransportStreamFn,
+  createOpenAIResponsesTransportStreamFn,
+} from "@openclaw/ai/transports";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
 } from "./embedded-agent-helpers.js";
-import { createOpenAICompletionsTransportStreamFn } from "./openai-transport-stream.js";
+import { streamWithIdleTimeout } from "./embedded-agent-runner/run/llm-idle-timeout.js";
 import {
   parseTransportChunkUsage,
   type CapturedStreamEvent,
@@ -18,6 +23,10 @@ import {
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+
+// Loaded hosted runners can delay the first real loopback request well beyond
+// the shared test timeout even when this file runs in its isolated project.
+const COLD_RUNNER_HTTP_TEST_TIMEOUT_MS = 300_000;
 
 describe("openai transport stream", () => {
   it("passes provider request timeouts to OpenAI SDK clients", () => {
@@ -80,6 +89,89 @@ describe("openai transport stream", () => {
       ),
     ).toBeUndefined();
   });
+
+  it.each([
+    {
+      api: "openai-responses" as const,
+      provider: "custom-openai",
+      createStream: createOpenAIResponsesTransportStreamFn,
+    },
+    {
+      api: "azure-openai-responses" as const,
+      provider: "azure-openai-responses-devdiv",
+      createStream: createAzureOpenAIResponsesTransportStreamFn,
+    },
+    {
+      api: "openai-completions" as const,
+      provider: "openai",
+      createStream: createOpenAICompletionsTransportStreamFn,
+    },
+  ])(
+    "honors turn timeout and zero retries over real $api HTTP",
+    async (transport) => {
+      const capturedTimeouts: Array<string | undefined> = [];
+      const server = createServer((request, response) => {
+        const timeout = request.headers["x-stainless-timeout"];
+        capturedTimeouts.push(Array.isArray(timeout) ? timeout[0] : timeout);
+        request.resume();
+        request.on("end", () => {
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              error: { type: "server_error", message: "turn retry regression" },
+            }),
+          );
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+
+        const model = {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          api: transport.api,
+          provider: transport.provider,
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 4_096,
+          requestTimeoutMs: 900_000,
+        } satisfies Model & { requestTimeoutMs: number };
+
+        const stream = await transport.createStream()(
+          model,
+          {
+            messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+            tools: [],
+          },
+          { apiKey: "test-key", timeoutMs: 1_234, maxRetries: 0 },
+        );
+
+        const eventTypes: string[] = [];
+        for await (const event of stream) {
+          eventTypes.push(event.type);
+        }
+
+        expect(eventTypes).toContain("error");
+        // The SDK advertises request timeouts in whole seconds on the wire.
+        expect(capturedTimeouts).toEqual(["1"]);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+    COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
+  );
 
   it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {
     let captured: { path?: string; timeout?: string; model?: string; roles?: string[] } = {};
@@ -180,6 +272,120 @@ describe("openai transport stream", () => {
       });
     }
   });
+
+  it.each(["reasoning_content", "reasoning"] as const)(
+    "keeps hidden local %s streams alive beyond the model idle timeout",
+    async (reasoningField) => {
+      // The regression under guard is "hidden reasoning stops resetting the idle
+      // watchdog", so the hidden phase has to outlast idleTimeoutMs or a broken
+      // build would pass. Pace chunks far below that budget instead of near it:
+      // a loaded runner stretches every inter-chunk gap, and one gap wider than
+      // the timeout inverts the ratio into a false idle timeout.
+      const idleTimeoutMs = 1_000;
+      const reasoningChunkDelayMs = 5;
+      const hiddenReasoningDurationMs = idleTimeoutMs + 200;
+      let hiddenReasoningElapsedMs = 0;
+      const server = createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+          res.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          });
+
+          const hiddenReasoningStartedAt = Date.now();
+          const writeNextChunk = () => {
+            if (res.destroyed) {
+              return;
+            }
+            hiddenReasoningElapsedMs = Date.now() - hiddenReasoningStartedAt;
+            if (hiddenReasoningElapsedMs < hiddenReasoningDurationMs) {
+              const reasoningChunk = {
+                id: "chatcmpl-local-reasoning",
+                object: "chat.completion.chunk",
+                created: 1,
+                model: "nemotron-local",
+                choices: [
+                  {
+                    index: 0,
+                    delta: { [reasoningField]: "private reasoning" },
+                    finish_reason: null,
+                  },
+                ],
+              };
+              res.write(`data: ${JSON.stringify(reasoningChunk)}\n\n`);
+              setTimeout(writeNextChunk, reasoningChunkDelayMs);
+              return;
+            }
+
+            res.write(
+              `data: ${JSON.stringify(makeCompletionsChunk({ role: "assistant", content: "OK" }))}\n\n`,
+            );
+            res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, "stop"))}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+          };
+
+          writeNextChunk();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const model = makeCompletionsModel({
+          id: "nemotron-local",
+          name: "Local Nemotron",
+          provider: "inference",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+        });
+        const onIdleTimeout = vi.fn();
+        const streamFn = streamWithIdleTimeout(
+          createOpenAICompletionsTransportStreamFn(),
+          idleTimeoutMs,
+          onIdleTimeout,
+        );
+        const stream = streamFn(
+          model,
+          {
+            systemPrompt: "system",
+            messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+            tools: [],
+          } as never,
+          { apiKey: "test-key" } as never,
+        );
+
+        let text = "";
+        let thinking = "";
+        for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+          if (event.type === "text_delta") {
+            text += event.delta ?? "";
+          }
+          if (event.type === "thinking_delta") {
+            thinking += event.delta ?? "";
+          }
+        }
+
+        expect(text).toBe("OK");
+        expect(thinking).toBe("");
+        expect(onIdleTimeout).not.toHaveBeenCalled();
+        // Without this the assertions above could pass on a run whose hidden
+        // phase never reached the watchdog deadline, i.e. proving nothing.
+        expect(hiddenReasoningElapsedMs).toBeGreaterThan(idleTimeoutMs);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
     const model = makeCompletionsModel({
@@ -689,6 +895,31 @@ describe("openai transport stream", () => {
     expect(usage.cost.totalOrigin).toBe("provider-billed");
   });
 
+  it("maps cache_write_tokens as a separate write count", () => {
+    const model = makeCompletionsModel({
+      id: "openrouter/cached",
+      name: "OpenRouter Cached",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 2 },
+      },
+      model,
+    );
+
+    // Writes are their own bucket: they must leave `input` and land in `totalTokens`,
+    // matching the plugin-sdk completions provider.
+    expect(usage).toMatchObject({ input: 5, cacheRead: 3, cacheWrite: 2, totalTokens: 15 });
+  });
+
   it("keeps the catalog estimate for an invalid provider-reported usage cost", () => {
     const model = makeCompletionsModel({
       id: "openrouter/free",
@@ -967,6 +1198,7 @@ describe("openai transport stream", () => {
         { type: "response.output_item.added", item: { type: "message" } },
         { type: "response.output_text.delta", delta: "a" },
         { type: "response.output_text.delta", delta: "b" },
+        { type: "response.completed", response: { id: "resp_text", status: "completed" } },
       ]),
       output,
       { push: (event) => events.push(event as CapturedStreamEvent) },
@@ -1032,7 +1264,6 @@ describe("openai transport stream", () => {
         id: "call_read|fc_read",
         name: "read",
         arguments: { path: "docs/nodes/computer-use.md" },
-        partialJson: streamedArguments,
       },
     ]);
     expect(events.map((event) => event.type)).toEqual([
@@ -1057,6 +1288,7 @@ describe("openai transport stream", () => {
             type: "response.output_item.done",
             item: { type: "function_call", name: "computer", arguments: "{}" },
           },
+          { type: "response.completed", response: { id: "resp_idless", status: "completed" } },
         ]),
         output,
         { push: (event) => events.push(event as CapturedStreamEvent) },
@@ -1123,7 +1355,6 @@ describe("openai transport stream", () => {
         id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
         name: "computer",
         arguments: { action: "screenshot" },
-        partialJson: '{"action":"screenshot"}',
       },
     ]);
     const toolEvents = events.filter((event) => event.type?.startsWith("toolcall_")) as Array<{
@@ -1313,6 +1544,10 @@ describe("openai transport stream", () => {
             status: "completed",
           },
         },
+        {
+          type: "response.completed",
+          response: { id: "resp_interleaved_calls", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as (typeof events)[number]) },
@@ -1325,14 +1560,12 @@ describe("openai transport stream", () => {
         id: "call_click|fc_click",
         name: "computer",
         arguments: { action: "left_click", coordinate: [10, 20] },
-        partialJson: '{"action":"left_click","coordinate":[10,20]}',
       },
       {
         type: "toolCall",
         id: "call_type|fc_type",
         name: "computer",
         arguments: { action: "type", text: "hello" },
-        partialJson: '{"action":"type","text":"hello"}',
       },
     ]);
     expect(
@@ -1591,14 +1824,12 @@ describe("openai transport stream", () => {
         id: "call_first_unindexed|fc_first_unindexed",
         name: "computer",
         arguments: { slot: 1 },
-        partialJson: '{"slot":1}',
       },
       {
         type: "toolCall",
         id: "call_second_unindexed|fc_second_unindexed",
         name: "computer",
         arguments: { slot: 2 },
-        partialJson: '{"slot":2}',
       },
     ]);
     expect(
@@ -1727,14 +1958,12 @@ describe("openai transport stream", () => {
         id: "call_recovered_first|fc_recovered_first",
         name: "read",
         arguments: { path: "README.md" },
-        partialJson: '{"path":"README.md"}',
       },
       {
         type: "toolCall",
         id: "call_recovered_second|fc_recovered_second",
         name: "write",
         arguments: { path: "README.md", text: "ok" },
-        partialJson: '{"path":"README.md","text":"ok"}',
       },
     ]);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
@@ -1844,6 +2073,10 @@ describe("openai transport stream", () => {
             arguments: '{"slot":1}',
           },
         },
+        {
+          type: "response.completed",
+          response: { id: "resp_omitted_suffix", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as (typeof events)[number]) },
@@ -1914,6 +2147,10 @@ describe("openai transport stream", () => {
             arguments: '{"slot":0}',
           },
         },
+        {
+          type: "response.completed",
+          response: { id: "resp_omitted_completions", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as (typeof events)[number]) },
@@ -1970,6 +2207,10 @@ describe("openai transport stream", () => {
             name: "computer",
             arguments: '{"slot":0}',
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_identity_mismatch", status: "completed" },
         },
       ]),
       output,
@@ -2035,6 +2276,10 @@ describe("openai transport stream", () => {
             name: "computer",
             arguments: '{"slot":1}',
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_sequential_unindexed", status: "completed" },
         },
       ]),
       output,

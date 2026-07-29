@@ -6,7 +6,7 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
   materializePluginAutoEnableCandidates: vi.fn(),
-  collectActiveToolSchemaProjectionWarnings: vi.fn(),
+  collectChannelDoctorCompatibilityMutations: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
   getInstalledPluginRecord: vi.fn(),
@@ -76,6 +76,7 @@ vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => ({
 }));
 
 vi.mock("./shared/channel-doctor.js", () => ({
+  collectChannelDoctorCompatibilityMutations: mocks.collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorRepairMutations: ({ cfg }: { cfg: OpenClawConfig }) => {
     const allowFrom = cfg.channels?.discord?.allowFrom as unknown[] | undefined;
     if (allowFrom?.[0] === 123) {
@@ -130,10 +131,6 @@ vi.mock("./shared/allowlist-policy-repair.js", () => ({
 
 vi.mock("./shared/allowfrom-fallback-migration.js", () => ({
   maybeRepairGroupAllowFromFallback: mocks.maybeRepairGroupAllowFromFallback,
-}));
-
-vi.mock("./shared/active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: mocks.collectActiveToolSchemaProjectionWarnings,
 }));
 
 vi.mock("./shared/bundled-plugin-load-paths.js", () => ({
@@ -286,7 +283,7 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
-    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValue([]);
+    mocks.collectChannelDoctorCompatibilityMutations.mockReturnValue([]);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
     mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) => ({
@@ -320,6 +317,34 @@ describe("doctor repair sequencing", () => {
     });
     expect(result.changeNotes).toContain("Migrated onboarding recommendation state.");
     expect(result.warningNotes).toContain("Migration warning.");
+  });
+
+  it("sanitizes ordered plugin repair changes, warnings, notices, and migration notes", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: ["Installed \u001B[31mplugin\u001B[0m\r\nnext."],
+      warnings: ["Plugin \u001B[31mwarning\u001B[0m\r\nnext."],
+      notices: ["Plugin \u001B[31mnotice\u001B[0m\r\nnext."],
+    });
+    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValueOnce({
+      changes: ["Migrated \u001B[31mrecommendations\u001B[0m\r\nnext."],
+      warnings: ["Migration \u001B[31mwarning\u001B[0m\r\nnext."],
+    });
+    const candidate = {} as OpenClawConfig;
+
+    const result = await runDoctorRepairSequence({
+      state: { cfg: candidate, candidate, pendingChanges: false, fixHints: [] },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toEqual(["Installed pluginnext.", "Migrated recommendationsnext."]);
+    expect(result.warningNotes).toEqual([
+      "Plugin warningnext.",
+      "Plugin noticenext.",
+      "Migration warningnext.",
+    ]);
+    const emittedNotes = [...result.changeNotes, ...result.warningNotes].join("\n");
+    expect(emittedNotes).not.toContain("\u001B");
+    expect(emittedNotes).not.toContain("\r");
   });
 
   it("applies ordered repairs and sanitizes empty-allowlist warnings", async () => {
@@ -583,37 +608,6 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([106232522769186816]);
   });
 
-  it("emits active tool schema projection warnings during doctor repair", async () => {
-    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValueOnce([
-      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
-    ]);
-
-    const result = await runDoctorRepairSequence({
-      state: {
-        cfg: {
-          tools: { allow: ["fuzzplugin_move_angles"] },
-        } as OpenClawConfig,
-        candidate: {
-          tools: { allow: ["fuzzplugin_move_angles"] },
-        } as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.changeNotes).toStrictEqual([]);
-    expect(result.warningNotes).toContain(
-      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
-    );
-    expect(mocks.collectActiveToolSchemaProjectionWarnings).toHaveBeenCalledWith({
-      cfg: {
-        tools: { allow: ["fuzzplugin_move_angles"] },
-      },
-      env: process.env,
-    });
-  });
-
   it("auto-enables newly installed configured plugins after doctor repair", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: ['Installed missing configured plugin "brave" from @openclaw/brave-plugin.'],
@@ -656,6 +650,91 @@ describe("doctor repair sequencing", () => {
     expect(result.changeNotes).toStrictEqual([
       'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
       "brave web search provider selected, enabled automatically.",
+    ]);
+  });
+
+  it("applies doctor contracts exposed by newly installed plugins", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: ['Installed missing configured plugin "discord" from @openclaw/discord.'],
+      warnings: [],
+      repairedPluginIds: ["discord"],
+    });
+    mocks.materializePluginAutoEnableCandidates.mockImplementationOnce(
+      (params: { config: OpenClawConfig }) => ({
+        config: {
+          ...params.config,
+          plugins: {
+            ...params.config.plugins,
+            entries: {
+              ...params.config.plugins?.entries,
+              discord: { enabled: true },
+            },
+          },
+        },
+        changes: ["discord installed for existing configuration, enabled automatically."],
+      }),
+    );
+    mocks.collectChannelDoctorCompatibilityMutations.mockImplementationOnce(
+      (cfg: OpenClawConfig) => [
+        {
+          config: {
+            ...cfg,
+            channels: {
+              ...cfg.channels,
+              discord: {
+                ...cfg.channels?.discord,
+                dmPolicy: "allowlist",
+                allowFrom: [123],
+                dm: { enabled: true },
+              },
+            },
+          },
+          changes: [
+            "Moved channels.discord.dm.policy → channels.discord.dmPolicy.",
+            "Moved channels.discord.dm.allowFrom → channels.discord.allowFrom.",
+          ],
+        },
+      ],
+    );
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            discord: {
+              dm: { enabled: true, policy: "allowlist", allowFrom: [123] },
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          channels: {
+            discord: {
+              dm: { enabled: true, policy: "allowlist", allowFrom: [123] },
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.collectChannelDoctorCompatibilityMutations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plugins: { entries: { discord: { enabled: true } } },
+      }),
+      { env: process.env },
+    );
+    expect(result.state.candidate.channels?.discord).toEqual({
+      dmPolicy: "allowlist",
+      allowFrom: ["123"],
+      dm: { enabled: true },
+    });
+    expect(result.changeNotes).toStrictEqual([
+      'Installed missing configured plugin "discord" from @openclaw/discord.',
+      "discord installed for existing configuration, enabled automatically.",
+      "Moved channels.discord.dm.policy → channels.discord.dmPolicy.\nMoved channels.discord.dm.allowFrom → channels.discord.allowFrom.",
+      "channels.discord.allowFrom: converted 1 numeric ID to strings",
     ]);
   });
 

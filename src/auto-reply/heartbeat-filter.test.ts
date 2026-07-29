@@ -93,6 +93,18 @@ describe("isHeartbeatOkResponse", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
+    ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
+  ])("matches acknowledgements with hidden %s blocks", (_label, thinkingBlock) => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [thinkingBlock, { type: "text", text: "HEARTBEAT_OK" }],
+      }),
+    ).toBe(true);
+  });
+
   it("preserves meaningful or non-text responses", () => {
     expect(
       isHeartbeatOkResponse({
@@ -155,6 +167,25 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       { role: "assistant", content: "Hi there!" },
       { role: "user", content: "What time is it?" },
       { role: "assistant", content: "It is 3pm." },
+    ]);
+  });
+
+  it.each([
+    ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
+    ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
+  ])("removes no-op heartbeat pairs with hidden %s blocks", (_label, thinkingBlock) => {
+    const nextUserMessage = { role: "user", content: "What time is it?" };
+    const messages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+      {
+        role: "assistant",
+        content: [thinkingBlock, { type: "text", text: "HEARTBEAT_OK" }],
+      },
+      nextUserMessage,
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+      nextUserMessage,
     ]);
   });
 

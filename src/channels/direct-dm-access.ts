@@ -130,7 +130,7 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
   // preserve the legacy direct-DM behavior: command access follows sender allowlist access.
   const commandAuthorized = shouldComputeAuth
     ? (params.runtime.resolveCommandAuthorizedFromAuthorizers?.({
-        useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
+        useAccessGroups: true,
         authorizers: [
           {
             configured: access.effectiveAllowFrom.length > 0,

@@ -40,6 +40,12 @@ import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
+import {
+  normalizeSidebarSessionActivePanels,
+  normalizeSidebarSessionLayouts,
+  type SidebarSessionActivePanels,
+  type SidebarSessionLayouts,
+} from "../pages/chat/sidebar-layout-persistence.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
@@ -50,6 +56,67 @@ import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-ident
 
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
+
+const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
+const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
+const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
+const CSS_WIDTH_ALLOWED_CHARS = /^[0-9A-Za-z.%+\-*/(),\s]+$/;
+const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
+const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
+const CSS_WIDTH_MAX_LENGTH = 96;
+
+function hasBalancedParentheses(value: string): boolean {
+  let depth = 0;
+  for (const char of value) {
+    if (char === "(") {
+      depth++;
+    } else if (char === ")") {
+      depth--;
+      if (depth < 0) {
+        return false;
+      }
+    }
+  }
+  return depth === 0;
+}
+
+function hasAllowedWidthIdentifiers(value: string): boolean {
+  for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
+    const identifier = match[0].toLowerCase();
+    if (
+      !CSS_WIDTH_FUNCTIONS.has(identifier) &&
+      !CSS_WIDTH_KEYWORDS.has(identifier) &&
+      !CSS_WIDTH_UNITS.has(identifier)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function normalizeChatMessageMaxWidth(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  if (normalized.length > CSS_WIDTH_MAX_LENGTH) {
+    return undefined;
+  }
+  if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
+    return normalized;
+  }
+  if (
+    !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
+    !hasBalancedParentheses(normalized) ||
+    !hasAllowedWidthIdentifiers(normalized)
+  ) {
+    return undefined;
+  }
+  return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
+}
 
 const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
@@ -118,14 +185,17 @@ export type UiSettings = {
   composerHoldToRecord?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
-  splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
-  boardSessionViews?: BoardSessionViews; // Last face and active dashboard tab per session
+  boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
+  sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
+  sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarEntries: string[]; // Ordered routes and pinned sessions below Home
+  sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
+  chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
+  showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
@@ -155,7 +225,10 @@ function isViteDevPage(): boolean {
 }
 
 function formatHostWithPort(hostname: string, port: string): string {
-  const normalizedHost = hostname.includes(":") ? `[${hostname}]` : hostname;
+  // location.hostname already carries brackets for IPv6 literals; wrapping
+  // again would produce an undialable ws://[[::1]]:port default.
+  const needsBrackets = hostname.includes(":") && !hostname.startsWith("[");
+  const normalizedHost = needsBrackets ? `[${hostname}]` : hostname;
   return `${normalizedHost}:${port}`;
 }
 
@@ -354,11 +427,11 @@ export function loadSettings(): UiSettings {
     chatPersistCommentary: true,
     chatSendShortcut: "enter",
     catalogOpenTarget: "viewer",
-    splitRatio: 0.6,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     sidebarLiveActivity: true,
+    showAdvancedSettings: false,
     pinnedAgentIds: [],
     textScale: 100,
     composerHoldToRecord: true,
@@ -435,15 +508,13 @@ export function loadSettings(): UiSettings {
           : defaults.composerHoldToRecord,
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
-      splitRatio:
-        typeof parsed.splitRatio === "number" &&
-        parsed.splitRatio >= 0.4 &&
-        parsed.splitRatio <= 0.7
-          ? parsed.splitRatio
-          : defaults.splitRatio,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
+      sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
+      sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
+        parsed.sidebarSessionActivePanels,
+      ),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -460,6 +531,11 @@ export function loadSettings(): UiSettings {
         typeof parsed.sidebarLiveActivity === "boolean"
           ? parsed.sidebarLiveActivity
           : defaults.sidebarLiveActivity,
+      chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
+      showAdvancedSettings:
+        typeof parsed.showAdvancedSettings === "boolean"
+          ? parsed.showAdvancedSettings
+          : defaults.showAdvancedSettings,
       pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
@@ -572,17 +648,30 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(typeof next.talkCameraAutoEnable === "boolean"
       ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
       : {}),
-    splitRatio: next.splitRatio,
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
     // Right dock is the default; only the opt-in bottom dock persists.
     ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
     ...(next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
       ? { boardSessionViews: normalizeBoardSessionViews(next.boardSessionViews) }
       : {}),
+    ...(next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
+      ? { sidebarSessionLayouts: normalizeSidebarSessionLayouts(next.sidebarSessionLayouts) }
+      : {}),
+    ...(next.sidebarSessionActivePanels && Object.keys(next.sidebarSessionActivePanels).length > 0
+      ? {
+          sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
+            next.sidebarSessionActivePanels,
+          ),
+        }
+      : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarEntries: next.sidebarEntries,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
+    ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
+      ? { chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth) }
+      : {}),
+    ...(next.showAdvancedSettings === true ? { showAdvancedSettings: true } : {}),
     // Empty pin list is the default; only real pins persist.
     ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
       ? { pinnedAgentIds: next.pinnedAgentIds }

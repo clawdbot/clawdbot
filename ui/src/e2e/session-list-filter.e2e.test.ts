@@ -72,6 +72,8 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     await currentPage.goto(`${server?.baseUrl ?? ""}sessions`);
     const visibleRow = currentPage.getByText(visibleLabel, { exact: true }).first();
     await visibleRow.waitFor({ timeout: 10_000 });
+    // Arm the deferred response before sampling requests; startup may still finish in between.
+    await gateway.deferNext("sessions.list");
     const requestsBeforeEvent = await gateway.getRequests("sessions.list");
     expect(
       requestsBeforeEvent.some(
@@ -81,7 +83,6 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       ),
     ).toBe(true);
 
-    await gateway.deferNext("sessions.list");
     await gateway.emitGatewayEvent("sessions.changed", {
       sessionKey: "agent:local:hidden",
       reason: "create",

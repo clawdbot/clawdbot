@@ -3,9 +3,9 @@ scenario:
   id: whatsapp-agent-message-action-upload-file
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-image
   execution:
-    profiles: { "whatsapp:mock-default": 11 }
     kind: flow
     channel: whatsapp
     timeoutMs: 90000

@@ -14,6 +14,7 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveThinkingDefault } from "./model-selection.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
@@ -36,13 +37,9 @@ function createDefaultSpawnConfig(): OpenClawConfig {
     session: {
       mainKey: "main",
       scope: "per-sender",
-    },
-    channels: {
-      discord: {
-        threadBindings: {
-          enabled: true,
-          spawnSessions: true,
-        },
+      threadBindings: {
+        enabled: true,
+        spawnSessions: true,
       },
     },
   };
@@ -74,6 +71,7 @@ const hoisted = vi.hoisted(() => {
   const countActiveRunsForSessionMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
+  const upsertSessionEntryMock = vi.fn();
   const createSessionAccessorMock = () => {
     const resolveMockStorePath = (scope: {
       agentId?: string;
@@ -97,21 +95,26 @@ const hoisted = vi.hoisted(() => {
       >;
       return store[scope.sessionKey];
     };
+    const listMockEntries = (
+      scope: {
+        agentId?: string;
+        env?: NodeJS.ProcessEnv;
+        storePath?: string;
+      } = {},
+    ) => {
+      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+        string,
+        SessionEntry
+      >;
+      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    };
     return {
-      listSessionEntries: (
-        scope: {
-          agentId?: string;
-          env?: NodeJS.ProcessEnv;
-          storePath?: string;
-        } = {},
-      ) => {
-        const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-          string,
-          SessionEntry
-        >;
-        return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-      },
+      listSessionEntries: listMockEntries,
+      listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
+      loadSessionEntryReadOnly: loadMockEntry,
+      upsertSessionEntry: async (scope: unknown, patch: SessionEntry) =>
+        await upsertSessionEntryMock(scope, patch),
       resolveSessionTranscriptRuntimeTarget: async (scope: {
         agentId: string;
         sessionId: string;
@@ -162,6 +165,7 @@ const hoisted = vi.hoisted(() => {
     countActiveRunsForSessionMock,
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
+    upsertSessionEntryMock,
     createSessionAccessorMock,
     state,
   };
@@ -193,10 +197,6 @@ vi.mock("../channels/plugins/registry.js", () => ({
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: hoisted.resolveStorePathMock,
-}));
-
-vi.mock("../config/sessions/store.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
@@ -456,8 +456,8 @@ function expectGatewayMethodNotCalled(method: string): void {
   expect(gatewayRequests().some((request) => request.method === method)).toBe(false);
 }
 
-function expectSessionPatchFields(expected: Record<string, unknown>): void {
-  expectRecordFields(gatewayRequest("sessions.patch").params, expected);
+function expectCreatedSessionFields(expected: Record<string, unknown>): void {
+  expectRecordFields(firstMockCall(hoisted.upsertSessionEntryMock, "session create")[1], expected);
 }
 
 function expectInitializeSessionFields(expected: Record<string, unknown>): Record<string, unknown> {
@@ -629,12 +629,11 @@ function enableLineCurrentConversationBindings(): void {
 function enableTelegramCurrentConversationBindings(): void {
   replaceSpawnConfig({
     ...hoisted.state.cfg,
-    channels: {
-      ...hoisted.state.cfg.channels,
-      telegram: {
-        threadBindings: {
-          enabled: true,
-        },
+    session: {
+      ...hoisted.state.cfg.session,
+      threadBindings: {
+        ...hoisted.state.cfg.session?.threadBindings,
+        enabled: true,
       },
     },
   });
@@ -705,6 +704,13 @@ describe("spawnAcpDirect", () => {
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
     hoisted.listTasksForOwnerKeyMock.mockReset().mockReturnValue([]);
+    hoisted.upsertSessionEntryMock
+      .mockReset()
+      .mockImplementation(async (_scope: unknown, patch: Partial<SessionEntry>) => ({
+        ...patch,
+        sessionId: patch.sessionId ?? "sess-123",
+        updatedAt: patch.updatedAt ?? Date.now(),
+      }));
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -863,23 +869,25 @@ describe("spawnAcpDirect", () => {
     expect(accepted.runId).toBe("run-1");
     expect(accepted.mode).toBe("session");
     expect(accepted.inlineDelivery).toBe(true);
-    expectSessionPatchFields({
-      key: accepted.childSessionKey,
+    expectCreatedSessionFields({
       spawnedBy: "agent:main:main",
+      completionOwnerSessionKey: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
+      parentSessionKey: "agent:main:main",
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: expect.any(Number),
     });
     expectBindingCallFields({
       targetKind: "session",
       placement: "child",
     });
-    const patchCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
-      (call: unknown[]) => (call[0] as { method?: string }).method === "sessions.patch",
-    );
     const agentCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
       (call: unknown[]) => (call[0] as { method?: string }).method === "agent",
     );
-    const patchCallOrder = expectDefined(
-      hoisted.callGatewayMock.mock.invocationCallOrder[patchCallIndex],
-      "hoisted.callGatewayMock.mock.invocationCallOrder[patchCallIndex] test invariant",
+    const createCallOrder = expectDefined(
+      hoisted.upsertSessionEntryMock.mock.invocationCallOrder[0],
+      "hoisted.upsertSessionEntryMock.mock.invocationCallOrder[0] test invariant",
     );
     const initializeCallOrder = expectDefined(
       hoisted.initializeSessionMock.mock.invocationCallOrder[0],
@@ -889,10 +897,10 @@ describe("spawnAcpDirect", () => {
       hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex],
       "hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex] test invariant",
     );
-    expect(typeof patchCallOrder).toBe("number");
+    expect(typeof createCallOrder).toBe("number");
     expect(typeof initializeCallOrder).toBe("number");
     expect(typeof agentCallOrder).toBe("number");
-    expect(patchCallOrder < initializeCallOrder).toBe(true);
+    expect(createCallOrder < initializeCallOrder).toBe(true);
     expect(initializeCallOrder < agentCallOrder).toBe(true);
     expectResolvedIntroTextInBindMetadata();
 
@@ -1316,7 +1324,7 @@ describe("spawnAcpDirect", () => {
     });
     expect(result).toHaveProperty(
       "error",
-      'agentId "pleres" is an OpenClaw config agent, not an ACP harness. Use runtime="subagent" or omit runtime for OpenClaw config agents. Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.list[].runtime.type="acp" with runtime.acp.agent.',
+      'agentId "pleres" is an OpenClaw config agent, not an ACP harness. Use runtime="subagent" or omit runtime for OpenClaw config agents. Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.entries.*.runtime.type="acp" with runtime.acp.agent.',
     );
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
     expectGatewayMethodNotCalled("agent");
@@ -1419,9 +1427,8 @@ describe("spawnAcpDirect", () => {
       agentSessionKey: "agent:main:subagent:parent",
     });
 
-    const accepted = expectAcceptedSpawn(result);
-    expectSessionPatchFields({
-      key: accepted.childSessionKey,
+    expectAcceptedSpawn(result);
+    expectCreatedSessionFields({
       spawnedBy: "agent:main:subagent:parent",
       spawnDepth: 2,
       subagentRole: "leaf",
@@ -2530,12 +2537,11 @@ describe("spawnAcpDirect", () => {
   it("fails fast when Discord ACP thread spawn is disabled", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
-      channels: {
-        discord: {
-          threadBindings: {
-            enabled: true,
-            spawnSessions: false,
-          },
+      session: {
+        ...hoisted.state.cfg.session,
+        threadBindings: {
+          enabled: true,
+          spawnSessions: false,
         },
       },
     });
@@ -2681,16 +2687,18 @@ describe("spawnAcpDirect", () => {
     hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<
         string,
-        { sessionId: string; updatedAt: number; deliveryContext?: unknown }
+        { sessionId: string; updatedAt: number; delivery?: SessionEntry["delivery"] }
       > = {
         "agent:main:subagent:parent": {
           sessionId: "parent-sess-1",
           updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "discord",
-            to: "channel:parent-channel",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "discord",
+              to: "channel:parent-channel",
+              accountId: "default",
+            },
+          }),
         },
       };
       return new Proxy(store, {
@@ -2759,7 +2767,7 @@ describe("spawnAcpDirect", () => {
         {
           sessionId: string;
           updatedAt: number;
-          deliveryContext?: unknown;
+          delivery?: SessionEntry["delivery"];
           spawnedBy?: string;
           spawnDepth?: number;
           subagentRole?: string;
@@ -2769,11 +2777,13 @@ describe("spawnAcpDirect", () => {
         "agent:main:acp:child": {
           sessionId: "parent-sess-1",
           updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "discord",
-            to: "channel:parent-channel",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "discord",
+              to: "channel:parent-channel",
+              accountId: "default",
+            },
+          }),
           spawnedBy: "agent:main:subagent:parent",
           spawnDepth: 1,
           subagentRole: "orchestrator",

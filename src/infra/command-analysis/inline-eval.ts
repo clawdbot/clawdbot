@@ -15,11 +15,22 @@ type PrefixFlagSpec = {
   prefix: string;
 };
 
+type AbbreviatedFlagSpec = {
+  label: string;
+  full: string;
+  min: string;
+};
+
 type InterpreterFlagSpec = {
   names: readonly string[];
   exactFlags: ReadonlySet<string>;
   rawExactFlags?: ReadonlyMap<string, string>;
   rawPrefixFlags?: readonly PrefixFlagSpec[];
+  abbreviatedFlags?: readonly AbbreviatedFlagSpec[];
+  joinedExactFlags?: ReadonlySet<string>;
+  joinedRawExactFlags?: ReadonlyMap<string, string>;
+  joinedFlagDenyExact?: ReadonlySet<string>;
+  joinedFlagDenyPrefixes?: readonly string[];
   prefixFlags?: readonly PrefixFlagSpec[];
   shortClusterFlags?: readonly ShortClusterFlagSpec[];
   scanPastDoubleDash?: boolean;
@@ -161,6 +172,107 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     ]),
   },
   { names: ["r", "rscript"], exactFlags: new Set(["-e"]) },
+  {
+    names: ["julia"],
+    exactFlags: new Set(["-e", "--eval", "--print"]),
+    rawExactFlags: new Map([["-E", "-E"]]),
+  },
+  {
+    names: ["elixir", "iex"],
+    exactFlags: new Set(["-e", "--eval", "--rpc-eval"]),
+    joinedExactFlags: new Set(),
+  },
+  { names: ["guile"], exactFlags: new Set(["-c", "-e"]), joinedExactFlags: new Set() },
+  {
+    names: ["groovy"],
+    exactFlags: new Set(["-e"]),
+    joinedFlagDenyExact: new Set(["-encoding"]),
+    joinedFlagDenyPrefixes: ["-encoding="],
+    shortClusterFlags: [
+      {
+        label: "-e",
+        flag: "e",
+        prefixChars: new Set(["n", "p"]),
+      },
+    ],
+  },
+  {
+    names: ["scala", "scala-cli"],
+    exactFlags: new Set([
+      "-e",
+      "--script-snippet",
+      "--execute-script",
+      "--execute-sc",
+      "--execute-scala-script",
+      "--scala-snippet",
+      "--execute-scala",
+      "--java-snippet",
+      "--execute-java",
+      "--markdown-snippet",
+      "--md-snippet",
+      "--execute-markdown",
+      "--execute-md",
+    ]),
+    joinedExactFlags: new Set(),
+  },
+  { names: ["clojure", "clj"], exactFlags: new Set(["-e", "--eval"]), joinedExactFlags: new Set() },
+  {
+    names: ["raku", "perl6"],
+    exactFlags: new Set(["-e"]),
+    joinedExactFlags: new Set(["-e"]),
+    shortClusterFlags: [
+      {
+        label: "-e",
+        flag: "e",
+        prefixChars: new Set(["n", "p"]),
+      },
+    ],
+  },
+  { names: ["ghc", "ghci"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
+  {
+    names: ["erl", "werl"],
+    exactFlags: new Set(["-eval", "-run", "-s"]),
+    joinedExactFlags: new Set(),
+  },
+  {
+    names: ["gdb"],
+    exactFlags: new Set([
+      "-ex",
+      "-iex",
+      "-eiex",
+      "-eval-command",
+      "--eval-command",
+      "-init-eval-command",
+      "--init-eval-command",
+      "-early-init-eval-command",
+      "--early-init-eval-command",
+    ]),
+    abbreviatedFlags: [
+      { label: "-eval-command", full: "-eval-command", min: "-ev" },
+      { label: "--eval-command", full: "--eval-command", min: "--ev" },
+      { label: "-init-eval-command", full: "-init-eval-command", min: "-init-e" },
+      { label: "--init-eval-command", full: "--init-eval-command", min: "--init-e" },
+      {
+        label: "-early-init-eval-command",
+        full: "-early-init-eval-command",
+        min: "-early-init-e",
+      },
+      {
+        label: "--early-init-eval-command",
+        full: "--early-init-eval-command",
+        min: "--early-init-e",
+      },
+    ],
+    prefixFlags: [
+      { label: "-ex", prefix: "-ex=" },
+      { label: "-iex", prefix: "-iex=" },
+      { label: "-eiex", prefix: "-eiex=" },
+      { label: "-eval-command", prefix: "-eval-command=" },
+      { label: "-init-eval-command", prefix: "-init-eval-command=" },
+      { label: "-early-init-eval-command", prefix: "-early-init-eval-command=" },
+    ],
+  },
+  { names: ["expect"], exactFlags: new Set(["-c"]) },
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
   {
@@ -318,19 +430,40 @@ function createInlineEvalHit(
   };
 }
 
+function matchAbbreviatedFlag(spec: InterpreterFlagSpec, lower: string): string | null {
+  const optionName = lower.split("=", 1)[0] ?? lower;
+  for (const flag of spec.abbreviatedFlags ?? []) {
+    if (
+      optionName.length >= flag.min.length &&
+      flag.full.startsWith(optionName) &&
+      flag.min.startsWith(optionName.slice(0, flag.min.length))
+    ) {
+      return flag.label;
+    }
+  }
+  return null;
+}
+
 function matchJoinedExactFlag(
   spec: InterpreterFlagSpec,
   token: string,
   lower: string,
 ): string | null {
+  if (
+    spec.joinedFlagDenyExact?.has(lower) === true ||
+    spec.joinedFlagDenyPrefixes?.some((prefix) => lower.startsWith(prefix)) === true
+  ) {
+    return null;
+  }
   for (const flag of spec.exactFlags) {
     if (flag.startsWith("--")) {
       const prefix = `${flag}=`;
       if (lower.startsWith(prefix) && lower.length > prefix.length) {
         return flag;
       }
-      continue;
     }
+  }
+  for (const flag of spec.joinedExactFlags ?? spec.exactFlags) {
     if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
       return normalizeLowercaseStringOrEmpty(flag);
     }
@@ -339,7 +472,7 @@ function matchJoinedExactFlag(
 }
 
 function matchJoinedRawExactFlag(spec: InterpreterFlagSpec, token: string): string | null {
-  for (const [flag, label] of spec.rawExactFlags ?? []) {
+  for (const [flag, label] of spec.joinedRawExactFlags ?? spec.rawExactFlags ?? []) {
     if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
       return label;
     }
@@ -424,6 +557,10 @@ export function detectInterpreterInlineEvalArgv(
         return createInlineEvalHit(executable, argv, rawPrefixFlag.label);
       }
       const lower = normalizeLowercaseStringOrEmpty(token);
+      const abbreviatedFlag = matchAbbreviatedFlag(spec, lower);
+      if (abbreviatedFlag) {
+        return createInlineEvalHit(executable, argv, abbreviatedFlag);
+      }
       if (spec.exactFlags.has(lower)) {
         return createInlineEvalHit(executable, argv, lower);
       }

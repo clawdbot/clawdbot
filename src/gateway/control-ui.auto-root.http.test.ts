@@ -85,7 +85,7 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
       expect(responseBody(end)).toBe(
-        '<html data-openclaw-terminal-enabled="false">fallback-hardlink</html>\n',
+        '<html data-openclaw-terminal-enabled="true">fallback-hardlink</html>\n',
       );
     });
   });

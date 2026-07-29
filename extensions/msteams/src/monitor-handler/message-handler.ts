@@ -7,12 +7,13 @@ import {
   logInboundDrop,
   resolveInboundMentionDecision,
   resolveInboundSupplementalSenderAllowed,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   filterSupplementalContextItems,
@@ -623,8 +624,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             },
             log,
             deadline: preprocessingDeadline,
-            preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
-              ?.preserveFilenames,
+            preserveFilenames: false,
           }),
       });
     } catch (err) {
@@ -872,7 +872,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             }
           : undefined,
       },
-      media: toInboundMediaFacts(inboundMedia),
+      media: await toInboundMediaFactsWithMetadata(inboundMedia),
       messageId: activity.id,
       timestamp: timestamp?.getTime() ?? Date.now(),
       from: teamsFrom,
@@ -905,6 +905,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         rawBody,
         commandBody,
       },
+      sessionTranscript: { historyLimit: isRoomish ? historyLimit : 0 },
       access: {
         mentions: {
           canDetectMention: !isDirectMessage,
@@ -1035,63 +1036,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     }
   };
 
-  // One debounced turn owns every constituent queue claim. Fan adoption and
-  // abandonment to all of them; otherwise merged messages replay after restart.
-  function buildFlushIngressLifecycle(entries: MSTeamsDebounceEntry[]): {
-    lifecycle: MSTeamsIngressLifecycle | undefined;
-    settle: () => Promise<void>;
-  } {
-    const lifecycles = entries
-      .map((entry) => entry.turnAdoptionLifecycle)
-      .filter((lifecycle) => lifecycle !== undefined);
-    const [firstLifecycle] = lifecycles;
-    if (!firstLifecycle) {
-      return { lifecycle: undefined, settle: async () => {} };
-    }
-    let handedOff = false;
-    const adoptAll = async () => {
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAdopted();
-      }
-    };
-    return {
-      lifecycle: {
-        abortSignal:
-          lifecycles.length === 1
-            ? firstLifecycle.abortSignal
-            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-        onAdopted: async () => {
-          handedOff = true;
-          await adoptAll();
-        },
-        onDeferred: () => {
-          handedOff = true;
-          for (const lifecycle of lifecycles) {
-            lifecycle.onDeferred();
-          }
-        },
-        onAdoptionFinalizing: () => {
-          for (const lifecycle of lifecycles) {
-            lifecycle.onAdoptionFinalizing();
-          }
-        },
-        onAbandoned: async () => {
-          handedOff = true;
-          for (const lifecycle of lifecycles) {
-            await lifecycle.onAbandoned();
-          }
-        },
-      },
-      // Gated, blank, and other terminal no-dispatch turns are handled work.
-      // Tombstone them instead of leaving deferred claims to stall-watchdog.
-      settle: async () => {
-        if (!handedOff) {
-          await adoptAll();
-        }
-      },
-    };
-  }
-
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<MSTeamsDebounceEntry>({
     debounceMs: inboundDebounceMs,
     buildKey: (entry) => {
@@ -1114,45 +1058,50 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
       return !core.channel.commands.isControlCommandMessage(entry.text, cfg);
     },
-    onFlush: async (entries) => {
+    onFlush: (entries, createFlush) => {
       const last = entries.at(-1);
-      if (!last) {
-        return;
-      }
-      const { lifecycle, settle } = buildFlushIngressLifecycle(entries);
-      try {
-        if (entries.length === 1) {
-          await handleTeamsMessageNow(
-            lifecycle ? { ...last, turnAdoptionLifecycle: lifecycle } : last,
-          );
-        } else {
-          const combinedText = entries
-            .map((entry) => entry.text)
-            .filter(Boolean)
-            .join("\n");
-          if (combinedText.trim()) {
-            const combinedRawText = entries
-              .map((entry) => entry.rawText)
-              .filter(Boolean)
-              .join("\n");
-            const wasMentioned = entries.some((entry) => entry.wasMentioned);
-            const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
-            await handleTeamsMessageNow({
-              context: last.context,
-              rawText: combinedRawText,
-              text: combinedText,
-              attachments: [],
-              wasMentioned,
-              implicitMentionKinds,
-              ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
-            });
+      const { lifecycle, settle } = fanInChannelIngressLifecycles(
+        entries.map((entry) => entry.turnAdoptionLifecycle),
+      );
+      return createFlush({
+        lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          if (!last) {
+            return;
           }
-        }
-        await settle();
-      } catch (err) {
-        await lifecycle?.onAbandoned();
-        throw err;
-      }
+          try {
+            if (entries.length === 1) {
+              await handleTeamsMessageNow({ ...last, turnAdoptionLifecycle: admissionLifecycle });
+            } else {
+              const combinedText = entries
+                .map((entry) => entry.text)
+                .filter(Boolean)
+                .join("\n");
+              if (combinedText.trim()) {
+                const combinedRawText = entries
+                  .map((entry) => entry.rawText)
+                  .filter(Boolean)
+                  .join("\n");
+                const wasMentioned = entries.some((entry) => entry.wasMentioned);
+                const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
+                await handleTeamsMessageNow({
+                  context: last.context,
+                  rawText: combinedRawText,
+                  text: combinedText,
+                  attachments: [],
+                  wasMentioned,
+                  implicitMentionKinds,
+                  turnAdoptionLifecycle: admissionLifecycle,
+                });
+              }
+            }
+            await settle();
+          } catch (err) {
+            await admissionLifecycle.onAbandoned();
+            throw err;
+          }
+        },
+      });
     },
     onError: (err) => {
       runtime.error(`msteams debounce flush failed: ${formatUnknownError(err)}`);

@@ -3,9 +3,9 @@ scenario:
   id: whatsapp-group-pending-history-context
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.group-session-keys
   execution:
-    profiles: { "whatsapp:mock-default": 2 }
     kind: flow
     channel: whatsapp
     timeoutMs: 90000

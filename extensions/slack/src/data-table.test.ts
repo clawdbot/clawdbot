@@ -6,7 +6,7 @@ import {
   hasSlackDataTableBlock,
   renderSlackDataTableCompactPlainTextFallback,
   renderSlackDataTableFallbackText,
-  SLACK_DATA_TABLE_CELL_CHARACTERS_MAX,
+  SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX,
 } from "./data-table.js";
 
 describe("Slack data table blocks", () => {
@@ -69,12 +69,12 @@ describe("Slack data table blocks", () => {
     ).toBeUndefined();
     expect(
       buildSlackDataTableBlock(base, {
-        cellCharacterCountOffset: SLACK_DATA_TABLE_CELL_CHARACTERS_MAX - 7,
+        cellCharacterCountOffset: SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX - 7,
       }),
     ).toBeDefined();
     expect(
       buildSlackDataTableBlock(base, {
-        cellCharacterCountOffset: SLACK_DATA_TABLE_CELL_CHARACTERS_MAX - 6,
+        cellCharacterCountOffset: SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX - 6,
       }),
     ).toBeUndefined();
   });

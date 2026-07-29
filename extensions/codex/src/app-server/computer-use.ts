@@ -3,7 +3,6 @@
  * app-server sessions.
  */
 import { existsSync } from "node:fs";
-import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { describeControlFailure } from "./capabilities.js";
 import {
   isCodexAppServerConnectionClosedError,
@@ -11,6 +10,11 @@ import {
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
+import {
+  killStaleComputerUseMcpChildren,
+  scopedRepairUnavailableStatus,
+  type CodexComputerUseRepairStatus,
+} from "./computer-use-process-repair.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -48,7 +52,6 @@ type CodexComputerUseStatusReason =
   | "marketplace_missing"
   | "plugin_not_installed"
   | "plugin_disabled"
-  | "remote_install_unsupported"
   | "mcp_missing"
   | "live_test_failed"
   | "ready"
@@ -83,13 +86,6 @@ type CodexComputerUseLiveTestStatus = {
   message: string;
   error?: string;
   durationMs?: number;
-};
-
-export type CodexComputerUseRepairStatus = {
-  attempted: boolean;
-  killedPids: number[];
-  message: string;
-  warnings: string[];
 };
 
 /** Readiness status for Codex Computer Use plugin and MCP server wiring. */
@@ -169,6 +165,7 @@ type MarketplaceRef =
       kind: "remote";
       name: string;
       remoteMarketplaceName: string;
+      remotePluginId: string;
     };
 
 type MarketplaceResolution = {
@@ -187,7 +184,12 @@ type PluginInspection =
     };
 
 const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
-const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curated", "local"];
+const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = [
+  "openai-bundled",
+  "openai-curated",
+  "openai-curated-remote",
+  "local",
+];
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
 const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
 
@@ -317,6 +319,7 @@ async function inspectCodexComputerUse(
       }
       client = await getLeasedSharedCodexAppServerClient({
         startOptions: runtime.start,
+        pluginConfig: params.pluginConfig,
         timeoutMs: params.timeoutMs ?? runtime.requestTimeoutMs,
         config: params.config,
         agentDir: params.agentDir,
@@ -429,20 +432,8 @@ async function ensureComputerUsePlugin(params: {
           config: params.config,
           plugin,
           tools: [],
-          reason: pluginSetupReason(plugin, params.marketplace),
-          message: pluginSetupMessage(params.config, plugin, params.marketplace),
-        }),
-      };
-    }
-    if (params.marketplace.kind === "remote") {
-      return {
-        ok: false,
-        status: statusFromPlugin({
-          config: params.config,
-          plugin,
-          tools: [],
-          reason: "remote_install_unsupported",
-          message: remoteInstallUnsupportedMessage(plugin, params.marketplace),
+          reason: pluginSetupReason(plugin),
+          message: pluginSetupMessage(params.config, plugin),
         }),
       };
     }
@@ -464,8 +455,8 @@ async function ensureComputerUsePlugin(params: {
         config: params.config,
         plugin,
         tools: [],
-        reason: pluginSetupReason(plugin, params.marketplace),
-        message: pluginSetupMessage(params.config, plugin, params.marketplace),
+        reason: pluginSetupReason(plugin),
+        message: pluginSetupMessage(params.config, plugin),
       }),
     };
   }
@@ -480,9 +471,11 @@ async function readComputerUseTools(params: {
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
-  if (!server && params.installPlugin) {
+  let tools = Object.keys(server?.tools ?? {}).toSorted();
+  if ((!server || tools.length === 0) && params.installPlugin) {
     await reloadMcpServers(params.request);
     server = await readMcpServerStatus(params.request, params.config.mcpServerName);
+    tools = Object.keys(server?.tools ?? {}).toSorted();
   }
   if (!server) {
     return statusFromPlugin({
@@ -493,11 +486,20 @@ async function readComputerUseTools(params: {
       message: `Computer Use is installed, but the ${params.config.mcpServerName} MCP server is not available.`,
     });
   }
+  if (tools.length === 0) {
+    return statusFromPlugin({
+      config: params.config,
+      plugin: params.plugin,
+      tools,
+      reason: "mcp_missing",
+      message: `Computer Use is installed, but the ${params.config.mcpServerName} MCP server exposes no tools.`,
+    });
+  }
 
   const status = statusFromPlugin({
     config: params.config,
     plugin: params.plugin,
-    tools: Object.keys(server.tools).toSorted(),
+    tools,
     reason: "ready",
     message: "Computer Use is ready.",
   });
@@ -641,17 +643,6 @@ async function cleanupComputerUseProbeThread(
   ]);
 }
 
-function scopedRepairUnavailableStatus(): CodexComputerUseRepairStatus {
-  return {
-    attempted: false,
-    killedPids: [],
-    warnings: [
-      "Computer Use auto-repair skipped because no scoped Codex app-server process was available.",
-    ],
-    message: "Computer Use stale child repair requires a scoped local app-server PID.",
-  };
-}
-
 async function resolveMarketplaceRef(params: {
   request: CodexComputerUseRequest;
   config: ResolvedCodexComputerUseConfig;
@@ -785,21 +776,33 @@ function findComputerUseMarketplaces(
   listed: CodexPluginListResponse,
   pluginName: string,
 ): MarketplaceRef[] {
-  return listed.marketplaces
-    .filter((marketplace) =>
-      marketplace.plugins.some(
-        (plugin) =>
-          plugin.name === pluginName ||
-          plugin.id === pluginName ||
-          plugin.id === `${pluginName}@${marketplace.name}`,
-      ),
-    )
-    .map((marketplace) => {
-      if (marketplace.path) {
-        return { kind: "local", name: marketplace.name, path: marketplace.path };
-      }
-      return { kind: "remote", name: marketplace.name, remoteMarketplaceName: marketplace.name };
-    });
+  return listed.marketplaces.flatMap((marketplace): MarketplaceRef[] => {
+    const plugin = marketplace.plugins.find(
+      (candidate) =>
+        candidate.name === pluginName ||
+        candidate.id === pluginName ||
+        candidate.id === `${pluginName}@${marketplace.name}`,
+    );
+    if (!plugin) {
+      return [];
+    }
+    if (marketplace.path) {
+      return [{ kind: "local", name: marketplace.name, path: marketplace.path }];
+    }
+    const remotePluginId = plugin.remotePluginId?.trim();
+    if (!remotePluginId) {
+      // Remote plugin/read and plugin/install reject the human-readable slug.
+      return [];
+    }
+    return [
+      {
+        kind: "remote",
+        name: marketplace.name,
+        remoteMarketplaceName: marketplace.name,
+        remotePluginId,
+      },
+    ];
+  });
 }
 
 function chooseKnownComputerUseMarketplace(
@@ -889,46 +892,26 @@ async function reloadMcpServers(request: CodexComputerUseRequest): Promise<void>
 }
 
 function pluginRequestParams(marketplace: MarketplaceRef, pluginName: string) {
-  return {
-    ...(marketplace.kind === "local" ? { marketplacePath: marketplace.path } : {}),
-    ...(marketplace.kind === "remote"
-      ? { remoteMarketplaceName: marketplace.remoteMarketplaceName }
-      : {}),
-    pluginName,
-  };
+  return marketplace.kind === "local"
+    ? { marketplacePath: marketplace.path, pluginName }
+    : {
+        remoteMarketplaceName: marketplace.remoteMarketplaceName,
+        pluginName: marketplace.remotePluginId,
+      };
 }
 
-function pluginSetupReason(
-  plugin: CodexPluginDetail,
-  marketplace: MarketplaceRef,
-): CodexComputerUseStatusReason {
-  if (marketplace.kind === "remote") {
-    return "remote_install_unsupported";
-  }
+function pluginSetupReason(plugin: CodexPluginDetail): CodexComputerUseStatusReason {
   return plugin.summary.installed ? "plugin_disabled" : "plugin_not_installed";
 }
 
 function pluginSetupMessage(
   config: ResolvedCodexComputerUseConfig,
   plugin: CodexPluginDetail,
-  marketplace: MarketplaceRef,
 ): string {
-  if (marketplace.kind === "remote") {
-    return remoteInstallUnsupportedMessage(plugin, marketplace);
-  }
   if (!plugin.summary.installed) {
     return "Computer Use is available but not installed. Run /codex computer-use install or enable computerUse.autoInstall.";
   }
   return `Computer Use is installed, but the ${config.pluginName} plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.`;
-}
-
-function remoteInstallUnsupportedMessage(
-  plugin: CodexPluginDetail,
-  marketplace: MarketplaceRef,
-): string {
-  const marketplaceName = marketplace.name ?? plugin.marketplaceName;
-  const state = plugin.summary.installed ? "installed but disabled" : "available";
-  return `Computer Use is ${state} in remote Codex marketplace ${marketplaceName}, but Codex app-server does not support remote plugin install yet. Configure computerUse.marketplaceSource or computerUse.marketplacePath for a local marketplace, then run /codex computer-use install.`;
 }
 
 function statusFromPlugin(params: {
@@ -1093,118 +1076,6 @@ function pluginWarnings(plugin: CodexPluginDetail): string[] {
     );
   }
   return warnings;
-}
-
-export async function killStaleComputerUseMcpChildren(
-  options: { ancestorPid?: number } = {},
-): Promise<CodexComputerUseRepairStatus> {
-  if (process.platform !== "darwin") {
-    return {
-      attempted: true,
-      killedPids: [],
-      warnings: [
-        `Computer Use stale child repair is currently macOS-only, not ${process.platform}.`,
-      ],
-      message: "Computer Use stale child repair skipped on this platform.",
-    };
-  }
-  if (
-    !options.ancestorPid ||
-    !Number.isSafeInteger(options.ancestorPid) ||
-    options.ancestorPid <= 0
-  ) {
-    return scopedRepairUnavailableStatus();
-  }
-  let stdout: string;
-  try {
-    const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,command="], {
-      logOutput: false,
-      maxBuffer: 5 * 1024 * 1024,
-    });
-    stdout = result.stdout;
-  } catch (error) {
-    return {
-      attempted: true,
-      killedPids: [],
-      warnings: [
-        `Could not list processes for Computer Use repair: ${describeControlFailure(error)}`,
-      ],
-      message: "Computer Use stale child repair could not inspect running processes.",
-    };
-  }
-  const killedPids: number[] = [];
-  const warnings: string[] = [];
-  const processInfos = parsePsOutput(stdout);
-  for (const processInfo of processInfos) {
-    if (!isStaleComputerUseMcpChild(processInfo.command)) {
-      continue;
-    }
-    if (!isDescendantOfPid(processInfo.pid, options.ancestorPid, processInfos)) {
-      continue;
-    }
-    try {
-      process.kill(processInfo.pid, "SIGTERM");
-      killedPids.push(processInfo.pid);
-    } catch (error) {
-      warnings.push(
-        `Could not terminate stale Computer Use MCP child pid ${processInfo.pid}: ${describeControlFailure(error)}`,
-      );
-    }
-  }
-  return {
-    attempted: true,
-    killedPids,
-    warnings,
-    message:
-      killedPids.length === 0
-        ? "No stale Computer Use MCP children were found under the scoped Codex app-server process."
-        : `Terminated ${killedPids.length} stale Computer Use MCP child process${killedPids.length === 1 ? "" : "es"} under the scoped Codex app-server process.`,
-  };
-}
-
-function parsePsOutput(stdout: string): Array<{ pid: number; ppid: number; command: string }> {
-  return stdout
-    .split(/\r?\n/u)
-    .flatMap((line) => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
-      if (!match) {
-        return [];
-      }
-      return [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" }];
-    })
-    .filter(
-      (processInfo) =>
-        Number.isSafeInteger(processInfo.pid) &&
-        processInfo.pid > 0 &&
-        Number.isSafeInteger(processInfo.ppid) &&
-        processInfo.ppid >= 0,
-    );
-}
-
-function isStaleComputerUseMcpChild(command: string): boolean {
-  return command.includes("SkyComputerUseClient") && /(?:^|\s)mcp(?:\s|$)/u.test(command);
-}
-
-function isDescendantOfPid(
-  pid: number,
-  ancestorPid: number,
-  processInfos: Array<{ pid: number; ppid: number }>,
-): boolean {
-  const parents = new Map(processInfos.map((processInfo) => [processInfo.pid, processInfo.ppid]));
-  const seen = new Set<number>();
-  let current = pid;
-  while (!seen.has(current)) {
-    seen.add(current);
-    const parent = parents.get(current);
-    if (!parent || parent <= 0) {
-      return false;
-    }
-    if (parent === ancestorPid) {
-      return true;
-    }
-    current = parent;
-  }
-  return false;
 }
 
 function createComputerUseRequest(params: {

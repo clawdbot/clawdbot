@@ -18,10 +18,11 @@ review_artifacts_helper_path() {
 review_claim() {
   local pr="$1"
   mark_pr_operation_side_effects_started
-  local root
-  root=$(repo_root)
-  cd "$root"
-  mkdir -p .local
+  # Claim logs are per-PR review state: keeping them in the PR worktree leaves the
+  # shared canonical checkout with no scripts/pr-owned .local, so a stray artifact
+  # there can never be mistaken for this flow's output. Claiming still works on a
+  # cold PR because enter_worktree provisions both the worktree and .local.
+  enter_worktree "$pr" false
 
   local reviewer=""
   local max_attempts=3
@@ -107,6 +108,11 @@ review_guard() {
   # shellcheck disable=SC1091
   source .local/pr-meta.env
 
+  if [ "${PR_NUMBER:-}" != "$pr" ]; then
+    echo "Review guard failed: .local/pr-meta.env describes PR #${PR_NUMBER:-unknown}, not #$pr. Re-run: scripts/pr review-init $pr"
+    exit 1
+  fi
+
   local branch
   branch=$(git branch --show-current)
   local head_sha
@@ -147,50 +153,76 @@ review_artifacts_init() {
   local pr="$1"
   enter_worktree "$pr" false
   require_artifact .local/pr-meta.env
+  require_artifact .local/pr-meta.json
 
   mark_pr_operation_side_effects_started
 
-  if [ ! -f .local/review.md ]; then
-    cat > .local/review.md <<'EOF_MD'
-A) TL;DR recommendation
-
-B) What changed and what is good?
-
-C) Security findings
-
-D) What is the PR intent? Is this the most optimal implementation?
-
-E) Concerns or questions (actionable)
-
-F) Tests
-
-G) Docs status
-
-H) Changelog
-
-I) Follow ups (optional)
-
-J) Suggested PR comment (optional)
-EOF_MD
+  local meta_number head_sha
+  meta_number=$(jq -r '.number' .local/pr-meta.json)
+  head_sha=$(jq -r '.headRefOid' .local/pr-meta.json)
+  # Bash regex, not rg: this guard runs inside fork-PR CI test harnesses on
+  # GitHub-hosted runners without ripgrep, where a missing rg (exit 127) would
+  # misreport a valid head SHA as an identity mismatch.
+  if [ "$meta_number" != "$pr" ] || ! [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Review artifacts init failed: .local/pr-meta.json describes PR #$meta_number at '$head_sha', not PR #$pr. Re-run: scripts/pr review-init $pr"
+    exit 1
   fi
 
-  if [ ! -f .local/review.json ]; then
-    node "$(review_artifacts_helper_path)" template > .local/review.json
+  # Take the first line in the shell, not through `head`: pipefail turns the
+  # helper's EPIPE into a spurious failure once the template outgrows the pipe.
+  local identity_line
+  identity_line=$(node "$(review_artifacts_helper_path)" markdown "$meta_number" "$head_sha")
+  identity_line=${identity_line%%$'\n'*}
+
+  if [ -f .local/review.json ] && [ -f .local/review.md ] &&
+    jq -e --argjson number "$meta_number" --arg head "$head_sha" \
+      '.pr.number == $number and .pr.headSha == $head' .local/review.json >/dev/null 2>&1 &&
+    [ "$(head -n1 .local/review.md)" = "$identity_line" ]
+  then
+    echo "review artifacts already stamped for PR #$meta_number at $head_sha"
+    echo "files=.local/review.md .local/review.json"
+    return 0
   fi
+
+  # Artifacts on disk were authored for another PR or a superseded head. Keep them
+  # instead of deleting: a mid-review head change is legitimate and the prose is
+  # worth salvaging, but only a freshly stamped template may gate this landing.
+  # mktemp -d allocates the archive slot atomically so a retry, a concurrent init,
+  # or a repeated clock second cannot overwrite an earlier preserved review.
+  local superseded_dir="" ext
+  for ext in json md; do
+    [ -f ".local/review.$ext" ] || continue
+    if [ -z "$superseded_dir" ]; then
+      mkdir -p .local/superseded
+      superseded_dir=$(mktemp -d ".local/superseded/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+    fi
+    mv ".local/review.$ext" "$superseded_dir/review.$ext"
+    echo "moved aside .local/review.$ext -> $superseded_dir/review.$ext (not authored for PR #$meta_number at $head_sha)"
+  done
+
+  node "$(review_artifacts_helper_path)" markdown "$meta_number" "$head_sha" > .local/review.md
+  node "$(review_artifacts_helper_path)" template "$meta_number" "$head_sha" > .local/review.json
 
   echo "review artifact templates are ready"
   echo "files=.local/review.md .local/review.json"
 }
 
-review_validate_artifacts() {
-  local pr="$1"
-  enter_worktree "$pr" false
-  require_artifact .local/review.md
-  require_artifact .local/review.json
-  require_artifact .local/pr-meta.env
-  require_artifact .local/pr-meta.json
-
-  review_guard "$pr"
+validate_review_artifact_data() {
+  # pr-meta.json is the identity authority the review artifacts are stamped against,
+  # so it must itself be anchored: review_guard binds pr-meta.env to the guarded PR
+  # and the checked-out head, and this ties pr-meta.json to pr-meta.env. Without it a
+  # wholly foreign but self-consistent .local set still gates the landing.
+  local meta_number meta_head
+  meta_number=$(jq -r '.number' .local/pr-meta.json)
+  meta_head=$(jq -r '.headRefOid' .local/pr-meta.json)
+  if ! (
+    # shellcheck disable=SC1091
+    source .local/pr-meta.env
+    [ "$meta_number" = "${PR_NUMBER:-}" ] && [ "$meta_head" = "${PR_HEAD_SHA:-}" ]
+  ); then
+    echo "Review artifact identity mismatch: .local/pr-meta.json describes PR #$meta_number at $meta_head, which does not match .local/pr-meta.env. Re-run: scripts/pr review-init"
+    return 1
+  fi
 
   if ! node "$(review_artifacts_helper_path)" validate \
     .local/review.json \
@@ -199,6 +231,32 @@ review_validate_artifacts() {
   then
     return 1
   fi
+}
+
+require_ready_review_recommendation() {
+  if ! jq -e '.recommendation == "READY FOR /prepare-pr"' .local/review.json >/dev/null; then
+    echo "PR preparation requires a validated READY FOR /prepare-pr review recommendation."
+    return 1
+  fi
+}
+
+review_validate_artifacts() {
+  local pr="$1"
+  # Callers use an OR-list to keep pre-mutation failures reversible; Bash disables
+  # errexit within that context, so every artifact and exact-head guard must propagate.
+  enter_worktree "$pr" false || return 1
+  require_artifact .local/review.md || return 1
+  require_artifact .local/review.json || return 1
+  require_artifact .local/pr-meta.env || return 1
+  require_artifact .local/pr-meta.json || return 1
+
+  review_guard "$pr" || return 1
+  if [ "${REVIEW_MODE:-}" != "pr" ]; then
+    echo "Review artifact validation requires the reviewed PR head, not main-baseline mode."
+    return 1
+  fi
+
+  validate_review_artifact_data || return 1
 
   echo "review artifacts validated"
   print_review_stdout_summary

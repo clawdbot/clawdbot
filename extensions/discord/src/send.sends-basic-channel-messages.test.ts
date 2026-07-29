@@ -28,6 +28,64 @@ const DISCORD_TEST_CFG = {
   channels: { discord: { token: "t" } },
 };
 
+const DISCORD_MARKDOWN_GOLDENS = [
+  {
+    name: "normalizes CommonMark underscore bold without changing other Discord markdown",
+    before: "__bold__ *italic* ~~strike~~ `code`",
+    after: "**bold** *italic* ~~strike~~ `code`",
+  },
+  {
+    name: "normalizes nested CommonMark emphasis and strong spans",
+    before:
+      "__*nested italic*__ __foo*bar*baz__ __a*x*.__ __foo**bar**baz__ __outer __inner__ tail__",
+    after:
+      "**_nested italic_** **foo*bar*baz** **a*x*.** **foo****bar****baz** **outer **inner** tail**",
+  },
+  {
+    name: "normalizes CommonMark bold containing links without changing destinations",
+    before:
+      "__See https://example.com and [__docs__](https://example.com)__ __See https://example.com__. __*see https://example.com*__ __<mailto:user*tag@example.com>__",
+    after:
+      "**See https://example.com and [**docs**](https://example.com)** **See https://example.com**. **_see https://example.com_** **<mailto:user*tag@example.com>**",
+  },
+  {
+    name: "normalizes CommonMark bold around URLs with parentheses and asterisks",
+    before:
+      "__https://example.com/a(b)*c__ __<https://example.com/a(b)*c>__ ____https://example.com____ https://[2001:db8::1]/__v1__ ftp://example.com/__v2__ WWW.example.com/__v3__",
+    after:
+      "__https://example.com/a(b)*c__ **<https://example.com/a(b)*c>** ****https://example.com**** https://[2001:db8::1]/__v1__ ftp://example.com/__v2__ WWW.example.com/__v3__",
+  },
+  {
+    name: "keeps escaped and intraword underscores literal",
+    before: "\\__literal__ foo__bar__baz awww.__bold__ \\\\__bold__",
+    after: "\\__literal__ foo__bar__baz awww.**bold** \\\\**bold**",
+  },
+  {
+    name: "keeps underscore markers inside code byte-identical",
+    before:
+      "`__inline__` ``tick ` __literal__`` `a` __bold__ `b` `__` __outside__\n\n````md\nline\n```\n__fenced__\n````",
+    after:
+      "`__inline__` ``tick ` __literal__`` `a` **bold** `b` `__` **outside**\n\n````md\nline\n```\n__fenced__\n````",
+  },
+  {
+    name: "keeps indentation and special link destinations byte-identical",
+    before:
+      '    a\n    b\n\n[x](<https://example.test/__v1__/a)>)\n<https://example.test/__v1__/>\nhttps://example.test/__v1__/bare\n<:__wave__:123456789012345678> <a:__dance__:123456789012345679> </__foo__:123456789012345680>\n\n[r]: https://example.test/__v1__/unused\n  "__title__"',
+    after:
+      '    a\n    b\n\n[x](<https://example.test/__v1__/a)>)\n<https://example.test/__v1__/>\nhttps://example.test/__v1__/bare\n<:__wave__:123456789012345678> <a:__dance__:123456789012345679> </__foo__:123456789012345680>\n\n[r]: https://example.test/__v1__/unused\n  "__title__"',
+  },
+  {
+    name: "keeps compact reference links byte-identical before channel chunking",
+    before: "[x][r] [x][r]\n\n[r]: https://example.test/a/very/long/reference",
+    after: "[x][r] [x][r]\n\n[r]: https://example.test/a/very/long/reference",
+  },
+  {
+    name: "escapes literal asterisks when normalizing underscore bold",
+    before: "__safe__ and __a * b__ and __foo **bar__",
+    after: "**safe** and **a \\* b** and **foo \\*\\*bar**",
+  },
+];
+
 beforeAll(async () => {
   ({
     deleteMessageDiscord,
@@ -229,6 +287,20 @@ describe("sendMessageDiscord", () => {
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expect(requireRestBody(postMock).content).toBe("hello world");
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
+  });
+
+  it.each(DISCORD_MARKDOWN_GOLDENS)("$name", async ({ before, after }) => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", before, {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+    });
+
+    expect(requireRestBody(postMock).content).toBe(after);
   });
 
   it("reports the first Discord chunk before a later chunk fails", async () => {
