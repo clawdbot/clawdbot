@@ -18,6 +18,8 @@ const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)
 
 const PROMOTION_SUBSECTION_HEADING_RE = /^### (?:Global|Project: .+?)\s*$/;
 
+const PROMOTION_ENTRY_MARKER_RE = /^<!--\s*openclaw-memory-promotion:.*-->\s*$/i;
+
 const ATX_HEADING_RE = /^#{1,6} /;
 
 /**
@@ -41,6 +43,20 @@ const WRITE_OVERHEAD_RESERVE = 21;
 type MemoryBlock =
   | { kind: "preserved"; text: string }
   | { kind: "promotion"; date: string; text: string };
+
+function startsGeneratedPromotionSubsection(lines: string[], index: number): boolean {
+  if (!PROMOTION_SUBSECTION_HEADING_RE.test(lines[index] ?? "")) {
+    return false;
+  }
+  for (let next = index + 1; next < lines.length; next += 1) {
+    const line = lines[next] ?? "";
+    if (line.trim().length === 0) {
+      continue;
+    }
+    return PROMOTION_ENTRY_MARKER_RE.test(line);
+  }
+  return false;
+}
 
 function parseMemoryBlocks(content: string): MemoryBlock[] {
   if (content.length === 0) {
@@ -67,9 +83,9 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
     currentDate = undefined;
   };
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     const continuesPromotionBody =
-      currentKind === "promotion" && PROMOTION_SUBSECTION_HEADING_RE.test(line);
+      currentKind === "promotion" && startsGeneratedPromotionSubsection(lines, index);
     if (ATX_HEADING_RE.test(line) && !continuesPromotionBody) {
       flush();
       const match = PROMOTION_SECTION_HEADING_RE.exec(line);

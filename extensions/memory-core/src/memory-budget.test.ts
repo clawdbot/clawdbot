@@ -233,6 +233,38 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).not.toContain("openclaw-memory-promotion");
   });
 
+  it("preserves a user-authored `### Global` heading written under a promotion section", () => {
+    const existing =
+      `${promotionSection("2026-04-10", 400)}\n` +
+      "### Global\n\nMy own global rule, not a promoted entry.\n\n" +
+      promotionSection("2026-04-20", 400);
+    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 900,
+    });
+    expect(result.droppedDates).toContain("2026-04-10");
+    expect(result.compacted).toContain("### Global");
+    expect(result.compacted).toContain("My own global rule, not a promoted entry.");
+  });
+
+  it("preserves a user-authored `### Project:` heading written under a promotion section", () => {
+    const existing =
+      `${promotionSection("2026-04-10", 400)}\n` +
+      "### Project: alpha\n\nAlpha ships on Fridays.\n\n" +
+      promotionSection("2026-04-20", 400);
+    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars: 900,
+    });
+    expect(result.droppedDates).toContain("2026-04-10");
+    expect(result.compacted).toContain("### Project: alpha");
+    expect(result.compacted).toContain("Alpha ships on Fridays.");
+  });
+
   it("exposes a sane default budget below the bootstrap injection cap", () => {
     // Bootstrap injection is capped at 12_000 chars per file (see
     // src/agents/embedded-agent-helpers/bootstrap.ts). The MEMORY.md budget
