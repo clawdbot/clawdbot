@@ -110,6 +110,47 @@ struct BoundedProcessTests {
         #expect(self.waitUntilGone(childPID))
     }
 
+    @Test func `cancellation reaps the process group`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-bounded-process-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let parentPIDFile = directory.appendingPathComponent("parent.pid")
+        let childPIDFile = directory.appendingPathComponent("child.pid")
+
+        let task = Task {
+            try await BoundedProcess.run(
+                path: "/bin/sh",
+                arguments: [
+                    "-c",
+                    """
+                    sleep 30 &
+                    echo $$ > "$PARENT_PID_FILE"
+                    echo $! > "$CHILD_PID_FILE"
+                    wait
+                    """,
+                ],
+                environment: [
+                    "PARENT_PID_FILE": parentPIDFile.path,
+                    "CHILD_PID_FILE": childPIDFile.path,
+                ],
+                timeout: 30)
+        }
+        let parentPID = try await self.waitForPID(in: parentPIDFile)
+        let childPID = try await self.waitForPID(in: childPIDFile)
+
+        task.cancel()
+        do {
+            _ = try await task.value
+            Issue.record("Expected cancellation")
+        } catch {
+            #expect(error is CancellationError)
+        }
+
+        #expect(self.waitUntilGone(parentPID))
+        #expect(self.waitUntilGone(childPID))
+    }
+
     @Test func `rejects excessive output and reaps the producer`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-bounded-process-\(UUID().uuidString)", isDirectory: true)
@@ -146,6 +187,17 @@ struct BoundedProcessTests {
         let value = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try #require(pid_t(value))
+    }
+
+    private func waitForPID(in file: URL) async throws -> pid_t {
+        let deadline = ContinuousClock.now + .seconds(1)
+        while ContinuousClock.now < deadline {
+            if let value = try? self.readPID(from: file) {
+                return value
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return try self.readPID(from: file)
     }
 
     private func waitUntilGone(_ pid: pid_t) -> Bool {

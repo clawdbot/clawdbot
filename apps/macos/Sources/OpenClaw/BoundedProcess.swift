@@ -138,6 +138,7 @@ enum BoundedProcess {
                 defer { group.cancelAll() }
                 return await group.next() ?? .exited
             }
+            try Task.checkCancellation()
 
             switch deadline {
             case .exited:
