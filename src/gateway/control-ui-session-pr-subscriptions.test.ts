@@ -4,6 +4,7 @@ import {
   createControlUiSessionPullRequestSubscriptions,
   parseControlUiSessionPullRequestsSubscribeParams,
 } from "./control-ui-session-pr-subscriptions.js";
+import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 
@@ -93,7 +94,9 @@ describe("control UI session PR subscriptions", () => {
 
   it("deduplicates overlapping watchers to one load per key per poll cycle", async () => {
     vi.useFakeTimers();
-    const load = vi.fn(async () => READY);
+    const load = vi.fn<
+      (params: ControlUiSessionPullRequestsParams) => Promise<ControlUiSessionPullRequests>
+    >(async () => READY);
     const broadcastToConnIds = vi.fn();
     active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
 

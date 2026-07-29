@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
   scopedSessionPullRequestKey,
@@ -7,20 +7,29 @@ import {
   sessionPullRequestsForGateway,
 } from "./session-pull-requests.ts";
 
+function createHello(): GatewayHelloOk {
+  return {
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: [] },
+    features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
+  };
+}
+
 function createGatewayHarness() {
-  const request = vi.fn().mockResolvedValue({ subscribed: true });
+  const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ subscribed: true });
   const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot = {
+  let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
     offlineStable: false,
-    hello: { features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] } },
+    hello: createHello(),
     canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
     lastError: null,
     lastErrorCode: null,
-  } as ApplicationGatewaySnapshot;
+  };
   const snapshotListeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const gateway = {
@@ -103,7 +112,7 @@ describe("session pull request snapshot store", () => {
     harness.setSnapshot({
       ...harness.gateway.snapshot,
       phase: "connected",
-      hello: { features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] } },
+      hello: createHello(),
     });
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(2);
