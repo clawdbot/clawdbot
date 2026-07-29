@@ -8,6 +8,8 @@ const handleDiscordActionMock = vi
   .spyOn(runtimeModule, "handleDiscordAction")
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
+const { beginDiscordActiveTurnThreadRoute, isDiscordActiveTurnThreadReply } =
+  await import("../active-turn-thread-route.js");
 const { beginDiscordInboundEventDeliveryCorrelation } =
   await import("../inbound-event-delivery.js");
 
@@ -616,6 +618,101 @@ describe("handleDiscordMessageAction", () => {
         mediaReadFile,
       },
     });
+  });
+
+  it("adopts a thread created from the active source message and confirms replies there", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const onThreadAdopted = vi.fn();
+    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted,
+    });
+    try {
+      expect(
+        isDiscordActiveTurnThreadReply({
+          sessionKey,
+          accountId: "account-1",
+        }),
+      ).toBe(false);
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { thread: { id: "thread-1" } },
+      });
+      await handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          messageId: "message-1",
+          threadName: "investigation",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(onThreadAdopted).toHaveBeenCalledWith("thread-1");
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { ok: true },
+      });
+      const result = await handleDiscordMessageAction({
+        action: "thread-reply",
+        params: {
+          threadId: "thread-1",
+          message: "done",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(result.details).toEqual({
+        ok: true,
+        sourceReplyRoute: "current-source",
+      });
+    } finally {
+      endRoute();
+    }
+  });
+
+  it("keeps a successful thread-create result when progress migration fails", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const onThreadAdoptionError = vi.fn();
+    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted: async () => {
+        throw new Error("preview move failed");
+      },
+      onThreadAdoptionError,
+    });
+    try {
+      const expectedResult = {
+        content: [],
+        details: { thread: { id: "thread-1" } },
+      };
+      handleDiscordActionMock.mockResolvedValueOnce(expectedResult);
+
+      const result = await handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          messageId: "message-1",
+          threadName: "investigation",
+        },
+        cfg: discordConfig({ threads: true }),
+        sessionKey,
+      });
+
+      expect(result).toBe(expectedResult);
+      expect(onThreadAdoptionError).toHaveBeenCalledWith(expect.any(Error));
+    } finally {
+      endRoute();
+    }
   });
 
   it("forwards top-level components on sends", async () => {

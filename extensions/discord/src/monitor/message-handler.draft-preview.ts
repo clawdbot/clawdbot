@@ -217,6 +217,9 @@ export function createDiscordDraftPreviewController(params: {
     markPreviewFinalized() {
       finalizedViaPreviewMessage = true;
     },
+    async retarget(channelId: string) {
+      await draftStream?.retarget(channelId);
+    },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
     async pushToolProgress(
       line?: string | ChannelProgressDraftLine,
@@ -388,6 +391,7 @@ export function createDiscordDraftPreviewController(params: {
         if (!finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
+        await draftStream?.cleanupRetargeted();
       } catch (err) {
         params.log(`discord: draft cleanup failed: ${String(err)}`);
       }

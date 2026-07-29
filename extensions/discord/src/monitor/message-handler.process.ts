@@ -25,6 +25,7 @@ import {
   shouldLogVerbose,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
+import { beginDiscordActiveTurnThreadRoute } from "../active-turn-thread-route.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
 import { editMessageDiscord } from "../send.messages.js";
@@ -89,6 +90,7 @@ async function processDiscordMessageInner(
     replyToMode,
     message,
     messageChannelId,
+    canonicalMessageId,
     isGuildMessage,
     isDirectMessage,
     isGroupDm,
@@ -154,10 +156,18 @@ async function processDiscordMessageInner(
     persistedSessionKey,
     turn,
     replyPlan,
-    deliverTarget,
+    deliverTarget: initialDeliverTarget,
     replyTarget,
-    replyReference,
+    replyReference: sourceReplyReference,
   } = processContext;
+  let deliverTarget = initialDeliverTarget;
+  let adoptedThreadId: string | undefined;
+  const replyReference = {
+    peek: () => (adoptedThreadId ? undefined : sourceReplyReference.peek()),
+    use: () => (adoptedThreadId ? undefined : sourceReplyReference.use()),
+    markSent: () => sourceReplyReference.markSent(),
+    hasReplied: () => Boolean(adoptedThreadId) || sourceReplyReference.hasReplied(),
+  };
   observer?.onReplyPlanResolved?.({
     createdThreadId: replyPlan.createdThreadId,
     sessionKey: persistedSessionKey,
@@ -165,7 +175,7 @@ async function processDiscordMessageInner(
 
   const replyRuntime = createDiscordMessageReplyRuntime({
     ctx,
-    processContext,
+    processContext: { ...processContext, replyReference },
     sourceRepliesAreToolOnly,
     shouldDisableCoreTypingKeepalive,
     isRoomEvent,
@@ -182,10 +192,11 @@ async function processDiscordMessageInner(
     beginQueuedDeliveryCorrelation,
     endDeliveryCorrelation,
     resolveCurrentTurnTranscriptFinalText,
-    deliverChannelId,
+    deliverChannelId: initialDeliverChannelId,
     draftPreview,
     resolvedBlockStreamingEnabled,
   } = replyRuntime;
+  let deliverChannelId = initialDeliverChannelId;
   let finalReplyStartNotified = false;
   const notifyFinalReplyStart = () => {
     if (finalReplyStartNotified) {
@@ -238,6 +249,22 @@ async function processDiscordMessageInner(
     draftPreview,
     reactions,
     onTurnReset: resetDeliveryState,
+  });
+  const endActiveTurnThreadRoute = beginDiscordActiveTurnThreadRoute(ctxPayload.SessionKey, {
+    accountId,
+    sourceChannelId: messageChannelId,
+    sourceMessageId: canonicalMessageId ?? message.id,
+    onThreadAdopted: async (threadId) => {
+      // A thread created from this exact source message becomes the active
+      // delivery surface for the remainder of the turn.
+      adoptedThreadId = threadId;
+      deliverTarget = `channel:${threadId}`;
+      deliverChannelId = threadId;
+      await draftPreview.retarget(threadId);
+    },
+    onThreadAdoptionError: (error) => {
+      logVerbose(`discord: failed to move active progress into adopted thread (${String(error)})`);
+    },
   });
   let replyLifecycleStarted = false;
   const onDiscordReplyStart = async () => {
@@ -692,6 +719,7 @@ async function processDiscordMessageInner(
     }
     throw err;
   } finally {
+    endActiveTurnThreadRoute();
     endDeliveryCorrelation();
     await draftPreview.cleanup();
     const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;

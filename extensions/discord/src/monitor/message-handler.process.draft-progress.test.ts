@@ -1,5 +1,6 @@
 // Discord message processing coverage split by cohesive behavior.
 import { describe, expect, it } from "vitest";
+import { notifyDiscordActiveTurnThreadCreated } from "../active-turn-thread-route.js";
 import {
   createAutomaticSourceDeliveryContext,
   createNoQueuedDispatchResult,
@@ -20,6 +21,39 @@ import {
 registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage draft streaming progress", () => {
+  it("moves progress and final delivery into a thread created from the source message", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Investigating.",
+      });
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey: String(params?.ctx?.SessionKey),
+        accountId: "default",
+        sourceChannelId: "c1",
+        sourceMessageId: "m1",
+        threadId: "thread-1",
+      });
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streaming: { mode: "progress" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.retarget).toHaveBeenCalledWith("thread-1");
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "channel:thread-1",
+        replyToId: undefined,
+      }),
+    );
+  });
+
   it("keeps opt-in commentary receipts independent from hidden tool progress", async () => {
     const draftStream = createMockDraftStreamForTest();
 
