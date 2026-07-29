@@ -551,6 +551,82 @@ describe("Codex app inventory cache", () => {
     expect(read.snapshot?.apps).toEqual(apps);
   });
 
+  it("does not renew non-target row freshness during a targeted merge", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 900,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+
+    // Freshness still belongs to the complete fetch at t=0, not the merge at t=900.
+    const read = cache.read({ key, request, nowMs: 1_100, suppressRefresh: true });
+    expect(read.state).toBe("stale");
+  });
+
+  it("keeps a scoped invalidation until a covering targeted refresh", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
+    cache.invalidate(key, "calendar plugin installed", 1, ["calendar-app"]);
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 2,
+      forceRefetch: true,
+      targetAppIds: ["drive-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 3, suppressRefresh: true }).state).toBe("stale");
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 4,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 5, suppressRefresh: true }).state).toBe("fresh");
+  });
+
+  it("keeps an unscoped invalidation until a complete refresh", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
+    cache.invalidate(key, "runtime identity changed", 1);
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 2,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 3, suppressRefresh: true }).state).toBe("stale");
+
+    await cache.refreshNow({ key, request, nowMs: 4, forceRefetch: true, targetAppIds: [] });
+    expect(cache.read({ key, request, nowMs: 5, suppressRefresh: true }).state).toBe("fresh");
+  });
+
   it("merges targeted refreshes for one runtime instead of alternating narrow snapshots", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";
