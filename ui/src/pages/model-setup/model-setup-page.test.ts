@@ -39,17 +39,19 @@ const detection: SystemAgentSetupDetectResult = {
   setupComplete: false,
 };
 
-function createContext(): { context: ApplicationContext; client: GatewayBrowserClient } {
-  const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+function createContext() {
+  const request = vi.fn<GatewayBrowserClient["request"]>();
+  const client = { request } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
     hello: {
       type: "hello-ok" as const,
       protocol: 1,
       auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
-      features: { methods: ["openclaw.setup.detect", "openclaw.setup.verify"] },
+      features: {
+        methods: ["openclaw.setup.detect", "openclaw.setup.verify", "openclaw.setup.prepare.start"],
+      },
     },
     assistantAgentId: "main",
     sessionKey: "main",
@@ -75,6 +77,7 @@ function createContext(): { context: ApplicationContext; client: GatewayBrowserC
   } as unknown as ApplicationGateway;
   return {
     client,
+    request,
     context: {
       gateway,
       basePath: "/openclaw",
@@ -224,5 +227,43 @@ describe("ModelSetupPage catalog icons", () => {
       expect.objectContaining({ credentials: "same-origin" }),
     );
     expect(page.querySelector(".model-setup__recommendation [data-provider-icon]")).toBeNull();
+  });
+
+  it("starts a prepare wizard from the download affordance", async () => {
+    const { context, client, request } = createContext();
+    request.mockImplementation(async (method: string) => {
+      if (method === "openclaw.setup.prepare.start") {
+        return { sessionId: "prepare-session", done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        return {
+          done: false,
+          status: "running",
+          step: {
+            id: "download",
+            type: "progress",
+            message: "Downloading model: 25%",
+          },
+        };
+      }
+      return {};
+    });
+    const { page } = await mountPage(context, {
+      state: { phase: "ready", result: detection },
+      client,
+      firstRun: false,
+    });
+
+    page.querySelector<HTMLButtonElement>('[data-prepare-choice="llama-cpp"] button')?.click();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "openclaw.setup.prepare.start",
+        { sessionId: expect.any(String), authChoice: "llama-cpp" },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
+      expect(page.textContent).toContain("Downloading model: 25%");
+    });
   });
 });

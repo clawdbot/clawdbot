@@ -101,8 +101,8 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     }
   });
 
-  it("removes all monitors when heartbeats are disabled", async () => {
-    const add = vi.fn(async () => ({}));
+  it("keeps a stable disabled monitor when heartbeat cadence is disabled", async () => {
+    const add = vi.fn(async (_input: { declarationKey?: string }, _options?: AddOptions) => ({}));
     const remove = vi.fn(async () => ({ ok: true }));
     const list = vi.fn(async () => [monitorJob("main")]);
     const cfg = {
@@ -115,8 +115,15 @@ describe("reconcileHeartbeatMonitorJobs", () => {
       logger,
     });
 
-    expect(add).not.toHaveBeenCalled();
-    expect(remove).toHaveBeenCalledWith("job-main", { systemOwned: true });
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        declarationKey: "heartbeat:main",
+        enabled: false,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: expect.any(Number) },
+      }),
+    );
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it("keeps converging other agents when one convergence fails", async () => {
@@ -138,5 +145,38 @@ describe("reconcileHeartbeatMonitorJobs", () => {
 
     expect(add).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("keeps removing stale monitors when one removal fails", async () => {
+    const add = vi.fn(async () => ({}));
+    const remove = vi
+      .fn(async (_jobId: string) => ({ ok: true }))
+      .mockRejectedValueOnce(new Error("store busy"));
+    const list = vi.fn(async () => [
+      monitorJob("stale-first"),
+      monitorJob("stale-second"),
+      monitorJob("stale-third"),
+    ]);
+    const cleanupLogger = { warn: vi.fn() };
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: "30m" } } },
+    } as OpenClawConfig;
+
+    await expect(
+      reconcileHeartbeatMonitorJobs({
+        cron: { add, list, remove } as never,
+        cfg,
+        logger: cleanupLogger,
+      }),
+    ).resolves.toEqual({ ok: false });
+
+    expect(remove).toHaveBeenCalledTimes(3);
+    expect(remove).toHaveBeenNthCalledWith(1, "job-stale-first", { systemOwned: true });
+    expect(remove).toHaveBeenNthCalledWith(2, "job-stale-second", { systemOwned: true });
+    expect(remove).toHaveBeenNthCalledWith(3, "job-stale-third", { systemOwned: true });
+    expect(cleanupLogger.warn).toHaveBeenCalledExactlyOnceWith(
+      { agentId: "stale-first", err: "Error: store busy" },
+      "cron-heartbeat: stale monitor cleanup failed",
+    );
   });
 });

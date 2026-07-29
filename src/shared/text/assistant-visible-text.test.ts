@@ -852,6 +852,12 @@ describe("stripMinimaxToolCallXml", () => {
 });
 
 describe("sanitizeAssistantVisibleText", () => {
+  it("does not preserve reasoning inside unequal backtick runs", () => {
+    expect(sanitizeAssistantVisibleText("before ```<think>private</think>`` after")).toBe(
+      "before ````` after",
+    );
+  });
+
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
       '<invoke name="read">payload</invoke></minimax:tool_call>',

@@ -428,6 +428,11 @@ openclaw gateway probe --ssh user@gateway-host
 <ParamField path="--ssh <target>" type="string">
   `user@host` or `user@host:port` (port defaults to `22`).
 </ParamField>
+
+OpenClaw launches only an SSH client found in OS-managed system directories. On native Windows,
+install the **OpenSSH Client** optional feature; Windows places it under
+`%SystemRoot%\System32\OpenSSH`.
+
 <ParamField path="--ssh-identity <path>" type="string">
   Identity file.
 </ParamField>

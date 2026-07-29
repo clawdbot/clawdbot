@@ -215,8 +215,12 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** Original runtime MEDIA references used to identify the persisted assistant row. */
+  assistantTranscriptMediaUrls?: string[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Exact key for replacing a runtime-owned assistant row after media materialization. */
+  assistantTranscriptIdempotencyKey?: string;
   /** Foreground freshness prevented a visible final after transcript persistence. */
   foregroundDeliverySuppression?: {
     reason: "stale-foreground";

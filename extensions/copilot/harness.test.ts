@@ -16,6 +16,8 @@ import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness
 import type { resolvePoolAcquire } from "./src/attempt.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
+type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
+
 const COPILOT_BYOK_PROVIDER_ERROR =
   "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
 
@@ -59,15 +61,9 @@ function asAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptRes
   return value as unknown as AgentHarnessAttemptResult;
 }
 
-function asCompleteAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptResult {
+function asCompleteAttemptResult(value: Record<string, unknown>): CanonicalAttemptResult {
   return asAttemptResult({
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [],
     assistantTexts: [],
@@ -81,14 +77,14 @@ function asCompleteAttemptResult(value: Record<string, unknown>): AgentHarnessAt
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...value,
-  });
+  }) as CanonicalAttemptResult;
 }
 
 const ATTEMPT_PARAMS = asAttemptParams({
   provider: "github-copilot",
   model: "gpt-4.1",
 });
-const ATTEMPT_RESULT = asAttemptResult({ ok: true });
+const ATTEMPT_RESULT = asCompleteAttemptResult({ ok: true });
 const TEST_POOL_KEY = {
   agentId: "test",
   authMode: "useLoggedInUser",
@@ -404,7 +400,7 @@ describe("createCopilotAgentHarness", () => {
   it("finalizes settled tools by resuming the compatible SDK session in isolated mode", async () => {
     const pool = makePoolMock();
     const client = createMockCopilotClient({ deleteSession: vi.fn() });
-    const settledResult = asAttemptResult({ assistantTexts: [] });
+    const settledResult = asCompleteAttemptResult({ assistantTexts: [] });
     const finalAssistant = {
       role: "assistant" as const,
       content: [{ type: "text" as const, text: "final answer" }],
@@ -951,7 +947,7 @@ describe("createCopilotAgentHarness", () => {
           sdkSessionId: "sdk-sess-warm",
           pooledClient: { key: TEST_POOL_KEY, client },
         });
-        return ATTEMPT_RESULT;
+        return { ...ATTEMPT_RESULT, journalValidated: true, sdkSessionId: "sdk-sess-warm" };
       });
       const harness = createCopilotAgentHarness({ pool });
 
@@ -960,11 +956,44 @@ describe("createCopilotAgentHarness", () => {
 
       expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
       const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
-        initialReplayState?: { sdkSessionId?: string; replayInvalid?: boolean };
+        initialReplayState?: {
+          journalValidated?: boolean;
+          sdkSessionId?: string;
+          replayInvalid?: boolean;
+        };
       };
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-warm");
+      expect(secondCallParams.initialReplayState?.journalValidated).toBe(true);
       // Must not synthesize a replayInvalid signal: undefined → resumable.
       expect(secondCallParams.initialReplayState?.replayInvalid).toBeUndefined();
+    });
+
+    it("clears journal provenance before a resumed attempt and restores it after validation", async () => {
+      const pool = makePoolMock();
+      const client = createMockCopilotClient({ deleteSession: vi.fn() });
+      const sessionStore = makeSessionStoreMock();
+      let call = 0;
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        call += 1;
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-provenance",
+          pooledClient: { key: TEST_POOL_KEY, client },
+        });
+        if (call === 2) {
+          expect(sessionStore.entries.get("oc-sess-reuse")?.journalVersion).toBeUndefined();
+        }
+        return {
+          ...ATTEMPT_RESULT,
+          journalValidated: true,
+          sdkSessionId: "sdk-sess-provenance",
+        };
+      });
+      const harness = createCopilotAgentHarness({ pool, sessionStore: sessionStore.store });
+
+      await harness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      await harness.runAttempt(makeAttemptParams({ runId: "t2" }));
+
+      expect(sessionStore.entries.get("oc-sess-reuse")?.journalVersion).toBe(1);
     });
 
     it("blocks reuse while timed-out compaction is pending, then resumes after completion", async () => {
@@ -1413,9 +1442,10 @@ describe("createCopilotAgentHarness", () => {
         }),
       );
       const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
-        initialReplayState?: { sdkSessionId?: string };
+        initialReplayState?: { journalValidated?: boolean; sdkSessionId?: string };
       };
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-sqlite");
+      expect(secondCallParams.initialReplayState?.journalValidated).toBeUndefined();
     });
 
     it("persists BYOK session compatibility with endpoint fingerprints instead of raw URLs", async () => {

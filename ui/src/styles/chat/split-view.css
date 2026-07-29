@@ -189,7 +189,8 @@ openclaw-chat-pane {
   }
 }
 
-.chat-pane__cloud {
+.chat-pane__cloud,
+.chat-pane__incognito {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -197,6 +198,7 @@ openclaw-chat-pane {
 }
 
 .chat-pane__cloud svg,
+.chat-pane__incognito svg,
 .chat-pane__workspace-chip svg {
   width: 14px;
   height: 14px;
@@ -212,6 +214,88 @@ openclaw-chat-pane {
 .chat-pane__workspace-menu {
   flex: 0 1 auto;
   min-width: 0;
+}
+
+.chat-pane__gateway-menu {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__gateway-chip {
+  display: inline-flex;
+  max-width: 170px;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-pane__gateway-chip:hover,
+.chat-pane__gateway-chip:focus-visible {
+  border-color: var(--muted-strong);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__gateway-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__gateway-health {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.chat-pane__gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.chat-pane__gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.chat-pane__gateway-chevron,
+.chat-pane__gateway-check {
+  display: inline-flex;
+}
+
+.chat-pane__gateway-chevron svg,
+.chat-pane__gateway-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-pane__gateway-chevron svg {
+  transform: rotate(180deg);
+}
+
+.chat-pane__gateway-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-pane__gateway-primary {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-pane__gateway-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
 }
 
 .chat-pane__branches-menu {
@@ -296,6 +380,28 @@ openclaw-chat-pane {
      action cluster stays pinned to the right edge (and doubles as the
      native window-drag surface between chip and actions). */
   margin-left: auto;
+}
+
+.chat-pane__sharing-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__sharing-title,
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__sharing-status--error {
+  max-width: 260px;
+  color: var(--danger);
+  white-space: normal;
+}
+
+.chat-pane__draft-indicator {
+  font-size: 13px;
 }
 
 @media (max-width: 480px) {

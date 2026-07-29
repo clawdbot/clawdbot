@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnePasswordError } from "./errors.js";
 import { OpClient } from "./op-client.js";
+import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
 type OpProcessRunner = NonNullable<ConstructorParameters<typeof OpClient>[0]["runner"]>;
 
@@ -12,6 +13,7 @@ const tempDirs: string[] = [];
 describe("OpClient", () => {
   let root = "";
   let opBin = "";
+  let interpreter = "";
   let tokenFile = "";
   const fixtureAuth = ["fixture", "auth"].join("-");
   const rightFixture = ["right", "fixture"].join("-");
@@ -20,9 +22,10 @@ describe("OpClient", () => {
     // openclaw-temp-dir: allow plugin tests cannot import the core-only tracker.
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-"));
     tempDirs.push(root);
-    opBin = path.join(root, "op");
+    opBin = path.join(root, process.platform === "win32" ? "op.exe" : "op");
     tokenFile = path.join(root, "service-account-token");
-    await fs.writeFile(opBin, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    interpreter = createTrustedNodeFixture(root);
+    await fs.writeFile(opBin, `#!${interpreter}\nprocess.exit(0);\n`, { mode: 0o700 });
     await fs.writeFile(tokenFile, `  ${fixtureAuth}\n`, { mode: 0o600 });
   });
 
@@ -53,7 +56,7 @@ describe("OpClient", () => {
     });
     expect(runner).toHaveBeenCalledTimes(1);
     expect(runner).toHaveBeenCalledWith(
-      opBin,
+      await fs.realpath(opBin),
       [
         "item",
         "get",
@@ -157,7 +160,7 @@ describe("OpClient", () => {
         client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
       ).resolves.toMatchObject({ value: "value" });
       expect(runner).toHaveBeenCalledWith(
-        opBin,
+        await fs.realpath(opBin),
         expect.any(Array),
         expect.objectContaining({
           env: expect.objectContaining({ OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth }),
@@ -217,4 +220,29 @@ describe("OpClient", () => {
     ).rejects.toMatchObject({ code: "OP_NOT_FOUND" });
     expect(runner).not.toHaveBeenCalled();
   });
+
+  it("fails closed if the resolved binary disappears before a request", async () => {
+    const runner = vi.fn<OpProcessRunner>();
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+    await fs.rm(opBin);
+
+    await expect(
+      client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+    ).rejects.toMatchObject({ code: "OP_NOT_FOUND" });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not read or pass the token to an executable in an unsafe directory",
+    async () => {
+      await fs.chmod(root, 0o777);
+      const runner = vi.fn<OpProcessRunner>();
+      const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+
+      await expect(
+        client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+      ).rejects.toMatchObject({ code: "OP_NOT_FOUND" });
+      expect(runner).not.toHaveBeenCalled();
+    },
+  );
 });

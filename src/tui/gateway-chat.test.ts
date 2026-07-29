@@ -314,7 +314,7 @@ describe("resolveGatewayConnection", () => {
     expect(result.token).toBeUndefined();
   });
 
-  it("keeps normal TUI local password mode env precedence by default", async () => {
+  it("keeps configured local password ahead of the ambient env password", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -327,7 +327,7 @@ describe("resolveGatewayConnection", () => {
 
     await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
       const result = await resolveGatewayConnection({});
-      expect(result.password).toBe("env-password");
+      expect(result.password).toBe("config-password");
     });
   });
 
@@ -700,6 +700,7 @@ describe("GatewayChatClient", () => {
         clientName: "openclaw-tui",
         caps: ["agent-kind", "plugin-approvals", "task-suggestions", "tool-events"],
         mode: "ui",
+        scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
         deviceIdentity: null,

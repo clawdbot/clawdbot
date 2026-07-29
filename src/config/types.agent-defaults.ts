@@ -16,7 +16,11 @@ import type {
 
 /** Workspace bootstrap-file injection policy for agent system prompts. */
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
-/** Optional bootstrap files that setup can skip while still creating required agent files. */
+/**
+ * Optional bootstrap files that setup can skip while still creating required
+ * agent files. "HEARTBEAT.md" stays accepted as legacy config input even
+ * though workspace setup no longer writes it.
+ */
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 /** Embedded runner behavior contract used by strict-agentic provider flows. */
 export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
@@ -96,10 +100,6 @@ export type AgentStartupContextConfig = {
 export type AgentContextLimitsConfig = {
   /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
   memoryGetMaxChars?: number;
-  /** Default line window for memory_get when lines is omitted (default: 120). */
-  memoryGetDefaultLines?: number;
-  /** Advanced max chars for a single live tool result; unset uses model-context auto cap. */
-  toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
 };
@@ -154,7 +154,7 @@ export type AgentDefaultsConfig = {
   modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
-  /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
+  /** Optional default allowlist of skills for agents that do not set agents.entries.*.skills. */
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
@@ -165,9 +165,9 @@ export type AgentDefaultsConfig = {
   skipBootstrap?: boolean;
   /**
    * List of optional bootstrap filenames to skip writing to the workspace root.
-   * Applies to: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
-   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
-   * Example: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]
+   * Applies to: SOUL.md, USER.md, IDENTITY.md ("HEARTBEAT.md" is accepted but a no-op).
+   * Required workspace setup such as AGENTS.md still runs.
+   * Example: ["SOUL.md", "USER.md", "IDENTITY.md"]
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   /**
@@ -286,6 +286,8 @@ export type AgentDefaultsConfig = {
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
+    /** Agent that owns ambient heartbeat runs when no per-agent heartbeat is configured. */
+    agentId?: string;
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
@@ -309,24 +311,28 @@ export type AgentDefaultsConfig = {
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
-    /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
+    /** Override the heartbeat prompt body. The default treats scratch as monitor prose and directs recurring work to cron jobs. */
     prompt?: string;
     /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;
     /**
      * If true, run heartbeat turns with lightweight bootstrap context.
-     * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
+     * Lightweight mode skips workspace bootstrap files; monitor scratch is
+     * injected by the heartbeat runner either way.
      */
     lightContext?: boolean;
     /**
      * If true, run heartbeat turns in an isolated session with no prior
-     * conversation history. The heartbeat only sees its bootstrap context
-     * (HEARTBEAT.md when lightContext is also enabled). Dramatically reduces
-     * per-heartbeat token cost by avoiding the full session transcript.
+     * conversation history. Dramatically reduces per-heartbeat token cost by
+     * avoiding the full session transcript.
      */
     isolatedSession?: boolean;
   };
-  /** Max concurrent agent runs across all conversations. Default: 4. */
+  /** Owner for ambient OpenClaw system-agent/Custodian inference. */
+  systemAgent?: {
+    agentId?: string;
+  };
+  /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
@@ -376,6 +382,8 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 };
 
 export type AgentCompactionConfig = {
+  /** Enable embedded proactive auto-compaction. Default: true. */
+  enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
   /** Override the session thinking level for embedded OpenClaw compaction summaries. */
@@ -409,18 +417,9 @@ export type AgentCompactionConfig = {
    */
   provider?: string;
   /**
-   * Rotate the active session transcript after compaction so the next turn
-   * starts from the compaction summary and unsummarized tail while the old
-   * transcript stays archived.
-   * Default: false (existing behavior preserved).
-   */
-  truncateAfterCompaction?: boolean;
-  /**
-   * Trigger a normal local compaction when the active session transcript reaches
-   * this size (bytes, or byte-size string like "20mb"). Set to 0/unset to
-   * disable. Requires truncateAfterCompaction so successful compaction can
-   * rotate to a smaller successor transcript. This does not split raw
-   * transcript bytes.
+   * Byte threshold for normal preflight local compaction (bytes, or a byte-size
+   * string like "20mb"). Set to 0 or leave unset to disable. Also caps Codex
+   * app-server native rollouts; oversized native threads restart fresh.
    */
   maxActiveTranscriptBytes?: number | string;
   /**

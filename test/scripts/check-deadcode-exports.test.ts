@@ -272,10 +272,33 @@ describe("check-deadcode-exports", () => {
     const packageJson = JSON.parse(
       fs.readFileSync(new URL(`../../${workspace}/package.json`, import.meta.url), "utf8"),
     ) as { exports: Record<string, unknown> };
-    const expected = Object.keys(packageJson.exports)
-      .map((subpath) =>
-        subpath === "." ? "src/index.ts!" : `src/${subpath.slice("./".length)}.ts!`,
-      )
+    const conventionalEntries = Object.keys(packageJson.exports).map((subpath) =>
+      subpath === "." ? "src/index.ts!" : `src/${subpath.slice("./".length)}.ts!`,
+    );
+    const missingConventionalEntries = conventionalEntries.filter(
+      (entry) =>
+        !fs.existsSync(
+          new URL(`../../${workspace}/${entry.slice(0, -"!".length)}`, import.meta.url),
+        ),
+    );
+    expect(missingConventionalEntries).toEqual(
+      workspace === "packages/agent-core"
+        ? ["src/harness/compaction.ts!", "src/harness/branch-summarization.ts!"]
+        : [],
+    );
+    if (workspace === "packages/agent-core") {
+      for (const sourcePath of [
+        "src/harness/compaction/compaction.ts",
+        "src/harness/compaction/branch-summarization.ts",
+      ]) {
+        expect(
+          fs.existsSync(new URL(`../../${workspace}/${sourcePath}`, import.meta.url)),
+          sourcePath,
+        ).toBe(true);
+      }
+    }
+    const expected = conventionalEntries
+      .filter((entry) => !missingConventionalEntries.includes(entry))
       .toSorted();
     expect([...knipConfig.workspaces[workspace].entry].toSorted()).toEqual(expected);
   });

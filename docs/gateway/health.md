@@ -40,6 +40,17 @@ health commands above for live connectivity checks.
 - `channels.<provider>.healthMonitor.enabled`: disable health-monitor restarts for a specific channel while leaving global monitoring enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
 - These per-channel overrides apply to the built-in channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
+- A crashing channel is recovered by its own auto-restart backoff first (`auto-restart attempt N/10` in the logs). The health monitor stays out of the way until that ladder ends with `giving up after 10 restart attempts`, then takes over as the last restart owner.
+
+## Inbound ingress health
+
+Channel connectivity and inbound admission are separate failure domains. A channel can hold a healthy transport connection — sending replies normally — while its durable ingress queue is unavailable, so not a single inbound message is admitted.
+
+- When a channel cannot open its durable ingress queue, its start fails and the gateway records the account as unable to receive. `openclaw channels status` reports `Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.`
+- Such an account is **unhealthy** regardless of transport state, and readiness reports it as failing. Previously it reported `health: healthy` and the health monitor never touched it.
+- Recovery stays automatic. The ingress verdict describes the account's last start attempt and is cleared by the next one, so the ordinary restart path is also how a transient queue-open failure recovers. Those restarts log as `health-monitor: restarting (reason: ingress-unavailable)` instead of the generic `stuck`.
+- If the restarts keep repeating, the cause is not transient. Check the logged ingress failure: a plugin denied the `openChannelIngressQueue` capability, for example, needs operator action rather than another restart.
+- Channels that never report ingress state are unaffected: absence means "no signal", never "broken". There is no traffic-staleness heuristic, so a genuinely quiet channel is never marked unhealthy for having received nothing.
 
 ## Uptime monitoring
 

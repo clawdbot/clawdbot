@@ -8,6 +8,53 @@ type MiddlewareUseSpy = {
   mock: { calls: unknown[][] };
 };
 
+type ChannelInboundModule = typeof import("openclaw/plugin-sdk/channel-inbound");
+type ChannelInboundRunParams = Parameters<ChannelInboundModule["runChannelInboundEvent"]>[0];
+type BufferedReplyDispatcher =
+  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
+
+export async function runTelegramChannelInboundEventWithHarness(
+  actual: ChannelInboundModule,
+  params: ChannelInboundRunParams,
+  dispatchReply: BufferedReplyDispatcher,
+) {
+  const resolveTurn = params.adapter.resolveTurn;
+  return await actual.runChannelInboundEvent({
+    ...params,
+    adapter: {
+      ...params.adapter,
+      resolveTurn: async (input, eventClass, preflight) => {
+        const resolved = await resolveTurn(input, eventClass, preflight);
+        if (!("route" in resolved) || "runDispatch" in resolved) {
+          return resolved;
+        }
+        const plan =
+          resolved as unknown as import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">;
+        return {
+          ...plan,
+          runDispatch: async () =>
+            await dispatchReply({
+              ctx: plan.ctxPayload,
+              cfg: plan.cfg,
+              dispatcherOptions: {
+                ...plan.dispatcherOptions,
+                deliver: plan.delivery.deliverWithProviderMessageSending,
+                onError: plan.delivery.onError,
+              },
+              toolsAllow: plan.toolsAllow,
+              replyOptions: plan.replyOptions,
+              replyResolver: plan.replyResolver,
+            }),
+          runDispatchLifecycle: {
+            turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+            onDispatchSkipped: () => params.turnAdoptionLifecycle?.onAbandoned?.(),
+          },
+        };
+      },
+    },
+  });
+}
+
 export function createTelegramCallbackContext(params: {
   id: string;
   data: string;

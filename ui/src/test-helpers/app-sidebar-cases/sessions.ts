@@ -14,9 +14,10 @@ import {
   type SidebarLifecycleState,
   successfulSessionPatch,
   type TestSessionMenu,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "./session-pagination.ts";
 
 describe("AppSidebar session indicators", () => {
   it("keeps one leading slot across neutral, running, open, and merged states", async () => {
@@ -58,7 +59,11 @@ describe("AppSidebar session indicators", () => {
         rateLimited: false,
       }),
     );
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const gatewayHarness = createGatewayHarness({
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
         features: { methods: ["controlUi.sessionPullRequests"] },
@@ -124,35 +129,35 @@ describe("AppSidebar session pagination", () => {
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
     expect(rows()).toHaveLength(10);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(20);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(30);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(40);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(41);
-    expect(button("Load more threads")).toBeNull();
+    expect(button("Show more")).toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
     button("Collapse")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(10);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
   });
 });
@@ -271,7 +276,7 @@ describe("AppSidebar session source lifecycle", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     const cachedResult = sidebar.sessionData.sessionsResult;
 
-    gateway.publish({ connected: false, reconnecting: true });
+    gateway.publish({ phase: "reconnecting" });
     sessions.publish({ result: null, agentId: null, loading: false });
     await sidebar.updateComplete;
 
@@ -280,7 +285,7 @@ describe("AppSidebar session source lifecycle", () => {
     expect(Object.keys(sidebar.sessionData.sessionRowsByAgent)).toEqual(["main"]);
     expect([...sidebar.sessionData.sessionCreatedOrder.keys()]).toEqual(["main-a", "main-b"]);
 
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "connected" });
     const partial = createSessionState("main", ["main-a"]);
     sessions.publish({ result: partial.result, agentId: partial.agentId });
     await sidebar.updateComplete;
@@ -311,8 +316,7 @@ describe("AppSidebar session source lifecycle", () => {
 
     gateway.publish({
       client: {} as GatewayBrowserClient,
-      connected: false,
-      reconnecting: true,
+      phase: "reconnecting",
     });
     await sidebar.updateComplete;
 
@@ -399,6 +403,27 @@ describe("AppSidebar session accessibility", () => {
   });
 });
 
+describe("AppSidebar session navigation", () => {
+  it("selects a literal session's agent before changing the active session", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:research:work"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const calls: string[] = [];
+    context.agentSelection.set = vi.fn((agentId) => calls.push(`agent:${agentId}`));
+    gateway.setSessionKey = vi.fn((sessionKey) => calls.push(`session:${sessionKey}`));
+
+    (sidebar as unknown as { selectSession: (sessionKey: string) => void }).selectSession(
+      "agent:research:work",
+    );
+
+    expect(calls).toEqual(["agent:research", "session:agent:research:work"]);
+  });
+});
+
 describe("AppSidebar session mutation feedback", () => {
   async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
     const gateway = createGatewayHarness(client);
@@ -451,8 +476,9 @@ describe("AppSidebar session mutation feedback", () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
-    const state = createSessionState("main", ["agent:main:main", "agent:main:a", "agent:main:b"]);
-    const archivedRow = state.result?.sessions.find((row) => row.key === "agent:main:a");
+    const archivedKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
+    const state = createSessionState("main", ["agent:main:main", archivedKey, "agent:main:b"]);
+    const archivedRow = state.result?.sessions.find((row) => row.key === archivedKey);
     if (!archivedRow) {
       throw new Error("expected archive row");
     }
@@ -480,15 +506,14 @@ describe("AppSidebar session mutation feedback", () => {
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(setSessionKey).toHaveBeenLastCalledWith(archivedRow.key));
+    expect(setSessionKey).not.toHaveBeenCalled();
+    // Undo restores through the batch helper, which refreshes once at the end.
     expect(harness.patch).toHaveBeenLastCalledWith(
       archivedRow.key,
       { archived: false, pinned: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
-    expect(navigate).toHaveBeenLastCalledWith("chat", {
-      search: "?session=agent%3Amain%3Aa",
-    });
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("patches a session icon from the picker", async () => {
@@ -614,8 +639,8 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
-    gateway.publish({ connected: false, reconnecting: true });
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "reconnecting" });
+    gateway.publish({ phase: "connected" });
     pending.reject(new Error("late old-connection rejection"));
     await pending.promise.catch(() => undefined);
     await Promise.resolve();
@@ -639,8 +664,8 @@ describe("AppSidebar session mutation feedback", () => {
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
-    gateway.publish({ connected: false, reconnecting: true });
-    gateway.publish({ connected: true, reconnecting: false });
+    gateway.publish({ phase: "reconnecting" });
+    gateway.publish({ phase: "connected" });
     pending.resolve(successfulSessionPatch("agent:main:a"));
     await pending.promise;
     await new Promise<void>((resolve) => {
@@ -698,8 +723,8 @@ describe("AppSidebar session mutation feedback", () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => {
       confirmations += 1;
       if (confirmations === 2) {
-        gateway.publish({ connected: false, reconnecting: true });
-        gateway.publish({ connected: true, reconnecting: false });
+        gateway.publish({ phase: "reconnecting" });
+        gateway.publish({ phase: "connected" });
       }
       return true;
     });

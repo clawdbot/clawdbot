@@ -23,7 +23,7 @@ function resolveSubagentSessionStorePath(stateDir: string, agentId: string): str
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   return Object.fromEntries(
     listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  ) as SessionStore;
+  ) as unknown as SessionStore;
 }
 
 /** Writes or updates one SQLite-backed subagent session entry for persistence tests. */

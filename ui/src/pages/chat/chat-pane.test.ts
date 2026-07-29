@@ -22,11 +22,12 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -80,7 +81,6 @@ function createInitializationContext(): ApplicationContext {
         localMediaPreviewRoots: [],
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
-        chatMessageMaxWidth: null,
         terminalEnabled: false,
       },
     },
@@ -115,7 +115,11 @@ describe("chat pane pull request refresh", () => {
       ],
       rateLimited: false,
     });
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = {
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string; refresh?: boolean }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient;
     const epoch = Symbol("pr-refresh");
     const setPullRequestSummary = vi.fn();
     const sessions = {
@@ -163,7 +167,7 @@ describe("chat pane pull request refresh", () => {
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
-      connected: false,
+      phase: "reconnecting" as const,
     });
 
     expect(pane.sessionPullRequests).toEqual([]);
@@ -173,7 +177,11 @@ describe("chat pane pull request refresh", () => {
     const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
     const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {
         capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
         setPullRequestSummary,
@@ -206,7 +214,11 @@ describe("chat pane pull request refresh", () => {
     const epoch = Symbol("pr-refresh");
     const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {
         capturePullRequestEpoch: vi.fn(() => epoch),
         setPullRequestSummary,
@@ -543,7 +555,7 @@ describe("chat pane initialization", () => {
     const snapshot = {
       ...pane.context.gateway.snapshot,
       client,
-      connected: true,
+      phase: "connected" as const,
       hello,
       sessionKey: canonicalSessionKey,
     };
@@ -596,7 +608,7 @@ describe("chat pane keyboard shortcuts", () => {
     pane.active = true;
     state.connected = false;
     state.sidebarContent = canvasContent;
-    state.sidebarOpen = true;
+    state.sidebarLayout = openSlot({ columns: [] }, "detail");
 
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
 
@@ -604,14 +616,14 @@ describe("chat pane keyboard shortcuts", () => {
 
     expect(expandEvent.defaultPrevented).toBe(true);
     expect(createSessionWorkspaceProps(state).collapsed).toBe(false);
-    expect(state.sidebarOpen).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
 
     const collapseEvent = dispatchSidebarShortcut(pane);
 
     expect(collapseEvent.defaultPrevented).toBe(true);
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
-    expect(state.sidebarOpen).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
 
     const mainSidebarEvent = dispatchSidebarShortcut(pane, false);

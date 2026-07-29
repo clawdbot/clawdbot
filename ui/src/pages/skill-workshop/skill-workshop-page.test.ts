@@ -66,9 +66,9 @@ function createContext(
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -285,7 +285,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     );
     const loadingState = page.state;
 
-    gatewayListener?.({ ...context.gateway.snapshot, connected: false });
+    gatewayListener?.({ ...context.gateway.snapshot, phase: "stopped" });
     expect(page.state).not.toBe(loadingState);
     expect(page.state?.skillWorkshopLoaded).toBe(false);
 
@@ -409,6 +409,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
     );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
     await waitForSkillWorkshop(() =>
@@ -472,6 +478,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
     );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
@@ -556,6 +568,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     );
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
     );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();

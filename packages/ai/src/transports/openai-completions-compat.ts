@@ -4,15 +4,19 @@
  * Provider transports use these helpers to derive OpenAI-compatible request
  * behavior from endpoint attribution without scattering provider-specific flags.
  */
-import type { Model } from "@openclaw/llm-core";
+import type { Model, OpenAICompletionsCompat } from "@openclaw/llm-core";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
+import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities } from "./host-policy.js";
 
 type ProviderEndpointClass = string;
 type ProviderRequestCapabilities = AiProviderRequestCapabilities;
+type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
+  modelId?: string;
+  baseUrl?: string;
   endpointClass: ProviderEndpointClass;
   knownProviderFamily: string;
   supportsNativeStreamingUsageCompat?: boolean;
@@ -29,13 +33,28 @@ type OpenAICompletionsCompatDefaults = {
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
+  supportsJsonSchemaResponseFormat: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
   requiresNonEmptyUserOrAssistantMessage: boolean;
+  cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+  sessionAffinityFormat: Exclude<OpenAICompletionsSessionAffinity, "none">;
+  supportsLongCacheRetention: boolean;
 };
 
 type DetectedOpenAICompletionsCompat = {
   capabilities: ProviderRequestCapabilities;
   defaults: OpenAICompletionsCompatDefaults;
+};
+
+export type ResolvedOpenAICompletionsCompat = Omit<
+  Required<OpenAICompletionsCompat>,
+  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders"
+> & {
+  cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+  openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
+  sessionAffinity: OpenAICompletionsSessionAffinity;
+  visibleReasoningDetailTypes: string[];
+  requiresNonEmptyUserOrAssistantMessage: boolean;
 };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
@@ -48,6 +67,7 @@ function resolveOpenAICompletionsCompatDefaults(
 ): OpenAICompletionsCompatDefaults {
   const {
     provider,
+    modelId,
     endpointClass,
     knownProviderFamily,
     supportsNativeStreamingUsageCompat = false,
@@ -57,11 +77,9 @@ function resolveOpenAICompletionsCompatDefaults(
   const isDefaultRoute = endpointClass === "default";
   const usesConfiguredNonOpenAIEndpoint =
     endpointClass !== "default" && endpointClass !== "openai-public";
+  const isMoonshot = knownProviderFamily === "moonshot" || endpointClass === "moonshot-native";
   const isMoonshotLike =
-    knownProviderFamily === "moonshot" ||
-    knownProviderFamily === "modelstudio" ||
-    endpointClass === "moonshot-native" ||
-    endpointClass === "modelstudio-native";
+    isMoonshot || knownProviderFamily === "modelstudio" || endpointClass === "modelstudio-native";
   const isModelStudioLike =
     knownProviderFamily === "modelstudio" ||
     endpointClass === "modelstudio-native" ||
@@ -74,7 +92,12 @@ function resolveOpenAICompletionsCompatDefaults(
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
   const isTogether =
     knownProviderFamily === "together" ||
+    input.baseUrl?.includes("api.together.ai") === true ||
+    input.baseUrl?.includes("api.together.xyz") === true ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "together"));
+  const isCloudflareAiGateway =
+    provider === "cloudflare-ai-gateway" ||
+    input.baseUrl?.includes("gateway.ai.cloudflare.com") === true;
   const isXiaomi =
     endpointClass === "xiaomi-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi"));
@@ -95,6 +118,8 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
+    isMoonshot ||
+    isCloudflareAiGateway ||
     isZai ||
     isTogether ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
@@ -127,8 +152,25 @@ function resolveOpenAICompletionsCompatDefaults(
               : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
+    supportsJsonSchemaResponseFormat:
+      (endpointClass === "openai-public" ||
+        (isDefaultRoute && isDefaultRouteProvider(provider, "openai"))) &&
+      isKnownOpenAIJsonSchemaModelId(modelId),
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
+    cacheControlFormat:
+      provider === "openrouter" && modelId?.startsWith("anthropic/") === true
+        ? "anthropic"
+        : undefined,
+    sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",
+    supportsLongCacheRetention:
+      provider !== "cloudflare-workers-ai" &&
+      provider !== "cloudflare-ai-gateway" &&
+      knownProviderFamily !== "together" &&
+      !input.baseUrl?.includes("api.cloudflare.com") &&
+      !input.baseUrl?.includes("gateway.ai.cloudflare.com") &&
+      !input.baseUrl?.includes("api.together.ai") &&
+      !input.baseUrl?.includes("api.together.xyz"),
   };
 }
 
@@ -142,6 +184,8 @@ function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
     | "usesExplicitProxyLikeEndpoint"
   > & {
     provider?: string;
+    modelId?: string;
+    baseUrl?: string;
   },
 ): OpenAICompletionsCompatDefaults {
   return resolveOpenAICompletionsCompatDefaults(input);
@@ -172,8 +216,71 @@ export function detectOpenAICompletionsCompat(
     capabilities,
     defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
       provider: model.provider,
+      modelId: model.id,
+      baseUrl: model.baseUrl,
       ...capabilities,
     }),
+  };
+}
+
+function resolveSessionAffinity(
+  model: Pick<Model<"openai-completions">, "compat">,
+  detectedFormat: OpenAICompletionsCompatDefaults["sessionAffinityFormat"],
+): OpenAICompletionsSessionAffinity {
+  if (model.compat?.sendSessionAffinityHeaders !== true) {
+    return "none";
+  }
+  if (
+    detectedFormat === "openrouter" ||
+    model.compat.thinkingFormat === "openrouter" ||
+    model.compat.openRouterRouting !== undefined
+  ) {
+    return "openrouter";
+  }
+  return "openai";
+}
+
+/** Applies explicit model overrides once on top of the canonical transport defaults. */
+export function resolveOpenAICompletionsCompat(
+  model: Model<"openai-completions">,
+  resolveCapabilities: (
+    input: AiProviderRequestPolicyInput,
+  ) => ProviderRequestCapabilities = resolveProviderRequestCapabilities,
+): ResolvedOpenAICompletionsCompat {
+  const { defaults } = detectOpenAICompletionsCompat(model, resolveCapabilities);
+  const configured = model.compat;
+  return {
+    supportsStore: configured?.supportsStore ?? defaults.supportsStore,
+    supportsDeveloperRole: configured?.supportsDeveloperRole ?? defaults.supportsDeveloperRole,
+    supportsReasoningEffort:
+      configured?.supportsReasoningEffort ?? defaults.supportsReasoningEffort,
+    supportsUsageInStreaming:
+      configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,
+    maxTokensField: configured?.maxTokensField ?? defaults.maxTokensField,
+    requiresToolResultName: configured?.requiresToolResultName ?? false,
+    requiresAssistantAfterToolResult: configured?.requiresAssistantAfterToolResult ?? false,
+    requiresThinkingAsText: configured?.requiresThinkingAsText ?? false,
+    requiresReasoningContentOnAssistantMessages:
+      configured?.requiresReasoningContentOnAssistantMessages ??
+      defaults.requiresReasoningContentOnAssistantMessages,
+    thinkingFormat: configured?.thinkingFormat ?? defaults.thinkingFormat,
+    openRouterRouting: configured?.openRouterRouting,
+    vercelGatewayRouting: configured?.vercelGatewayRouting ?? {},
+    zaiToolStream: configured?.zaiToolStream ?? false,
+    supportsStrictMode: configured?.supportsStrictMode ?? defaults.supportsStrictMode,
+    supportsJsonSchemaResponseFormat:
+      configured?.supportsJsonSchemaResponseFormat ?? defaults.supportsJsonSchemaResponseFormat,
+    cacheControlFormat: configured?.cacheControlFormat ?? defaults.cacheControlFormat,
+    sessionAffinity: resolveSessionAffinity(model, defaults.sessionAffinityFormat),
+    supportsPromptCacheKey: configured?.supportsPromptCacheKey ?? false,
+    supportsLongCacheRetention:
+      configured?.supportsLongCacheRetention ?? defaults.supportsLongCacheRetention,
+    visibleReasoningDetailTypes:
+      configured && "visibleReasoningDetailTypes" in configured
+        ? ((configured as { visibleReasoningDetailTypes?: string[] }).visibleReasoningDetailTypes ??
+          defaults.visibleReasoningDetailTypes)
+        : defaults.visibleReasoningDetailTypes,
+    requiresNonEmptyUserOrAssistantMessage: defaults.requiresNonEmptyUserOrAssistantMessage,
   };
 }
 

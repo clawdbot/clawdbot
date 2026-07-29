@@ -1,9 +1,7 @@
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -50,14 +48,7 @@ function createAttempt(): EmbeddedRunAttemptParams {
 
 function createSettledAttempt(): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [
       {
@@ -124,7 +115,9 @@ describe("runCodexSettledTurnFinalization", () => {
           assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
           messagesPresent: [
             attachCodexMirrorAttestation(
-              assistant,
+              Object.assign({}, assistant, {
+                idempotencyKey: "codex-settled-finalizer:run-1:assistant",
+              }),
               fingerprintCodexMirrorSourceMessage(assistant as never),
             ),
           ],
@@ -181,6 +174,7 @@ describe("runCodexSettledTurnFinalization", () => {
     );
     expect(result).toMatchObject({
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
       usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
       assistant: {
         role: "assistant",

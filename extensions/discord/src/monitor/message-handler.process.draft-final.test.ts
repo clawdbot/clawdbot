@@ -10,6 +10,7 @@ import {
   deliverDiscordReply,
   dispatchInboundMessageForTest as dispatchInboundMessage,
   editMessageDiscord,
+  getGlobalHookRunnerForTest as getGlobalHookRunner,
   getLastDispatchReplyOptions,
   getSessionEntry,
   readLatestAssistantTextByIdentity,
@@ -28,6 +29,84 @@ import {
 } from "./message-handler.process.test-helpers.js";
 
 registerDiscordProcessTestLifecycle();
+
+const PREVIEW_MODES = ["partial", "block", "progress"] as const;
+
+function registerHooks(...hooks: string[]) {
+  const registered = new Set(hooks);
+  getGlobalHookRunner.mockReturnValue({
+    hasHooks: vi.fn((hookName: string) => registered.has(hookName)),
+  });
+}
+
+async function runHookSafetyFinalReply(mode: (typeof PREVIEW_MODES)[number]) {
+  dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+    await params?.dispatcher.sendFinalReply({ text: "final answer" });
+    await params?.dispatcher.waitForIdle();
+    return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+  });
+  const ctx = await createAutomaticSourceDeliveryContext({
+    discordConfig: { streaming: { mode } },
+  });
+  await runProcessDiscordMessage(ctx);
+}
+
+describe("processDiscordMessage provider preview hook safety", () => {
+  it.each(PREVIEW_MODES)("preserves %s previews when no hooks are registered", async (mode) => {
+    await runHookSafetyFinalReply(mode);
+
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves previews for observer-only hooks", async () => {
+    registerHooks("message_sent");
+
+    await runHookSafetyFinalReply("progress");
+
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(
+    ["reply_payload_sending", "message_sending"].flatMap((hookName) =>
+      PREVIEW_MODES.map((mode) => [hookName, mode] as const),
+    ),
+  )("suppresses %s-capable %s previews", async (hookName, mode) => {
+    registerHooks(hookName);
+
+    await runHookSafetyFinalReply(mode);
+
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses previews when both modifying hooks are registered", async () => {
+    registerHooks("reply_payload_sending", "message_sending");
+
+    await runHookSafetyFinalReply("partial");
+
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicitly disabled previews off without hooks", async () => {
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streaming: { mode: "off" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enter final delivery after message_sending cancellation", async () => {
+    registerHooks("message_sending");
+    deliverDiscordReply.mockResolvedValueOnce({ visibleReplySent: false });
+
+    await runHookSafetyFinalReply("partial");
+
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("processDiscordMessage draft streaming final delivery", () => {
   it("sends a fresh final message when final fits one chunk", async () => {

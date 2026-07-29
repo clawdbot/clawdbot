@@ -10,7 +10,7 @@
   "dependencies": {
     "audio-decode": "2.2.3",
     "baileys": "7.0.0-rc13",
-    "typebox": "1.3.3"
+    "typebox": "1.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
@@ -36,7 +36,9 @@
     },
     "channel": {
       "id": "whatsapp",
-      "approvalFlags": ["native"],
+      "approvalFlags": [
+        "native"
+      ],
       "label": "WhatsApp",
       "selectionLabel": "WhatsApp (QR link)",
       "detailLabel": "WhatsApp Web",

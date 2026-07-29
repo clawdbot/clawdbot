@@ -36,6 +36,80 @@ private actor StringCapture {
     }
 }
 
+/// Delivers a pong asynchronously, well before the deadline, so a cancelled deadline
+/// task racing the gate would surface as a spurious timeout.
+private final class DelayedPongWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    private let delay: Duration
+
+    init(delay: Duration) {
+        self.delay = delay
+    }
+
+    var state: URLSessionTask.State {
+        .running
+    }
+
+    func resume() {}
+
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        _ = (closeCode, reason)
+    }
+
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        _ = message
+    }
+
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+        let delay = self.delay
+        Task {
+            try? await Task.sleep(for: delay)
+            pongReceiveHandler(nil)
+        }
+    }
+
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        throw URLError(.badServerResponse)
+    }
+
+    func receive(
+        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+    {
+        completionHandler(.failure(URLError(.badServerResponse)))
+    }
+}
+
+/// Mirrors URLSession dropping a pong handler outright when the task is cancelled or
+/// closed mid-flight: the ping is accepted and no callback ever arrives.
+private final class SilentPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    var state: URLSessionTask.State {
+        .running
+    }
+
+    func resume() {}
+
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        _ = (closeCode, reason)
+    }
+
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        _ = message
+    }
+
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+        _ = pongReceiveHandler
+    }
+
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        throw URLError(.badServerResponse)
+    }
+
+    func receive(
+        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+    {
+        completionHandler(.failure(URLError(.badServerResponse)))
+    }
+}
+
 private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let callbacks: [Error?]
 
@@ -1079,6 +1153,32 @@ struct GatewayNodeSessionTests {
         #expect(Array(decoded.heldApprovals[0].approvalId.utf8) == Array(approvalID.utf8))
         #expect(try Array(#require(decoded.heldApprovals[0].activeResolutionAttemptId).utf8) ==
             Array(activeAttemptID.utf8))
+    }
+
+    @Test
+    func `websocket ping times out when no pong callback ever arrives`() async throws {
+        // Without the deadline this await never returns: the checked continuation is
+        // orphaned, Swift logs CONTINUATION MISUSE, and the keepalive loop wedges forever.
+        let task = SilentPingWebSocketTask()
+
+        do {
+            try await WebSocketTaskBox(task: task).sendPing(timeout: .milliseconds(50))
+            Issue.record("sendPing unexpectedly succeeded without a pong")
+        } catch let error as URLError {
+            #expect(error.code == .timedOut)
+        }
+    }
+
+    @Test
+    func `websocket ping succeeds when the pong beats the deadline`() async throws {
+        // Cancelling the deadline makes Task.sleep throw; if that cancellation were
+        // swallowed the deadline task would fall through and race the pong callback,
+        // reporting a healthy ping as timed out.
+        let task = DelayedPongWebSocketTask(delay: .milliseconds(20))
+
+        for _ in 0..<20 {
+            try await WebSocketTaskBox(task: task).sendPing(timeout: .seconds(5))
+        }
     }
 
     @Test
@@ -2173,8 +2273,8 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.event") == 1
         }
         let firstRequest = try #require(task.sentRequests(method: "node.event").first)
-        task.emitResponse(
-            id: try #require(firstRequest["id"] as? String),
+        try task.emitResponse(
+            id: #require(firstRequest["id"] as? String),
             payload: [
                 "ok": true,
                 "event": "node.presence.activity",
@@ -2195,8 +2295,8 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.event") == 2
         }
         let secondRequest = try #require(task.sentRequests(method: "node.event").last)
-        task.emitResponse(
-            id: try #require(secondRequest["id"] as? String),
+        try task.emitResponse(
+            id: #require(secondRequest["id"] as? String),
             payload: [
                 "ok": true,
                 "event": "node.presence.activity",
@@ -2217,13 +2317,61 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.event") == 3
         }
         let thirdRequest = try #require(task.sentRequests(method: "node.event").last)
-        task.emitResponse(
-            id: try #require(thirdRequest["id"] as? String),
+        try task.emitResponse(
+            id: #require(thirdRequest["id"] as? String),
             payload: ["ok": true])
         let legacy = try await legacyRequest.value
         #expect(legacy == nil)
 
         await gateway.disconnect()
+    }
+
+    @Test
+    func `route bound request rejects a response after its socket is retired`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        let route = try #require(await gateway.currentRoute())
+        let socket = try #require(session.latestTask())
+        let request = Task {
+            try await gateway.request(
+                method: "sessions.list",
+                paramsJSON: "{}",
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("route bound request sent") {
+            socket.sentRequestCount(method: "sessions.list") == 1
+        }
+        let sent = try #require(socket.sentRequests(method: "sessions.list").first)
+
+        await gateway._test_handleChannelDisconnected("socket retired", socketGeneration: 1)
+        try socket.emitResponse(
+            id: #require(sent["id"] as? String),
+            payload: ["sessions": []])
+
+        do {
+            _ = try await request.value
+            Issue.record("late response unexpectedly crossed the retired route")
+        } catch is CancellationError {
+            // Expected: the response belongs to the retired admission generation.
+        }
     }
 
     @Test
@@ -3462,6 +3610,21 @@ struct GatewayNodeSessionTests {
             against: URL(string: "wss://gateway.example.com:7443"))
 
         #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
+    }
+
+    @Test
+    func `resolve gateway HTTP url supports relative broker routes and preserves absolute providers`() {
+        let gateway = URL(string: "wss://gateway.example.com:7443")
+
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "/plugins/codex/realtime/calls",
+            against: gateway)?.absoluteString == "https://gateway.example.com:7443/plugins/codex/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "https://api.openai.com/v1/realtime/calls",
+            against: gateway)?.absoluteString == "https://api.openai.com/v1/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "wss://gateway.example.com/realtime",
+            against: gateway) == nil)
     }
 
     @Test

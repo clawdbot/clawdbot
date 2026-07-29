@@ -2,7 +2,7 @@
 // Defers scheduler startup until cron is touched by runtime or API handlers.
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -27,7 +27,7 @@ type LoadedGatewayCronState = {
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePath(undefined, env);
+  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;
@@ -136,7 +136,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.phase = "stopped";
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
-          resolved.state.stopExitWatchers?.();
           await resolved.state.stopStreamWatchers?.();
           return;
         }
@@ -161,7 +160,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.phase = "stopped";
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
-          resolved.state.stopExitWatchers?.();
           await resolved.state.stopStreamWatchers?.();
           return;
         }
@@ -185,8 +183,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         loaded.phase = "stopped";
         loaded.underlyingStarted = false;
         loaded.state.cron.stop();
-        loaded.state.stopExitWatchers?.();
-        void loaded.state.stopStreamWatchers?.().catch(() => {});
         return;
       }
       const loading = cronStateLoader.peek();
@@ -201,8 +197,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
             resolved.phase = "stopped";
             resolved.underlyingStarted = false;
             resolved.state.cron.stop();
-            resolved.state.stopExitWatchers?.();
-            void resolved.state.stopStreamWatchers?.().catch(() => {});
           })
           .catch(() => {});
       }
@@ -221,7 +215,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         await resolved.state.cron.stopAndDrain();
       } else {
         resolved.state.cron.stop();
-        resolved.state.stopExitWatchers?.();
         await resolved.state.stopStreamWatchers?.();
       }
     },
@@ -286,6 +279,12 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     },
     async readJob(id) {
       return await (await load()).state.cron.readJob(id);
+    },
+    async readScratch(id) {
+      return await (await load()).state.cron.readScratch(id);
+    },
+    async writeScratch(id, write) {
+      return await (await load()).state.cron.writeScratch(id, write);
     },
     getDefaultAgentId() {
       if (!loaded) {

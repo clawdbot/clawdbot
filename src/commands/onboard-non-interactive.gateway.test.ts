@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { createThrowingRuntime } from "./onboard-non-interactive.test-helpers.js";
+import {
+  createThrowingRuntime,
+  mockOnboardingAgent,
+} from "./onboard-non-interactive.test-helpers.js";
+import type { WaitForGatewayReachableMock } from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
@@ -29,18 +33,7 @@ const gatewayServiceMock = vi.hoisted(() => ({
 const readLastGatewayErrorLineMock = vi.hoisted(() =>
   vi.fn(async () => "Gateway failed to start: required secrets are unavailable."),
 );
-let waitForGatewayReachableMock:
-  | ((params: {
-      url: string;
-      token?: string;
-      password?: string;
-      deadlineMs?: number;
-      probeTimeoutMs?: number;
-    }) => Promise<{
-      ok: boolean;
-      detail?: string;
-    }>)
-  | undefined;
+let waitForGatewayReachableMock: WaitForGatewayReachableMock;
 
 function resolveTestConfigPath() {
   const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
@@ -107,6 +100,8 @@ vi.mock("../config/config.js", () => ({
   },
   resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
 }));
+
+vi.mock("./onboard-agent.js", () => ({ ensureOnboardingAgent: mockOnboardingAgent }));
 
 vi.mock("./onboard-helpers.js", () => {
   const normalizeGatewayTokenInput = (value: unknown): string => {
@@ -303,7 +298,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     if (!tempHome) {
       throw new Error("temp home not initialized");
     }
-    const stateDir = await fs.mkdtemp(path.join(tempHome, prefix));
+    const stateDir = await fs.realpath(await fs.mkdtemp(path.join(tempHome, prefix)));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     return stateDir;
@@ -363,6 +358,30 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
+  });
+
+  it("writes the implicit workspace under a non-default state directory", async () => {
+    await withStateDir("state-isolated-workspace-", async (stateDir) => {
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: "tok_state_isolation",
+        },
+        runtime,
+      );
+
+      const workspace = path.join(stateDir, "workspace");
+      const cfg = readTestConfig();
+      expect(cfg.agents?.defaults?.workspace).toBe(workspace);
+      expect(cfg.agents?.entries?.main?.workspace).toBe(workspace);
+    });
   });
 
   it("preserves existing config on onboard rerun (openclaw#84692)", async () => {

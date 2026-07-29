@@ -76,6 +76,8 @@ export function resolveUpdateStatusBanner(params: {
         "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
       "deps-install-failed": "Dependency install failed. Fix the install error and retry.",
       "build-failed": "Build failed. Fix the build error and retry.",
+      "build-dirty":
+        "The selected revision's build changed checkout files. Retry with a revision that includes its generated artifacts.",
       "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
       "global-install-failed":
         "The global package install did not verify on disk. Retry or reinstall from the CLI.",

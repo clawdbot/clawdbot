@@ -58,7 +58,7 @@ import type {
 import type { OpenClawPluginCommandDefinition } from "./plugin-command.types.js";
 import type {
   OpenClawPluginChannelRegistration,
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
   OpenClawGatewayDiscoveryService,
   OpenClawPluginHostedMediaResolver,
@@ -223,20 +223,7 @@ export type OpenClawPluginApi = {
   registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
-    opts?: {
-      /** Parent command path for nested command groups, for example `["nodes"]`. */
-      parentPath?: string[];
-      /** Explicit command names owned by this registrar at `parentPath`. */
-      commands?: string[];
-      /**
-       * Parse-time command descriptors for lazy CLI registration.
-       *
-       * When descriptors cover every command exposed at `parentPath`, OpenClaw
-       * can keep the plugin registrar lazy. Command-only registrations stay on
-       * the eager compatibility path.
-       */
-      descriptors?: OpenClawPluginCliCommandDescriptor[];
-    },
+    opts?: OpenClawPluginCliRegistrationOptions,
   ) => void;
   /**
    * Register a plugin-owned node feature command group under `openclaw nodes`.

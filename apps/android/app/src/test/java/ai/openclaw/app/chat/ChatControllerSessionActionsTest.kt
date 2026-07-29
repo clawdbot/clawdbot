@@ -39,14 +39,23 @@ class ChatControllerSessionActionsTest {
   }
 
   @Test
-  fun rewindReturnsEditorTextAndIssuesAgentScopedParams() =
+  fun rewindReturnsEditorTextAndValidAttachmentsAndIssuesAgentScopedParams() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("sessions.rewind", """{"editorText":"restore me"}""")
+      gateway.respondWith(
+        "sessions.rewind",
+        """{"editorText":"restore me","editorAttachments":[{"mimeType":"image/png","data":"aW1hZ2U="},{"mimeType":"image/jpeg","data":"%%%"}]}""",
+      )
       gateway.respondWithBranchHistory()
       val controller = controller(this, gateway)
 
-      assertEquals("restore me", controller.rewindSessionAtEntry("main", "entry-user"))
+      assertEquals(
+        SessionRewindResult(
+          editorText = "restore me",
+          editorAttachments = listOf(SessionEditorAttachment(mimeType = "image/png", data = "aW1hZ2U=")),
+        ),
+        controller.rewindSessionAtEntryResult("main", "entry-user"),
+      )
 
       val params = json.parseToJsonElement(gateway.calls.first { it.method == "sessions.rewind" }.paramsJson!!).jsonObject
       assertEquals("main", params.getValue("sessionKey").jsonPrimitive.content)
@@ -55,13 +64,23 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
-  fun forkReturnsCreatedKeyAndEditorText() =
+  fun forkReturnsCreatedKeyEditorTextAndAttachments() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("sessions.fork", """{"sessionKey":"agent:main:forked","editorText":"continue here"}""")
+      gateway.respondWith(
+        "sessions.fork",
+        """{"sessionKey":"agent:main:forked","editorText":"continue here","editorAttachments":[{"mimeType":"image/webp","data":"Zm9yaw=="}]}""",
+      )
       val controller = controller(this, gateway)
 
-      assertEquals("agent:main:forked" to "continue here", controller.forkSessionAtEntry("main", "entry-user"))
+      assertEquals(
+        SessionForkResult(
+          sessionKey = "agent:main:forked",
+          editorText = "continue here",
+          editorAttachments = listOf(SessionEditorAttachment(mimeType = "image/webp", data = "Zm9yaw==")),
+        ),
+        controller.forkSessionAtEntry("main", "entry-user"),
+      )
 
       val params = json.parseToJsonElement(gateway.calls.single { it.method == "sessions.fork" }.paramsJson!!).jsonObject
       assertEquals("main", params.getValue("agentId").jsonPrimitive.content)

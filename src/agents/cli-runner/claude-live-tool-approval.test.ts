@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../../infra/plugin-approvals.js";
+import {
+  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+  PLUGIN_APPROVAL_DETAIL_MAX_LENGTH,
+} from "../../infra/plugin-approvals.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   requestClaudeNativeToolApproval,
@@ -66,6 +69,7 @@ describe("requestClaudeNativeToolApproval", () => {
         sessionKey: "agent:main:main",
         title: "Claude native tool: Bash",
         description: '{"command":"ls"}',
+        detail: '{"command":"ls"}',
         severity: "warning",
         allowedDecisions: ["allow-once", "deny"],
         timeoutMs: DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -176,7 +180,7 @@ describe("requestClaudeNativeToolApproval", () => {
     ).resolves.toEqual({ kind: "deny", reason: "user" });
 
     const requestPayload = mockCallGatewayTool.mock.calls[0]?.[2] as
-      | { description?: string; allowedDecisions?: unknown }
+      | { description?: string; detail?: string; allowedDecisions?: unknown }
       | undefined;
     expect(requestPayload?.description).toContain("destructive-tail");
     expect(requestPayload?.description).toContain(
@@ -184,6 +188,7 @@ describe("requestClaudeNativeToolApproval", () => {
     );
     expect(requestPayload?.description).toMatch(/…\[\+\d+ chars hidden\]…/u);
     expect(requestPayload?.description?.length).toBeLessThanOrEqual(512);
+    expect(requestPayload?.detail).toBe(JSON.stringify({ file_path: "/tmp/output.txt", content }));
     expect(requestPayload?.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
@@ -201,15 +206,56 @@ describe("requestClaudeNativeToolApproval", () => {
 
     expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({
       description: '{"command":"ls"}',
+      detail: '{"command":"ls"}',
       allowedDecisions: ["allow-once", "deny"],
     });
   });
 
-  it("denies oversized Bash input without calling the gateway", async () => {
+  it("denies Bash whose channel description truncates even when detail would fit", async () => {
+    // Channel/push approvers never see the reviewer detail, so a Bash command
+    // hidden by description truncation must not be approvable from anywhere.
     await expect(
       requestClaudeNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: `echo ${"x".repeat(500)}; rm -rf /tmp/example` },
+        pluginId: "claude-cli",
+        ask: "on-miss",
+      }),
+    ).resolves.toEqual({ kind: "deny", reason: "policy-oversized" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("denies Bash input beyond the reviewer detail limit without calling the gateway", async () => {
+    await expect(
+      requestClaudeNativeToolApproval({
+        toolName: "Bash",
+        toolInput: { command: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) },
+        pluginId: "claude-cli",
+        ask: "on-miss",
+      }),
+    ).resolves.toEqual({ kind: "deny", reason: "policy-oversized" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("denies Bash whose short raw command expands past the summary bound when sanitized", async () => {
+    // ~70 bidi override chars stay under the raw description budget but escape
+    // to \u{202E} sequences that overflow the 512-char channel summary.
+    await expect(
+      requestClaudeNativeToolApproval({
+        toolName: "Bash",
+        toolInput: { command: `echo ${"‮".repeat(70)}; rm -rf /tmp/example` },
+        pluginId: "claude-cli",
+        ask: "on-miss",
+      }),
+    ).resolves.toEqual({ kind: "deny", reason: "policy-oversized" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("denies Bash when reviewer sanitization would hide the command tail", async () => {
+    await expect(
+      requestClaudeNativeToolApproval({
+        toolName: "Bash",
+        toolInput: { command: `# ${"\u202e".repeat(3_000)}\necho destructive-tail` },
         pluginId: "claude-cli",
         ask: "on-miss",
       }),
@@ -262,6 +308,9 @@ describe("requestClaudeNativeToolApproval", () => {
       ask: "on-miss",
     });
 
-    expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({ description: "{}" });
+    expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+      description: "{}",
+      detail: "{}",
+    });
   });
 });

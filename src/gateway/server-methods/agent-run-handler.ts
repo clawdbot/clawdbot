@@ -8,6 +8,7 @@ import {
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { authorizeResolvedSessionMutation } from "../session-sharing.js";
 import { formatForLog } from "../ws-log.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
@@ -148,6 +149,10 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     }
     agentId = content.agentId;
     requestedSessionKey = content.requestedSessionKey;
+    // Participation is authorized below against the canonical session the run
+    // actually targets (see prepareAgentSession). A keyless request resolves its
+    // default/effective session there, so authorizing only an explicit key here
+    // would let a non-member drive a restricted default session.
     let effectiveTranscriptInputText = content.effectiveTranscriptInputText;
     let message = content.message;
     const {
@@ -268,6 +273,19 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
       } = preparedSession;
       cfgForAgent = cfgLocal;
+      // Authorize the canonical session the run will actually target — covering
+      // keyless requests whose default/effective session is resolved only here —
+      // before any run side effects (admission, dispatch).
+      const sharingError = authorizeResolvedSessionMutation({
+        cfg: cfgLocal,
+        client,
+        sessionKey: canonicalKey,
+        agentId: canonicalSessionAgentId,
+      });
+      if (sharingError) {
+        respond(false, undefined, sharingError);
+        return;
+      }
       effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
       restoredCronContinuationIdentity = preparedSession.restoredCronContinuationIdentity;
       sessionPersistedBeforeGatewayAdmission =
@@ -293,7 +311,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
           normalizedSpawned,
           requestDeliveryHint,
           requestLabel: request.label,
-          recipientChannel,
           pluginOwnerId:
             freshEntry === undefined
               ? normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)

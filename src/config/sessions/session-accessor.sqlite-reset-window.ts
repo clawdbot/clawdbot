@@ -13,7 +13,7 @@ import type { SessionTranscriptProjectionState } from "./session-transcript-inde
 type ResetWindowDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   | "session_transcript_active_events"
-  | "session_transcript_generations"
+  | "transcript_rewrite_watermarks"
   | "transcript_event_identities"
   | "transcript_events"
 >;
@@ -112,7 +112,7 @@ function readTranscriptGeneration(projection: ResetWindowProjection): string | u
   return executeSqliteQueryTakeFirstSync(
     projection.database.db,
     getResetWindowKysely(projection.database)
-      .selectFrom("session_transcript_generations")
+      .selectFrom("transcript_rewrite_watermarks")
       .select("generation")
       .where("session_id", "=", projection.resolved.sessionId),
   )?.generation;
@@ -283,4 +283,26 @@ export function readVisibleMessageRange(
     visible.postStart + postVisibleEnd - visible.kept.length,
   );
   return [...keptEvents, ...postEvents];
+}
+
+/** Maps a logical visible-message range to its materialized message positions. */
+export function resolveVisibleMessagePositionRange(
+  projection: ResetWindowProjection,
+  start: number,
+  endExclusive: number,
+): number[] {
+  if (endExclusive <= start) {
+    return [];
+  }
+  const visible = resolveVisibleMessagePositions(projection);
+  const boundedStart = Math.min(Math.max(0, start), visible.total);
+  const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
+  const keptEnd = Math.min(boundedEnd, visible.kept.length);
+  const positions = visible.kept.slice(boundedStart, keptEnd);
+  const postVisibleStart = Math.max(boundedStart, visible.kept.length);
+  const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
+  for (let logical = postVisibleStart; logical < postVisibleEnd; logical += 1) {
+    positions.push(visible.postStart + logical - visible.kept.length);
+  }
+  return positions;
 }

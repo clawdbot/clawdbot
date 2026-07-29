@@ -12,9 +12,12 @@ import {
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
-import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  resolveClosestSize,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { canonicalizeBase64, MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   ensureAuthProfileStore,
   hasConfiguredSecretInput,
@@ -72,7 +75,6 @@ const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
-const MB = 1024 * 1024;
 const OPENAI_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
   OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
@@ -125,14 +127,6 @@ function resolveOpenAIImageCount(count: number | undefined): number {
     return 1;
   }
   return Math.max(1, Math.min(OPENAI_MAX_IMAGE_RESULTS, Math.trunc(count)));
-}
-
-function resolveGeneratedImageMaxBytes(cfg: OpenClawConfig): number {
-  const configured = cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * MB);
-  }
-  return MAX_IMAGE_BYTES;
 }
 
 function isPublicOpenAIImageBaseUrl(baseUrl: string): boolean {
@@ -1060,7 +1054,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         const data = await readProviderJsonResponse(response, "openai.image-generation", {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             count,
-            resolveGeneratedImageMaxBytes(req.cfg),
+            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           ),
         });
         const output = resolveOutputMime(req.outputFormat);

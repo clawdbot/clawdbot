@@ -16,7 +16,7 @@ import {
   buildPersistedUserTurnMessage,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
-import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
+import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 
 function createUserTurnInputController() {
   const baseInput: UserTurnInput = {
@@ -138,7 +138,7 @@ describe("prepareChatSendUserTurn", () => {
     expect(prepared.isInternalTextSlashCommandTurn).toBe(true);
     expect(prepared.queuedFollowupOwnerKey).toBeUndefined();
     expect(prepared.replyOptionImages).toBeUndefined();
-    await expect(prepared.pluginBoundMediaFieldsPromise).resolves.toEqual({});
+    await expect(prepared.pluginBoundMediaPromise).resolves.toEqual([]);
     await expect(readInput()).resolves.toEqual(controller.baseInput);
   });
 
@@ -198,12 +198,13 @@ describe("prepareChatSendUserTurn", () => {
         body: "hello",
       },
       ApprovalReviewerDeviceId: "device-1",
-      MediaPath: "uploads/report.pdf",
-      MediaPaths: ["uploads/report.pdf"],
-      MediaType: "application/pdf",
-      MediaTypes: ["application/pdf"],
-      MediaWorkspaceDir: "/workspace",
-      MediaStaged: true,
+      media: [
+        {
+          path: "uploads/report.pdf",
+          contentType: "application/pdf",
+          workspaceDir: "/workspace",
+        },
+      ],
       GatewayClientScopes: ["operator.admin"],
       GatewayClientCaps: ["tool-events"],
       SessionCreation: {
@@ -428,25 +429,14 @@ describe("prepareChatSendUserTurn", () => {
   });
 });
 
-describe("applyChatSendManagedMediaFields", () => {
-  it("fills missing staged fields without replacing pre-staged paths", () => {
+describe("applyChatSendManagedMedia", () => {
+  it("does not replace pre-staged facts", () => {
     const ctx = {
-      MediaStaged: true,
-      MediaPath: "uploads/report.pdf",
+      media: [{ path: "uploads/report.pdf", workspaceDir: "/workspace" }],
     } as MsgContext;
 
-    applyChatSendManagedMediaFields(ctx, {
-      MediaPath: "managed/image.png",
-      MediaPaths: ["managed/image.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
-    });
+    applyChatSendManagedMedia(ctx, [{ path: "managed/image.png", contentType: "image/png" }]);
 
-    expect(ctx).toMatchObject({
-      MediaPath: "uploads/report.pdf",
-      MediaPaths: ["managed/image.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
-    });
+    expect(ctx.media).toEqual([{ path: "uploads/report.pdf", workspaceDir: "/workspace" }]);
   });
 });

@@ -1,16 +1,15 @@
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach } from "vitest";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
   embeddedAgentLog,
-  withTempDir,
   expect,
   it,
   vi,
   tinyPngBase64,
   fs,
-  os,
   path,
-  trackTempDir,
   createParams,
   createProjector,
   buildEmptyToolTelemetry,
@@ -20,6 +19,17 @@ import {
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
+
+let openClawState: OpenClawTestState;
+beforeEach(async () => {
+  openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-codex-media-state-",
+  });
+});
+afterEach(async () => {
+  await openClawState.cleanup();
+});
 
 describe("CodexAppServerEventProjector media projection", () => {
   it("attaches native Codex image-generation saved paths as reply media", async () => {
@@ -51,9 +61,6 @@ describe("CodexAppServerEventProjector media projection", () => {
   });
 
   it("saves raw Codex image-generation results as reply media", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
-    trackTempDir(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const projector = await createProjector();
 
     await projector.handleNotification(
@@ -194,9 +201,6 @@ describe("CodexAppServerEventProjector media projection", () => {
   });
 
   it("dedupes raw and typed Codex image-generation media for the same item", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
-    trackTempDir(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const projector = await createProjector();
     const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
 
@@ -230,50 +234,44 @@ describe("CodexAppServerEventProjector media projection", () => {
   });
 
   it("prefers gateway-managed image media when the typed event arrives first", async () => {
-    await withTempDir("openclaw-codex-media-state-", async (stateDir) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const projector = await createProjector();
-      const savedPath = "/home/dev-user/.codex/generated_images/session-1/ig_123.png";
+    const projector = await createProjector();
+    const savedPath = "/home/dev-user/.codex/generated_images/session-1/ig_123.png";
 
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: {
-            type: "imageGeneration",
-            id: "ig_123",
-            status: "completed",
-            revisedPrompt: "A tiny blue square",
-            result: tinyPngBase64,
-            savedPath,
-          },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("rawResponseItem/completed", {
-          item: {
-            type: "image_generation_call",
-            id: "ig_123",
-            status: "generating",
-            result: tinyPngBase64,
-          },
-        }),
-      );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: tinyPngBase64,
+          savedPath,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "ig_123",
+          status: "generating",
+          result: tinyPngBase64,
+        },
+      }),
+    );
 
-      const result = projector.buildResult(buildEmptyToolTelemetry());
-      const mediaUrl = result.toolMediaUrls?.[0];
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const mediaUrl = result.toolMediaUrls?.[0];
 
-      expect(result.toolMediaUrls).toHaveLength(1);
-      expect(mediaUrl).not.toBe(savedPath);
-      expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
-      await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
-        Buffer.from(tinyPngBase64, "base64"),
-      );
-    });
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(mediaUrl).not.toBe(savedPath);
+    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
   });
 
   it("preserves distinct raw image-generation items with identical image bytes", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
-    trackTempDir(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const projector = await createProjector();
 
     for (const id of ["ig_raw_1", "ig_raw_2"]) {

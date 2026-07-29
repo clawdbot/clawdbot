@@ -22,6 +22,7 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -33,6 +34,7 @@ import type {
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
   PluginManifestDashboardDataBinding,
+  PluginManifestMcpServer,
 } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
@@ -50,7 +52,8 @@ type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProvide
 type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
 type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
 type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProviderPlugin;
-type OpenClawPluginCliCommandDescriptor = import("./types.js").OpenClawPluginCliCommandDescriptor;
+type OpenClawPluginCliRootCommandDescriptor =
+  import("./types.js").OpenClawPluginCliRootCommandDescriptor;
 type OpenClawPluginCliRegistrar = import("./types.js").OpenClawPluginCliRegistrar;
 type OpenClawPluginCommandDefinition = import("./types.js").OpenClawPluginCommandDefinition;
 type PluginInteractiveHandlerRegistration =
@@ -102,7 +105,7 @@ type PluginCliRegistration = {
   register: OpenClawPluginCliRegistrar;
   parentPath: string[];
   commands: string[];
-  descriptors: OpenClawPluginCliCommandDescriptor[];
+  descriptors: OpenClawPluginCliRootCommandDescriptor[];
   source: string;
   rootDir?: string;
 };
@@ -192,6 +195,7 @@ export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActio
 type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
+  builtWithOpenClawVersion?: string;
   backend: CliBackendPlugin;
   source: string;
   rootDir?: string;
@@ -252,6 +256,11 @@ export type PluginAgentToolResultMiddlewareRegistration = {
   runtimes: AgentToolResultMiddlewareRuntime[];
   source: string;
   rootDir?: string;
+};
+export type PluginAgentToolResultMiddlewareOwner = {
+  pluginId: string;
+  runtimes: AgentToolResultMiddlewareRuntime[];
+  manifest: PluginManifestRecord;
 };
 type PluginAgentHarnessRegistration = {
   pluginId: string;
@@ -413,6 +422,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  builtWithOpenClawVersion?: string;
   packageName?: string;
   description?: string;
   format?: PluginFormat;
@@ -467,6 +477,7 @@ export type PluginRecord = {
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;
 };
@@ -497,6 +508,7 @@ export type PluginRegistry = {
   workerProviders: Map<string, PluginWorkerProviderRegistration>;
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
+  agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];

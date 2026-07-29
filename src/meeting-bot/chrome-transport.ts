@@ -1,6 +1,7 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import type { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import { openMeetingWithBrowser, recoverMeetingBrowserTab } from "./browser-controller.js";
 import { callMeetingBrowserProxyOnNode, resolveMeetingBrowserNode } from "./browser-node.js";
@@ -102,18 +103,23 @@ export function createMeetingChromeTransport<
   async function openOrRecoverMeeting(params: {
     callBrowser: MeetingBrowserRequestCaller;
     config: Config;
+    fullConfig: OpenClawConfig;
     meetingSessionId: string;
     mode: Mode;
     trackedTargetId?: string;
     url: string;
     locationLabel: string;
   }) {
+    const captureCaptions =
+      params.mode === "transcribe" ||
+      resolveTranscriptsConfig(params.fullConfig.transcripts).enabled;
     if (params.config.chrome.launch) {
       return await openMeetingWithBrowser({
         adapter: options.platform,
         callBrowser: params.callBrowser,
         config: params.config.chrome,
         session: {
+          captureCaptions,
           meetingSessionId: params.meetingSessionId,
           mode: params.mode,
           url: params.url,
@@ -125,6 +131,7 @@ export function createMeetingChromeTransport<
       allowSessionAdoption: true,
       autoJoin: params.config.chrome.autoJoin,
       callBrowser: params.callBrowser,
+      captureCaptions,
       config: params.config.chrome,
       locationLabel: params.locationLabel,
       meetingSessionId: params.meetingSessionId,
@@ -283,6 +290,7 @@ export function createMeetingChromeTransport<
     const result = await openOrRecoverMeeting({
       callBrowser,
       config: params.config,
+      fullConfig: params.fullConfig,
       locationLabel: "in local Chrome",
       meetingSessionId: params.meetingSessionId,
       mode: params.mode,
@@ -398,6 +406,7 @@ export function createMeetingChromeTransport<
     const browser = await openOrRecoverMeeting({
       callBrowser,
       config: params.config,
+      fullConfig: params.fullConfig,
       locationLabel: "on the selected Chrome node",
       meetingSessionId: params.meetingSessionId,
       mode: params.mode,
@@ -528,6 +537,7 @@ export function createMeetingChromeTransport<
   async function recoverCurrentTab(params: {
     runtime: PluginRuntime;
     config: Config;
+    fullConfig?: OpenClawConfig;
     meetingSessionId?: string;
     mode: Mode;
     nodeId?: string;
@@ -562,6 +572,9 @@ export function createMeetingChromeTransport<
                 timeoutMs: request.timeoutMs,
               })
           : await resolveLocalMeetingBrowserRequest(params.runtime),
+        captureCaptions:
+          params.mode === "transcribe" ||
+          resolveTranscriptsConfig(params.fullConfig?.transcripts).enabled,
         config: params.config.chrome,
         locationLabel: nodeId ? "on the selected Chrome node" : "in local Chrome",
         meetingSessionId: params.meetingSessionId,

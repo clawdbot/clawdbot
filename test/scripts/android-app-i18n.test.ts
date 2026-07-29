@@ -83,6 +83,26 @@ describe("Android app i18n resources", () => {
     }
   });
 
+  it("builds complete third-party flavor resources for every native locale", async () => {
+    const catalog = await buildAndroidAppI18nCatalog();
+    const base = await readFile(
+      "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
+      "utf8",
+    );
+    const resources = [...catalog.resources].filter(
+      ([filePath]) =>
+        filePath.includes("/apps/android/app/src/thirdParty/res/values-") &&
+        filePath.endsWith("/accessibility_strings.xml"),
+    );
+
+    expect(base).toContain('tools:ignore="MissingTranslation"');
+    expect(resources).toHaveLength(NATIVE_I18N_LOCALES.length);
+    for (const [, content] of resources) {
+      expect(content).toContain('name="accessibility_service_label"');
+      expect(content).toContain('name="accessibility_dev_activity_label"');
+    }
+  });
+
   it("preserves the existing Swedish app name", async () => {
     const strings = await readFile("apps/android/app/src/main/res/values-sv/strings.xml", "utf8");
     expect(strings).toContain('<string name="app_name">OpenClaw-nod</string>');
@@ -459,5 +479,14 @@ describe("Android app i18n resources", () => {
         "apps/android/wear/src/main/java/ai/openclaw/wear/WearScreenshotMode.kt",
       ),
     ).toEqual([]);
+  });
+
+  it("scans flavor-specific activity surfaces", () => {
+    expect(
+      findUnlocalizedAndroidUiLiterals(
+        'Text("Developer surface")',
+        "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
+      ).map((finding) => finding.source),
+    ).toEqual(["Developer surface"]);
   });
 });

@@ -4,11 +4,15 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["meta"],
+  "providers": [
+    "meta"
+  ],
   "providerEndpoints": [
     {
       "endpointClass": "meta-native",
-      "hosts": ["api.meta.ai"]
+      "hosts": [
+        "api.meta.ai"
+      ]
     }
   ],
   "providerRequest": {
@@ -23,12 +27,16 @@
       "meta": {
         "baseUrl": "https://api.meta.ai/v1",
         "api": "openai-responses",
+        "defaultModel": "muse-spark-1.1",
         "models": [
           {
             "id": "muse-spark-1.1",
             "name": "Muse Spark 1.1",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": [
+              "text",
+              "image"
+            ],
             "contextWindow": 1048576,
             "maxTokens": 131072,
             "thinkingLevelMap": {
@@ -51,9 +59,9 @@
               ]
             },
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 1.25,
+              "output": 4.25,
+              "cacheRead": 0.15,
               "cacheWrite": 0
             }
           }
@@ -68,8 +76,12 @@
     "providers": [
       {
         "id": "meta",
-        "authMethods": ["api-key"],
-        "envVars": ["MODEL_API_KEY"]
+        "authMethods": [
+          "api-key"
+        ],
+        "envVars": [
+          "MODEL_API_KEY"
+        ]
       }
     ]
   },

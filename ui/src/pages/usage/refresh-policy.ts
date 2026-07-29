@@ -1,4 +1,4 @@
-export const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
+const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
 export type UsageRefreshReason = "focus" | "manual" | "poll" | "reconnect";
 type UsageRefreshDecision = "defer" | "fetch" | "skip";

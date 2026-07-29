@@ -311,11 +311,10 @@ describe("iMessage monitor attachment policy", () => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.BodyForAgent).toBe(
         expectedBody,
       );
-      expect(
-        dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.MediaTypes,
-      ).toEqual(expectedMediaTypes);
-      expect(dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.MediaUrls).toEqual(
-        expectedMediaUrls,
+      const media = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.media;
+      expect(media?.map((fact) => fact.contentType ?? fact.kind)).toEqual(expectedMediaTypes);
+      expect(media?.map((fact) => fact.url)).toEqual(
+        expectedMediaUrls?.map((url) => url || undefined) ?? media?.map(() => undefined),
       );
     },
   );

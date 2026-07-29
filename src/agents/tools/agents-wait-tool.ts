@@ -197,7 +197,8 @@ export function createAgentsWaitTool(opts: {
     label: "Wait for Agents",
     name: "agents_wait",
     displaySummary: "Wait for collector children.",
-    description: "Wait until one collector child completes, or until timeout.",
+    description:
+      "Wait for collector subagents started by sessions_spawn collect=true. Accepts many run ids; returns once any completes (completed results incl. structured output, plus pending ids), or on timeoutSeconds.",
     parameters: AgentsWaitToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as { ids: string[]; timeoutSeconds?: number };

@@ -4,6 +4,7 @@ import { buildContextEngineRuntimeSettings } from "../../../context-engine/runti
 import type { ContextEngine, ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
@@ -23,6 +24,7 @@ import {
   getProviderPromptState,
   markLastProviderPromptContextRejected,
 } from "../provider-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -70,6 +72,7 @@ export async function recoverEmbeddedRunOverflow(input: {
   assistantErrorText?: string;
   assistantOverflowCandidate?: AssistantMessage;
   attempt: EmbeddedRunAttemptResult;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   attemptCompactionCount: number;
   runtimeAuthPlan: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["runtimeAuthPlan"];
   resolvedSessionKey: string;
@@ -141,7 +144,8 @@ export async function recoverEmbeddedRunOverflow(input: {
   }
 
   const providerPromptRejection =
-    contextOverflowError.source === "assistantError" || input.attempt.promptErrorSource === "prompt"
+    contextOverflowError.source === "assistantError" ||
+    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "prompt"
       ? markLastProviderPromptContextRejected(getProviderPromptState(input.runParams.runId))
       : undefined;
 
@@ -346,6 +350,8 @@ export async function recoverEmbeddedRunOverflow(input: {
       }
       if (preflightRecovery?.route === "compact_then_truncate") {
         const sessionAfterCompaction = input.getActiveSession();
+        // Recovery must preserve stored rows and branch from the frozen provider projection.
+        // Rewriting in place erases audit history and can persist bytes the provider never saw.
         const truncResult = await truncateOversizedToolResultsInActiveTarget({
           scope: {
             sessionId: sessionAfterCompaction.id,
@@ -356,11 +362,9 @@ export async function recoverEmbeddedRunOverflow(input: {
           contextWindowTokens: input.contextTokenBudget,
           maxCharsOverride: resolveLiveToolResultMaxChars({
             contextWindowTokens: input.contextTokenBudget,
-            cfg: runParams.config,
-            agentId: input.sessionAgentId,
           }),
-          config: runParams.config,
           protectTrailingToolResults: true,
+          projectionState: input.toolResultPromptProjectionState,
         });
         if (truncResult.truncated) {
           log.info(
@@ -390,8 +394,6 @@ export async function recoverEmbeddedRunOverflow(input: {
   if (!input.state.toolResultTruncationAttempted) {
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: input.contextTokenBudget,
-      cfg: runParams.config,
-      agentId: input.sessionAgentId,
     });
     const hasOversized = input.attempt.messagesSnapshot
       ? sessionLikelyHasOversizedToolResults({
@@ -407,6 +409,8 @@ export async function recoverEmbeddedRunOverflow(input: {
           `(contextWindow=${input.contextTokenBudget} tokens)`,
       );
       const session = input.getActiveSession();
+      // Recovery must preserve stored rows and branch from the frozen provider projection.
+      // Rewriting in place erases audit history and can persist bytes the provider never saw.
       const truncResult = await truncateOversizedToolResultsInActiveTarget({
         scope: {
           sessionId: session.id,
@@ -416,8 +420,8 @@ export async function recoverEmbeddedRunOverflow(input: {
         },
         contextWindowTokens: input.contextTokenBudget,
         maxCharsOverride: toolResultMaxChars,
-        config: runParams.config,
         protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
+        projectionState: input.toolResultPromptProjectionState,
       });
       if (truncResult.truncated) {
         log.info(

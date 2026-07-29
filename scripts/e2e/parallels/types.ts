@@ -53,6 +53,7 @@ export interface NpmRegistryPackage {
 }
 
 export interface NpmRegistryServer {
+  hostUrl: string;
   url: string;
   stop(): Promise<void>;
 }

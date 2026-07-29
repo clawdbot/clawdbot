@@ -363,6 +363,9 @@ export function reconcileSessionChanged(
   if (rowFields.archivedAt === null) {
     delete row.archivedAt;
   }
+  if (rowFields.archivedBy === null) {
+    delete row.archivedBy;
+  }
   if (rowFields.pinnedAt === null) {
     delete row.pinnedAt;
   }

@@ -1,6 +1,8 @@
 import { createServer, get } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
+import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import type { SetupInferenceDetection } from "./setup-inference.js";
 
 const blockingWorkerUrl = new URL(
@@ -20,8 +22,8 @@ function emptyDetection(): SetupInferenceDetection {
     unavailableCandidates: [],
     manualProviders: [],
     authOptions: [],
-    recommendedInstalls: [],
-    workspace: "/tmp/work",
+    recommendedInstalls: listRecommendedToolInstalls(),
+    workspace: DEFAULT_AGENT_WORKSPACE_DIR,
     setupComplete: false,
   };
 }
@@ -129,7 +131,7 @@ describe("isolated setup inference detection", () => {
       {
         kind: "anthropic-api-key",
         brandId: "anthropic",
-        modelRef: "anthropic/claude-opus-4-8",
+        modelRef: "anthropic/claude-opus-5",
         label: "Anthropic API key",
         detail: "ANTHROPIC_API_KEY set",
         credentials: true,

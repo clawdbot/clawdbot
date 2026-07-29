@@ -1,6 +1,4 @@
 /** Tests auto-reply status message formatting. */
-import fs from "node:fs";
-import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
@@ -10,11 +8,17 @@ import {
   providerContextTokenCacheKey,
 } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import {
   buildStatusMessage as buildStatusMessageRaw,
   type buildStatusMessage as BuildStatusMessage,
 } from "../status/status-message.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import { buildCommandsMessage, buildCommandsMessagePaginated, buildHelpMessage } from "./status.js";
 
@@ -834,7 +838,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
       },
       sessionKey: "agent:main:main",
@@ -875,7 +879,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "channel-context-window",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
         totalTokens: 49_000,
         totalTokensFresh: true,
@@ -1071,9 +1075,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 1_048_576,
@@ -1105,9 +1112,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "claude-opus-4-7",
         modelProvider: "claude-cli",
         model: "claude-opus-4-7",
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
         inputTokens: 29,
         outputTokens: 19_000,
         cacheRead: 3_000_000,
@@ -1158,9 +1168,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "claude-opus-4-7",
         modelProvider: "claude-cli",
         model: "claude-opus-4-7",
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
         inputTokens: 29,
         outputTokens: 19_000,
       },
@@ -1204,9 +1217,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 1_048_576,
@@ -1249,9 +1265,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 123_456,
@@ -1296,9 +1315,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
       },
@@ -1342,9 +1364,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
       },
@@ -1387,9 +1412,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
       },
@@ -1429,9 +1457,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "custom-runtime",
         model: "unknown-fallback-model",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "custom-runtime/unknown-fallback-model",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 128_000,
@@ -1632,9 +1663,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "gpt-4.1-mini",
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
-        fallbackNoticeSelectedModel: "openai/gpt-4.1-mini",
-        fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
-        fallbackNoticeReason: "rate limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "openai/gpt-4.1-mini",
+          activeModel: "anthropic/claude-haiku-4-5",
+          reason: "rate limit",
+        },
         contextTokens: 32_000,
       },
       sessionKey: "agent:main:main",
@@ -1664,9 +1698,12 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
-        fallbackNoticeSelectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-        fallbackNoticeReason: "rate limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
+          reason: "rate limit",
+        },
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -1692,7 +1729,6 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         modelProvider: "openai",
         model: "gpt-4.1-mini",
-        fallbackNoticeReason: "unknown",
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -1981,29 +2017,21 @@ describe("buildStatusMessage", () => {
       totalTokens: number;
     };
   }) {
-    const logPath = path.join(
-      params.dir,
-      ".openclaw",
-      "agents",
-      params.agentId,
-      "sessions",
-      `${params.sessionId}.jsonl`,
-    );
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    fs.writeFileSync(
-      logPath,
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            model: params.model ?? "claude-opus-4-6",
-            usage: params.usage,
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
+    void params.dir;
+    const scope = {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: `agent:${params.agentId}:main`,
+      storePath: resolveStorePath(undefined, { agentId: params.agentId }),
+    };
+    replaceSessionEntrySync(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
+    appendTranscriptMessageSync(scope, {
+      message: {
+        role: "assistant",
+        model: params.model ?? "claude-opus-4-6",
+        usage: params.usage,
+      },
+    });
   }
 
   const baselineTranscriptUsage = {
@@ -2249,51 +2277,28 @@ describe("buildStatusMessage", () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-cache-delivery-mirror";
-        const logPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "sessions",
-          `${sessionId}.jsonl`,
-        );
-        fs.mkdirSync(path.dirname(logPath), { recursive: true });
-        fs.writeFileSync(
-          logPath,
-          [
-            JSON.stringify({ type: "session", version: 1, id: sessionId }),
-            JSON.stringify({
-              type: "message",
-              message: {
-                role: "assistant",
-                provider: "anthropic",
-                model: "claude-opus-4-6",
-                usage: {
-                  input: 1,
-                  output: 2,
-                  cacheRead: 1000,
-                  cacheWrite: 0,
-                  totalTokens: 1003,
-                },
+        writeBaselineTranscriptUsageLog({ dir, agentId: "main", sessionId });
+        appendTranscriptMessageSync(
+          {
+            agentId: "main",
+            sessionId,
+            sessionKey: "agent:main:main",
+            storePath: resolveStorePath(undefined, { agentId: "main" }),
+          },
+          {
+            message: {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
               },
-            }),
-            JSON.stringify({
-              type: "message",
-              message: {
-                role: "assistant",
-                provider: "openclaw",
-                model: "delivery-mirror",
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                },
-              },
-            }),
-          ].join("\n"),
-          "utf-8",
+            },
+          },
         );
 
         const text = buildTranscriptStatusText({
@@ -2456,9 +2461,12 @@ describe("buildStatusMessage", () => {
         providerOverride: "xiaomi",
         modelOverride: "mimo-v2-flash",
         model: "fake-minimax/FakeMiniMax-M2.5",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "fake-minimax/FakeMiniMax-M2.5",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "fake-minimax/FakeMiniMax-M2.5",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
       },
@@ -2657,9 +2665,12 @@ describe("buildStatusMessage", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "custom-runtime",
         model: "unknown-fallback-model",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "custom-runtime/unknown-fallback-model",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         contextTokens: 128_000,

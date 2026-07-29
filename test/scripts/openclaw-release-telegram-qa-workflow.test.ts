@@ -25,6 +25,7 @@ type WorkflowJob = {
     run?: string;
     uses?: string;
     with?: Record<string, unknown>;
+    "working-directory"?: string;
   }>;
   uses?: string;
   with?: Record<string, unknown>;
@@ -459,6 +460,22 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
+  it("resolves pnpm from the candidate package-manager pin", () => {
+    const buildJob = workflowJob("build_candidate");
+    const installStep = workflowStep(
+      buildJob,
+      "Install candidate dependencies without runner credentials",
+    );
+    const buildStep = workflowStep(buildJob, "Build candidate runtime without runner credentials");
+
+    expect(installStep["working-directory"]).toBe(".candidate");
+    expect(installStep.run).toContain("pnpm install");
+    expect(installStep.run).not.toContain("pnpm --dir .candidate");
+    expect(buildStep["working-directory"]).toBe(".candidate");
+    expect(buildStep.run).toContain("pnpm exec node scripts/build-all.mjs qaRuntime");
+    expect(buildStep.run).not.toContain("pnpm --dir .candidate");
+  });
+
   it("allows the tracked-file index to exceed Node's default child-process buffer", () => {
     const compareStep = workflowStep(
       workflowJob("attest_candidate"),
@@ -595,9 +612,14 @@ describe("release Telegram QA workflow", () => {
       "Telegram channel canary failed; skipping the remaining scenarios.",
     );
     expect(runStep?.run).toContain("--list-scenarios");
-    expect(runStep?.run).toContain('"$scenario_id" != "channel-canary"');
+    expect(runStep?.run).toContain('if [[ "$scenario_id" == "channel-canary" ]]; then');
+    expect(runStep?.run).toContain("has_channel_canary=true");
+    expect(runStep?.run).toContain("Candidate Telegram QA catalog has no default scenarios.");
     expect(runStep?.run).toContain(
       'run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"',
+    );
+    expect(runStep?.run?.indexOf("--list-scenarios")).toBeLessThan(
+      runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary") ?? -1,
     );
     expect(
       runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary"),
@@ -827,6 +849,19 @@ describe("release Telegram QA workflow", () => {
     expect(source).not.toMatch(/^\s+node_bin="\$\(realpath -e "\$\(command -v node\)"\)"$/mu);
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
     expect(source).toContain("sudo install -d -o root -g root -m 0700 /tmp/openclaw");
+    expect(source).toContain('candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"');
+    expect(source).toContain(
+      'sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"',
+    );
+    expect(source).toContain(
+      '[[ "$(stat -c \'%F:%a:%u:%g\' "$candidate_artifacts_dir")" == "directory:700:${sut_uid}:${sut_gid}" ]]',
+    );
+    expect(source).toContain("printf 'CANDIDATE_ARTIFACTS_DIR=%q\\n' \"$candidate_artifacts_dir\"");
+    expect(source).toContain("export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN");
+    expect(source).toContain(
+      '[[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -w "$CANDIDATE_ARTIFACTS_DIR" ]]',
+    );
+    expect(source).toContain("CANDIDATE_ARTIFACTS_DIR \\");
     expect(source).toContain(
       '-m 0711 \\\n            "${runtime_root}/tmp/openclaw-${runner_uid}"',
     );

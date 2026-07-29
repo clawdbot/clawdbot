@@ -403,7 +403,7 @@ describe("scripts/test-docker-all scheduler", () => {
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
       expect(summary.status).toBe("passed");
       expect(summary.lanes).toEqual([]);
-      expect(summary.omittedUnsupportedLanes).toHaveLength(11);
+      expect(summary.omittedUnsupportedLanes).toHaveLength(12);
       expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
       expect(summary.omittedUnsupportedLanes).toContain(
         "published-upgrade-survivor-versioned-runtime-deps",

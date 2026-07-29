@@ -4,8 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
-import type { UserProfile } from "../packages/gateway-protocol/src/index.js";
+import type {
+  RequestFrame,
+  SystemAgentChatHistoryResult,
+  SystemAgentChatQuestion,
+  SystemAgentChatResult,
+  SystemChangesListResult,
+  UserProfile,
+} from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
+import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
   createControlUiMockBootstrapConfig,
@@ -18,23 +27,42 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
 import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
-import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
+import {
+  buildChannelsPairingMock,
+  buildChannelsStatusMock,
+  buildChannelWizardMocks,
+} from "./control-ui-mock-channels.ts";
+import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "board";
+  fixture?: "approval" | "board" | "swarm";
   host: string;
   port: number;
 };
 
 type SessionListOptions = {
+  creators?: readonly SessionCreatorFixture[];
   hasMore: boolean;
   nextOffset: number | null;
   offset?: number;
   totalCount: number;
 };
+
+type SessionCreatorFixture = { type: "human" | "agent"; id: string; label: string };
+
+// Two creator identities so the sidebar's collaborative ownership chrome
+// (owner avatars + People filter) renders in the mock harness.
+const MOCK_SESSION_CREATORS: readonly SessionCreatorFixture[] = [
+  { type: "human", id: "profile-peter", label: "Peter" },
+  { type: "human", id: "profile-mira", label: "Mira" },
+];
+const [MOCK_CREATOR_PETER, MOCK_CREATOR_MIRA] = MOCK_SESSION_CREATORS as [
+  SessionCreatorFixture,
+  SessionCreatorFixture,
+];
 
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
@@ -44,6 +72,7 @@ const NARRATION_DEMO_SESSION_KEY = "agent:main:sidebar-narration-demo";
 const NARRATION_DEMO_RUN_ID = "mock-sidebar-narration-run";
 const OBSERVER_DEMO_SESSION_KEY = "agent:main:session-observer-demo";
 const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
+const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -126,11 +155,11 @@ function parseArgs(args: string[]): CliOptions {
   return options;
 }
 
-function parseFixture(value: string | undefined): "board" | undefined {
+function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (value !== "board") {
+  if (value !== "approval" && value !== "board" && value !== "swarm") {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -175,6 +204,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     hasMore: options.hasMore,
     limitApplied: 50,
     nextOffset: options.nextOffset,
+    ...(options.creators ? { creators: options.creators } : {}),
     offset: options.offset ?? 0,
     path: "",
     sessions,
@@ -183,11 +213,16 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   };
 }
 
-function pagedSessionsListResponse(sessions: unknown[], offset: number) {
+function pagedSessionsListResponse(
+  sessions: unknown[],
+  offset: number,
+  creators?: readonly SessionCreatorFixture[],
+) {
   const normalizedOffset = Math.max(0, Math.floor(offset));
   const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
   const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
   return sessionsListResponse(page, {
+    creators,
     hasMore: nextOffset < sessions.length,
     nextOffset: nextOffset < sessions.length ? nextOffset : null,
     offset: normalizedOffset,
@@ -218,17 +253,18 @@ function buildSessionRows(params: {
 function buildSessionListCases(
   sessions: unknown[],
   matchBase: Record<string, unknown> = {},
+  creators?: readonly SessionCreatorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   const cases: Array<{ match: Record<string, unknown>; response: unknown }> = [];
   for (let offset = SESSION_PAGE_SIZE; offset < sessions.length; offset += SESSION_PAGE_SIZE) {
     cases.push({
       match: { ...matchBase, offset },
-      response: pagedSessionsListResponse(sessions, offset),
+      response: pagedSessionsListResponse(sessions, offset, creators),
     });
   }
   cases.push({
     match: matchBase,
-    response: pagedSessionsListResponse(sessions, 0),
+    response: pagedSessionsListResponse(sessions, 0, creators),
   });
   return cases;
 }
@@ -607,13 +643,23 @@ function buildProfileUsageMocks(baseTime: number) {
  * across a few real section keys, and `config.get` returns a matching
  * snapshot with the hash `config.set`/`config.apply` are guarded by.
  */
-function buildConfigMocks() {
+function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
+    ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
+    channels: {
+      whatsapp: {
+        enabled: true,
+        allowFrom: ["+15551234567"],
+        dmPolicy: "pairing",
+        groupPolicy: "allowlist",
+        selfChatMode: "off",
+      },
+    },
     mcp: {
       servers: {
         context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
@@ -644,6 +690,38 @@ function buildConfigMocks() {
             type: "boolean",
             title: "Console timestamps",
             description: "Prefix console log lines with a timestamp.",
+          },
+        },
+      },
+      talk: {
+        type: "object",
+        title: "Talk",
+        properties: {
+          interruptOnSpeech: {
+            type: "boolean",
+            title: "Talk Interrupt on Speech",
+            description: "Stop speaking when the user talks over the assistant.",
+          },
+          realtime: {
+            type: "object",
+            title: "Talk Realtime",
+            properties: {
+              provider: {
+                type: "string",
+                title: "Talk Realtime Provider",
+                description: "Active realtime voice provider id, such as openai or google.",
+              },
+              model: {
+                type: "string",
+                title: "Talk Realtime Model",
+                description: "Realtime voice model for browser Talk sessions.",
+              },
+              speakerVoice: {
+                type: "string",
+                title: "Talk Realtime Speaker Voice",
+                description: "Built-in realtime voice id.",
+              },
+            },
           },
         },
       },
@@ -700,6 +778,59 @@ function buildConfigMocks() {
           },
         },
       },
+      // Channel settings are the one schema surface the channels page renders,
+      // so the fixture keeps both tiers represented.
+      channels: {
+        type: "object",
+        title: "Channels",
+        properties: {
+          whatsapp: {
+            type: "object",
+            title: "WhatsApp",
+            properties: {
+              enabled: { type: "boolean", title: "Enabled" },
+              allowFrom: { type: "array", title: "Allow from", items: { type: "string" } },
+              dmPolicy: { type: "string", title: "DM policy", enum: ["pairing", "open", "off"] },
+              groupPolicy: {
+                type: "string",
+                title: "Group policy",
+                enum: ["allowlist", "open", "off"],
+              },
+              // Channel-specific leaves carry their help from the plugin's own
+              // uiHints in production; the fixture uses schema descriptions,
+              // which resolve through the same field-meta fallback.
+              selfChatMode: {
+                type: "string",
+                title: "Self chat mode",
+                description: "Same-phone setup (bot uses your personal WhatsApp number).",
+                enum: ["off", "notes"],
+              },
+              configWrites: { type: "boolean", title: "Config writes" },
+              streaming: {
+                type: "object",
+                title: "Streaming",
+                properties: {
+                  progress: {
+                    type: "object",
+                    properties: {
+                      maxLines: { type: "integer", title: "Progress max lines" },
+                      toolProgress: { type: "boolean", title: "Progress tool lines" },
+                    },
+                  },
+                },
+              },
+              healthMonitor: {
+                type: "object",
+                title: "Health monitor",
+                properties: {
+                  enabled: { type: "boolean", title: "Enabled" },
+                },
+              },
+              mediaMaxMb: { type: "number", title: "Media max MB" },
+            },
+          },
+        },
+      },
     },
   };
   return {
@@ -715,7 +846,14 @@ function buildConfigMocks() {
     },
     schema: {
       schema,
-      uiHints: {},
+      // Resolve tiers and shared channel help the way the gateway does so the
+      // mock reproduces the real split and subtext instead of bare labels.
+      uiHints: applySharedChannelFieldHelp(
+        applyResolvedConfigTierHints(
+          schema,
+          applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+        ),
+      ),
       version: "mock-config-schema",
       generatedAt: new Date(0).toISOString(),
     },
@@ -799,7 +937,9 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
-async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
+async function createChatPickerScenario(
+  fixture?: CliOptions["fixture"],
+): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
   const selfProfile: UserProfile = {
     id: "presence-riley",
@@ -819,6 +959,11 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     "utf8",
   ).toString("base64url");
   const devicePairQrDataUrl = await qrcode.toDataURL(devicePairSetupCode, {
+    errorCorrectionLevel: "M",
+    margin: 2,
+    width: 360,
+  });
+  const whatsappLoginQrDataUrl = await qrcode.toDataURL("mock-whatsapp-login", {
     errorCorrectionLevel: "M",
     margin: 2,
     width: 360,
@@ -1061,10 +1206,61 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       runtimeMs: 200_000,
     },
   );
+  const swarmGroupId = "swarm:agent:main:main:mock-turn";
+  const swarmChildRows =
+    fixture === "swarm"
+      ? [
+          sessionRow("agent:main:subagent:swarm-plan", "National polling", baseTime - 9_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "done",
+          }),
+          sessionRow("agent:main:subagent:swarm-work", "Work and labor", baseTime - 8_000, {
+            hasActiveRun: true,
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmLog: "Comparing labor, education, and consumer signals.",
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "running",
+          }),
+          sessionRow("agent:main:subagent:swarm-health", "Health", baseTime - 7_000, {
+            hasActiveRun: true,
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "running",
+          }),
+          sessionRow("agent:main:subagent:swarm-trust", "Governance and trust", baseTime - 6_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            subagentRunState: "active",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: undefined,
+          }),
+          sessionRow("agent:main:subagent:swarm-media", "Media signals", baseTime - 5_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "failed",
+          }),
+        ]
+      : [];
   const sessions = [
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
-      childSessions: ["agent:main:lisbon-trip"],
+      childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
     }),
+    ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
       activeRunIds: [OBSERVER_DEMO_RUN_ID],
       hasActiveRun: true,
@@ -1080,6 +1276,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       status: "running",
     }),
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
+      createdActor: MOCK_CREATOR_MIRA,
       hasActiveRun: true,
       startedAt: baseTime - 45_000,
       status: "running",
@@ -1092,14 +1289,18 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       icon: "name:spark",
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
+      category: "Research",
+      createdActor: MOCK_CREATOR_MIRA,
       execCwd: "/Users/peter/Projects/clawdbot",
     }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
+      category: "Research",
       execCwd: "/Users/peter/Projects/openclaw",
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
+      createdActor: MOCK_CREATOR_PETER,
       execCwd: "/Users/peter/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       observerDigest: {
@@ -1144,6 +1345,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const archivedSessions = [
     sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
       archived: true,
+      archivedBy: MOCK_CREATOR_MIRA,
+      createdActor: MOCK_CREATOR_PETER,
       totalTokens: 42_000,
     }),
     sessionRow(
@@ -1177,8 +1380,56 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
+  const cronMocks = buildCronMocks(Date.now());
   const channelWizard = buildChannelWizardMocks();
-  const configMocks = buildConfigMocks();
+  const configMocks = buildConfigMocks({ swarmEnabled: fixture === "swarm" });
+  const custodianHistory = {
+    turns: [
+      {
+        role: "user",
+        text: "Can you check whether this system is ready?",
+        at: baseTime - 18 * 60_000,
+      },
+      {
+        role: "assistant",
+        text: "Everything important is connected. I’ll keep watching for changes.",
+        at: baseTime - 17 * 60_000,
+      },
+      {
+        role: "user",
+        text: "Please remember that I prefer concise updates.",
+        at: baseTime - 16 * 60_000,
+      },
+    ],
+  } satisfies SystemAgentChatHistoryResult;
+  const custodianChanges = {
+    entries: [
+      {
+        id: "mock-system-agent-model",
+        at: baseTime - 6 * 60_000,
+        kind: "operation",
+        source: "system-agent",
+        summary: "Updated the default model for the main agent",
+        changedPaths: ["agents.defaults.model"],
+      },
+      {
+        id: "mock-plugin-install",
+        at: baseTime - 42 * 60_000,
+        kind: "config-write",
+        source: "plugin-install",
+        summary: "Enabled the Telegram plugin",
+        changedPaths: ["plugins.entries.telegram.enabled"],
+      },
+      {
+        id: "mock-doctor-repair",
+        at: baseTime - 2 * 60 * 60_000,
+        kind: "config-write",
+        source: "doctor",
+        summary: "Repaired a stale channel account reference",
+        changedPaths: ["channels.whatsapp.defaultAccount"],
+      },
+    ],
+  } satisfies SystemChangesListResult;
   return {
     assistantAgentId: "main",
     assistantName: "Molty",
@@ -1187,6 +1438,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "chat.metadata",
       "chat.startup",
       "question.list",
+      "openclaw.changes.list",
+      "openclaw.chat",
+      "openclaw.chat.history",
       "sessions.diff",
       "sessions.files.set",
       "system.info",
@@ -1206,7 +1460,66 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      ...cronMocks,
       "users.self": { profile: selfProfile },
+      // Talk settings page pickers: realtime catalog with the model/voice
+      // suggestion lists the gateway emits for provider entries.
+      "talk.catalog": {
+        modes: ["realtime", "stt-tts", "transcription"],
+        transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
+        brains: ["agent-consult", "direct-tools", "none"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          ready: true,
+          activeProvider: "openai",
+          providers: [
+            {
+              id: "openai",
+              label: "OpenAI Realtime Voice",
+              configured: true,
+              defaultModel: "gpt-realtime-2.1",
+              transports: ["webrtc", "gateway-relay"],
+              models: [
+                "gpt-realtime-2.1",
+                "gpt-realtime-2.1-mini",
+                "gpt-realtime-2",
+                "gpt-live-1-codex",
+                "gpt-live-1-boulder-alpha",
+              ],
+              voices: [
+                "alloy",
+                "ash",
+                "ballad",
+                "cedar",
+                "coral",
+                "echo",
+                "marin",
+                "sage",
+                "shimmer",
+                "verse",
+              ],
+              modes: ["realtime"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: true,
+            },
+            {
+              id: "xai",
+              label: "xAI Grok Voice",
+              configured: false,
+              defaultModel: "grok-voice-latest",
+              transports: ["gateway-relay"],
+              voices: ["eve", "ara", "rex", "sal", "leo"],
+              modes: ["realtime"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: false,
+            },
+          ],
+        },
+      },
+      // Custom session group catalog so the sidebar's category zone (and its
+      // drag-reordering against built-in sections) is exercised in the mock.
+      "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
       "system.info": {
         machineName: "Peters-Mac-Studio",
         hostname: "peters-mac-studio.local",
@@ -1305,6 +1618,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
       "config.schema": configMocks.schema,
+      "openclaw.chat.history": custodianHistory,
+      "openclaw.changes.list": custodianChanges,
       // The sidebar recovers pending questions through question.list after the
       // hello handshake, so this remains visible after a mock-page refresh.
       "question.list": {
@@ -1330,17 +1645,23 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
-      "exec.approval.list": [
-        {
-          id: "mock-production-export-approval",
-          request: {
-            command: "openclaw export --target production",
-            sessionKey: "agent:main:production-export",
-          },
-          createdAtMs: baseTime - 75_000,
-          expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
-        },
-      ],
+      // Pending exec approvals reopen as a blocking modal on every page load
+      // (connect-time exec.approval.list recovery), so the demo approval is
+      // opt-in via --fixture=approval instead of polluting the default mock.
+      "exec.approval.list":
+        fixture === "approval"
+          ? [
+              {
+                id: "mock-production-export-approval",
+                request: {
+                  command: "openclaw export --target production",
+                  sessionKey: "agent:main:production-export",
+                },
+                createdAtMs: baseTime - 75_000,
+                expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+              },
+            ]
+          : [],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
       "sessions.patch": { ok: true },
@@ -1377,6 +1698,42 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
+      "channels.pairing.list": buildChannelsPairingMock(baseTime),
+      "channels.pairing.approve": {
+        cases: [
+          {
+            match: { requestId: "pairing-req-1" },
+            response: {
+              requestId: "pairing-req-1",
+              senderId: "552731142",
+              notification: "sent",
+              commandOwnerBootstrap: "not-requested",
+            },
+          },
+          {
+            response: {
+              requestId: "pairing-req-2",
+              senderId: "+1 555 0192",
+              notification: "unsupported",
+              commandOwnerBootstrap: "not-requested",
+            },
+          },
+        ],
+      },
+      "channels.pairing.dismiss": {
+        cases: [
+          {
+            match: { requestId: "pairing-req-1" },
+            response: { requestId: "pairing-req-1", senderId: "552731142" },
+          },
+          { response: { requestId: "pairing-req-2", senderId: "+1 555 0192" } },
+        ],
+      },
+      "web.login.start": {
+        message: "Scan the QR code with WhatsApp to link this device.",
+        qrDataUrl: whatsappLoginQrDataUrl,
+      },
+      "web.login.wait": { message: "Linked.", connected: true },
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
@@ -1680,13 +2037,13 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
-      "sessions.observer.ask": {
+      "sessions.companion.ask": {
         cases: [
           {
             match: { sessionKey: OBSERVER_DEMO_SESSION_KEY },
             response: {
               answer: "It is rerunning the focused test to check whether the latest fix is stable.",
-              digestRevision: 4,
+              ts: baseTime + 2_000,
             },
           },
         ],
@@ -1696,7 +2053,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           // Child fetches must precede the catch-all page case (subset match).
           {
             match: { spawnedBy: "agent:main:main" },
-            response: pagedSessionsListResponse([mainChildRow], 0),
+            response: pagedSessionsListResponse([mainChildRow, ...swarmChildRows], 0),
           },
           {
             match: { spawnedBy: "agent:main:tax-research" },
@@ -1708,7 +2065,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases([...sessions, ...archivedSessions]),
+          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_CREATORS),
         ],
       },
     },
@@ -1787,8 +2144,117 @@ function escapeScriptContent(script: string): string {
   return script.replaceAll("</script", "<\\/script");
 }
 
+/** Adds the one stateful mock surface the generic scenario fixture cannot express. */
+function installControlUiCustodianMock(replyDelayMs: number): void {
+  type MockGatewayControls = {
+    deferNext: (method: string) => void;
+    resolveDeferred: (method: string, payload: unknown) => void;
+  };
+  type MockWindow = Window & {
+    openclawControlUiE2eGateway?: MockGatewayControls;
+  };
+
+  const gateway = (window as MockWindow).openclawControlUiE2eGateway;
+  const MockWebSocket = window.WebSocket;
+  if (!gateway || !MockWebSocket) {
+    return;
+  }
+  const sendDescriptor = Object.getOwnPropertyDescriptor(MockWebSocket.prototype, "send");
+  const originalSend = sendDescriptor?.value as WebSocket["send"] | undefined;
+  if (typeof originalSend !== "function") {
+    return;
+  }
+  const sendOriginal = (socket: WebSocket, data: Parameters<WebSocket["send"]>[0]): void => {
+    Reflect.apply(originalSend, socket, [data]);
+  };
+  const sessionTurns = new Map<string, number>();
+  MockWebSocket.prototype.send = function (data): void {
+    let frame: RequestFrame | null = null;
+    if (typeof data === "string") {
+      try {
+        frame = JSON.parse(data) as RequestFrame;
+      } catch {
+        frame = null;
+      }
+    }
+    if (frame?.type !== "req" || frame.method !== "openclaw.chat") {
+      sendOriginal(this, data);
+      return;
+    }
+
+    const params =
+      frame.params && typeof frame.params === "object"
+        ? (frame.params as { message?: unknown; sessionId?: unknown })
+        : {};
+    const sessionId =
+      typeof params.sessionId === "string" && params.sessionId.trim()
+        ? params.sessionId
+        : "control-ui-custodian-mock";
+    const message = typeof params.message === "string" ? params.message : undefined;
+    const turn = sessionTurns.get(sessionId) ?? 0;
+    sessionTurns.set(sessionId, turn + 1);
+    const channelQuestion = {
+      id: "mock-channel-choice",
+      header: "Channel setup",
+      question: "Which channel would you like to work on?",
+      options: [
+        {
+          label: "WhatsApp",
+          reply: "help me connect WhatsApp",
+          description: "Review linking and account status.",
+          recommended: true,
+        },
+        {
+          label: "Telegram",
+          reply: "help me connect Telegram",
+          description: "Review the bot token and delivery status.",
+        },
+        {
+          label: "Discord",
+          reply: "help me connect Discord",
+          description: "Review the bot and server connection.",
+        },
+      ],
+      isOther: true,
+    } satisfies SystemAgentChatQuestion;
+    const response: SystemAgentChatResult = message
+      ? message.toLowerCase().includes("channel")
+        ? {
+            sessionId,
+            reply: "I can help with that.\n\nChoose a channel to continue.",
+            action: "none",
+            question: channelQuestion,
+          }
+        : {
+            sessionId,
+            reply: `I checked the mock system. Everything looks healthy.\n\nThat was demo turn ${turn}.`,
+            action: "none",
+          }
+      : {
+          sessionId,
+          reply:
+            "Hi — I’m OpenClaw, your system caretaker.\n\nAsk me about setup, channels, or recent changes.",
+          action: "none",
+        };
+
+    // Defer before forwarding so the generic gateway records the request but
+    // cannot race its normal immediate response against this stateful reply.
+    gateway.deferNext("openclaw.chat");
+    sendOriginal(this, data);
+    window.setTimeout(
+      () => gateway.resolveDeferred("openclaw.chat", response),
+      message === undefined ? 0 : replyDelayMs,
+    );
+  };
+}
+
+function createCustodianMockInitScript(): string {
+  return `(() => { const __name = (target) => target; (${installControlUiCustodianMock.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}); })();`;
+}
+
 function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
+  const custodianInitScript = escapeScriptContent(createCustodianMockInitScript());
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
   return {
     configureServer(server) {
@@ -1802,7 +2268,7 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n    </script>\n  </head>`,
+        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${custodianInitScript}\n    </script>\n  </head>`,
       );
     },
   };
@@ -1854,7 +2320,7 @@ async function waitForShutdown(): Promise<void> {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const scenario = await createChatPickerScenario();
+const scenario = await createChatPickerScenario(options.fixture);
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),

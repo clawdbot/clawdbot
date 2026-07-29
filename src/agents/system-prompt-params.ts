@@ -55,12 +55,11 @@ export function buildSystemPromptParams(params: {
   runtime: Omit<RuntimeInfoInput, "agentId">;
   workspaceDir?: string;
   cwd?: string;
+  preparedRepoRoot?: string | null;
 }): SystemPromptRuntimeParams {
-  const repoRoot = resolveRepoRoot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-  });
+  const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
+    ? (params.preparedRepoRoot ?? undefined)
+    : resolveSystemPromptRepoRoot(params);
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(undefined);
   const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
@@ -78,7 +77,7 @@ export function buildSystemPromptParams(params: {
   };
 }
 
-function resolveRepoRoot(params: {
+export function resolveSystemPromptRepoRoot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   cwd?: string;

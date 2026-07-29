@@ -137,7 +137,7 @@ describe("runCapability image skip", () => {
   });
 
   it("skips image understanding for a vision model when preferredModel is dangling", async () => {
-    const ctx: MsgContext = { MediaPath: "/tmp/image.png", MediaType: "image/png" };
+    const ctx: MsgContext = { media: [{ path: "/tmp/image.png", contentType: "image/png" }] };
     const media = normalizeMediaAttachments(ctx);
     const cache = createMediaAttachmentCache(media);
     const cfg = {
@@ -184,7 +184,7 @@ describe("runCapability image skip", () => {
         mediaType: "image/png",
         fileContents: Buffer.from("image"),
       },
-      async ({ ctx }) => {
+      async ({ ctx, mediaPath }) => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this image";
@@ -200,7 +200,7 @@ describe("runCapability image skip", () => {
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
-          workspaceDir: path.dirname(ctx.MediaPath),
+          workspaceDir: path.dirname(mediaPath),
           providers: {
             minimax: {
               id: "minimax",
@@ -244,7 +244,7 @@ describe("runCapability image skip", () => {
         mediaType: "image/png",
         fileContents: Buffer.from("image"),
       },
-      async ({ ctx }) => {
+      async ({ ctx, mediaPath }) => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this minimax image";
@@ -260,7 +260,7 @@ describe("runCapability image skip", () => {
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
-          workspaceDir: path.dirname(ctx.MediaPath),
+          workspaceDir: path.dirname(mediaPath),
           providers: {
             minimax: {
               id: "minimax",
@@ -294,7 +294,7 @@ describe("runCapability image skip", () => {
         mediaType: "image/png",
         fileContents: Buffer.from("image"),
       },
-      async ({ ctx }) => {
+      async ({ ctx, mediaPath }) => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this explicit image";
@@ -316,7 +316,7 @@ describe("runCapability image skip", () => {
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
-          workspaceDir: path.dirname(ctx.MediaPath),
+          workspaceDir: path.dirname(mediaPath),
           providers: {
             openrouter: {
               id: "openrouter",

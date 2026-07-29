@@ -24,6 +24,27 @@ afterEach(() => {
 });
 
 describe("SessionPullRequestIndicatorsController", () => {
+  it("does not schedule a Task invalidation loop when no rows are eligible", async () => {
+    vi.useFakeTimers();
+    const host = new TestHost();
+    const controller = new SessionPullRequestIndicatorsController(host, {
+      getConnected: () => true,
+      getRows: () => [],
+      getSelectedAgentId: () => "main",
+      getSnapshot: () =>
+        ({
+          client: {} as GatewayBrowserClient,
+          hello: { features: { methods: ["controlUi.sessionPullRequests"] } },
+        }) as ApplicationGatewaySnapshot,
+    });
+
+    controller.hostConnected();
+    controller.hostUpdated();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(host.requestUpdate).not.toHaveBeenCalled();
+  });
+
   it("refreshes visible PR state and keeps the last value while rate limited", async () => {
     vi.useFakeTimers();
     const host = new TestHost();
@@ -34,7 +55,7 @@ describe("SessionPullRequestIndicatorsController", () => {
     } as SidebarRecentSession;
     let state: "open" | "merged" = "open";
     let rateLimited = false;
-    const request = vi.fn(() =>
+    const request = vi.fn((_method: string, _params: unknown) =>
       Promise.resolve({
         pullRequests: rateLimited
           ? []
@@ -53,7 +74,11 @@ describe("SessionPullRequestIndicatorsController", () => {
       }),
     );
     const snapshot = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string; agentId?: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       hello: { features: { methods: ["controlUi.sessionPullRequests"] } },
     } as ApplicationGatewaySnapshot;
     const controller = new SessionPullRequestIndicatorsController(host, {

@@ -17,11 +17,9 @@ export type {
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
-  CliBackendResolveRuntimeToolAvailability,
-  CliBackendResolveRuntimeToolAvailabilityContext,
-  CliBackendRuntimeToolAvailability,
   CliBackendSideQuestionToolMode,
   CliBackendToolAvailability,
+  CliBackendToolAvailabilityEnforcement,
   CliBackendThinkingLevel,
   CliBundleMcpMode,
   PluginTextTransforms,
@@ -240,8 +238,9 @@ export type {
   VideoGenerationProviderPlugin,
 } from "./capability-provider.types.js";
 export type {
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteAuth,

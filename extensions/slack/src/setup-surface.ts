@@ -1,4 +1,5 @@
 // Slack plugin module implements setup surface behavior.
+import { resolveBasicAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -43,25 +44,11 @@ async function resolveSlackAllowFromEntries(params: {
   token?: string;
   entries: string[];
 }): Promise<ChannelSetupWizardAllowFromEntry[]> {
-  return await resolveEntriesWithOptionalToken({
+  return await resolveBasicAllowFromEntries({
     token: params.token,
     entries: params.entries,
-    buildWithoutToken: (input) => ({
-      input,
-      resolved: false,
-      id: null,
-    }),
     resolveEntries: async ({ token, entries }) =>
-      (
-        await resolveSlackUserAllowlist({
-          token,
-          entries,
-        })
-      ).map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id ?? null,
-      })),
+      await resolveSlackUserAllowlist({ token, entries }),
   });
 }
 

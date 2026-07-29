@@ -4,6 +4,7 @@ import {
   appendTranscriptMessage,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -645,6 +646,51 @@ describe("session upstream monitor", () => {
       expect.objectContaining({ ownRecentUserTexts: ["exact decorated prompt"] }),
     ]);
     expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([]);
+  });
+
+  it("reports a matching external prompt after catalog history import", async () => {
+    const database = createDatabaseOptions();
+    const sessionKey = "agent:main:adopted:catalog-import";
+    const sessionId = "session-catalog-import";
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, env: database.env },
+      { sessionId, updatedAt: 1 },
+    );
+    await importSessionCatalogHistory({
+      catalogId: "pi",
+      threadId: "thread-pi",
+      read: async () => ({
+        hostId: "gateway",
+        threadId: "thread-pi",
+        items: [{ id: "native-user-1", type: "userMessage", text: "repeat me" }],
+      }),
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      config: {},
+    });
+    createLink(sessionKey, "pi", database);
+    const check = vi.fn(async (probes: SessionUpstreamProbe[]) => [
+      {
+        kind: "activity" as const,
+        sessionKey,
+        occurredAt: 20_000,
+        humanTurns: probes[0]?.ownRecentUserTexts.includes("repeat me") ? 0 : 1,
+        nextMarker: { offset: 20 },
+        dedupeId: "20",
+      },
+    ]);
+
+    await runSessionUpstreamMonitorTick({
+      ...database,
+      providers: [provider("pi", check)],
+      isRunActive: () => false,
+    });
+
+    expect(check).toHaveBeenCalledWith([expect.objectContaining({ ownRecentUserTexts: [] })]);
+    expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([
+      expect.objectContaining({ kind: "human_direct_message", summary: "human message via pi" }),
+    ]);
   });
 
   it("records an external prompt five seconds after OpenClaw activity", async () => {

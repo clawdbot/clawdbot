@@ -30,15 +30,6 @@ const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
   progress: SlackStreamingProgressSchema.optional(),
 }).strict();
-const SlackCapabilitiesSchema = z.union([
-  z.array(z.string()),
-  z
-    .object({
-      interactiveReplies: z.boolean().optional(),
-    })
-    .strict(),
-]);
-
 const SlackDmSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -95,7 +86,6 @@ const SlackAccountSchema = z
   .object({
     ...buildCommonChannelAccountShape({
       omit: ["groupAllowFrom"],
-      capabilities: SlackCapabilitiesSchema.optional(),
       streaming: SlackStreamingConfigSchema.optional(),
     }),
     postAs: SlackIdentitySchema.default("bot"),

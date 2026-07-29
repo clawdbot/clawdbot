@@ -12,6 +12,31 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
 describe("plugin harness prompt media", () => {
+  it("does not hydrate marker or bare paths from recalled memory context", async () => {
+    const recalledMemory = [
+      "<relevant-memories>",
+      "1. [fact] stale [media attached: /tmp/some.png] and /tmp/other.png",
+      "</relevant-memories>",
+    ].join("\n");
+
+    await expect(
+      preparePluginHarnessPromptImages({
+        runParams: {
+          agentId: "main",
+          config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+          prompt: `${recalledMemory}\n\ncurrent question`,
+          sessionId: "session-recalled-memory",
+        },
+        runtime: {
+          model: { input: ["text", "image"] },
+          sessionId: "session-recalled-memory",
+          workspaceDir: "/tmp",
+        },
+        pluginHarnessOwnsTransport: true,
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
+    ).resolves.toEqual({ images: undefined, imageOrder: undefined, media: undefined });
+  });
+
   it("hydrates plugin images and preserves serialized replay order with non-image facts", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-media-"));
     const workspaceDir = path.join(stateDir, "workspace");
@@ -39,9 +64,8 @@ describe("plugin harness prompt media", () => {
           message: {
             role: "user",
             content: "inspect",
-            MediaPaths: [imagePath, documentFact.path],
-            MediaTypes: ["image/png", "application/pdf"],
             __openclaw: {
+              media: [{ path: imagePath, contentType: "image/png" }, documentFact],
               mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
             },
           },
@@ -183,9 +207,7 @@ describe("plugin harness prompt media", () => {
 
   it("retains an intentionally non-hydrating remote-only image as a type-only fact", async () => {
     const media = buildInboundMediaNoteProjection({
-      MediaPaths: [""],
-      MediaUrls: ["https://example.com/described.png"],
-      MediaTypes: ["image/png"],
+      media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
       MediaUnderstanding: [
         {
           kind: "image.description",
@@ -237,9 +259,11 @@ describe("plugin harness prompt media", () => {
           message: {
             role: "user",
             content: "compare",
-            MediaPaths: ["/tmp/described.png", "/tmp/inline.png"],
-            MediaTypes: ["image/png", "image/png"],
             __openclaw: {
+              media: [
+                { path: "/tmp/described.png", contentType: "image/png" },
+                { path: "/tmp/inline.png", contentType: "image/png" },
+              ],
               mediaImageLayout: {
                 slots: [{ kind: "inline", factIndex: 1 }],
                 suppressedFactIndexes: [0],
