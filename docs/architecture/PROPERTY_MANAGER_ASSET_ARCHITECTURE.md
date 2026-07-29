@@ -1,7 +1,7 @@
 ---
 title: "PropertyManager Asset Architecture"
-version: "1.0"
-status: "Architecture — Phase 0"
+version: "1.1"
+status: "Architecture — Phase 1 implemented (dev VM)"
 owner: "OpenClaw Architecture"
 last_reviewed: "2026-07-29"
 category: "Architecture"
@@ -10,8 +10,8 @@ source_document: "PROPERTY_MANAGER_ASSET_ARCHITECTURE.md"
 
 # PropertyManager Asset Architecture
 
-Version: 1.0  
-Status: **Phase 0 — design only; implementation blocked**  
+Version: 1.1  
+Status: **Phase 1 implemented on development VM**  
 Authority: Requirements in [PropertyManager Foundational Requirements](../foundation/PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md)  
 Last Updated: 2026-07-29
 
@@ -21,7 +21,7 @@ Last Updated: 2026-07-29
 
 Track operating meters (runtime hours, mileage, cycles) for ranch equipment and vehicles. Connect preventive-maintenance schedules to meter intervals from manufacturer manuals. Provide one shared REST API for all client surfaces.
 
-**Implementation is blocked** until operator approval of Phase 0 docs and explicit Phase 1 authorization. All work begins on the **development VM**; production Intel Mini deployment is a separate gated checkpoint.
+**Phase 1 implemented on dev VM (2026-07-29).** Production Intel Mini deployment remains a separate gated checkpoint (Phase 3).
 
 ---
 
@@ -323,7 +323,24 @@ Lists: cursor pagination `?cursor=<opaque>&limit=50`.
 
 ### Health
 
-- `GET /health` — includes `api_version`, `schema_version` (set at Phase 1 implementation time)
+- `GET /health` — includes `api_version`, `schema_version` (`006` as of Phase 1)
+
+### Phase 1 implementation notes (dev VM)
+
+| Area                                            | Status                      |
+| ----------------------------------------------- | --------------------------- |
+| Migration 006 audit fields                      | Implemented                 |
+| `/v1/` asset and meter endpoints                | Implemented                 |
+| Lower-reading preview + confirm                 | Implemented                 |
+| Backdated reading recalc                        | Implemented                 |
+| Idempotency-Key + cursor pagination             | Implemented                 |
+| Optimistic locking (`row_version` / `If-Match`) | Implemented                 |
+| Proposed meter + activate-meter                 | Implemented                 |
+| Mapping proposals + CLI                         | Implemented                 |
+| Dashboard QR auth policy                        | Implemented (PIN / API key) |
+| Completion confirm-or-enter                     | Implemented on API          |
+| Mac/iOS client wiring                           | Planned Phase 2             |
+| Full test matrix (concurrency, offline sync)    | Phase 2 acceptance          |
 
 ---
 

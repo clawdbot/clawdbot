@@ -11,6 +11,10 @@ from flask import Flask, jsonify, request
 import db as pm_db
 import meter_schedule as ms
 from assets_api import register_asset_routes
+from auth import auth_required, auth_status
+from decimal_utils import parse_decimal
+from errors import error_response, validation_error
+from mapping_proposals import register_mapping_routes
 
 app = Flask(__name__)
 
@@ -225,7 +229,7 @@ def enrich_tasks(rows: list[dict]) -> list[dict]:
         if asset_id:
             meter_row = ms.fetch_meter_row(str(asset_id))
             if meter_row:
-                current_meter = ms._as_float(meter_row.get("current_value"))
+                current_meter = ms._as_decimal(meter_row.get("current_value"))
             item = ms.enrich_task_meter_fields(item, current_meter)
         enriched.append(item)
     return enriched
@@ -237,10 +241,11 @@ def health():
         {
             "status": "ok",
             "service": "propertymanager-api",
+            "api_version": "v1",
             "db_mode": "docker_exec" if pm_db.use_docker() else "tcp",
-            "auth_required": False,
-            "schema_version": "005",
+            "schema_version": "006",
             "attachments_root": ATTACHMENTS_ROOT,
+            **auth_status(),
         }
     )
 
@@ -598,7 +603,7 @@ def upsert_task():
 
     if asset_id and schedule_kind in {"meter", "both"}:
         meter_row = ms.fetch_meter_row(str(asset_id))
-        current = ms._as_float((meter_row or {}).get("current_value"))
+        current = ms._as_decimal((meter_row or {}).get("current_value"))
         ms.recalc_tasks_for_asset(str(asset_id), current)
 
     parts = payload.get("parts")
@@ -820,7 +825,10 @@ def create_task_part(task_id: str):
 
 
 @app.post("/tasks/<task_id>/complete")
+@auth_required()
 def complete_task(task_id: str):
+    from flask import g
+
     payload = request.get_json(silent=True) or {}
     note = str(payload.get("note") or "").strip() or None
     completed_at = datetime.now(timezone.utc)
@@ -834,25 +842,33 @@ def complete_task(task_id: str):
         (task_id,),
     )
     if task is None:
-        return jsonify({"error": "Task not found"}), 404
+        return error_response("NOT_FOUND", "Task not found", status=404)
 
     warning_days = int(task.get("warning_days") or 0)
     next_due = completed_at + timedelta(days=max(warning_days, 1))
 
-    meter_value_raw = payload.get("meter_value_at_completion")
     meter_value = None
+    meter_value_raw = payload.get("meter_value_at_completion")
     if meter_value_raw is not None and meter_value_raw != "":
         try:
-            meter_value = float(meter_value_raw)
-        except (TypeError, ValueError):
-            return jsonify({"error": "meter_value_at_completion must be a number"}), 400
+            meter_value = parse_decimal(meter_value_raw, field="meter_value_at_completion")
+        except ValueError as exc:
+            return validation_error(str(exc), field="meter_value_at_completion")
 
-    meter_result = ms.complete_task_meter(
-        task_id,
-        completed_at=completed_at,
-        note=note,
-        meter_value_at_completion=meter_value,
-    )
+    confirm_current = bool(payload.get("confirm_current_meter"))
+
+    try:
+        meter_result = ms.complete_task_meter(
+            task_id,
+            completed_at=completed_at,
+            note=note,
+            meter_value_at_completion=meter_value,
+            confirm_current_meter=confirm_current,
+            operator_identity=getattr(g, "operator_identity", None),
+            integration_identity=getattr(g, "integration_identity", None),
+        )
+    except ValueError as exc:
+        return validation_error(str(exc))
 
     completion_id = str(uuid4())
     pm_db.execute(
@@ -896,6 +912,7 @@ def complete_task(task_id: str):
 
 
 register_asset_routes(app)
+register_mapping_routes(app)
 
 
 if __name__ == "__main__":

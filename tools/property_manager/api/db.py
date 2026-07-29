@@ -83,7 +83,10 @@ def _jsonable(value: Any) -> Any:
     if value is None:
         return None
     if isinstance(value, Decimal):
-        return float(value)
+        text = format(value, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, uuid.UUID):

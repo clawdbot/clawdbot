@@ -1,7 +1,7 @@
 ---
 title: "PropertyManager Foundational Requirements"
-version: "1.0"
-status: "Foundational — Phase 0"
+version: "1.1"
+status: "Phase 1 complete — dev VM implementation"
 owner: "OpenClaw Operator"
 last_reviewed: "2026-07-29"
 category: "Governance"
@@ -10,8 +10,8 @@ source_document: "PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md"
 
 # PropertyManager Foundational Requirements
 
-Version: 1.0  
-Status: **Phase 0 — design only; implementation blocked**  
+Version: 1.1  
+Status: **Phase 1 complete on development VM** — Phase 2 operator acceptance next  
 Owner: OpenClaw Operator  
 Last Updated: 2026-07-29
 
@@ -25,18 +25,20 @@ Implementation details live in [PropertyManager Asset Architecture](../architect
 
 ---
 
-## Phase 0 gate — implementation blocked until operator approval
+## Phase 0 gate — design approved; Phase 1 implemented on dev VM
 
-**No schema migration, API endpoint, dashboard route, Swift client change, or production deployment may proceed until:**
+**Phase 1 (dev VM) delivered 2026-07-29:**
 
-1. This document and the asset architecture document are reviewed and explicitly approved by the operator.
-2. The Phase 0 design review checklist (below) is signed off.
-3. A separate Phase 1 authorization is issued for implementation on the **development VM**.
+- Migration `006_phase1_meter_audit.sql` applied on development VM
+- REST API `/v1/` with auth seam, decimal-safe values, cursor pagination, idempotency, optimistic locking
+- Lower-reading preview/confirm workflow
+- Backdated reading recalc (conditional `current_value` update)
+- Proposed meter defaults + `POST /v1/assets/<id>/activate-meter`
+- RanchBrain mapping proposals (no auto-apply) + CLI `propertymanager-mapping-proposals.py`
+- Dashboard QR read public / write requires operator PIN or API key
+- Smoke tests: `tools/property_manager/tests/test_phase1_meters.py`
 
-Until Phase 1 authorization:
-
-- Existing draft SQL, API stubs, and client prototypes in the repo are **non-authoritative** and must not be applied to any database.
-- Documentation updates are the only permitted deliverable for Phase 0.
+**Production (Intel Mini) remains blocked** until Phase 2 acceptance and explicit Phase 3 authorization.
 
 ### Phase 0 design review checklist
 
