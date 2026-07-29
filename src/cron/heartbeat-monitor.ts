@@ -7,7 +7,7 @@ import {
 } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
-import type { CronJob, CronJobCreate } from "./types.js";
+import type { CronJob, CronJobCreate, CronSessionTarget } from "./types.js";
 
 const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
 
@@ -70,7 +70,7 @@ export function resolveHeartbeatMonitorSpecs(
             }),
           },
           payload: { kind: "heartbeat" },
-          sessionTarget: "main",
+          sessionTarget: (agent.heartbeat?.session ?? "main") as CronSessionTarget,
           wakeMode: "next-heartbeat",
         },
       },
