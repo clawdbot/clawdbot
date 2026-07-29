@@ -42,7 +42,9 @@ import {
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
+  runWithPromptBuildHookDispatch,
   shouldInjectHeartbeatPrompt,
+  shouldSkipPromptBuildHooks,
 } from "./attempt.prompt-helpers.js";
 
 function hasLoneSurrogate(value: string): boolean {
@@ -385,5 +387,45 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
 
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("prompt-build hook reentrancy", () => {
+  it("keeps normal and raw-run behavior distinct", () => {
+    expect(shouldSkipPromptBuildHooks({ isRawModelRun: false })).toBe(false);
+    expect(shouldSkipPromptBuildHooks({ isRawModelRun: true })).toBe(true);
+  });
+
+  it("skips nested runs while prompt-build hooks are dispatching", async () => {
+    await runWithPromptBuildHookDispatch(async () => {
+      expect(shouldSkipPromptBuildHooks({ isRawModelRun: false })).toBe(true);
+    });
+    expect(shouldSkipPromptBuildHooks({ isRawModelRun: false })).toBe(false);
+  });
+
+  it("clears inherited skip state from detached descendants after dispatch", async () => {
+    let releaseChild: (() => void) | undefined;
+    const childGate = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
+    let detachedResult: Promise<boolean> | undefined;
+
+    await runWithPromptBuildHookDispatch(async () => {
+      detachedResult = (async () => {
+        await childGate;
+        return shouldSkipPromptBuildHooks({ isRawModelRun: false });
+      })();
+      expect(shouldSkipPromptBuildHooks({ isRawModelRun: false })).toBe(true);
+    });
+
+    releaseChild?.();
+    await expect(detachedResult).resolves.toBe(false);
+  });
+
+  it("ignores caller-supplied fields that resemble a hook opt-out", () => {
+    const spoofedParams = { isRawModelRun: false, skipPromptBuildHooks: true } as {
+      isRawModelRun: boolean;
+    };
+    expect(shouldSkipPromptBuildHooks(spoofedParams)).toBe(false);
   });
 });

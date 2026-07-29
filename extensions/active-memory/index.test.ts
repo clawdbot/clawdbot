@@ -2374,6 +2374,22 @@ describe("active-memory plugin", () => {
     expect(prompt).toContain("What is my favorite food? prompt-append-check");
   });
 
+  it("keeps the recall prompt intact when launched from its prompt-build hook", async () => {
+    registerPluginConfig({
+      promptAppend: "Prefer stable long-term preferences over one-off events.",
+    });
+
+    await runPromptBuild({
+      prompt: "What is my favorite food? nested-recall-check",
+    });
+
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain("You are a memory search agent.");
+    expect(prompt).toContain("Additional operator instructions:");
+    expect(prompt).toContain("Prefer stable long-term preferences over one-off events.");
+    expect(prompt).toContain("What is my favorite food? nested-recall-check");
+  });
+
   it("allows replacing the base prompt while still appending conversation context", async () => {
     registerPluginConfig({
       promptOverride: "Custom memory prompt. Return NONE or one user fact.",
