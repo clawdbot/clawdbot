@@ -667,7 +667,7 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `matching recreated source drops stale native claim`() throws {
+    func `matching recreated source parks stale native claim`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -691,6 +691,11 @@ struct DeviceIdentityStoreTests {
         #expect(identity.deviceId == Self.fixtureDeviceID)
         #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(!FileManager.default.fileExists(atPath: claimURL.path))
+        let parkedClaims = try FileManager.default.contentsOfDirectory(
+            at: source.identityURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("device.json.native-importing.stale-") }
+        #expect(parkedClaims.count == 1)
     }
 
     @Test

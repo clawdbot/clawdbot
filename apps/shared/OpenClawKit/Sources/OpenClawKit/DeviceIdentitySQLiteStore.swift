@@ -386,9 +386,9 @@ enum DeviceIdentitySQLiteStore {
                         throw DeviceIdentityStore.storageError(
                             "Legacy device identity source and interrupted native claim both exist")
                     }
-                    // Matching keys mean the claim and source are one identity; deviceId is SQLite-owned metadata.
-                    // Delete only after exclusive quarantine and post-rename revalidation, which closes the
-                    // replace-between-compare-and-unlink race.
+                    // The acquired .stale-* identity stays parked: no online deletion point is race-free without
+                    // coupling it to the SQLite commit. One file in this pathological state beats a data-loss
+                    // window, and operators or Doctor can sweep it later.
                     let quarantineURL = self.claimURL(
                         nativeClaimURL,
                         suffix: ".stale-\(UUID().uuidString)")
@@ -405,24 +405,40 @@ enum DeviceIdentitySQLiteStore {
                                 String(cString: strerror(acquireError)))
                     }
 
-                    let acquiredClaim = try? self.readLegacyIdentity(
-                        quarantineURL,
-                        beneath: source.stateDirURL)
-                    guard
-                        let acquiredClaim,
-                        sourceFile.material.identity.publicKey == acquiredClaim.material.identity.publicKey,
-                        sourceFile.material.identity.privateKey == acquiredClaim.material.identity.privateKey
-                    else {
-                        // RENAME_EXCL restores only into a vacant path. EEXIST leaves the acquired file quarantined.
+                    // RENAME_EXCL restores only into a vacant path. EEXIST leaves the acquired file quarantined.
+                    func restoreOrParkQuarantine() {
                         _ = quarantineURL.path.withCString { quarantinePath in
                             nativeClaimURL.path.withCString { claimPath in
                                 renamex_np(quarantinePath, claimPath, UInt32(RENAME_EXCL))
                             }
                         }
+                    }
+                    // Validate the acquired bytes before any continue path: only a claim that
+                    // still parses and matches may be parked while startup proceeds.
+                    guard
+                        let acquiredClaim = try? self.readLegacyIdentity(
+                            quarantineURL,
+                            beneath: source.stateDirURL)
+                    else {
+                        restoreOrParkQuarantine()
                         throw DeviceIdentityStore.storageError(
                             "Legacy device identity source and interrupted native claim both exist")
                     }
-                    try FileManager.default.removeItem(at: quarantineURL)
+                    let currentSource = try? self.readLegacyIdentity(
+                        source.identityURL,
+                        beneath: source.stateDirURL)
+                    if currentSource == nil, !self.pathMayExist(source.identityURL) {
+                        continue
+                    }
+                    guard
+                        let currentSource,
+                        currentSource.material.identity.publicKey == acquiredClaim.material.identity.publicKey,
+                        currentSource.material.identity.privateKey == acquiredClaim.material.identity.privateKey
+                    else {
+                        restoreOrParkQuarantine()
+                        throw DeviceIdentityStore.storageError(
+                            "Legacy device identity source and interrupted native claim both exist")
+                    }
                     continue
                 }
                 ownsNativeClaim = true
