@@ -68,8 +68,8 @@ export function createMeetingPluginNodeHostHandler(options: MeetingPluginNodeHos
     bridgeIdPrefix: `${platform.session.idPrefix}_node_`,
     talkBackModes: new Set(["agent", "bidi"]),
     agentMode: "agent",
-    normalizeUrl: platform.urls.validateAndNormalize,
-    normalizeMeetingKey: platform.urls.normalizeForReuse,
+    normalizeUrl: (value) => platform.urls.validateAndNormalize(value),
+    normalizeMeetingKey: (value) => platform.urls.normalizeForReuse(value),
     outputMentionsAudioDevice: (output) => /\bBlackHole\s+2ch\b/i.test(output),
     systemProfilerCommand: SYSTEM_PROFILER_COMMAND,
     browser: {
@@ -93,7 +93,7 @@ export function createMeetingPluginNodeInvokePolicy(
     displayName: platform.displayName,
     deniedCode: options.deniedCode,
     supportedModes: new Set(["agent", "bidi", "transcribe"]),
-    normalizeUrl: platform.urls.validateAndNormalize,
+    normalizeUrl: (value) => platform.urls.validateAndNormalize(value),
     useConfiguredSetupCommands: true,
     start: config.chrome,
   });
@@ -209,7 +209,7 @@ export function createMeetingPluginShellEntry<
   const id = options.platform.id;
   const methodPrefix = id.replaceAll("-", "");
   const toolName = id.replaceAll("-", "_");
-  const loadCli = createLazyRuntimeModule(options.cli.load);
+  const loadCli = createLazyRuntimeModule(() => options.cli.load());
   return createMeetingPluginEntryOptions<Config, Request, Runtime>({
     ...options,
     id,
@@ -219,7 +219,7 @@ export function createMeetingPluginShellEntry<
     disabledMessage: `${options.platform.displayName} plugin disabled in plugin config`,
     gatewayMethodPrefix: methodPrefix,
     nodeCommand: options.platform.nodeCommandName,
-    normalizeUrl: options.platform.urls.validateAndNormalize,
+    normalizeUrl: (value) => options.platform.urls.validateAndNormalize(value),
     toolDescription: `Join and manage ${options.browserGuestLabel} browser guests. Guest admission, tenant sign-in, and media permissions may require manual action in the OpenClaw Chrome profile.`,
     toolLabel: options.platform.displayName,
     toolName,
@@ -273,7 +273,14 @@ export function createMeetingPluginTypes<
     ChromeHealth: Health;
     JoinRequest: Request;
     JoinResult: MeetingPluginJoinResult<Session>;
-    ProbeContext: MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>;
+    ProbeContext: MeetingProbeContext<
+      Config & { defaultMode: Mode },
+      Mode,
+      Transport,
+      Health,
+      Session,
+      Request
+    >;
     Session: Session;
     TranscriptSnapshot: MeetingTranscriptSnapshot;
   };
