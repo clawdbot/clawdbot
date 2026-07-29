@@ -725,6 +725,20 @@ export async function readRegisteredSandboxRuntimeIds(params: {
     .map((entry) => entry.containerName);
 }
 
+/** Reads exact runtime-owned sandbox scope keys without creating a state database. */
+export function readRegisteredSandboxScopeKeys(): string[] {
+  return [
+    ...new Set(
+      readRegistryRows("container")
+        .map((row) => rowToContainerEntry(row))
+        .flatMap((entry) => {
+          const scopeKey = entry?.sessionKey.trim();
+          return scopeKey ? [scopeKey] : [];
+        }),
+    ),
+  ];
+}
+
 /** Creates or updates one sandbox runtime registry entry, preserving immutable creation fields. */
 export async function updateRegistry(entry: SandboxRegistryEntry) {
   runOpenClawStateWriteTransaction(({ db }) => {

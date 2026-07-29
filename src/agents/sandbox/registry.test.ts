@@ -44,6 +44,7 @@ import {
   migrateLegacySandboxRegistryFiles,
   readBrowserRegistry,
   readRegisteredSandboxRuntimeIds,
+  readRegisteredSandboxScopeKeys,
   readRegistry,
   readRegistryEntry,
   removeBrowserRegistryEntry,
@@ -179,10 +180,33 @@ describe("registry race safety", () => {
     // owns migration so normal startup cannot mutate registry layout.
     await seedContainerRegistry([containerEntry({ containerName: "legacy-container" })]);
 
+    expect(readRegisteredSandboxScopeKeys()).toEqual([]);
     await expect(readRegistry()).resolves.toEqual({ entries: [] });
     await expect(readRegistryEntry("legacy-container")).resolves.toBeNull();
     await expect(fs.access(SANDBOX_REGISTRY_PATH)).resolves.toBeUndefined();
     await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
+  });
+
+  it("reads unique runtime-owned container scope keys from SQLite", async () => {
+    await updateRegistry(
+      containerEntry({
+        containerName: "proof-a",
+        sessionKey: "agent:main:telegram:direct:doctor-proof",
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "proof-b",
+        sessionKey: "agent:main:telegram:direct:doctor-proof",
+      }),
+    );
+    await updateRegistry(containerEntry({ containerName: "proof-c", sessionKey: "global" }));
+    await updateBrowserRegistry(browserEntry({ sessionKey: "agent:browser:main" }));
+
+    expect(readRegisteredSandboxScopeKeys()).toEqual([
+      "agent:main:telegram:direct:doctor-proof",
+      "global",
+    ]);
   });
 
   it("normalizes legacy registry entries after explicit migration", async () => {
