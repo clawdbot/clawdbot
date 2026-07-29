@@ -543,6 +543,11 @@ describe("qa suite planning helpers", () => {
       ),
     ).toBe(true);
     expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
+    expect(
+      scenarioRequiresIsolatedQaSuiteWorker(
+        readQaScenarioById("matrix-dm-thread-reply-override"),
+      ),
+    ).toBe(true);
   });
 
   it("isolates and collects scenario-declared transport policy", () => {

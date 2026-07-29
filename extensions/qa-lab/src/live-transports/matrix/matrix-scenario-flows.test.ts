@@ -134,6 +134,16 @@ describe("Matrix QA Lab scenario flows", () => {
     });
   });
 
+  it("isolates the DM thread override from session-scope bindings", () => {
+    expect(readQaScenarioById("matrix-dm-thread-reply-override").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      suiteIsolation: "isolated",
+      isolationReason:
+        "Asserts fresh DM native-thread routing after session-scope scenarios and cannot inherit their DM session binding.",
+    });
+  });
+
   it("runs the allowlist scenario through its config-file reload owner", () => {
     const scenario = catalog.scenarios.find((entry) => entry.id === "matrix-allowlist-hot-reload");
     expect(scenario?.execution.kind).toBe("flow");
