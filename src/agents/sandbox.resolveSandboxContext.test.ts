@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
@@ -274,6 +275,202 @@ describe("resolveSandboxContext", () => {
       expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
     } finally {
       readRegisteredSandboxRuntimeIdsMock.mockResolvedValue([]);
+      restore();
+    }
+  }, 15_000);
+
+  it("types backend creation failures as sandbox provisioning errors", async () => {
+    const backendFailure = new Error("Sandbox image not found: missing:test");
+    const restore = registerSandboxBackend("broken-backend", async () => {
+      throw backendFailure;
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "broken-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      const error = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:worker:broken-sandbox",
+        workspaceDir: await createSandboxFixtureDir("broken-sandbox"),
+      }).catch((caught: unknown) => caught);
+
+      expect(isSandboxProvisioningError(error)).toBe(true);
+      expect(error).toMatchObject({
+        name: "SandboxProvisioningError",
+        code: "sandbox_provisioning",
+        backendId: "broken-backend",
+        message: "Sandbox image not found: missing:test",
+        cause: backendFailure,
+      });
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("keeps sandbox registry failures inside the provisioning boundary", async () => {
+    const registryFailure = new Error("sandbox registry write failed");
+    updateRegistryMock.mockRejectedValueOnce(registryFailure);
+    const restore = registerSandboxBackend("registry-failure-backend", async () => ({
+      id: "registry-failure-backend",
+      runtimeId: "registry-failure-runtime",
+      runtimeLabel: "Registry Failure Runtime",
+      workdir: "/workspace",
+      buildExecSpec: async () => ({
+        argv: ["registry-failure-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "registry-failure-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      const error = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:worker:registry-failure",
+        workspaceDir: await createSandboxFixtureDir("registry-failure"),
+      }).catch((caught: unknown) => caught);
+
+      expect(isSandboxProvisioningError(error)).toBe(true);
+      expect(error).toMatchObject({
+        backendId: "registry-failure-backend",
+        message: "sandbox registry write failed",
+        cause: registryFailure,
+      });
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("keeps sandbox browser startup failures inside the provisioning boundary", async () => {
+    const browserFailure = new Error("sandbox browser image missing");
+    ensureSandboxBrowserMock.mockRejectedValueOnce(browserFailure);
+    const restore = registerSandboxBackend("browser-failure-backend", async () => ({
+      id: "browser-failure-backend",
+      runtimeId: "browser-failure-runtime",
+      runtimeLabel: "Browser Failure Runtime",
+      workdir: "/workspace",
+      capabilities: { browser: true },
+      buildExecSpec: async () => ({
+        argv: ["browser-failure-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "browser-failure-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+              browser: { enabled: true },
+            },
+          },
+        },
+      };
+
+      const error = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:worker:browser-failure",
+        workspaceDir: await createSandboxFixtureDir("browser-failure"),
+      }).catch((caught: unknown) => caught);
+
+      expect(isSandboxProvisioningError(error)).toBe(true);
+      expect(error).toMatchObject({
+        backendId: "browser-failure-backend",
+        message: "sandbox browser image missing",
+        cause: browserFailure,
+      });
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("keeps filesystem bridge failures inside the provisioning boundary", async () => {
+    const bridgeFailure = new Error("sandbox filesystem bridge failed");
+    const restore = registerSandboxBackend("bridge-failure-backend", async () => ({
+      id: "bridge-failure-backend",
+      runtimeId: "bridge-failure-runtime",
+      runtimeLabel: "Bridge Failure Runtime",
+      workdir: "/workspace",
+      buildExecSpec: async () => ({
+        argv: ["bridge-failure-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+      createFsBridge: () => {
+        throw bridgeFailure;
+      },
+    }));
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "bridge-failure-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      const error = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:worker:bridge-failure",
+        workspaceDir: await createSandboxFixtureDir("bridge-failure"),
+      }).catch((caught: unknown) => caught);
+
+      expect(isSandboxProvisioningError(error)).toBe(true);
+      expect(error).toMatchObject({
+        backendId: "bridge-failure-backend",
+        message: "sandbox filesystem bridge failed",
+        cause: bridgeFailure,
+      });
+    } finally {
       restore();
     }
   }, 15_000);

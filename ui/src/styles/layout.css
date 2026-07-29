@@ -1731,6 +1731,11 @@ html.openclaw-native-macos
   font-size: 11px;
 }
 
+.sidebar-session-empty-placeholder {
+  /* Match the section title: 9px header inset + 8px drag handle + 8px gap. */
+  padding-left: 25px;
+}
+
 .sidebar-session--archived {
   opacity: 0.62;
 }

@@ -1,4 +1,7 @@
-// Telegram ingress media-group regression: durable queue → core drain → grammY → album buffer.
+// Telegram ingress coalescing regression: durable queue → core drain → grammY → inbound buffer.
+// Both Telegram inbound buffers (album, forward-burst debounce) defer their spooled
+// participant the same way, so both depend on deferredLaneOccupancy="release" to admit
+// later same-lane members. Cover them together — a lane regression breaks both at once.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -110,6 +113,25 @@ function photoUpdate(params: { updateId: number; messageId: number; caption?: st
   };
 }
 
+function forwardedTextUpdate(params: { updateId: number; messageId: number; text: string }) {
+  return {
+    update_id: params.updateId,
+    message: {
+      message_id: params.messageId,
+      date: 1_736_380_800 + params.messageId,
+      chat: { id: 111, type: "private" as const, first_name: "Ada" },
+      from: { id: 111, is_bot: false, first_name: "Ada" },
+      // forward_origin puts the entry on the forward debounce lane (80ms window).
+      forward_origin: {
+        type: "user" as const,
+        date: 1_736_300_000,
+        sender_user: { id: 555, is_bot: false, first_name: "Origin" },
+      },
+      text: params.text,
+    },
+  };
+}
+
 function createBotApiTransport(): TelegramTransport {
   let getFileCall = 0;
   const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
@@ -159,38 +181,42 @@ function createTelegramDeps(stateDir: string): TelegramBotDeps {
   } as TelegramBotDeps;
 }
 
-async function assertAlbumTurnAndTombstones(params: {
-  spoolDir: string;
-  firstUpdateId: number;
-  secondUpdateId: number;
-}) {
+/** Both members must land in one turn; a second turn is the split this file guards. */
+async function awaitSingleDownstreamTurn(): Promise<MsgContext & Record<string, unknown>> {
   await vi.waitFor(
     () => {
       expect(downstreamTurns).toHaveBeenCalledTimes(1);
     },
     { timeout: 5_000, interval: 5 },
   );
-  const turn = downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
-  expect(turn.Body).toContain("Two photo album");
-  expect(turn.media).toMatchObject([
-    { path: "/tmp/photo-1.jpg", kind: "image" },
-    { path: "/tmp/photo-2.jpg", kind: "image" },
-  ]);
+  return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
+}
 
+async function assertSpoolTombstoned(params: { spoolDir: string; updateIds: number[] }) {
   const queue = openTelegramIngressQueue(params.spoolDir);
   await vi.waitFor(async () => {
     expect(await queue.listClaims()).toEqual([]);
     expect(await queue.listPending({ limit: "all" })).toEqual([]);
   });
-  await expect(
-    queue.enqueue(telegramQueueEventId(params.firstUpdateId), {} as never),
-  ).resolves.toMatchObject({ kind: "completed" });
-  await expect(
-    queue.enqueue(telegramQueueEventId(params.secondUpdateId), {} as never),
-  ).resolves.toMatchObject({ kind: "completed" });
+  // Every member tombstones independently, so a replayed update cannot re-enter.
+  for (const updateId of params.updateIds) {
+    await expect(queue.enqueue(telegramQueueEventId(updateId), {} as never)).resolves.toMatchObject(
+      { kind: "completed" },
+    );
+  }
 }
 
-describe("Telegram durable ingress media groups", () => {
+async function assertAlbumTurnAndTombstones(params: { spoolDir: string; updateIds: number[] }) {
+  const turn = await awaitSingleDownstreamTurn();
+  expect(turn.Body).toContain("Two photo album");
+  expect(turn.media).toMatchObject([
+    { path: "/tmp/photo-1.jpg", kind: "image" },
+    { path: "/tmp/photo-2.jpg", kind: "image" },
+  ]);
+  await assertSpoolTombstoned(params);
+}
+
+describe("Telegram durable ingress coalescing", () => {
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let stateDir: string;
   let spoolDir: string;
@@ -279,7 +305,7 @@ describe("Telegram durable ingress media groups", () => {
       setTimeout(resolve, 5);
     });
     await monitor.admit(second);
-    await assertAlbumTurnAndTombstones({ spoolDir, firstUpdateId: 101, secondUpdateId: 102 });
+    await assertAlbumTurnAndTombstones({ spoolDir, updateIds: [101, 102] });
 
     await monitor.stop();
     await telegramTransport.close();
@@ -293,7 +319,47 @@ describe("Telegram durable ingress media groups", () => {
     const { monitor, telegramTransport } = await createMonitor();
 
     monitor.start();
-    await assertAlbumTurnAndTombstones({ spoolDir, firstUpdateId: 201, secondUpdateId: 202 });
+    await assertAlbumTurnAndTombstones({ spoolDir, updateIds: [201, 202] });
+
+    await monitor.stop();
+    await telegramTransport.close();
+  });
+
+  it("coalesces a forwarded burst admitted a few milliseconds apart", async () => {
+    const { monitor, telegramTransport } = await createMonitor();
+    monitor.start();
+
+    await monitor.admit(forwardedTextUpdate({ updateId: 301, messageId: 1, text: "First note" }));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+    await monitor.admit(forwardedTextUpdate({ updateId: 302, messageId: 2, text: "Second note" }));
+
+    const turn = await awaitSingleDownstreamTurn();
+    expect(turn.Body).toContain("First note");
+    expect(turn.Body).toContain("Second note");
+    await assertSpoolTombstoned({ spoolDir, updateIds: [301, 302] });
+
+    await monitor.stop();
+    await telegramTransport.close();
+  });
+
+  it("coalesces a forwarded burst replayed from a durable restart backlog", async () => {
+    await writeTelegramSpooledUpdate({
+      spoolDir,
+      update: forwardedTextUpdate({ updateId: 401, messageId: 1, text: "First note" }),
+    });
+    await writeTelegramSpooledUpdate({
+      spoolDir,
+      update: forwardedTextUpdate({ updateId: 402, messageId: 2, text: "Second note" }),
+    });
+    const { monitor, telegramTransport } = await createMonitor();
+
+    monitor.start();
+    const turn = await awaitSingleDownstreamTurn();
+    expect(turn.Body).toContain("First note");
+    expect(turn.Body).toContain("Second note");
+    await assertSpoolTombstoned({ spoolDir, updateIds: [401, 402] });
 
     await monitor.stop();
     await telegramTransport.close();

@@ -4344,6 +4344,7 @@ export const en: TranslationMap = {
       threads: "Threads",
       groups: "Groups",
       coding: "Coding",
+      noSessionsForAgent: "No sessions found for this agent",
       catalogViewOptions: "View options",
       catalogGroupByProject: "Project",
       catalogGroupByPerson: "Person",

@@ -190,10 +190,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   }
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
+    transcriptOwnership: params.sessionManager
+      ? { kind: "caller-owned", sessionManager: params.sessionManager }
+      : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },
     runtime: {
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
-      sessionTarget: resolvedSessionTarget,
       sessionKey: resolvedSessionKey,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,

@@ -230,10 +230,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { PluginStateLeaseError } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  formatSqliteSessionFileMarker,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -289,11 +286,6 @@ async function seedQmdSessionTranscript(params: {
     storePath,
     entry: {
       sessionId: params.sessionId,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        storePath,
-      }),
       updatedAt: timestamp,
     },
   });

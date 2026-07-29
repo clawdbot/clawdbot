@@ -437,12 +437,14 @@ function requireBuiltChannelSourceTurnId(
 
 describe("runReplyAgent active steering", () => {
   it("dispatches a declined steer once with its source-turn identity", async () => {
+    const runState: ReplyOperationRunState = {};
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
     state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const { run, sourceTurnId } = createMinimalRun({
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -464,6 +466,7 @@ describe("runReplyAgent active steering", () => {
 
     await expect(run()).resolves.toBeUndefined();
 
+    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
       { cleanedBody: "hello" },

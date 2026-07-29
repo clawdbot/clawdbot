@@ -2813,6 +2813,11 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+/* Keep both halves of the voice pill visually joined when Talk is unavailable. */
+.chat-talk-control:has(.chat-send-btn:disabled) .chat-talk-input-picker__trigger {
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+}
+
 .chat-talk-input-picker__trigger:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;

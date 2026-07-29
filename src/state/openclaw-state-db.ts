@@ -107,7 +107,6 @@ const terminalOpenLatch = createSqliteTerminalOpenLatch({
       return;
     }
     cached.walMaintenance.close();
-    clearNodeSqliteKyselyCacheForDatabase(cached.db);
     if (cached.db.isOpen) {
       cached.db.close();
     }
@@ -583,7 +582,6 @@ export function openOpenClawStateDatabase(
       return maintenance;
     } catch (err) {
       maintenance?.close();
-      clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();
       if (
         err instanceof Error &&
@@ -647,7 +645,6 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
     return false;
   }
   database.walMaintenance.close();
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
   if (database.db.isOpen) {
     database.db.close();
   }
@@ -659,7 +656,6 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
 export function closeOpenClawStateDatabase(): void {
   for (const database of cachedDatabases.values()) {
     database.walMaintenance.close();
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
     if (database.db.isOpen) {
       database.db.close();
     }

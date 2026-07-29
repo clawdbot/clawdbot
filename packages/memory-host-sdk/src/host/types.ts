@@ -100,6 +100,12 @@ export type MemorySearchRuntimeDebug = {
   configuredMode?: string;
   effectiveMode?: string;
   fallback?: string;
+  embeddingBootstrap?: {
+    ok: false;
+    provider: string;
+    reason: string;
+    degradedTo: "keyword-only";
+  };
   qmd?: MemorySearchRuntimeQmdDebug;
 };
 

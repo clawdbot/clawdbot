@@ -36,6 +36,12 @@ active agent workspace profile files. Skill catalogs and tool-routed
 instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
 and full `MEMORY.md` fall back to plain turn input context instead.
 
+When `openclaw_direct.sessions_yield` is available, those instructions also
+tell a native Codex parent to end the current turn when a child's result should
+arrive in a later turn. Native `wait_agent` remains for an intentional same-turn
+wait when the immediate next step is blocked on the child; completion polling
+loops are not a substitute.
+
 Most OpenClaw dynamic tools use the searchable `openclaw` namespace. Tools
 marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested

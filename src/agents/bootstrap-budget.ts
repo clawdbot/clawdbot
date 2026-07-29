@@ -166,16 +166,23 @@ export function buildBootstrapInjectionStats(params: {
   }
   return params.bootstrapFiles.map((file) => {
     const pathValue = normalizeOptionalString(file.path) ?? "";
+    const normalizedPath = pathValue.replace(/\\/g, "/");
+    // Bootstrap hooks are extension-facing and may provide path/content only.
+    // Derive the display name before budget classification so those entries
+    // keep working and cannot crash the turn when filename-specific caps run.
+    const name =
+      normalizeOptionalString(file.name) ??
+      (normalizedPath ? path.posix.basename(normalizedPath) : "bootstrap");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
       (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
+      injectedByPath.get(name) ??
+      injectedByBaseName.get(name);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
-      name: file.name,
-      path: pathValue || file.name,
+      name,
+      path: pathValue || name,
       missing: file.missing,
       rawChars,
       injectedChars,
