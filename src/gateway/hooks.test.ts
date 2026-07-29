@@ -283,18 +283,47 @@ describe("gateway hooks helpers", () => {
       ok: false,
       error: "channel must name a concrete channel for hook delivery",
     });
+    expect(
+      normalizeAgentPayload({
+        message: "hello",
+        accountId: "work",
+      }),
+    ).toEqual({
+      ok: false,
+      error: "accountId requires channel and to for hook delivery",
+    });
+    for (const accountId of [123, "   "]) {
+      expect(
+        normalizeAgentPayload({
+          message: "hello",
+          channel: "demo-alias-channel",
+          to: "123456",
+          accountId,
+        }),
+      ).toEqual({
+        ok: false,
+        error: "accountId must be a non-empty string for hook delivery",
+      });
+    }
 
     const explicit = normalizeAgentPayload({
       message: "hello",
       channel: "demo-alias-channel",
       to: "123456",
+      accountId: " work ",
     });
     expect(explicit).toMatchObject({
       ok: true,
       value: {
         channel: "demo-alias-channel",
         to: "123456",
-        delivery: { mode: "announce", channel: "demo-alias-channel", to: "123456" },
+        accountId: "work",
+        delivery: {
+          mode: "announce",
+          channel: "demo-alias-channel",
+          to: "123456",
+          accountId: "work",
+        },
       },
     });
   });

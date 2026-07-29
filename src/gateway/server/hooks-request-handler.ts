@@ -387,6 +387,7 @@ export function createHooksRequestHandler(
           deliver: normalized.value.deliver,
           channel: normalized.value.channel,
           to: normalized.value.to ?? null,
+          accountId: normalized.value.accountId ?? null,
           model: normalized.value.model ?? null,
           thinking: normalized.value.thinking ?? null,
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
