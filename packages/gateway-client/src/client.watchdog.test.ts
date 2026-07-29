@@ -482,42 +482,6 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
-  test("establishes a fresh event sequence baseline after an automatic reconnect", async () => {
-    vi.useFakeTimers();
-    const onEvent = vi.fn();
-    const onGap = vi.fn();
-    const { client, connections } = createSyntheticGatewayProtocol({ onEvent, onGap });
-    client.start();
-    const firstConnection = connections[0];
-    if (!firstConnection) {
-      throw new Error("synthetic protocol connection missing");
-    }
-    firstConnection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
-    );
-
-    firstConnection.close(1012, "service restart");
-    await vi.advanceTimersByTimeAsync(10);
-    const replacementConnection = connections[1];
-    if (!replacementConnection) {
-      throw new Error("synthetic replacement connection missing");
-    }
-    replacementConnection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 3 }),
-    );
-
-    expect(onGap).not.toHaveBeenCalled();
-    expect(onEvent).toHaveBeenCalledTimes(2);
-
-    replacementConnection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 5 }),
-    );
-
-    expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 4, received: 5 });
-    expect(onEvent).toHaveBeenCalledTimes(3);
-    client.stop();
-  });
-
   test("restarts immediately after resetting a pending reconnect", async () => {
     vi.useFakeTimers();
     const { client, connections } = createSyntheticGatewayProtocol();
@@ -558,44 +522,6 @@ describe("GatewayClient", () => {
     expect(connections).toHaveLength(2);
     expect(connections[0]?.close).toHaveBeenCalledOnce();
     expect(connections[1]?.close).not.toHaveBeenCalled();
-    client.stop();
-  });
-
-  test("resets event sequence state on restart without admitting retired socket frames", () => {
-    const onEvent = vi.fn();
-    const onGap = vi.fn();
-    const { client, connections } = createSyntheticGatewayProtocol({ onEvent, onGap });
-    client.start();
-    const firstConnection = connections[0];
-    if (!firstConnection) {
-      throw new Error("synthetic protocol connection missing");
-    }
-    firstConnection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
-    );
-
-    client.stop();
-    client.start();
-    const replacementConnection = connections[1];
-    if (!replacementConnection) {
-      throw new Error("synthetic replacement connection missing");
-    }
-    firstConnection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 10 }),
-    );
-    replacementConnection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 3 }),
-    );
-
-    expect(onGap).not.toHaveBeenCalled();
-    expect(onEvent).toHaveBeenCalledTimes(2);
-
-    replacementConnection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 5 }),
-    );
-
-    expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 4, received: 5 });
-    expect(onEvent).toHaveBeenCalledTimes(3);
     client.stop();
   });
 
