@@ -3,24 +3,21 @@ use crate::gateway_device_identity::{
     CLIENT_ID, CLIENT_MODE, CLIENT_PLATFORM, CLIENT_ROLE, CLIENT_SCOPES,
 };
 use crate::quickchat::QUICKCHAT_LABEL;
-use futures_util::{SinkExt, StreamExt};
-use openclaw_gateway_core::{
-    pinned_tls_config, reconnect_backoff as gateway_reconnect_backoff, tls_trust,
-    ConnectErrorDetails, TlsTrust, TLS_PIN_MISMATCH_ERROR,
+use openclaw_gateway_client::{
+    reconnect_backoff as gateway_reconnect_backoff, tls_trust, ClientError as SharedClientError,
+    ConnectErrorDetails, Event as GatewayEvent, GatewayClient as SharedGatewayClient,
+    GatewayClientConfig as SharedGatewayClientConfig, GatewaySession as SharedGatewaySession,
+    TlsTrust,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::tungstenite::{Error as TungsteniteError, Message};
-use tokio_tungstenite::{
-    connect_async, connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
-};
+#[cfg(test)]
 use uuid::Uuid;
 
 const AGENT_KIND_CLIENT_CAPABILITY: &str = "agent-kind";
@@ -233,6 +230,16 @@ impl RequestFailure {
     fn classify_connect(mut self, auth: &GatewayAuth) -> Self {
         self.connect_state = classify_connect_failure(self.connect_details.code(), !auth.is_none());
         self
+    }
+
+    fn from_shared(error: SharedClientError) -> Self {
+        match error {
+            SharedClientError::Gateway {
+                message, details, ..
+            } => Self::method_with_details(message, details.as_ref()),
+            SharedClientError::Tls(message) => Self::tls(message),
+            error => Self::transport(error.to_string()),
+        }
     }
 }
 
@@ -585,37 +592,51 @@ impl GatewayClient {
         receiver: &mut mpsc::Receiver<DriverCommand>,
     ) -> Result<(), RequestFailure> {
         let (identity, auth) = self.identity_and_auth(app, config)?;
-        let mut socket = tokio::time::timeout(CONNECT_TIMEOUT, connect_gateway_socket(config))
-            .await
-            .map_err(|_| RequestFailure::transport("Gateway connection timed out."))??;
-        let nonce = wait_for_connect_challenge(&mut socket).await?;
-        let signed_at_ms = unix_time_ms().map_err(RequestFailure::transport)?;
-        // Native child WebViews use platform HTTP trust and cannot bind the optional
-        // WebSocket leaf pin, so pinned Gateway connections remain capability-free.
+        let trust = tls_trust(config.tls_fingerprint.as_deref()).map_err(RequestFailure::tls)?;
+        if matches!(trust, TlsTrust::Pinned(_)) && !config.ws_url.starts_with("wss://") {
+            return Err(RequestFailure::tls(
+                "Gateway TLS fingerprint requires a wss:// URL.",
+            ));
+        }
+        let shared_config = SharedGatewayClientConfig::new(&config.ws_url)
+            .map_err(|error| RequestFailure::from_shared(error))?
+            .tls_trust(trust)
+            .challenge_timeout(HANDSHAKE_TIMEOUT)
+            .request_timeout(REQUEST_TIMEOUT);
         let inline_widgets_available = config
             .tls_fingerprint
             .as_deref()
             .is_none_or(|value| value.trim().is_empty());
-        let params = connect_params(
-            &identity,
-            &auth,
-            &nonce,
-            signed_at_ms,
-            inline_widgets_available,
+        let connect_identity = identity.clone();
+        let connect_auth = auth.clone();
+        let connect = SharedGatewayClient::connect(shared_config, move |nonce| async move {
+            let signed_at_ms = unix_time_ms()?;
+            connect_params(
+                &connect_identity,
+                &connect_auth,
+                &nonce,
+                signed_at_ms,
+                inline_widgets_available,
+            )
+        });
+        let connect_result = tokio::time::timeout(
+            CONNECT_TIMEOUT + HANDSHAKE_TIMEOUT + REQUEST_TIMEOUT,
+            connect,
         )
-        .map_err(RequestFailure::transport)?;
-        let hello = match request_on_socket(app, &mut socket, "connect", params).await {
-            Ok(hello) => hello,
-            Err(failure) => {
-                let failure = failure.classify_connect(&auth);
+        .await
+        .map_err(|_| RequestFailure::transport("Gateway connection timed out."))?;
+        let session = match connect_result {
+            Ok(session) => session,
+            Err(error) => {
+                let failure = RequestFailure::from_shared(error).classify_connect(&auth);
                 if should_clear_stored_device_token(&failure, &auth) {
                     self.clear_device_token(&config.ws_url)?;
                 }
                 return Err(failure);
             }
         };
+        let hello = validate_hello(session.hello().clone()).map_err(RequestFailure::transport)?;
         drop(auth);
-        let hello = validate_hello(hello).map_err(RequestFailure::transport)?;
         if let Some(device_token) = hello.device_token.as_deref() {
             self.persist_device_token(&config.ws_url, device_token)?;
         }
@@ -624,12 +645,13 @@ impl GatewayClient {
             gated_canvas_surface_url(hello.canvas_surface_url, inline_widgets_available),
         );
 
-        let agents = request_agents_list(app, &mut socket).await?;
+        let agents = request_agents_list(&session).await?;
         if self.inner.config_generation.load(Ordering::SeqCst) != generation {
             return Ok(());
         }
         self.cache_agents(agents);
         self.set_connection_state(app, GatewayConnectionState::Up, None);
+        let mut transport_activity = session.subscribe_transport_activity();
         let mut last_gateway_activity = Instant::now();
 
         loop {
@@ -646,7 +668,7 @@ impl GatewayClient {
                     match command {
                         DriverCommand::Reconfigure => return Ok(()),
                         DriverCommand::Request { request, reply } => {
-                            let result = perform_request(app, &mut socket, request).await;
+                            let result = perform_request_while_dispatching(app, &session, request).await;
                             last_gateway_activity = Instant::now();
                             match result {
                                 Ok(response) => {
@@ -664,8 +686,16 @@ impl GatewayClient {
                         }
                     }
                 }
-                incoming = socket.next() => {
-                    handle_idle_message(app, &mut socket, incoming).await?;
+                event = session.next_event() => {
+                    let event = event
+                        .map_err(RequestFailure::from_shared)?;
+                    dispatch_chat_event(app, &event);
+                    last_gateway_activity = Instant::now();
+                }
+                activity = transport_activity.changed() => {
+                    activity.map_err(|_| {
+                        RequestFailure::transport("Gateway transport activity ended.")
+                    })?;
                     last_gateway_activity = Instant::now();
                 }
                 _ = tokio::time::sleep(DRIVER_TICK) => {
@@ -964,95 +994,45 @@ fn connect_params(
     Ok(params)
 }
 
+#[cfg(test)]
 fn request_frame(id: &str, method: &str, params: Value) -> Value {
-    json!({
-        "type": "req",
-        "id": id,
-        "method": method,
-        "params": params
-    })
+    json!({ "type": "req", "id": id, "method": method, "params": params })
 }
 
-async fn wait_for_connect_challenge(socket: &mut GatewaySocket) -> Result<String, RequestFailure> {
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-        loop {
-            let value = next_json(socket).await?;
-            if value.get("type").and_then(Value::as_str) == Some("event")
-                && value.get("event").and_then(Value::as_str) == Some("connect.challenge")
-            {
-                let nonce = value
-                    .get("payload")
-                    .and_then(|payload| payload.get("nonce"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|nonce| !nonce.is_empty());
-                return nonce
-                    .map(ToOwned::to_owned)
-                    .ok_or_else(|| RequestFailure::transport("Gateway challenge omitted nonce."));
-            }
-        }
-    })
-    .await
-    .map_err(|_| RequestFailure::transport("Gateway connect challenge timed out."))?
-}
-
-async fn request_on_socket(
+async fn perform_request_while_dispatching(
     app: &AppHandle,
-    socket: &mut GatewaySocket,
-    method: &str,
-    params: Value,
-) -> Result<Value, RequestFailure> {
-    let id = Uuid::new_v4().to_string();
-    let encoded = serde_json::to_string(&request_frame(&id, method, params)).map_err(|error| {
-        RequestFailure::transport(format!("Could not encode {method}: {error}"))
-    })?;
-    socket
-        .send(Message::Text(encoded.into()))
-        .await
-        .map_err(|error| RequestFailure::transport(format!("Could not send {method}: {error}")))?;
-
-    tokio::time::timeout(REQUEST_TIMEOUT, async {
-        loop {
-            let value = next_json(socket).await?;
-            dispatch_chat_event(app, &value);
-            if value.get("type").and_then(Value::as_str) != Some("res")
-                || value.get("id").and_then(Value::as_str) != Some(id.as_str())
-            {
-                continue;
+    session: &SharedGatewaySession,
+    request: GatewayRequest,
+) -> Result<GatewayResponse, RequestFailure> {
+    let request = perform_request(session, request);
+    tokio::pin!(request);
+    loop {
+        tokio::select! {
+            result = &mut request => return result,
+            event = session.next_event() => {
+                let event = event.map_err(RequestFailure::from_shared)?;
+                dispatch_chat_event(app, &event);
             }
-            if value.get("ok").and_then(Value::as_bool) == Some(true) {
-                return Ok(value.get("payload").cloned().unwrap_or(Value::Null));
-            }
-            let message = value
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("Gateway request failed.");
-            let details = value
-                .get("error")
-                .and_then(|error| error.get("details"))
-                .filter(|details| details.is_object());
-            return Err(RequestFailure::method_with_details(message, details));
         }
-    })
-    .await
-    .map_err(|_| RequestFailure::transport(format!("Gateway {method} request timed out.")))?
+    }
 }
 
 async fn perform_request(
-    app: &AppHandle,
-    socket: &mut GatewaySocket,
+    session: &SharedGatewaySession,
     request: GatewayRequest,
 ) -> Result<GatewayResponse, RequestFailure> {
     match request {
-        GatewayRequest::AgentsList => request_agents_list(app, socket)
+        GatewayRequest::AgentsList => request_agents_list(session)
             .await
             .map(GatewayResponse::AgentsList),
         GatewayRequest::ChatSend(params) => {
             let params = serde_json::to_value(params).map_err(|error| {
                 RequestFailure::transport(format!("Could not encode chat.send: {error}"))
             })?;
-            let payload = request_on_socket(app, socket, "chat.send", params).await?;
+            let payload = session
+                .request("chat.send", params)
+                .await
+                .map_err(|error| RequestFailure::from_shared(error))?;
             serde_json::from_value(payload)
                 .map(GatewayResponse::ChatSend)
                 .map_err(|error| {
@@ -1064,7 +1044,10 @@ async fn perform_request(
             if let Some(observed_url) = observed_url {
                 params["observedUrl"] = Value::String(observed_url);
             }
-            let payload = request_on_socket(app, socket, "plugin.surface.refresh", params).await?;
+            let payload = session
+                .request("plugin.surface.refresh", params)
+                .await
+                .map_err(|error| RequestFailure::from_shared(error))?;
             let response: PluginSurfaceRefreshResponse =
                 serde_json::from_value(payload).map_err(|error| {
                     RequestFailure::transport(format!(
@@ -1082,10 +1065,12 @@ async fn perform_request(
 }
 
 async fn request_agents_list(
-    app: &AppHandle,
-    socket: &mut GatewaySocket,
+    session: &SharedGatewaySession,
 ) -> Result<AgentsListResult, RequestFailure> {
-    let payload = request_on_socket(app, socket, "agents.list", json!({})).await?;
+    let payload = session
+        .request("agents.list", json!({}))
+        .await
+        .map_err(|error| RequestFailure::from_shared(error))?;
     serde_json::from_value(payload).map_err(|error| {
         RequestFailure::transport(format!("Invalid agents.list response: {error}"))
     })
@@ -1210,111 +1195,12 @@ fn ack_error_message(ack: &ChatSendAck) -> String {
         .unwrap_or_else(|| format!("Gateway chat.send {}.", ack.status))
 }
 
-type GatewaySocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
-
-async fn connect_gateway_socket(config: &GatewayWsConfig) -> Result<GatewaySocket, RequestFailure> {
-    let trust = tls_trust(config.tls_fingerprint.as_deref()).map_err(RequestFailure::tls)?;
-    let result = match trust {
-        TlsTrust::SystemRoots => connect_async(config.ws_url.as_str()).await,
-        TlsTrust::Pinned(expected) => {
-            if !config.ws_url.starts_with("wss://") {
-                return Err(RequestFailure::tls(
-                    "Gateway TLS fingerprint requires a wss:// URL.",
-                ));
-            }
-            let connector = Connector::Rustls(Arc::new(
-                pinned_tls_config(expected).map_err(RequestFailure::tls)?,
-            ));
-            connect_async_tls_with_config(config.ws_url.as_str(), None, false, Some(connector))
-                .await
-        }
-    };
-    result
-        .map(|(socket, _)| socket)
-        .map_err(|error| connect_failure(config, error))
-}
-
-fn connect_failure(config: &GatewayWsConfig, error: TungsteniteError) -> RequestFailure {
-    let message = format!("Gateway connection failed: {error}");
-    if is_tls_connect_failure(&config.ws_url, &error) {
-        RequestFailure::tls(message)
-    } else {
-        RequestFailure::transport(message)
-    }
-}
-
-fn is_tls_connect_failure(ws_url: &str, error: &TungsteniteError) -> bool {
-    if !ws_url.starts_with("wss://") {
-        return false;
-    }
-    error.to_string().contains(TLS_PIN_MISMATCH_ERROR)
-        || matches!(error, TungsteniteError::Tls(_))
-        || matches!(error, TungsteniteError::Io(io_error) if io_error.kind() == ErrorKind::InvalidData)
-}
-
-async fn next_json(socket: &mut GatewaySocket) -> Result<Value, RequestFailure> {
-    loop {
-        let message = socket
-            .next()
-            .await
-            .ok_or_else(|| RequestFailure::transport("Gateway connection closed."))?
-            .map_err(|error| {
-                RequestFailure::transport(format!("Gateway connection failed: {error}"))
-            })?;
-        match message {
-            Message::Text(text) => {
-                return serde_json::from_str(text.as_ref()).map_err(|error| {
-                    RequestFailure::transport(format!("Gateway sent invalid JSON: {error}"))
-                });
-            }
-            Message::Ping(payload) => {
-                socket.send(Message::Pong(payload)).await.map_err(|error| {
-                    RequestFailure::transport(format!("Could not answer Gateway ping: {error}"))
-                })?
-            }
-            Message::Close(_) => {
-                return Err(RequestFailure::transport("Gateway connection closed."));
-            }
-            _ => {}
-        }
-    }
-}
-
-async fn handle_idle_message(
-    app: &AppHandle,
-    socket: &mut GatewaySocket,
-    incoming: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-) -> Result<(), RequestFailure> {
-    let message = incoming
-        .ok_or_else(|| RequestFailure::transport("Gateway connection closed."))?
-        .map_err(|error| {
-            RequestFailure::transport(format!("Gateway connection failed: {error}"))
-        })?;
-    match message {
-        Message::Text(text) => {
-            if let Ok(value) = serde_json::from_str::<Value>(text.as_ref()) {
-                dispatch_chat_event(app, &value);
-            }
-            Ok(())
-        }
-        Message::Ping(payload) => socket.send(Message::Pong(payload)).await.map_err(|error| {
-            RequestFailure::transport(format!("Could not answer Gateway ping: {error}"))
-        }),
-        Message::Close(_) => Err(RequestFailure::transport("Gateway connection closed.")),
-        _ => Ok(()),
-    }
-}
-
-fn dispatch_chat_event(app: &AppHandle, frame: &Value) {
-    if frame.get("type").and_then(Value::as_str) != Some("event")
-        || frame.get("event").and_then(Value::as_str) != Some("chat")
-    {
+fn dispatch_chat_event(app: &AppHandle, frame: &GatewayEvent) {
+    if frame.event != "chat" {
         return;
     }
-    if let Some(payload) = frame.get("payload") {
-        // Payload stays raw so the WebView can mirror Gateway delta assembly without native drift.
-        let _ = app.emit_to(QUICKCHAT_LABEL, CHAT_EVENT, payload.clone());
-    }
+    // Payload stays raw so the WebView can mirror Gateway delta assembly without native drift.
+    let _ = app.emit_to(QUICKCHAT_LABEL, CHAT_EVENT, frame.payload.clone());
 }
 
 fn unix_time_ms() -> Result<u64, String> {
@@ -1405,12 +1291,9 @@ mod tests {
 
     #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
-        let tls_error = TungsteniteError::Io(std::io::Error::new(
-            ErrorKind::InvalidData,
-            TLS_PIN_MISMATCH_ERROR,
-        ));
-        assert!(is_tls_connect_failure("wss://127.0.0.1:18789", &tls_error));
-        assert!(!is_tls_connect_failure("ws://127.0.0.1:18789", &tls_error));
+        let failure =
+            RequestFailure::from_shared(SharedClientError::Tls("certificate mismatch".to_string()));
+        assert!(failure.tls_failure);
         assert_eq!(
             GatewayConnectionState::TlsFailure.event_name(),
             "tls-failure"
@@ -1601,7 +1484,7 @@ mod tests {
         assert_eq!(mismatch_with_auth.connect_state, None);
 
         let stale_device_details =
-            json!({ "code": openclaw_gateway_core::AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE });
+            json!({ "code": openclaw_gateway_client::AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE });
         let stale_device_auth = RequestFailure::method_with_details(
             "device token mismatch",
             Some(&stale_device_details),
