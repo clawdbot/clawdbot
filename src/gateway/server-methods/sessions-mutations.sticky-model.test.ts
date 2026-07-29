@@ -86,9 +86,7 @@ beforeEach(() => {
   effects.mutateConfigFileWithRetry
     .mockReset()
     .mockImplementation(
-      async (params: {
-        mutate: (draft: OpenClawConfig, context: unknown) => unknown;
-      }) => {
+      async (params: { mutate: (draft: OpenClawConfig, context: unknown) => unknown }) => {
         const draft = structuredClone(cfg);
         const result = await params.mutate(draft, {});
         return { nextConfig: draft, result };
