@@ -348,17 +348,17 @@ describe("sandbox workspace Doctor migration", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const protectedPaths = [
-      "agent:main:telegram:direct:doctor-proof",
-      "agent:main-telegram:signal:direct:doctor-proof",
-    ].map((rawSessionKey) => {
+    const resolveSetupPath = (rawSessionKey: string) => {
       const layout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
         rawSessionKey,
         workspaceDir: context.workspaceDir,
       });
       return path.join(layout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
-    });
+    };
+    const inactivePath = resolveSetupPath("agent:main:telegram:direct:doctor-proof");
+    const activePath = resolveSetupPath("agent:main-telegram:signal:direct:doctor-proof");
+    const protectedPaths = [inactivePath, activePath];
     for (const setupPath of protectedPaths) {
       await fsp.mkdir(path.dirname(setupPath), { recursive: true });
       await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
@@ -374,7 +374,6 @@ describe("sandbox workspace Doctor migration", () => {
       doctorOnlyStateMigrations: true,
     });
 
-    const [inactivePath, activePath] = protectedPaths;
     expect(detected.sources).not.toContainEqual(
       expect.objectContaining({ kind: "setup", sourcePath: inactivePath }),
     );
