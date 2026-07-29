@@ -70,8 +70,12 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
 /**
  * Azure AI Foundry resources front arbitrary model vendors, so on those hosts
  * the prompt-cache-key default only applies to deployments that look like
- * first-party OpenAI models. Foundry deployment ids are operator-chosen (for
- * example `prod-spud`), so the display-name metadata counts as well. `gpt-oss`
+ * first-party OpenAI models. The catalog display name is the canonical model
+ * identity and takes precedence: Foundry deployment ids are operator-chosen
+ * aliases (for example a Llama deployment named `gpt-prod`), so the id tail is
+ * only consulted when no display name exists. Dropping the field for an
+ * OpenAI deployment with an unrelated name merely skips a cache hint, while
+ * sending it to a strict non-OpenAI endpoint rejects the request. `gpt-oss`
  * is the open-weight family served via serverless inference, not an Azure
  * OpenAI deployment, so it stays excluded on both fields.
  */
@@ -79,8 +83,12 @@ function isOpenAIFamilyFoundryDeployment(
   modelId: string | undefined,
   modelName: string | undefined,
 ): boolean {
+  const canonicalName = modelName?.trim();
+  if (canonicalName) {
+    return matchesOpenAIFamilyModelToken(canonicalName);
+  }
   const idTail = modelId === undefined ? undefined : modelId.slice(modelId.lastIndexOf("/") + 1);
-  return matchesOpenAIFamilyModelToken(idTail) || matchesOpenAIFamilyModelToken(modelName);
+  return matchesOpenAIFamilyModelToken(idTail);
 }
 
 /**
@@ -184,8 +192,9 @@ function resolveOpenAICompletionsCompatDefaults(
   // so the default route only counts as first-party OpenAI when no custom base URL
   // overrides the destination. First-party OpenAI hosts include the regional
   // us./eu.api.openai.com subdomains. Dedicated Azure OpenAI hosts always qualify;
-  // multi-model Azure Foundry hosts only for OpenAI-family deployment ids, since
-  // those resources also front non-OpenAI models (MAI, Llama, ...).
+  // multi-model Azure Foundry hosts only for OpenAI-family deployments, judged by
+  // the canonical display name (deployment-id tail as fallback), since those
+  // resources also front non-OpenAI models (MAI, Llama, ...).
   const supportsPromptCacheKey =
     endpointClass === "openai-public" ||
     endpointClass === "azure-openai" ||

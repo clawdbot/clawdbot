@@ -656,6 +656,7 @@ describe("OpenAI-compatible completions compatibility", () => {
       name: "Azure AI Foundry host outside the manifest endpoint class",
       model: createModel({
         id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna (Azure)",
         provider: "azure-openai",
         baseUrl: "https://example.services.ai.azure.com/openai/v1",
       }),
@@ -665,6 +666,7 @@ describe("OpenAI-compatible completions compatibility", () => {
       name: "regional Azure Foundry host outside the manifest endpoint class",
       model: createModel({
         id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna (Azure)",
         provider: "azure-openai",
         baseUrl: "https://eastus.api.cognitive.microsoft.com/openai/v1",
       }),
@@ -719,6 +721,26 @@ describe("OpenAI-compatible completions compatibility", () => {
       expected: proxyResolvedCompat,
     },
     {
+      name: "OpenAI-alias deployment id with a non-OpenAI display name on an Azure Foundry host",
+      model: createModel({
+        id: "gpt-prod",
+        name: "Llama 3.1 405B Instruct",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: proxyResolvedCompat,
+    },
+    {
+      name: "OpenAI deployment id without a display name on an Azure Foundry host",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        name: "",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
       name: "non-OpenAI deployment on a dedicated Azure OpenAI host",
       model: createModel({
         id: "my-custom-deployment",
@@ -737,6 +759,7 @@ describe("OpenAI-compatible completions compatibility", () => {
       name: "uppercase Azure OpenAI host",
       model: createModel({
         id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna (Azure)",
         provider: "azure-openai",
         baseUrl: "https://EXAMPLE.SERVICES.AI.AZURE.COM/openai/v1",
       }),
