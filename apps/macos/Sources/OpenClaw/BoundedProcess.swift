@@ -1,3 +1,4 @@
+import Darwin
 import Dispatch
 import Foundation
 import Subprocess
@@ -21,19 +22,25 @@ enum BoundedProcess {
 
     private final class ProcessExitSignal: @unchecked Sendable {
         private let lock = NSLock()
-        private let source: DispatchSourceProcess
+        private let source: DispatchSourceProcess?
         private var continuation: CheckedContinuation<Void, Never>?
         private var finished = false
 
         init(processIdentifier: pid_t) {
-            self.source = DispatchSource.makeProcessSource(
+            if Self.hasExited(processIdentifier) {
+                self.source = nil
+                self.finished = true
+                return
+            }
+            let source = DispatchSource.makeProcessSource(
                 identifier: processIdentifier,
                 eventMask: .exit,
                 queue: .global(qos: .utility))
-            self.source.setEventHandler { [weak self] in
+            self.source = source
+            source.setEventHandler { [weak self] in
                 self?.finish()
             }
-            self.source.resume()
+            source.resume()
         }
 
         func wait() async {
@@ -63,8 +70,18 @@ enum BoundedProcess {
             let continuation = self.continuation
             self.continuation = nil
             self.lock.unlock()
-            self.source.cancel()
+            self.source?.cancel()
             continuation?.resume()
+        }
+
+        private static func hasExited(_ processIdentifier: pid_t) -> Bool {
+            while true {
+                var info = siginfo_t()
+                if waitid(P_PID, id_t(processIdentifier), &info, WEXITED | WNOHANG | WNOWAIT) == 0 {
+                    return info.si_pid != 0 || info.si_signo != 0
+                }
+                guard errno == EINTR else { return false }
+            }
         }
     }
 
