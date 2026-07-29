@@ -107,11 +107,7 @@ async function collectPersonalSkillRealPaths(
       }
     }
   };
-  for (let cursor = 0; cursor < queue.length; cursor += 1) {
-    const current = queue[cursor];
-    if (!current) {
-      break;
-    }
+  for (const current of queue) {
     let realDir: string;
     try {
       realDir = await fs.realpath(current.dir);
