@@ -183,4 +183,45 @@ describe("context-engine host parameter projection", () => {
       expect.objectContaining({ engineId, operation: "assemble" }),
     ]);
   });
+
+  it("does not mutate frozen engines reused by a factory", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+    const engineId = `host-param-frozen-${++engineCounter}`;
+    const assemble = vi.fn<ContextEngine["assemble"]>(async (params) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+    class FrozenProbeEngine implements ContextEngine {
+      readonly #info = { id: engineId, name: "Frozen Probe" };
+
+      get info() {
+        return this.#info;
+      }
+
+      async ingest() {
+        return { ingested: true };
+      }
+
+      assemble = assemble;
+
+      async compact() {
+        return { ok: true, compacted: false };
+      }
+    }
+    const sharedEngine = Object.freeze(new FrozenProbeEngine());
+    registerContextEngineForOwner(engineId, () => sharedEngine, `test:${engineId}`);
+
+    const first = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+    const second = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+    expect(first.info).toEqual({ id: engineId, name: "Frozen Probe" });
+    await first.assemble({ sessionId: "session-1", sessionKey: "first", messages: [message] });
+    await second.assemble({ sessionId: "session-2", sessionKey: "second", messages: [message] });
+
+    expect(assemble).toHaveBeenCalledTimes(2);
+    expect(assemble.mock.calls.map(([params]) => params)).toEqual([
+      { sessionId: "session-1", messages: [message] },
+      { sessionId: "session-2", messages: [message] },
+    ]);
+  });
 });

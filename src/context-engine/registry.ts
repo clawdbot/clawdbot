@@ -58,9 +58,10 @@ type RegisterContextEngineForOwnerOptions = {
   lifecycle?: ContextEngineRegistrationLifecycle;
 };
 
-const HOST_PARAM_METHODS = "bootstrap maintain ingest ingestBatch afterTurn assemble compact".split(
-  " ",
-);
+const HOST_PARAM_METHODS =
+  "bootstrap maintain ingest ingestBatch afterTurn assemble compact prepareSubagentSpawn onSubagentEnded".split(
+    " ",
+  );
 export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
   "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
 );
@@ -68,35 +69,37 @@ const LEGACY_HOST_PARAM_DEFAULT_COMPAT = getPluginCompatRecord(
   "context-engine-legacy-host-param-default",
 );
 
-function applyContextEngineHostParamProjection(engine: ContextEngine): void {
+function wrapContextEngineWithHostParamProjection(engine: ContextEngine): ContextEngine {
   const removeAfter = LEGACY_HOST_PARAM_DEFAULT_COMPAT.removeAfter;
-  const declared = engine.info.acceptedHostParams;
-  const accepted = declared ? new Set(declared) : undefined;
+  const accepted = engine.info.acceptedHostParams;
   const engineRecord = engine as unknown as Record<PropertyKey, unknown>;
+  const wrappedRecord: Record<PropertyKey, unknown> = {};
+  Object.defineProperty(wrappedRecord, "info", { get: () => engine.info });
   for (const methodName of HOST_PARAM_METHODS) {
     const method = engineRecord[methodName];
     if (typeof method !== "function") {
       continue;
     }
-    engineRecord[methodName] = (params: Record<string, unknown>) => {
-      // Removal(2026-08-12): undeclared engines receive full params after this legacy default.
-      // Contract: context-engine-legacy-host-param-default.
-      const currentAccepted =
-        accepted ??
-        (removeAfter && new Date().toISOString().slice(0, 10) <= removeAfter
-          ? new Set()
-          : undefined);
+    wrappedRecord[methodName] = (params: Record<string, unknown>) => {
+      // Removal(2026-08-12): undeclared engines get full params. Contract: context-engine-legacy-host-param-default.
+      const useLegacyDefault =
+        removeAfter !== undefined && new Date().toISOString().slice(0, 10) <= removeAfter;
+      const currentAccepted = accepted ?? (useLegacyDefault ? [] : undefined);
       if (!currentAccepted) {
         return method.call(engine, params);
       }
       const projected = Object.fromEntries(
         Object.entries(params).filter(
-          ([key]) => !CONTEXT_ENGINE_HOST_PARAMS.has(key) || currentAccepted.has(key),
+          ([key]) => currentAccepted.includes(key) || !CONTEXT_ENGINE_HOST_PARAMS.has(key),
         ),
       );
       return method.call(engine, projected);
     };
   }
+  if (engine.dispose) {
+    wrappedRecord.dispose = engine.dispose.bind(engine);
+  }
+  return Object.create(engine, Object.getOwnPropertyDescriptors(wrappedRecord)) as ContextEngine;
 }
 
 type ResolvedContextEngineMetadata = {
@@ -122,19 +125,19 @@ function wrapResolvedContextEngine(
     factoryCtx?: ContextEngineFactoryContext;
   },
 ): ContextEngine {
-  applyContextEngineHostParamProjection(engine);
+  const projected = wrapContextEngineWithHostParamProjection(engine);
   const wrapped =
     metadata.defaultEngineId &&
     metadata.factoryCtx &&
     metadata.engineId !== metadata.defaultEngineId
       ? wrapContextEngineWithRuntimeQuarantine({
-          engine,
+          engine: projected,
           engineId: metadata.engineId,
           owner: metadata.owner,
           defaultEngineId: metadata.defaultEngineId,
           factoryCtx: metadata.factoryCtx,
         })
-      : engine;
+      : projected;
   RESOLVED_CONTEXT_ENGINE_METADATA.set(wrapped, metadata);
   return wrapped;
 }
