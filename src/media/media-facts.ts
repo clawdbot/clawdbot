@@ -9,6 +9,8 @@ export type MediaFact = {
   url?: string;
   contentType?: string;
   kind?: MediaKind;
+  fileName?: string;
+  sizeBytes?: number;
   durationMs?: number;
   width?: number;
   height?: number;
@@ -28,6 +30,10 @@ export type MediaFactInput = {
 };
 
 const RUNTIME_PROMPT_MEDIA_FACTS = Symbol.for("openclaw.runtimePromptMediaFacts");
+
+function normalizeNonNegativeNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
 
 /** Attaches facts to a runtime prompt message without changing serialized/model-visible bytes. */
 export function attachRuntimePromptMediaFacts<T extends object>(
@@ -215,6 +221,8 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
       ...(fact.url ? { url: fact.url } : {}),
       ...(fact.contentType && !bareLegacyKind ? { contentType: fact.contentType } : {}),
       ...(explicitKind ? { kind: explicitKind } : {}),
+      ...(fact.fileName ? { fileName: fact.fileName } : {}),
+      ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
       ...(fact.durationMs ? { durationMs: fact.durationMs } : {}),
       ...(fact.width ? { width: fact.width } : {}),
       ...(fact.height ? { height: fact.height } : {}),
@@ -348,6 +356,8 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
     url: normalizeOptionalString(media.url),
     contentType,
     kind: media.kind ?? defaults.kind ?? kindFromMime(contentType),
+    fileName: normalizeOptionalString(media.fileName),
+    sizeBytes: normalizeNonNegativeNumber(media.sizeBytes),
     ...(durationMs ? { durationMs } : {}),
     ...(width ? { width } : {}),
     ...(height ? { height } : {}),
@@ -432,6 +442,8 @@ function resolveMediaFactsWithPrecedence(
           ? (legacyContentType ?? fact?.contentType)
           : (fact?.contentType ?? legacyContentType),
         kind: fact?.kind,
+        fileName: fact?.fileName,
+        sizeBytes: fact?.sizeBytes,
         durationMs: fact?.durationMs,
         width: fact?.width,
         height: fact?.height,

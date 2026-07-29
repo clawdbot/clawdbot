@@ -72,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.presence": [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
+  "controlUi.sessionPullRequests.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
   "session.observer": [READ_SCOPE],

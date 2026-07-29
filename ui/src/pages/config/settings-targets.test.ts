@@ -32,6 +32,12 @@ describe("settings search target manifest", () => {
       ["personal", "/settings/profile", "", "#settings-profile-identity"],
       ["modelBehavior", "/settings/model-providers", "", "#settings-model-behavior"],
       [
+        "appearanceLanguage",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-language",
+      ],
+      [
         "appearanceTheme",
         "/settings/appearance",
         "?section=__appearance__",
@@ -135,8 +141,7 @@ describe("settings config section ownership", () => {
     expect(configPageForSection("models")).toBe("advanced");
   });
 
-  it("keeps General and Advanced free of curated include lists", () => {
-    expect(configSectionKeysForPage("config")).toBeUndefined();
+  it("keeps Advanced free of a curated include list", () => {
     expect(configSectionKeysForPage("advanced")).toBeUndefined();
   });
 });

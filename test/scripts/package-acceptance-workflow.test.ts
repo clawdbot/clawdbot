@@ -4458,6 +4458,14 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(ignored.stderr).toBe("");
   });
 
+  it("does not track generated node_modules entries", () => {
+    const tracked = execFileSync("git", ["ls-files", "-z", "--", ":(glob)**/node_modules/**"], {
+      encoding: "utf8",
+    });
+
+    expect(tracked).toBe("");
+  });
+
   it("keeps tracked sync metadata and QA Mantis sources visible to remote full syncs", () => {
     for (const path of [
       ".github/release/clawhub-cli/package-lock.json",

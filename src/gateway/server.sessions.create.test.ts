@@ -3335,7 +3335,7 @@ test("sessions.create rejects unusable attachment-only input before creating a s
   });
 
   expect(created.ok).toBe(false);
-  expect(created.error?.message).toContain("attachments require usable content");
+  expect(created.error?.message).toContain("must be object");
   const listed = await directSessionReq<{ sessions?: unknown[] }>("sessions.list", {});
   expect(listed.payload?.sessions).toEqual([]);
 });

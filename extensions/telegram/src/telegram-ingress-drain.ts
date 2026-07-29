@@ -14,14 +14,7 @@ import {
 } from "./bot-processing-outcome.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
-import {
-  resolveTelegramUpdateId,
-  TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES,
-  TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS,
-  TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
-  TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS,
-  telegramQueueEventId,
-} from "./telegram-ingress-spool.js";
+import { resolveTelegramUpdateId, telegramQueueEventId } from "./telegram-ingress-spool.js";
 import {
   TelegramIngressPayloadError,
   TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
@@ -33,7 +26,6 @@ const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
 const TELEGRAM_SPOOLED_DRAIN_POLL_INTERVAL_MS = 500;
-const TELEGRAM_SPOOLED_DRAIN_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
 export function resolveTelegramAdoptionStallTimeoutMs(params: {
   configured?: number;
@@ -221,11 +213,8 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     },
     pollIntervalMs: params.pollIntervalMs ?? TELEGRAM_SPOOLED_DRAIN_POLL_INTERVAL_MS,
     retention: {
-      pruneIntervalMs: TELEGRAM_SPOOLED_DRAIN_PRUNE_INTERVAL_MS,
-      completedTtlMs: TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS,
-      completedMaxEntries: TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS,
-      failedMaxEntries: TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     drain: {
       deferredLaneOccupancy: "release",

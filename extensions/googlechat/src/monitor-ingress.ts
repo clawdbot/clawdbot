@@ -14,14 +14,7 @@ import type { GoogleChatEvent } from "./types.js";
 
 const GOOGLECHAT_INGRESS_PAYLOAD_VERSION = 1;
 const GOOGLECHAT_INGRESS_POLL_INTERVAL_MS = 500;
-const GOOGLECHAT_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const GOOGLECHAT_INGRESS_MAX_CONCURRENT_DELIVERIES = 8;
-const GOOGLECHAT_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-// The webhook retry horizon must fit beneath this cap; match Slack/Mattermost fleet sizing.
-// The 30-day TTL is the real horizon, while the cap only bounds disk usage.
-const GOOGLECHAT_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const GOOGLECHAT_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const GOOGLECHAT_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
 type GoogleChatIngressPayload = {
   version: 1;
@@ -202,13 +195,8 @@ export function createGoogleChatIngressMonitor(options: {
     deliver: (rawEvent, lifecycle, claim) =>
       options.dispatch(normalizeClaimedGoogleChatEvent(rawEvent, claim.id), lifecycle),
     pollIntervalMs: options.pollIntervalMs ?? GOOGLECHAT_INGRESS_POLL_INTERVAL_MS,
-    retention: {
-      pruneIntervalMs: GOOGLECHAT_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: GOOGLECHAT_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: GOOGLECHAT_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: GOOGLECHAT_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: GOOGLECHAT_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    // The webhook retry horizon must fit beneath the standard 30-day / 20k cap.
+    retention: "standard",
     drain: {
       resolveNonRetryableFailure: resolveGoogleChatIngressNonRetryableFailure,
       startLimit: GOOGLECHAT_INGRESS_MAX_CONCURRENT_DELIVERIES,

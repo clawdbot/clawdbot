@@ -459,6 +459,7 @@ describe("createMusicGenerateTool", () => {
         path: "/tmp/generated-night-drive.mp3",
         mimeType: "audio/mpeg",
         name: "night-drive.mp3",
+        sizeBytes: 11,
         durationMs: 12_000,
       },
     ]);
@@ -691,6 +692,7 @@ describe("createMusicGenerateTool", () => {
         path: "/tmp/generated-night-drive.mp3",
         mimeType: "audio/mpeg",
         name: "night-drive.mp3",
+        sizeBytes: 11,
       },
     ]);
   });

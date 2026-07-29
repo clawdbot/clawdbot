@@ -670,7 +670,6 @@ src/config/sessions/transcript.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
-src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
 src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts

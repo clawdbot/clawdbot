@@ -112,7 +112,7 @@ async function grantPermissions(params: {
       });
       unsupportedPermissions = params.optionalPermissions;
     },
-    { commandTimeoutMs: params.timeoutMs },
+    { commandTimeoutMs: params.timeoutMs, signal: params.signal },
   );
   params.signal.throwIfAborted();
   return {

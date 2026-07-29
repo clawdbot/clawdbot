@@ -144,6 +144,41 @@ describe("nextcloudTalkMessageActions", () => {
   describe("handleAction", () => {
     const cfg = {} as CoreConfig;
 
+    beforeEach(() => {
+      // Dispatch now resolves the account and enforces the same enabled+configured
+      // gate as describeMessageTool, so react tests need a configured account.
+      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
+    });
+
+    it("rejects a disabled account before reaching the sender", async () => {
+      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
+
+      await expect(
+        nextcloudTalkMessageActions.handleAction?.({
+          channel: "nextcloud-talk",
+          action: "react",
+          params: { to: "room:abc123", messageId: "1", emoji: "👍" },
+          cfg,
+          accountId: "work",
+        }),
+      ).rejects.toThrow(/is disabled or not configured/);
+      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unconfigured account before reaching the sender", async () => {
+      hoisted.resolveNextcloudTalkAccount.mockReturnValue(unconfiguredAccount);
+
+      await expect(
+        nextcloudTalkMessageActions.handleAction?.({
+          channel: "nextcloud-talk",
+          action: "react",
+          params: { to: "room:abc123", messageId: "1", emoji: "👍" },
+          cfg,
+        }),
+      ).rejects.toThrow(/is disabled or not configured/);
+      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
+    });
+
     it("invokes sendReactionNextcloudTalk with normalized params for the react action", async () => {
       const result = await nextcloudTalkMessageActions.handleAction?.({
         channel: "nextcloud-talk",

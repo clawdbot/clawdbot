@@ -5860,7 +5860,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Marketplace choices
   - H2: Bundled macOS marketplace
   - H3: Shared plugin cache
-  - H2: Remote catalog limit
+  - H2: Remote marketplaces
   - H2: Configuration reference
   - H2: What OpenClaw checks
   - H2: macOS permissions
@@ -5893,6 +5893,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supervision and safe continuation
   - H2: Visible replies and heartbeats
   - H2: Hook boundaries
+  - H2: Experimental sandbox process streaming
   - H2: V1 support contract
   - H2: Native permissions and MCP elicitations
   - H2: Queue steering

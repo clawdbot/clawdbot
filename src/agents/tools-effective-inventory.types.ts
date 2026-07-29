@@ -18,6 +18,9 @@ export type EffectiveToolInventoryEntry = {
   source: EffectiveToolSource;
   pluginId?: string;
   channelId?: string;
+  mcpServer?: string;
+  mcpToolName?: string;
+  deniedBySession?: true;
   risk?: "low" | "medium" | "high";
   tags?: string[];
 };
