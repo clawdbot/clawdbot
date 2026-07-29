@@ -10,6 +10,7 @@ import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
 import {
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
+  type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
 import {
   AuthStorage as AgentAuthStorageClass,
@@ -41,6 +42,7 @@ import {
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
+import { staticModelIdMatches } from "./model.static-id.js";
 
 export { resolveModelWithRegistry } from "./model.registry-resolution.js";
 
@@ -62,6 +64,7 @@ type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
   retryTransientProviderRuntimeMiss?: boolean;
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 };
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
@@ -229,6 +232,17 @@ export async function resolveModelAsync(
       ? fallbackStores.modelRegistry.fork(authStorage)
       : fallbackStores.modelRegistry);
   const runtimeHooks = resolveRuntimeHooks(options);
+  // Route-projected cfg owns transport/auth; the snapshot contributes generation facts only.
+  const preparedModelRuntime = options?.preparedModelRuntime ?? preparedSnapshot;
+  const preparedStaticCatalogModel = preparedModelRuntime?.configuredRuntimeModels?.find(
+    ({ modelId: candidateId, provider: rowProvider }) =>
+      staticModelIdMatches({
+        candidateId,
+        rowProvider,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+      }),
+  )?.model;
   if (normalizedRef.manifestAlias.ambiguous) {
     return {
       error: buildUnknownModelError({
@@ -252,6 +266,8 @@ export async function resolveModelAsync(
     manifestAlias: normalizedRef.manifestAlias,
     workspaceDir,
     runtimeHooks,
+    preparedInlineProviderModels: preparedModelRuntime?.inlineProviderModels,
+    preparedStaticCatalogModel,
   });
   if (explicitModel?.kind === "suppressed") {
     const suppressedRuntimeModel = resolveRuntimePreferredSuppressedModel({
@@ -300,6 +316,9 @@ export async function resolveModelAsync(
       return undefined;
     }
     staticCatalogLookup ??= (async () => {
+      if (preparedStaticCatalogModel) {
+        return preparedStaticCatalogModel;
+      }
       const manifestModel = resolveBundledStaticCatalogModel({
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
@@ -335,6 +354,7 @@ export async function resolveModelAsync(
       workspaceDir,
       preferDiscoveredModelMetadata: true,
       preferDiscoveredTransport: options?.preferBundledStaticCatalogTransport,
+      staticCatalogModel: catalogModel,
     });
     return normalizeResolvedModel({
       provider: normalizedRef.provider,

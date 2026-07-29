@@ -1,6 +1,9 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
 import { relative } from "node:path";
-import { agentsCoreIsolatedTestFiles } from "../../test/vitest/vitest.agents-paths.mjs";
+import {
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "../../test/vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
@@ -211,7 +214,7 @@ function isExclusiveCompactGroup(group) {
 // scales with the runner class. infra-process spawns child processes per test
 // and hit worker-startup timeouts under contention before serialization.
 const PINNED_WORKER_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-gateway-(?:core|methods)$/u;
+  /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-cli$|^agentic-gateway-(?:core|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 
 function applyCompactGroupWorkerPins(group) {
@@ -523,7 +526,7 @@ function resolveAgentCoreShardName(file) {
 }
 
 function createAgentCoreSplitShards() {
-  const isolatedTests = new Set(agentsCoreIsolatedTestFiles);
+  const isolatedTests = new Set(agentVitestProjectOwners.coreIsolated.include);
   const groups = new Map();
   for (const file of listTestFiles("src/agents")) {
     const name = relative("src/agents", file).replaceAll("\\", "/");
@@ -553,7 +556,7 @@ function createAgentCoreSplitShards() {
       if (shardName === "agentic-agents-core-runner-cli") {
         return createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES).map(
           (batch, index) => ({
-            configs: ["test/vitest/vitest.agents-core.config.ts"],
+            configs: [agentVitestProjectOwners.core.config],
             includePatterns: batch,
             requiresDist: false,
             shardName: `${shardName}-${index + 1}`,
@@ -562,7 +565,7 @@ function createAgentCoreSplitShards() {
       }
       return [
         {
-          configs: ["test/vitest/vitest.agents-core.config.ts"],
+          configs: [agentVitestProjectOwners.core.config],
           includePatterns,
           requiresDist: false,
           shardName,
@@ -574,8 +577,8 @@ function createAgentCoreSplitShards() {
   return [
     ...sharedShards,
     {
-      configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
-      includePatterns: agentsCoreIsolatedTestFiles,
+      configs: [agentVitestProjectOwners.coreIsolated.config],
+      includePatterns: agentVitestProjectOwners.coreIsolated.include,
       requiresDist: false,
       shardName: "agentic-agents-core-isolated",
     },
@@ -1192,23 +1195,18 @@ const SPLIT_NODE_SHARDS = new Map([
       ...createAgentCoreSplitShards(),
       {
         shardName: "agentic-agents-embedded",
-        configs: [
-          "test/vitest/vitest.agents-embedded-agent.config.ts",
-          "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
-          "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
-          "test/vitest/vitest.agents-embedded-agent-run.config.ts",
-        ],
+        configs: embeddedAgentVitestProjectOwners.map((owner) => owner.config),
         env: AGENTS_EMBEDDED_AGENT_ENV,
         requiresDist: false,
       },
       {
         shardName: "agentic-agents-support",
-        configs: ["test/vitest/vitest.agents-support.config.ts"],
+        configs: [agentVitestProjectOwners.support.config],
         requiresDist: false,
       },
       {
         shardName: "agentic-agents-tools",
-        configs: ["test/vitest/vitest.agents-tools.config.ts"],
+        configs: [agentVitestProjectOwners.tools.config],
         requiresDist: false,
       },
       {

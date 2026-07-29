@@ -222,6 +222,27 @@ suite.define(() => {
       await expect
         .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().left))
         .toBe(0);
+
+      // Leaving an open drawer must close its fixed menu and clear the drawer
+      // before the same sidebar moves back into the desktop navigation slot.
+      await openSessionMenu();
+      const beforeWideTransition = await hiddenActionCounts();
+      await page.setViewportSize({ height: 900, width: 1280 });
+      await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--mobile-nav");
+      await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expectHiddenShortcutsInert(beforeWideTransition);
+
+      // Returning to drawer layout must not resurrect the prior open drawer.
+      await page.setViewportSize({ height: 900, width: 900 });
+      await expectDrawerClosed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await drawerToggle.click();
+      await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+      await expect
+        .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().left))
+        .toBe(0);
       await openSessionMenu();
       const beforeDrawerCollapse = await hiddenActionCounts();
       await page.keyboard.press("Meta+B");

@@ -29,7 +29,7 @@ import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import {
-  normalizeCodexResponseTokenUsage,
+  CodexResponseCompletionProjection,
   normalizeCodexThreadTokenUsage,
   projectCodexThreadUsageUpdate,
 } from "./event-projector-usage.js";
@@ -106,7 +106,7 @@ export class CodexAppServerEventProjector {
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
-  private responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
+  private readonly responseCompletions = new CodexResponseCompletionProjection();
   private completedCompactionCount = 0;
   private lastTranscriptTimestamp = 0;
 
@@ -288,13 +288,13 @@ export class CodexAppServerEventProjector {
         await this.handleTurnCompleted(params);
         break;
       case "rawResponse/completed":
-        this.handleRawResponseCompleted(params);
+        this.responseCompletions.record(params);
         break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        this.responseUsage = undefined;
+        this.responseCompletions.clear();
         if (params.willRetry === true) {
           break;
         }
@@ -334,7 +334,8 @@ export class CodexAppServerEventProjector {
     // A terminal timeout must not publish exact usage, but the timeout watcher
     // can still recover a completed assistant. Keep the snapshot masked until
     // recovery clears the abort instead of destroying it in markTimedOut().
-    const projectedUsage = this.aborted ? this.tokenUsage : (this.responseUsage ?? this.tokenUsage);
+    const completedUsage = this.responseCompletions.usage ?? this.tokenUsage;
+    const projectedUsage = this.aborted ? this.tokenUsage : completedUsage;
     const hasAssistantItemText = this.assistantProjection.hasAssistantItemTextForSynthesis();
     const legacyFailClosed =
       !this.completedTurn || this.completedTurn.status !== "completed" || hasAssistantItemText;
@@ -416,6 +417,9 @@ export class CodexAppServerEventProjector {
       ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
       bootstrapPromptWarningSignaturesSeen: this.params.bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: this.params.bootstrapPromptWarningSignature,
+      ...(this.responseCompletions.modelIterations > 0
+        ? { modelIterations: this.responseCompletions.modelIterations }
+        : {}),
       messagesSnapshot,
       assistantTexts,
       toolMetas,
@@ -483,7 +487,7 @@ export class CodexAppServerEventProjector {
 
   markAborted(): void {
     this.aborted = true;
-    this.responseUsage = undefined;
+    this.responseCompletions.clear();
   }
 
   isCompacting(): boolean {
@@ -594,13 +598,6 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private handleRawResponseCompleted(params: JsonObject): void {
-    const usage = isJsonObject(params.usage) ? params.usage : undefined;
-    // Every provider completion replaces the prior response snapshot. A final
-    // response with missing or malformed usage must leave freshness unknown.
-    this.responseUsage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
-  }
-
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
     const turn = readCodexTurn(params.turn);
     if (!turn || turn.id !== this.turnId) {
@@ -608,7 +605,7 @@ export class CodexAppServerEventProjector {
     }
     this.completedTurn = turn;
     if (turn.status !== "completed") {
-      this.responseUsage = undefined;
+      this.responseCompletions.clear();
     }
     if (turn.status === "failed") {
       const usageLimitMessage = formatCodexUsageLimitErrorMessage({

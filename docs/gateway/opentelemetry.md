@@ -114,6 +114,39 @@ stdout, or `both` for both.
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless. |
 | `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                    |
 
+## Continue an upstream WebSocket trace
+
+An authenticated Gateway WebSocket client can attach a W3C `traceparent` to
+each request frame:
+
+```json
+{
+  "type": "req",
+  "id": "eval-item-42",
+  "method": "agent",
+  "params": {},
+  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+}
+```
+
+The Gateway creates a child request context that preserves the upstream trace
+ID and sampling flags. Agent, harness, model-call, and provider spans created
+inside the request remain on that trace. This allows a local experiment runner
+to create one Langfuse/OpenTelemetry trace per dataset item and correlate the
+corresponding OpenClaw execution.
+
+Trace context is request-scoped, not connection-scoped. On a long-lived
+WebSocket, generate or inject the appropriate `traceparent` independently for
+every RPC. Concurrent requests remain isolated even when their work
+interleaves.
+
+The field is accepted only after the existing Gateway authentication handshake
+and does not affect authentication or method authorization. A `traceparent` on
+the initial `connect` frame is ignored. Missing or syntactically malformed
+values within the 128-character field limit silently fall back to a fresh
+request trace; longer values make the request frame invalid. `tracestate` and
+`baggage` are not accepted by the Gateway WebSocket protocol.
+
 ## Privacy and content capture
 
 Raw model/tool content is **not** exported by default. Spans carry bounded

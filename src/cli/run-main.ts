@@ -1026,6 +1026,7 @@ export async function runCli(
   argv: string[] = process.argv,
   options: {
     additionalStartupTrace?: ReturnType<typeof createGatewayStartupTrace>;
+    retainConsoleRoutingUntilProcessExit?: boolean;
   } = {},
 ) {
   const originalArgv = normalizeWindowsArgv(argv);
@@ -1033,7 +1034,11 @@ export async function runCli(
   return await withConsoleLogsRoutedToStderrForJson(
     originalArgv,
     () => runCliWithPreparedOutputMode(originalArgv, { ...options, builtInMachineOutput }),
-    { machineOutput: builtInMachineOutput, restoreChanges: true },
+    {
+      machineOutput: builtInMachineOutput,
+      restoreChanges: true,
+      retainRoutingUntilProcessExit: options.retainConsoleRoutingUntilProcessExit,
+    },
   );
 }
 

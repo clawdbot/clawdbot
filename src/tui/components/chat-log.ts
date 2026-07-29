@@ -7,9 +7,6 @@ import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
-// Tolerates history timestamps slightly before locally pending messages.
-const PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS = 60_000;
-
 type RepeatableSystemMessage = {
   component: Container;
   textNode: Text;
@@ -17,24 +14,31 @@ type RepeatableSystemMessage = {
   count: number;
 };
 
+type TrackedTool = {
+  component: ToolExecutionComponent;
+  runId?: string;
+  active: boolean;
+};
+
+type TrackedAssistantRun = {
+  streaming?: AssistantMessageComponent;
+  frozen: Set<AssistantMessageComponent>;
+  finalized: Set<AssistantMessageComponent>;
+  committedText?: string;
+  latestText?: string;
+};
+
 /** Scrollback container that tracks pending users, streaming assistant runs, tools, and notices. */
 export class ChatLog extends Container {
   private readonly maxComponents: number;
-  private toolById = new Map<string, ToolExecutionComponent>();
-  private toolRunIds = new Map<string, string>();
-  private streamingRuns = new Map<string, AssistantMessageComponent>();
-  private frozenAssistants = new Map<string, Set<AssistantMessageComponent>>();
-  private committedAssistantText = new Map<string, string>();
-  private latestAssistantText = new Map<string, string>();
-  private liveUsers = new Map<string, UserMessageComponent>();
-  private liveUserSequences = new Map<string, number>();
-  private liveEventUserIds = new Set<string>();
+  private tools = new Map<string, TrackedTool>();
+  private assistantRuns = new Map<string, TrackedAssistantRun>();
+  private userComponents = new Map<string, UserMessageComponent>();
   private pendingUsers = new Map<
     string,
     {
       component: UserMessageComponent;
       text: string;
-      createdAt: number;
     }
   >();
   private pendingSystemNotices = new Map<string, Container>();
@@ -49,23 +53,19 @@ export class ChatLog extends Container {
 
   // Pruning must clear side maps so future stream/tool updates do not target detached components.
   private dropComponentReferences(component: Component) {
-    for (const [toolId, tool] of this.toolById.entries()) {
-      if (tool === component) {
-        this.toolById.delete(toolId);
-        this.toolRunIds.delete(toolId);
-      }
-    }
-    for (const [runId, message] of this.streamingRuns.entries()) {
-      if (message === component) {
-        this.streamingRuns.delete(runId);
+    for (const [toolId, tool] of this.tools.entries()) {
+      if (tool.component === component) {
+        this.tools.delete(toolId);
       }
     }
     if (component instanceof AssistantMessageComponent) {
-      for (const [runId, messages] of this.frozenAssistants.entries()) {
-        messages.delete(component);
-        if (messages.size === 0) {
-          this.frozenAssistants.delete(runId);
+      for (const [runId, run] of this.assistantRuns.entries()) {
+        if (run.streaming === component) {
+          run.streaming = undefined;
         }
+        run.frozen.delete(component);
+        run.finalized.delete(component);
+        this.releaseAssistantRunIfEmpty(runId, run);
       }
     }
     for (const [runId, entry] of this.pendingUsers.entries()) {
@@ -73,11 +73,9 @@ export class ChatLog extends Container {
         this.pendingUsers.delete(runId);
       }
     }
-    for (const [messageId, user] of this.liveUsers.entries()) {
+    for (const [messageId, user] of this.userComponents.entries()) {
       if (user === component) {
-        this.liveUsers.delete(messageId);
-        this.liveUserSequences.delete(messageId);
-        this.liveEventUserIds.delete(messageId);
+        this.userComponents.delete(messageId);
       }
     }
     for (const [runId, entry] of this.pendingSystemNotices.entries()) {
@@ -109,6 +107,58 @@ export class ChatLog extends Container {
     }
   }
 
+  private reserveLiveUserSlot(
+    protectedComponents: Set<Component>,
+    firstRunComponent: Component | undefined,
+    runId?: string,
+  ) {
+    if (protectedComponents.size <= this.maxComponents) {
+      return;
+    }
+
+    // Keep live output and the sole reply; completed run history is the
+    // first choice when a delayed prompt needs a bounded scrollback slot.
+    const streaming = runId ? this.assistantRuns.get(runId)?.streaming : undefined;
+    const completedTools = new Set<ToolExecutionComponent>();
+    for (const tool of this.tools.values()) {
+      if (!tool.active) {
+        completedTools.add(tool.component);
+      }
+    }
+    const evictable =
+      this.children.find(
+        (entry) =>
+          entry !== firstRunComponent &&
+          entry !== streaming &&
+          entry instanceof AssistantMessageComponent &&
+          protectedComponents.has(entry),
+      ) ??
+      this.children.find(
+        (entry) =>
+          entry !== firstRunComponent &&
+          entry instanceof ToolExecutionComponent &&
+          completedTools.has(entry) &&
+          protectedComponents.has(entry),
+      ) ??
+      (streaming &&
+      firstRunComponent instanceof AssistantMessageComponent &&
+      firstRunComponent !== streaming
+        ? firstRunComponent
+        : undefined) ??
+      (firstRunComponent instanceof ToolExecutionComponent && completedTools.has(firstRunComponent)
+        ? firstRunComponent
+        : undefined) ??
+      this.children.find(
+        (entry) =>
+          entry !== firstRunComponent &&
+          entry instanceof ToolExecutionComponent &&
+          protectedComponents.has(entry),
+      );
+    if (evictable) {
+      protectedComponents.delete(evictable);
+    }
+  }
+
   private append(component: Component) {
     this.addChild(component);
     this.pruneOverflow();
@@ -119,73 +169,22 @@ export class ChatLog extends Container {
     this.append(component);
   }
 
-  clearAll(opts?: { preservePendingUsers?: boolean; preserveLiveUsers?: boolean }) {
+  clearAll() {
     this.clear();
-    this.toolById.clear();
-    this.toolRunIds.clear();
-    this.streamingRuns.clear();
-    this.frozenAssistants.clear();
-    this.committedAssistantText.clear();
-    this.latestAssistantText.clear();
-    if (opts?.preserveLiveUsers) {
-      // History rows are authoritative snapshots, not in-flight live events.
-      // Keeping them would resurrect deleted or switched-away transcript branches.
-      for (const messageId of this.liveUsers.keys()) {
-        if (!this.liveEventUserIds.has(messageId)) {
-          this.liveUsers.delete(messageId);
-          this.liveUserSequences.delete(messageId);
-        }
-      }
-    } else {
-      this.liveUsers.clear();
-      this.liveUserSequences.clear();
-      this.liveEventUserIds.clear();
-    }
+    this.tools.clear();
+    this.assistantRuns.clear();
+    this.userComponents.clear();
+    this.pendingUsers.clear();
     this.pendingSystemNotices.clear();
     this.btwMessage = null;
     this.repeatableSystemMessage = null;
-    if (!opts?.preservePendingUsers) {
-      this.pendingUsers.clear();
-    }
   }
 
   clearTools() {
-    for (const tool of this.toolById.values()) {
-      this.removeChild(tool);
+    for (const tool of this.tools.values()) {
+      this.removeChild(tool.component);
     }
-    this.toolById.clear();
-    this.toolRunIds.clear();
-  }
-
-  restoreLiveUsers(beforeMessageSeq?: number) {
-    // Rebuilt history replaces matching IDs in addUser; only live prompts
-    // missing from a stale snapshot are restored before the next canonical row.
-    for (const messageId of this.liveEventUserIds) {
-      const component = this.liveUsers.get(messageId);
-      if (!component) {
-        this.liveEventUserIds.delete(messageId);
-        continue;
-      }
-      if (this.children.includes(component)) {
-        continue;
-      }
-      if (beforeMessageSeq !== undefined) {
-        const messageSeq = this.liveUserSequences.get(messageId);
-        if (messageSeq === undefined || messageSeq >= beforeMessageSeq) {
-          continue;
-        }
-      }
-      this.appendNonSystem(component);
-    }
-  }
-
-  restorePendingUsers() {
-    for (const entry of this.pendingUsers.values()) {
-      if (this.children.includes(entry.component)) {
-        continue;
-      }
-      this.appendNonSystem(entry.component);
-    }
+    this.tools.clear();
   }
 
   clearPendingUsers() {
@@ -249,26 +248,22 @@ export class ChatLog extends Container {
     return true;
   }
 
-  addUser(text: string, options?: { messageId?: string; messageSeq?: number }) {
+  addUser(text: string, options?: { messageId?: string }) {
+    const previous = options?.messageId ? this.userComponents.get(options.messageId) : undefined;
+    if (previous) {
+      previous.setText(text);
+      return previous;
+    }
     const component = new UserMessageComponent(text);
     if (options?.messageId) {
-      this.liveUsers.set(options.messageId, component);
-      // Once authoritative history contains this identity it is no longer a
-      // missing live event and must not survive a later deletion or branch.
-      this.liveEventUserIds.delete(options.messageId);
-      if (options.messageSeq !== undefined) {
-        this.liveUserSequences.set(options.messageId, options.messageSeq);
-      }
+      this.userComponents.set(options.messageId, component);
     }
     this.appendNonSystem(component);
+    return component;
   }
 
-  addLiveUser(text: string, options: { messageId: string; messageSeq?: number; runId?: string }) {
-    this.liveEventUserIds.add(options.messageId);
-    if (options.messageSeq !== undefined) {
-      this.liveUserSequences.set(options.messageId, options.messageSeq);
-    }
-    const existing = this.liveUsers.get(options.messageId);
+  addLiveUser(text: string, options: { messageId: string; runId?: string }) {
+    const existing = this.userComponents.get(options.messageId);
     if (existing) {
       existing.setText(text);
       return existing;
@@ -278,31 +273,41 @@ export class ChatLog extends Container {
     if (pending && options.runId && pending.text === text) {
       pending.component.setText(text);
       this.pendingUsers.delete(options.runId);
-      this.liveUsers.set(options.messageId, pending.component);
+      this.userComponents.set(options.messageId, pending.component);
       return pending.component;
     }
 
     const component = new UserMessageComponent(text);
-    this.liveUsers.set(options.messageId, component);
-    const frozen = options.runId ? this.frozenAssistants.get(options.runId) : undefined;
-    const assistant =
-      frozen?.values().next().value ??
-      (options.runId ? this.streamingRuns.get(options.runId) : undefined);
-    const assistantIndex = assistant ? this.children.indexOf(assistant) : -1;
-    if (assistant && assistantIndex >= 0) {
-      // Transcript broadcasts can trail the first delta; insert their prompt
-      // before the existing reply. Preserve both when full scrollback evicts
-      // older components so the newly recovered prompt cannot disappear.
-      this.repeatableSystemMessage = null;
-      this.children.splice(assistantIndex, 0, component);
-      const protectedComponents = new Set<Component>([component, assistant]);
-      if (options.runId) {
-        for (const [toolId, tool] of this.toolById) {
-          if (this.toolRunIds.get(toolId) === options.runId) {
-            protectedComponents.add(tool);
-          }
+    this.userComponents.set(options.messageId, component);
+    const protectedComponents = new Set<Component>([component]);
+    if (options.runId) {
+      const run = this.assistantRuns.get(options.runId);
+      for (const segment of run?.frozen ?? []) {
+        protectedComponents.add(segment);
+      }
+      const streaming = run?.streaming;
+      if (streaming) {
+        protectedComponents.add(streaming);
+      }
+      for (const segment of run?.finalized ?? []) {
+        protectedComponents.add(segment);
+      }
+      for (const tool of this.tools.values()) {
+        if (tool.runId === options.runId) {
+          protectedComponents.add(tool.component);
         }
       }
+    }
+    const firstRunComponentIndex = this.children.findIndex((entry) =>
+      protectedComponents.has(entry),
+    );
+    if (firstRunComponentIndex >= 0) {
+      const firstRunComponent = this.children[firstRunComponentIndex];
+      // Scrollback may evict early reply segments before a peer prompt arrives;
+      // anchor before the earliest surviving reply or tool from the same run.
+      this.repeatableSystemMessage = null;
+      this.children.splice(firstRunComponentIndex, 0, component);
+      this.reserveLiveUserSlot(protectedComponents, firstRunComponent, options.runId);
       this.pruneOverflow(protectedComponents);
       return component;
     }
@@ -310,16 +315,15 @@ export class ChatLog extends Container {
     return component;
   }
 
-  addPendingUser(runId: string, text: string, createdAt = Date.now()) {
+  addPendingUser(runId: string, text: string) {
     const existing = this.pendingUsers.get(runId);
     if (existing) {
       existing.text = text;
-      existing.createdAt = createdAt;
       existing.component.setText(text);
       return existing.component;
     }
     const component = new UserMessageComponent(text);
-    this.pendingUsers.set(runId, { component, text, createdAt });
+    this.pendingUsers.set(runId, { component, text });
     this.appendNonSystem(component);
     return component;
   }
@@ -350,44 +354,6 @@ export class ChatLog extends Container {
     return true;
   }
 
-  reconcilePendingUsers(
-    historyUsers: Array<{
-      text: string;
-      timestamp?: number | null;
-    }>,
-  ) {
-    // Gateway history may echo a just-submitted local message; remove pending rows when it does.
-    const normalizedHistory = historyUsers
-      .map((entry) => ({
-        text: entry.text.trim(),
-        timestamp: typeof entry.timestamp === "number" ? entry.timestamp : null,
-      }))
-      .filter((entry) => entry.text.length > 0 && entry.timestamp !== null);
-    const clearedRunIds: string[] = [];
-    for (const [runId, entry] of this.pendingUsers.entries()) {
-      const pendingText = entry.text.trim();
-      if (!pendingText) {
-        continue;
-      }
-      const matchIndex = normalizedHistory.findIndex(
-        (historyEntry) =>
-          historyEntry.text === pendingText &&
-          (historyEntry.timestamp ?? 0) >=
-            entry.createdAt - PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS,
-      );
-      if (matchIndex === -1) {
-        continue;
-      }
-      if (this.children.includes(entry.component)) {
-        this.removeChild(entry.component);
-      }
-      this.pendingUsers.delete(runId);
-      clearedRunIds.push(runId);
-      normalizedHistory.splice(matchIndex, 1);
-    }
-    return clearedRunIds;
-  }
-
   countPendingUsers() {
     return this.pendingUsers.size;
   }
@@ -396,9 +362,48 @@ export class ChatLog extends Container {
     return runId ?? "default";
   }
 
+  private getAssistantRun(runId: string): TrackedAssistantRun {
+    let run = this.assistantRuns.get(runId);
+    if (!run) {
+      run = {
+        frozen: new Set(),
+        finalized: new Set(),
+      };
+      this.assistantRuns.set(runId, run);
+    }
+    return run;
+  }
+
+  private releaseAssistantRunIfEmpty(runId: string, run: TrackedAssistantRun) {
+    if (
+      !run.streaming &&
+      run.frozen.size === 0 &&
+      run.finalized.size === 0 &&
+      run.committedText === undefined &&
+      run.latestText === undefined
+    ) {
+      this.assistantRuns.delete(runId);
+    }
+  }
+
+  private resolveSingleStreamingRunId(): string | undefined {
+    let streamingRunId: string | undefined;
+    for (const [runId, run] of this.assistantRuns) {
+      if (!run.streaming) {
+        continue;
+      }
+      if (streamingRunId !== undefined) {
+        return undefined;
+      }
+      streamingRunId = runId;
+    }
+    return streamingRunId;
+  }
+
   private resolveAssistantSegment(runId: string, text: string) {
-    const committed = this.committedAssistantText.get(runId);
-    if (!committed) {
+    const run = this.assistantRuns.get(runId);
+    const committed = run?.committedText;
+    if (!run || !committed) {
       return text;
     }
     if (text.startsWith(committed)) {
@@ -407,55 +412,53 @@ export class ChatLog extends Container {
 
     // A revised provider snapshot cannot be split at an obsolete tool boundary.
     // Drop obsolete segments so the authoritative replacement lands after the tools.
-    const frozen = this.frozenAssistants.get(runId);
-    if (!frozen?.size) {
+    if (!run.frozen.size) {
       return text;
     }
-    for (const component of frozen) {
+    for (const component of run.frozen) {
       this.removeChild(component);
     }
-    this.frozenAssistants.delete(runId);
-    const streaming = this.streamingRuns.get(runId);
-    if (streaming) {
-      this.removeChild(streaming);
-      this.streamingRuns.delete(runId);
+    run.frozen.clear();
+    if (run.streaming) {
+      this.removeChild(run.streaming);
+      run.streaming = undefined;
     }
-    this.committedAssistantText.delete(runId);
+    run.committedText = undefined;
     return text;
   }
 
   // Tool rows freeze earlier cumulative text so later deltas render below the tool.
   private freezeStreamingAssistants() {
-    for (const [runId, component] of this.streamingRuns) {
-      let frozen = this.frozenAssistants.get(runId);
-      if (!frozen) {
-        frozen = new Set();
-        this.frozenAssistants.set(runId, frozen);
+    for (const run of this.assistantRuns.values()) {
+      if (!run.streaming) {
+        continue;
       }
-      frozen.add(component);
-      this.committedAssistantText.set(runId, this.latestAssistantText.get(runId) ?? "");
+      run.frozen.add(run.streaming);
+      run.committedText = run.latestText ?? "";
+      run.streaming = undefined;
     }
-    this.streamingRuns.clear();
   }
 
   startAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
-    this.latestAssistantText.set(effectiveRunId, text);
+    const run = this.getAssistantRun(effectiveRunId);
+    run.finalized.clear();
+    run.latestText = text;
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
-    const existing = this.streamingRuns.get(effectiveRunId);
+    const existing = run.streaming;
     if (existing) {
       existing.setText(segmentText);
       return existing;
     }
     const component = new AssistantMessageComponent(segmentText);
-    this.streamingRuns.set(effectiveRunId, component);
+    run.streaming = component;
     this.appendNonSystem(component);
     return component;
   }
 
   reserveAssistantSlot(runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
-    const existing = this.streamingRuns.get(effectiveRunId);
+    const existing = this.assistantRuns.get(effectiveRunId)?.streaming;
     if (existing) {
       return existing;
     }
@@ -464,11 +467,12 @@ export class ChatLog extends Container {
 
   updateAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
-    this.latestAssistantText.set(effectiveRunId, text);
+    const run = this.getAssistantRun(effectiveRunId);
+    run.latestText = text;
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
-    const existing = this.streamingRuns.get(effectiveRunId);
+    const existing = run.streaming;
     if (!existing) {
-      if (!segmentText && this.committedAssistantText.has(effectiveRunId)) {
+      if (!segmentText && run.committedText !== undefined) {
         return;
       }
       this.startAssistant(text, runId);
@@ -479,39 +483,58 @@ export class ChatLog extends Container {
 
   finalizeAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
+    const run = this.getAssistantRun(effectiveRunId);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
-    const existing = this.streamingRuns.get(effectiveRunId);
-    this.frozenAssistants.delete(effectiveRunId);
-    this.committedAssistantText.delete(effectiveRunId);
-    this.latestAssistantText.delete(effectiveRunId);
+    const existing = run.streaming;
+    const finalized = new Set(run.frozen);
+    let lastAssistant: AssistantMessageComponent | undefined;
+    run.frozen.clear();
+    run.committedText = undefined;
+    run.latestText = undefined;
     if (existing) {
       if (segmentText) {
         existing.setText(segmentText);
+        lastAssistant = existing;
       } else {
         this.removeChild(existing);
       }
-      this.streamingRuns.delete(effectiveRunId);
-      return;
+      run.streaming = undefined;
+    } else if (segmentText) {
+      const component = new AssistantMessageComponent(segmentText);
+      this.appendNonSystem(component);
+      lastAssistant = component;
     }
-    if (segmentText) {
-      this.appendNonSystem(new AssistantMessageComponent(segmentText));
+
+    if (lastAssistant) {
+      finalized.add(lastAssistant);
     }
+    for (const segment of finalized) {
+      if (!this.children.includes(segment)) {
+        finalized.delete(segment);
+      }
+    }
+    if (finalized.size > 0) {
+      // Persisted peer prompts can trail finalization; retain every surviving
+      // reply segment so full scrollback cannot evict the tool-split tail.
+      run.finalized = finalized;
+      this.assistantRuns.set(effectiveRunId, run);
+    }
+    this.releaseAssistantRunIfEmpty(effectiveRunId, run);
   }
 
   dropAssistant(runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
-    for (const component of this.frozenAssistants.get(effectiveRunId) ?? []) {
-      this.removeChild(component);
-    }
-    this.frozenAssistants.delete(effectiveRunId);
-    this.committedAssistantText.delete(effectiveRunId);
-    this.latestAssistantText.delete(effectiveRunId);
-    const existing = this.streamingRuns.get(effectiveRunId);
-    if (!existing) {
+    const run = this.assistantRuns.get(effectiveRunId);
+    if (!run) {
       return;
     }
-    this.removeChild(existing);
-    this.streamingRuns.delete(effectiveRunId);
+    for (const component of run.frozen) {
+      this.removeChild(component);
+    }
+    if (run.streaming) {
+      this.removeChild(run.streaming);
+    }
+    this.assistantRuns.delete(effectiveRunId);
   }
 
   showBtw(params: { question: string; text: string; isError?: boolean }) {
@@ -542,20 +565,16 @@ export class ChatLog extends Container {
   }
 
   startTool(toolCallId: string, toolName: string, args: unknown, runId?: string) {
-    const existing = this.toolById.get(toolCallId);
+    const existing = this.tools.get(toolCallId);
     if (existing) {
-      existing.setArgs(args);
-      return existing;
+      existing.component.setArgs(args);
+      return existing.component;
     }
-    const owningRunId =
-      runId ?? (this.streamingRuns.size === 1 ? this.streamingRuns.keys().next().value : undefined);
+    const owningRunId = runId ?? this.resolveSingleStreamingRunId();
     this.freezeStreamingAssistants();
     const component = new ToolExecutionComponent(toolName, args);
     component.setExpanded(this.toolsExpanded);
-    this.toolById.set(toolCallId, component);
-    if (owningRunId) {
-      this.toolRunIds.set(toolCallId, owningRunId);
-    }
+    this.tools.set(toolCallId, { component, runId: owningRunId, active: true });
     this.appendNonSystem(component);
     return component;
   }
@@ -565,23 +584,25 @@ export class ChatLog extends Container {
     result: unknown,
     opts?: { isError?: boolean; partial?: boolean },
   ) {
-    const existing = this.toolById.get(toolCallId);
+    const existing = this.tools.get(toolCallId);
     if (!existing) {
       return;
     }
     if (opts?.partial) {
-      existing.setPartialResult(result as Record<string, unknown>);
+      existing.active = true;
+      existing.component.setPartialResult(result as Record<string, unknown>);
       return;
     }
-    existing.setResult(result as Record<string, unknown>, {
+    existing.active = false;
+    existing.component.setResult(result as Record<string, unknown>, {
       isError: opts?.isError,
     });
   }
 
   setToolsExpanded(expanded: boolean) {
     this.toolsExpanded = expanded;
-    for (const tool of this.toolById.values()) {
-      tool.setExpanded(expanded);
+    for (const tool of this.tools.values()) {
+      tool.component.setExpanded(expanded);
     }
   }
 }

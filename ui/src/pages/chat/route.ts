@@ -1,6 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
@@ -32,8 +33,7 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
 
 function sessionPage(face: BoardFace) {
   return definePage({
-    id: face,
-    path: `/${face}`,
+    ...routePageSpec(face),
     loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
       `${location.pathname}\u0000${location.search}`,
     loader: async (context: ApplicationContext, { location, signal }) => {

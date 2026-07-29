@@ -28,34 +28,6 @@
         "defaultModel": "kimi-for-coding",
         "models": [
           {
-            "id": "kimi-for-coding",
-            "name": "Kimi Code",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 32768,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-for-coding-highspeed",
-            "name": "Kimi K2.7 Code HighSpeed",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 32768,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
             "id": "k3",
             "name": "Kimi K3",
             "reasoning": true,
@@ -107,6 +79,34 @@
             },
             "compat": {
               "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "kimi-for-coding",
+            "name": "Kimi Code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "kimi-for-coding-highspeed",
+            "name": "Kimi K2.7 Code HighSpeed",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
             }
           }
         ]

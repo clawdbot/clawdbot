@@ -231,13 +231,31 @@ describe("qa coverage report", () => {
       inventory.scorecardTaxonomy.categories.find(
         (category) => category.id === TEST_BROWSER_CATEGORY_ID,
       )?.inventoryRefs,
-    ).toContainEqual({
-      coverageId: TEST_BROWSER_COVERAGE_ID,
-      kind: "playwright",
-      path: "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
-      role: "primary",
-      scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
-    });
+    ).toEqual(
+      expect.arrayContaining([
+        {
+          coverageId: TEST_BROWSER_COVERAGE_ID,
+          kind: "qa-scenario",
+          path: null,
+          role: "primary",
+          scenarioRefs: ["qa/scenarios/ui/control-ui-qa-channel-image-roundtrip.yaml"],
+        },
+        {
+          coverageId: TEST_BROWSER_COVERAGE_ID,
+          kind: "playwright",
+          path: "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
+          role: "secondary",
+          scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
+        },
+        {
+          coverageId: TEST_BROWSER_COVERAGE_ID,
+          kind: "playwright",
+          path: "ui/src/e2e/plan-replay-reconnect.e2e.test.ts",
+          role: "secondary",
+          scenarioRefs: ["qa/scenarios/ui/control-ui-plan-replay-reconnect.yaml"],
+        },
+      ]),
+    );
     expect(
       expectDefined(inventory.byTheme.memory, "memory QA theme").map((coverage) => coverage.id),
     ).toContain("session-memory.memory-recall");
@@ -371,8 +389,19 @@ describe("qa coverage report", () => {
       "- tools.tool-invocation-and-execution (tools / Tool Invocation and Execution; partial): profiles: all, release; coverage IDs:",
     );
     expect(report).toContain(
-      "primary:playwright:ui/src/e2e/chat-flow.messaging.e2e.test.ts (control-ui.gateway-hosted-ui-control)",
+      "primary:qa-scenario:qa/scenarios/ui/control-ui-qa-channel-image-roundtrip.yaml (control-ui.gateway-hosted-ui-control)",
     );
+    for (const executionPath of [
+      "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
+      "ui/src/e2e/plan-replay-reconnect.e2e.test.ts",
+    ]) {
+      expect(report).toContain(
+        `secondary:playwright:${executionPath} (${TEST_BROWSER_COVERAGE_ID})`,
+      );
+      expect(report).not.toContain(
+        `primary:playwright:${executionPath} (${TEST_BROWSER_COVERAGE_ID})`,
+      );
+    }
     expect(report).not.toContain("### Unknown Scenario Coverage IDs");
   });
 

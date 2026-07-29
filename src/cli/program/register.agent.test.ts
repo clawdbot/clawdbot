@@ -180,6 +180,9 @@ describe("agent command registration", () => {
       "/tmp/project",
       "--model",
       "openai/gpt-5.6-sol",
+      "--code-mode",
+      "code",
+      "--local-model-lean",
       "--fallback",
       "anthropic/claude-sonnet-4-6",
       "--fallback",
@@ -193,6 +196,8 @@ describe("agent command registration", () => {
       expect.objectContaining({
         cwd: "/tmp/project",
         model: "openai/gpt-5.6-sol",
+        codeMode: "code",
+        localModelLean: true,
         fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
         authEnvOnly: true,
         timeout: "600",

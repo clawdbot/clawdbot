@@ -102,7 +102,7 @@ type SessionBackfillDay = {
   topCandidates: string[];
 };
 
-type SessionBackfillResult = {
+export type SessionBackfillResult = {
   agentId: string;
   workspaceDir: string;
   applied: boolean;
@@ -118,7 +118,17 @@ type SessionBackfillResult = {
   };
 };
 
-type RunSessionBackfillParams = {
+type SessionBackfillContinuation = {
+  advanced: boolean;
+  hasMore: boolean;
+};
+
+type SessionBackfillExecution = {
+  result: SessionBackfillResult;
+  continuation: SessionBackfillContinuation;
+};
+
+export type RunSessionBackfillParams = {
   agentId: string;
   workspaceDir: string;
   from?: string;
@@ -155,6 +165,32 @@ function resolveLimitDays(value: number | undefined): number {
     throw new Error("--limit-days must be a positive integer.");
   }
   return value;
+}
+
+export function normalizeSessionBackfillSelection(
+  params: Pick<RunSessionBackfillParams, "from" | "to" | "limitDays">,
+  labels: { from: string; to: string; limitDays: string } = {
+    from: "--from",
+    to: "--to",
+    limitDays: "--limit-days",
+  },
+): { from?: string; to?: string; limitDays: number } {
+  const from = normalizeMemoryDay(params.from, labels.from);
+  const to = normalizeMemoryDay(params.to, labels.to);
+  if (from !== undefined && to !== undefined && from > to) {
+    throw new Error(`${labels.from} must not be after ${labels.to}.`);
+  }
+  let limitDays: number;
+  try {
+    limitDays = resolveLimitDays(params.limitDays);
+  } catch {
+    throw new Error(`${labels.limitDays} must be a positive integer.`);
+  }
+  return {
+    ...(from !== undefined ? { from } : {}),
+    ...(to !== undefined ? { to } : {}),
+    limitDays,
+  };
 }
 
 function sourceFromCorpusEntry(entry: SessionTranscriptCorpusEntry): SessionBackfillSource | null {
@@ -551,9 +587,9 @@ async function applySessionBackfillDays(params: {
   return Math.max(0, after.length - before.length);
 }
 
-export async function runSessionBackfill(
+async function executeSessionBackfillCore(
   params: RunSessionBackfillParams,
-): Promise<SessionBackfillResult> {
+): Promise<SessionBackfillExecution> {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     throw new Error("Memory session-backfill requires a resolvable workspace directory.");
@@ -571,28 +607,26 @@ export async function runSessionBackfill(
       removeGroundedShortTermCandidates({ workspaceDir }),
     ]);
     return {
-      agentId: params.agentId,
-      workspaceDir,
-      applied: false,
-      rem: false,
-      days: [],
-      candidateCount: 0,
-      stagedEntries: 0,
-      writtenDiaryEntries: 0,
-      replacedDiaryEntries: 0,
-      rollback: {
-        removedDiaryEntries: diary.removed,
-        removedStagedEntries: staged.removed,
+      result: {
+        agentId: params.agentId,
+        workspaceDir,
+        applied: false,
+        rem: false,
+        days: [],
+        candidateCount: 0,
+        stagedEntries: 0,
+        writtenDiaryEntries: 0,
+        replacedDiaryEntries: 0,
+        rollback: {
+          removedDiaryEntries: diary.removed,
+          removedStagedEntries: staged.removed,
+        },
       },
+      continuation: { advanced: false, hasMore: false },
     };
   }
 
-  const from = normalizeMemoryDay(params.from, "--from");
-  const to = normalizeMemoryDay(params.to, "--to");
-  if (from !== undefined && to !== undefined && from > to) {
-    throw new Error("--from must not be after --to.");
-  }
-  const limitDays = resolveLimitDays(params.limitDays);
+  const { from, to, limitDays } = normalizeSessionBackfillSelection(params);
   const state = await readSessionIngestionState(workspaceDir);
   const sources = await listSessionBackfillSources({
     agentId: params.agentId,
@@ -612,6 +646,17 @@ export async function runSessionBackfill(
     .map((day) => ({ day, candidates: collected.byDay.get(day) ?? [] }));
   const days = selectedDays.map((entry) => summarizeDay(entry.day, entry.candidates));
   const candidateCount = days.reduce((sum, day) => sum + day.candidateCount, 0);
+  // Scans retain every unseen in-range candidate before batch caps, so comparing their full
+  // hash set with the selected batch makes continuation authoritative across day/file caps.
+  const selectedHashes = new Set(
+    selectedDays.flatMap((day) => day.candidates.map((candidate) => candidate.hash)),
+  );
+  const continuation = {
+    advanced: Boolean(params.apply) && candidateCount > 0,
+    hasMore: collected.scans.some((scan) =>
+      scan.candidates.some((candidate) => !selectedHashes.has(candidate.hash)),
+    ),
+  };
   let writtenDiaryEntries = 0;
   let replacedDiaryEntries = 0;
   let stagedEntries = 0;
@@ -667,14 +712,32 @@ export async function runSessionBackfill(
   }
 
   return {
-    agentId: params.agentId,
-    workspaceDir,
-    applied: Boolean(params.apply),
-    rem: Boolean(params.rem),
-    days,
-    candidateCount,
-    stagedEntries,
-    writtenDiaryEntries,
-    replacedDiaryEntries,
+    result: {
+      agentId: params.agentId,
+      workspaceDir,
+      applied: Boolean(params.apply),
+      rem: Boolean(params.rem),
+      days,
+      candidateCount,
+      stagedEntries,
+      writtenDiaryEntries,
+      replacedDiaryEntries,
+    },
+    continuation,
   };
 }
+
+export async function executeSessionBackfill(
+  params: RunSessionBackfillParams,
+): Promise<SessionBackfillResult> {
+  return (await executeSessionBackfillCore(params)).result;
+}
+
+export async function executeSessionBackfillBatch(
+  params: RunSessionBackfillParams,
+): Promise<SessionBackfillExecution> {
+  return await executeSessionBackfillCore(params);
+}
+
+// Preserve the CLI-facing name while every caller shares the same executor.
+export { executeSessionBackfill as runSessionBackfill };

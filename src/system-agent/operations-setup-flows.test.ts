@@ -30,7 +30,7 @@ describe("system agent setup-flow operations", () => {
     expect(isPersistentSystemAgentOperation({ kind: "channel-list" })).toBe(false);
   });
 
-  it("parses hosted skills and web-search setup requests", () => {
+  it("parses hosted skills, web-search, and Gateway setup requests", () => {
     for (const input of ["configure skills", "setup skills", "set up skills"]) {
       expect(parseSystemAgentOperation(input)).toEqual({ kind: "skills-setup" });
     }
@@ -46,9 +46,25 @@ describe("system agent setup-flow operations", () => {
       kind: "open-setup",
       target: "search",
     });
+    for (const input of ["configure gateway", "set up gateway", "gateway settings"]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "gateway-config-setup" });
+    }
+    expect(parseSystemAgentOperation("open gateway wizard")).toEqual({
+      kind: "open-setup",
+      target: "gateway",
+    });
     expect(isPersistentSystemAgentOperation({ kind: "skills-setup" })).toBe(false);
     expect(isPersistentSystemAgentOperation({ kind: "search-setup" })).toBe(false);
+    expect(isPersistentSystemAgentOperation({ kind: "gateway-config-setup" })).toBe(false);
     expect(parseSystemAgentOperation("configure search with brave").kind).toBe("none");
+  });
+
+  it("parses the exact memory-import grammar", () => {
+    for (const input of ["import memory", "import memories", "memory import"]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "memory-import" });
+    }
+    expect(isPersistentSystemAgentOperation({ kind: "memory-import" })).toBe(false);
+    expect(parseSystemAgentOperation("import memory from codex").kind).toBe("none");
   });
 
   it("parses anchored setup switches and channel info", () => {
@@ -93,6 +109,7 @@ describe("system agent setup-flow operations", () => {
       { kind: "open-setup", target: "classic" } as const,
       { kind: "open-setup", target: "channels", channel: "slack" } as const,
       { kind: "open-setup", target: "search" } as const,
+      { kind: "open-setup", target: "gateway" } as const,
     ]) {
       const result = await executeSystemAgentOperation(operation, runtime);
       expect(result.applied).toBe(false);
@@ -103,16 +120,28 @@ describe("system agent setup-flow operations", () => {
     expect(output).toContain("openclaw onboard --classic");
     expect(output).toContain("openclaw channels add --channel slack");
     expect(output).toContain("openclaw configure --section web");
+    expect(output).toContain("openclaw configure --section gateway");
   });
 
-  it("prints one-shot pointers for hosted skills and search setup", async () => {
+  it("prints one-shot pointers for hosted skills, search, and Gateway setup", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
 
     await executeSystemAgentOperation({ kind: "skills-setup" }, runtime);
     await executeSystemAgentOperation({ kind: "search-setup" }, runtime);
+    await executeSystemAgentOperation({ kind: "gateway-config-setup" }, runtime);
 
     expect(lines.join("\n")).toContain("openclaw configure --section skills");
     expect(lines.join("\n")).toContain("openclaw configure --section web");
+    expect(lines.join("\n")).toContain("openclaw configure --section gateway");
+  });
+
+  it("points one-shot memory import at interactive owners", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation({ kind: "memory-import" }, runtime);
+
+    expect(lines.join("\n")).toContain("Memory page in the Control UI");
+    expect(lines.join("\n")).toContain("openclaw onboard");
   });
 
   it("routes one-shot model setup through the verified OpenClaw flow", async () => {

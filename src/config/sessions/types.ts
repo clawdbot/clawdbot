@@ -52,6 +52,27 @@ export type SessionDeliveryState =
       origin: SessionOrigin;
     };
 
+type PendingFinalDeliveryState = {
+  createdAt: number;
+  context?: DeliveryContext;
+  intentId?: string;
+} & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
+
+type FallbackNoticeState = {
+  kind: "active";
+  selectedModel: string;
+  activeModel: string;
+  reason?: string;
+};
+
+type MemoryFlushState =
+  | { kind: "succeeded"; compactionCount: number }
+  | {
+      kind: "failed";
+      compactionCount?: number;
+      failureCount: number;
+    };
+
 export type { AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpMeta };
 
 export type CliSessionReseedReceipt = {
@@ -59,6 +80,15 @@ export type CliSessionReseedReceipt = {
   promptHash: string;
   localSessionId: string;
   userTurnDisposition: "persisted" | "omitted";
+};
+
+export type SessionDiffBaseline = {
+  version: 1;
+  sessionId: string;
+  root: string;
+  files: Array<{ path: string; fingerprint: string }>;
+  /** Some checkout entries could not be fingerprinted without exceeding diff safety caps. */
+  truncated?: true;
 };
 
 export type CliSessionBinding = {
@@ -313,6 +343,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     spawnedWorkspaceDir?: string;
     /** Task working directory inherited by spawned sessions and reused on later turns. */
     spawnedCwd?: string;
+    /** Content-free fingerprints for checkout changes that predate this session generation. */
+    sessionDiffBaseline?: SessionDiffBaseline;
     /**
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
@@ -473,18 +505,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
-    /** Durable marker that final user reply delivery still needs a retry/resume pass. */
-    pendingFinalDelivery?: boolean;
-    pendingFinalDeliveryCreatedAt?: number;
-    pendingFinalDeliveryLastAttemptAt?: number;
-    pendingFinalDeliveryAttemptCount?: number;
-    pendingFinalDeliveryLastError?: string | null;
-    /** Frozen reply text that needs delivery. */
-    pendingFinalDeliveryText?: string | null;
-    /** Original delivery context (channel, recipient, etc). */
-    pendingFinalDeliveryContext?: DeliveryContext;
-    /** Durable send intent backing pending final delivery, when already created. */
-    pendingFinalDeliveryIntentId?: string | null;
+    pendingFinalDelivery?: PendingFinalDeliveryState;
     /**
      * Whether totalTokens reflects a fresh context snapshot for the latest run.
      * Undefined means legacy/unknown freshness; false forces consumers to treat
@@ -507,26 +528,12 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * incompatible runtime harnesses.
      */
     agentHarnessId?: string;
-    /**
-     * Last selected/runtime model pair for which a fallback notice was emitted.
-     * Used to avoid repeating the same fallback notice every turn.
-     */
-    fallbackNoticeSelectedModel?: string;
-    fallbackNoticeActiveModel?: string;
-    fallbackNoticeReason?: string;
+    fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
-    memoryFlushAt?: number;
-    memoryFlushCompactionCount?: number;
-    memoryFlushContextHash?: string;
-    /** Consecutive memory flush failures since the last successful flush. */
-    memoryFlushFailureCount?: number;
-    /** Timestamp (ms) of the last failed memory flush attempt. */
-    memoryFlushLastFailedAt?: number;
-    /** Last memory flush failure error message, truncated for durable metadata. */
-    memoryFlushLastFailureError?: string;
+    memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
     /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */

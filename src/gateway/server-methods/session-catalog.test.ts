@@ -232,6 +232,27 @@ describe("session catalog Gateway methods", () => {
     }
   });
 
+  it("shares settled identical lists across out-of-phase clients until the window expires", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const list = vi.fn(async () => []);
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+    const config = {};
+    try {
+      await call("sessions.catalog.list", {}, config);
+
+      now += 2_500;
+      await call("sessions.catalog.list", {}, config);
+      expect(list).toHaveBeenCalledOnce();
+
+      now += 501;
+      await call("sessions.catalog.list", {}, config);
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
     const broadcastToConnIds = vi.fn();
     const host = {
@@ -326,7 +347,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("does not clone the shared list projection for each catalog request", async () => {
+  it("does not clone the shared list projection for a settled shared catalog result", async () => {
     const storedEntries = [
       {
         sessionKey: "agent:main:shared",
@@ -347,12 +368,13 @@ describe("session catalog Gateway methods", () => {
       },
     ];
     const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    const config = {};
     try {
-      await call("sessions.catalog.list", {});
-      await call("sessions.catalog.list", {});
+      await call("sessions.catalog.list", {}, config);
+      await call("sessions.catalog.list", {}, config);
 
       expect(cloneSpy).not.toHaveBeenCalled();
-      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(2);
+      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
       expect(hoisted.listSessionEntriesReadOnly).toHaveBeenLastCalledWith({
         agentId: "main",
         clone: false,
@@ -689,6 +711,8 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("retries an exception-derived create target failure without a config reload", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     const resolveCreateSession = vi
       .fn()
       .mockImplementationOnce(() => {
@@ -703,25 +727,30 @@ describe("session catalog Gateway methods", () => {
     ];
     const config = {};
 
-    const unavailable = await call("sessions.catalog.list", {}, config);
-    expect(unavailable).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          capabilities: { continueSession: false, archive: false },
-        }),
-      ],
-    });
-    const recovered = await call("sessions.catalog.list", {}, config);
-    expect(recovered).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          capabilities: expect.objectContaining({
-            createSession: { model: "anthropic/claude-opus-4-8" },
+    try {
+      const unavailable = await call("sessions.catalog.list", {}, config);
+      expect(unavailable).toHaveBeenCalledWith(true, {
+        catalogs: [
+          expect.objectContaining({
+            capabilities: { continueSession: false, archive: false },
           }),
-        }),
-      ],
-    });
-    expect(resolveCreateSession).toHaveBeenCalledTimes(2);
+        ],
+      });
+      now += 3_001;
+      const recovered = await call("sessions.catalog.list", {}, config);
+      expect(recovered).toHaveBeenCalledWith(true, {
+        catalogs: [
+          expect.objectContaining({
+            capabilities: expect.objectContaining({
+              createSession: { model: "anthropic/claude-opus-4-8" },
+            }),
+          }),
+        ],
+      });
+      expect(resolveCreateSession).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("keeps creation available when catalog history listing fails", async () => {

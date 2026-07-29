@@ -27,7 +27,6 @@ type InternalRunParams = RunEmbeddedAgentParams & {
 type AttemptRuntime = {
   sessionId: string;
   sessionFile: string;
-  sessionTarget?: ContextEngineSessionTarget;
   sessionKey?: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
@@ -68,6 +67,16 @@ type AttemptRuntime = {
   captureRuntimeArtifact: boolean;
 };
 
+type AttemptTranscriptOwnership =
+  | {
+      kind: "caller-owned";
+      sessionManager: NonNullable<RunEmbeddedAgentParams["sessionManager"]>;
+    }
+  | {
+      kind: "runtime-target";
+      sessionTarget?: ContextEngineSessionTarget;
+    };
+
 type AttemptControl = {
   lifecycleGeneration: string;
   pluginHarnessOwnsTransport: boolean;
@@ -92,6 +101,7 @@ type AttemptControl = {
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
   runtime: AttemptRuntime;
+  transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
   bootstrapPromptWarningSignaturesSeen: string[];
   suppressNextUserMessagePersistence: boolean;
@@ -206,7 +216,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     sessionFile: runtime.sessionFile,
-    sessionTarget: runtime.sessionTarget,
+    ...(input.transcriptOwnership.kind === "caller-owned"
+      ? { sessionManager: input.transcriptOwnership.sessionManager }
+      : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,

@@ -4352,7 +4352,7 @@ describe("createTelegramBot", () => {
     sendMessageSpy.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     replySpy.mockResolvedValue({
-      text: "⚙️ Compaction skipped: already_compacted_recently • ctx 0%",
+      text: "⚙️ Compaction skipped: already_compacted • ctx 0%",
     });
 
     loadConfig.mockReturnValue({

@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import {
@@ -99,6 +100,15 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
     body: JSON.stringify(body),
   });
   return res;
+}
+
+function createOpenAiChatClient(port: number): OpenAI {
+  return new OpenAI({
+    apiKey: "test",
+    baseURL: `http://127.0.0.1:${port}/v1`,
+    defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+    maxRetries: 0,
+  });
 }
 
 function parseSseDataLines(text: string): string[] {
@@ -1879,6 +1889,127 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it.each([
+    {
+      name: "a split custom XML opener",
+      deltas: ["<", "xiaohai-banli>milk tea</", "xiaohai-banli>"],
+      expected: "<xiaohai-banli>milk tea</xiaohai-banli>",
+    },
+    {
+      name: "literal script-like content",
+      deltas: ["<", "script>alert('literal')</", "script>"],
+      expected: "<script>alert('literal')</script>",
+    },
+  ])("preserves $name through the official OpenAI SDK SSE stream", async ({ deltas, expected }) => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      const { session, emit } = createStubSessionHarness();
+      subscribeEmbeddedAgentSession({ session, runId });
+      emit({ type: "message_start", message: { role: "assistant" } });
+      for (const delta of deltas) {
+        emitAssistantTextDelta({ emit, delta });
+      }
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Preserve the literal output." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        if (typeof choice.delta.content === "string") {
+          content.push(choice.delta.content);
+        }
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+
+    expect(content.join("")).toBe(expected);
+    expect(finishReasons.at(-1)).toBe("stop");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves buffered leading content in cumulative assistant snapshots", async () => {
+    const expected = "<xiaohai-banli>milk tea</xiaohai-banli>";
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: {
+          text: expected,
+          delta: "xiaohai-banli>milk tea</xiaohai-banli>",
+        },
+      });
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Preserve the full snapshot." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        if (typeof choice.delta.content === "string") {
+          content.push(choice.delta.content);
+        }
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+
+    expect(content.join("")).toBe(expected);
+    expect(finishReasons.at(-1)).toBe("stop");
+  });
+
+  it("flushes same-turn assistant microtasks before the SSE done frame", async () => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce(((opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
+      const result = Promise.resolve({ payloads: [{ text: "start finish" }] });
+      void result.then(() => {
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        void Promise.resolve().then(() => {
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: "finish" } });
+        });
+      });
+      return result;
+    }) as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "Finish the streamed response." }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    const data = parseSseDataLines(await res.text());
+    expect(data.at(-1)).toBe("[DONE]");
+    const chunks = data
+      .filter((line) => line !== "[DONE]")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const content = chunks
+      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+      .filter((value): value is string => typeof value === "string")
+      .join("");
+    expect(content).toBe("start finish");
+    const finishChoice = chunks
+      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .at(-1);
+    expect(finishChoice?.finish_reason).toBe("stop");
+  });
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {
@@ -2263,6 +2394,72 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       // shared server
     }
   });
+
+  it.each([
+    { astral: "😀", boundary: 255 },
+    { astral: "𐐷", boundary: 511 },
+  ])(
+    "keeps streamed tool-call arguments well-formed ($astral at UTF-16 boundary $boundary)",
+    async ({ astral, boundary }) => {
+      const argumentPrefix = '{"value":"';
+      const value = `${"a".repeat(boundary - argumentPrefix.length)}${astral}tail`;
+      const expectedArguments = JSON.stringify({ value });
+      expect(expectedArguments.indexOf(astral)).toBe(boundary);
+
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "Calling the tool." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "read_value",
+              arguments: expectedArguments,
+            },
+          ],
+        },
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "read the value" }],
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+      const data = parseSseDataLines(await res.text());
+      expect(data.at(-1)).toBe("[DONE]");
+
+      const chunks = data
+        .filter((line) => line !== "[DONE]")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const choices = chunks.flatMap(
+        (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
+      );
+      const argumentDeltas = choices
+        .flatMap((choice) => {
+          const delta = choice.delta as Record<string, unknown> | undefined;
+          return (delta?.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
+        })
+        .map((toolCall) => {
+          const toolFunction = toolCall.function as Record<string, unknown> | undefined;
+          return toolFunction?.arguments;
+        })
+        .filter((argumentsDelta): argumentsDelta is string => typeof argumentsDelta === "string");
+
+      expect(argumentDeltas.length).toBeGreaterThan(1);
+      for (const argumentsDelta of argumentDeltas) {
+        expect(new TextDecoder().decode(new TextEncoder().encode(argumentsDelta))).toBe(
+          argumentsDelta,
+        );
+      }
+      expect(argumentDeltas.join("")).toBe(expectedArguments);
+      expect(JSON.parse(argumentDeltas.join(""))).toEqual({ value });
+      expect(choices.some((choice) => choice.finish_reason === "tool_calls")).toBe(true);
+    },
+  );
 
   it(
     "sends an initial SSE chunk before a streaming agent run settles",

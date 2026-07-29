@@ -9,6 +9,12 @@ import type {
   LobsterPetAntennae,
   LobsterPetPaletteId,
 } from "./lobster-pet-contract.ts";
+import {
+  CHIMERA_STITCHES,
+  ECLIPSE_CORONA,
+  NOTEXTURE_CHECKER,
+  WATERMELON_RIND,
+} from "./lobster-pet-sprites-wild.ts";
 
 export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateResult> = {
   crown: svg`
@@ -69,8 +75,8 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
   `,
 };
 
-// Light speckle trait, distinct from calico's bold mottling; skipped on
-// palettes whose identity is already pattern-driven (see renderLobsterSvg).
+// Light speckle trait; skipped on palettes whose identity is already
+// pattern-driven (see renderLobsterSvg).
 export const FRECKLE_SPOTS = svg`
   <g class="lob-freckles" fill="#ffffff" opacity="0.3">
     <circle cx="42" cy="45" r="1.6" />
@@ -84,7 +90,7 @@ export const FRECKLE_SPOTS = svg`
 
 // Lumen photophores: dotted running lights along the shell. The glow (and
 // its dark-theme-only intensity) lives in lobster-pet.css.
-export const LUMEN_SPOTS = svg`
+const LUMEN_SPOTS = svg`
   <g class="lob-lumen" fill="#7ef5dd">
     <circle cx="36" cy="54" r="2.4" />
     <circle cx="50" cy="66" r="2" />
@@ -95,7 +101,7 @@ export const LUMEN_SPOTS = svg`
   </g>
 `;
 
-export const MAGMA_SEAMS = svg`
+const MAGMA_SEAMS = svg`
   <g class="lob-magma" fill="none" stroke="#ff6a3d" stroke-width="2" stroke-linecap="round">
     <path d="M40 44 L48 54 L42 66 L50 78" />
     <path d="M74 40 L68 52 L78 64" />
@@ -103,21 +109,21 @@ export const MAGMA_SEAMS = svg`
   </g>
 `;
 
-export const OILSLICK_SHEEN = svg`
+const OILSLICK_SHEEN = svg`
   <g class="lob-oilsheen">
     <ellipse cx="46" cy="60" rx="22" ry="11" fill="#7f77dd" opacity="0.3" transform="rotate(-14 46 60)" />
     <ellipse cx="76" cy="74" rx="17" ry="8" fill="#1d9e75" opacity="0.28" transform="rotate(10 76 74)" />
   </g>
 `;
 
-export const AURORA_BANDS = svg`
+const AURORA_BANDS = svg`
   <g class="lob-aurora" fill="none" stroke-linecap="round">
     <path class="lob-aurora__band1" d="M24 62 Q48 48 70 58 T102 54" stroke="#4ecfa6" stroke-width="6" opacity="0.5" />
     <path class="lob-aurora__band2" d="M28 76 Q54 62 78 72 T100 68" stroke="#a184ec" stroke-width="5" opacity="0.45" />
   </g>
 `;
 
-export const NEBULA_STARS = svg`
+const NEBULA_STARS = svg`
   <g class="lob-nebula-stars">
     <circle cx="38" cy="52" r="1" fill="#fff" />
     <circle cx="52" cy="70" r="1.2" fill="#fff" />
@@ -129,14 +135,14 @@ export const NEBULA_STARS = svg`
   </g>
 `;
 
-export const GLASS_GLINTS = svg`
+const GLASS_GLINTS = svg`
   <g class="lob-glass-glints" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.7">
     <path d="M34 22 L28 32" />
     <path d="M40 16 L37 22" />
   </g>
 `;
 
-export const GEODE_FACETS = svg`
+const GEODE_FACETS = svg`
   <g class="lob-geode-facets">
     <polygon points="70,34 80,30 78,44" fill="#9b6ff0" />
     <polygon points="82,46 94,42 88,58" fill="#b48ef0" />
@@ -146,7 +152,7 @@ export const GEODE_FACETS = svg`
   </g>
 `;
 
-export const PHOSPHOR_SCANLINES = svg`
+const PHOSPHOR_SCANLINES = svg`
   <g class="lob-scanlines" stroke="#3fff7d" stroke-width="1" opacity="0.16">
     <path d="M40 20 H80 M30 27 H90 M26 34 H94 M21 41 H99 M18 48 H102 M17 55 H103 M17 62 H103 M18 69 H102 M22 76 H98 M31 83 H89 M45 90 H75" />
   </g>
@@ -159,7 +165,7 @@ export const GLITCH_GHOSTS = svg`
   </g>
 `;
 
-export const BLUEPRINT_MARKS = svg`
+const BLUEPRINT_MARKS = svg`
   <g class="lob-blueprint" fill="none" stroke="#cfe3ff">
     <path class="lob-bp-outline" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" stroke-width="1.5" stroke-dasharray="5 3" />
     <path d="M54 58 H66 M60 52 V64" stroke-width="1" opacity="0.7" />
@@ -167,7 +173,7 @@ export const BLUEPRINT_MARKS = svg`
   </g>
 `;
 
-export const MECHA_PLATES = svg`
+const MECHA_PLATES = svg`
   <g class="lob-mecha">
     <g fill="none" stroke="#5f6a75" stroke-width="1.5">
       <path d="M28 56 Q60 66 92 56" />
@@ -234,7 +240,6 @@ export function PIXEL_LOBSTER(openEyeStyle: string, closedEyeStyle: string): Tem
 // Palettes whose identity is already pattern-driven skip the freckle trait;
 // stacking speckle sets reads as noise, not a variant.
 export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
-  "calico",
   "split",
   "retro",
   "lumen",
@@ -253,10 +258,22 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "banana",
   "bee",
   "rubberduck",
+  "watermelon",
   "sourdough",
   "zombie",
   "plush",
+  "balloon",
   "disco",
+  "cryptid",
+  "flatpack",
+  "tinfoil",
+  "actual",
+  "chimera",
+  "notexture",
+  "loading",
+  "eclipse",
+  "ascii",
+  "portal",
   "invisible",
   "goldenretro",
 ]);
@@ -340,6 +357,16 @@ const DISCO_FACETS = svg`
 `;
 
 export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResult>> = {
+  lumen: LUMEN_SPOTS,
+  magma: MAGMA_SEAMS,
+  oilslick: OILSLICK_SHEEN,
+  aurora: AURORA_BANDS,
+  nebula: NEBULA_STARS,
+  glass: GLASS_GLINTS,
+  geode: GEODE_FACETS,
+  phosphor: PHOSPHOR_SCANLINES,
+  blueprint: BLUEPRINT_MARKS,
+  clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,
   rubberduck: DUCK_BILL,
@@ -347,19 +374,11 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   zombie: ZOMBIE_STITCHES,
   plush: PLUSH_SEAMS,
   disco: DISCO_FACETS,
+  watermelon: WATERMELON_RIND,
+  eclipse: ECLIPSE_CORONA,
+  notexture: NOTEXTURE_CHECKER,
+  chimera: CHIMERA_STITCHES,
 };
-
-// Calico mottling: dark blotches scattered clear of the eye line.
-export const CALICO_SPOTS = svg`
-  <g class="lob-spots" fill="#2a1f16" opacity="0.8">
-    <ellipse cx="40" cy="50" rx="6" ry="4" transform="rotate(-15 40 50)" />
-    <ellipse cx="72" cy="62" rx="7" ry="4.5" transform="rotate(18 72 62)" />
-    <ellipse cx="55" cy="76" rx="5" ry="3.5" transform="rotate(-8 55 76)" />
-    <ellipse cx="84" cy="42" rx="4" ry="3" transform="rotate(25 84 42)" />
-    <ellipse cx="47" cy="18" rx="4.5" ry="3" transform="rotate(-20 47 18)" />
-    <ellipse cx="30" cy="64" rx="4" ry="3" transform="rotate(12 30 64)" />
-  </g>
-`;
 
 // Split two-tone: the right half of the body (down to the belly midline)
 // repainted in the second shell color; the right claw and antenna follow via

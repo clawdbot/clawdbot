@@ -20,13 +20,13 @@ const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
 function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
   try {
-    return record[field];
+    return Object.hasOwn(record, field) ? record[field] : undefined;
   } catch {
     return undefined;
   }
 }
 
-function transportPayloadToolName(tool: unknown): string | undefined {
+export function readCodeModePayloadToolName(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return undefined;
   }
@@ -42,30 +42,92 @@ function transportPayloadToolName(tool: unknown): string | undefined {
   return typeof fnName === "string" ? fnName : undefined;
 }
 
-export function enforceCodeModeResponsesToolSurface(payload: unknown): void {
-  if (!isRecord(payload) || !Array.isArray(payload.tools)) {
+export function filterCodeModePayloadTools(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): void {
+  if (!isRecord(payload)) {
     return;
   }
-  payload.tools = payload.tools.filter((tool) => {
-    const name = transportPayloadToolName(tool);
-    return typeof name === "string" && isCodeModeModelVisibleToolName(name);
+  const tools = readToolPayloadField(payload, "tools");
+  if (!Array.isArray(tools)) {
+    return;
+  }
+  payload.tools = tools.flatMap((tool) => {
+    const name = readCodeModePayloadToolName(tool);
+    if (typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames)) {
+      return [tool];
+    }
+    if (!isRecord(tool)) {
+      return [];
+    }
+    const filteredGroups: Record<string, unknown> = {};
+    for (const key of ["functionDeclarations", "function_declarations"] as const) {
+      const declarations = readToolPayloadField(tool, key);
+      if (!Array.isArray(declarations)) {
+        continue;
+      }
+      const filtered = declarations.filter((declaration) => {
+        const declarationName = readCodeModePayloadToolName(declaration);
+        return (
+          typeof declarationName === "string" &&
+          isCodeModeModelVisibleToolName(declarationName, visibleToolNames)
+        );
+      });
+      if (filtered.length > 0) {
+        filteredGroups[key] = filtered;
+      }
+    }
+    return Object.keys(filteredGroups).length > 0 ? [filteredGroups] : [];
   });
 }
 
-export function assertCodeModeResponsesToolSurface(payload: unknown): void {
-  if (!isRecord(payload) || !Array.isArray(payload.tools)) {
+export function resolveCodeModeResponsesVisibleToolNames(
+  context: Pick<Context, "tools">,
+): ReadonlySet<string> {
+  return new Set(
+    (context.tools ?? [])
+      .map(readCodeModePayloadToolName)
+      .filter((name): name is string => typeof name === "string"),
+  );
+}
+
+export function enforceCodeModeResponsesToolSurface(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): void {
+  if (!isRecord(payload)) {
+    return;
+  }
+  const tools = readToolPayloadField(payload, "tools");
+  if (!Array.isArray(tools)) {
+    return;
+  }
+  payload.tools = tools.filter((tool) => {
+    const name = readCodeModePayloadToolName(tool);
+    return typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames);
+  });
+}
+
+export function assertCodeModeResponsesToolSurface(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): void {
+  const tools = isRecord(payload) ? readToolPayloadField(payload, "tools") : undefined;
+  if (!Array.isArray(tools)) {
     throw new Error("Code mode payload tool surface violation: expected exec,wait; got no tools");
   }
-  const names = payload.tools
-    .map(transportPayloadToolName)
+  const names = tools
+    .map(readCodeModePayloadToolName)
     .filter((name): name is string => typeof name === "string" && name.length > 0)
     .toSorted((left, right) => left.localeCompare(right));
   if (
     names.length >= 2 &&
+    names.length === tools.length &&
     new Set(names).size === names.length &&
-    names.filter((name) => name === "exec").length === 1 &&
-    names.filter((name) => name === "wait").length === 1 &&
-    names.every(isCodeModeModelVisibleToolName)
+    names.includes("exec") &&
+    names.includes("wait") &&
+    names.every((name) => isCodeModeModelVisibleToolName(name, visibleToolNames))
   ) {
     return;
   }

@@ -693,6 +693,38 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
           },
         },
       },
+      talk: {
+        type: "object",
+        title: "Talk",
+        properties: {
+          interruptOnSpeech: {
+            type: "boolean",
+            title: "Talk Interrupt on Speech",
+            description: "Stop speaking when the user talks over the assistant.",
+          },
+          realtime: {
+            type: "object",
+            title: "Talk Realtime",
+            properties: {
+              provider: {
+                type: "string",
+                title: "Talk Realtime Provider",
+                description: "Active realtime voice provider id, such as openai or google.",
+              },
+              model: {
+                type: "string",
+                title: "Talk Realtime Model",
+                description: "Realtime voice model for browser Talk sessions.",
+              },
+              speakerVoice: {
+                type: "string",
+                title: "Talk Realtime Speaker Voice",
+                description: "Built-in realtime voice id.",
+              },
+            },
+          },
+        },
+      },
       messages: {
         type: "object",
         title: "Messages",
@@ -1430,6 +1462,61 @@ async function createChatPickerScenario(
       ...buildBackgroundTasksMock(baseTime),
       ...cronMocks,
       "users.self": { profile: selfProfile },
+      // Talk settings page pickers: realtime catalog with the model/voice
+      // suggestion lists the gateway emits for provider entries.
+      "talk.catalog": {
+        modes: ["realtime", "stt-tts", "transcription"],
+        transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
+        brains: ["agent-consult", "direct-tools", "none"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          ready: true,
+          activeProvider: "openai",
+          providers: [
+            {
+              id: "openai",
+              label: "OpenAI Realtime Voice",
+              configured: true,
+              defaultModel: "gpt-realtime-2.1",
+              transports: ["webrtc", "gateway-relay"],
+              models: [
+                "gpt-realtime-2.1",
+                "gpt-realtime-2.1-mini",
+                "gpt-realtime-2",
+                "gpt-live-1-codex",
+                "gpt-live-1-boulder-alpha",
+              ],
+              voices: [
+                "alloy",
+                "ash",
+                "ballad",
+                "cedar",
+                "coral",
+                "echo",
+                "marin",
+                "sage",
+                "shimmer",
+                "verse",
+              ],
+              modes: ["realtime"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: true,
+            },
+            {
+              id: "xai",
+              label: "xAI Grok Voice",
+              configured: false,
+              defaultModel: "grok-voice-latest",
+              transports: ["gateway-relay"],
+              voices: ["eve", "ara", "rex", "sal", "leo"],
+              modes: ["realtime"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: false,
+            },
+          ],
+        },
+      },
       // Custom session group catalog so the sidebar's category zone (and its
       // drag-reordering against built-in sections) is exercised in the mock.
       "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },

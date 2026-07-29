@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
@@ -43,6 +44,7 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("returns candidates");
     expect(schema).toContain("max 160 bytes");
     expect(schema).toContain("shortens the proposal listing entry");
+    expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
   });
 
   it("documents that proposal_content must be final skill body content, not a plan or change description", () => {
@@ -78,7 +80,7 @@ describe("skill_workshop tool", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: false,
+              mode: "off",
             },
           },
         },
@@ -91,11 +93,11 @@ describe("skill_workshop tool", () => {
   it("does not nudge the foreground model when autonomy is enabled", () => {
     const disabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
-      config: { skills: { workshop: { autonomous: { enabled: false } } } },
+      config: { skills: { workshop: { autonomous: { mode: "off" } } } },
     });
     const enabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
-      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     });
 
     expect(enabled.description).toBe(disabled.description);

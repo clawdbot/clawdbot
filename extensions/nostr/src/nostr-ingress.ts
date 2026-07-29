@@ -114,11 +114,6 @@ export function createNostrIngress(options: {
     return queue;
   };
 
-  const legacyMigration = migrateNostrLegacyRecentEventIds({
-    queue: getQueue(),
-    eventIds: options.legacyEventIds ?? [],
-  });
-
   const monitor = createChannelIngressMonitor<
     Event,
     { receivedAt: number; rawEvent: string },
@@ -184,13 +179,20 @@ export function createNostrIngress(options: {
     createStoppedError,
     onError: (error) => options.onError?.(error as Error, "ingress drain"),
   });
-  const monitorStart = legacyMigration.then(() => {
+  const monitorStart = (async () => {
+    // Open through the shared monitor first so a denied queue is classified for
+    // gateway health before Nostr's legacy tombstone migration touches it.
+    monitor.ensureQueueAvailable();
+    await migrateNostrLegacyRecentEventIds({
+      queue: getQueue(),
+      eventIds: options.legacyEventIds ?? [],
+    });
     // stop() may run while the legacy migration is pending. Do not let that
     // deferred startup revive polling after shutdown has begun.
     if (!stopping) {
       monitor.start();
     }
-  });
+  })();
   void monitorStart.catch((error: unknown) => options.onError?.(error as Error, "ingress drain"));
 
   // Admission stays local because relay ack needs accepted/duplicate plus rate,
@@ -244,7 +246,7 @@ export function createNostrIngress(options: {
   };
 
   const admitOnce = async (prepared: PreparedNostrAdmission): Promise<"accepted" | "duplicate"> => {
-    await legacyMigration;
+    await monitorStart;
     const pending = await getQueue().listPending({ limit: options.maxPendingEvents });
     const claims = await getQueue().listClaims();
     if (pending.length + claims.length >= options.maxPendingEvents) {

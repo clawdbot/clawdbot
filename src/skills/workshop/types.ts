@@ -52,6 +52,7 @@ export type SkillWorkshopProposalReviewCompletion = {
 export type SkillWorkshopRunOptions = {
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
+  autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
@@ -93,6 +94,8 @@ export type SkillProposalRecord = {
   createdAt: string;
   updatedAt: string;
   createdBy: SkillProposalSource;
+  /** True only for proposals created by autonomous correction or experience capture. */
+  autonomousCapture?: true;
   origin?: SkillProposalOrigin;
   /** Immutable run attribution used to recover interrupted proposal-only reviews. */
   originRunIds?: string[];
@@ -165,6 +168,7 @@ export type SkillProposalCreateInput = {
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
+  autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
   goal?: string;
   evidence?: string;
@@ -180,6 +184,7 @@ export type SkillProposalUpdateInput = {
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
+  autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
   goal?: string;
   evidence?: string;

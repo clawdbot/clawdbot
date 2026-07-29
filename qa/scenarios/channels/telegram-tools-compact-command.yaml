@@ -6,7 +6,7 @@ scenario:
   category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
-      - channels.channel-native-commands
+      - telegram.built-in-commands
   objective: Verify Telegram renders the compact model-tool inventory.
   successCriteria:
     - The compact tools command reaches native command dispatch.
@@ -33,8 +33,8 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text:
-              expr: "transport.id === 'telegram' ? '/tools@openclaw compact' : '/tools compact'"
+            text: /tools compact
+            nativeCommand: { name: tools }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }

@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isOpenAIGptLiveModel,
   OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE,
-  OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE,
 } from "./realtime-quicksilver.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -34,21 +33,10 @@ describe("openai gpt-live model detection", () => {
   });
 });
 
-describe("openai realtime voice provider with gpt-live models", () => {
+describe("openai realtime voice provider gpt-live transport guard", () => {
   beforeEach(() => {
     mintSecretMock.mockReset();
     mintSecretMock.mockResolvedValue({ value: "ek_test", expiresAt: 1234 });
-  });
-
-  it("fails closed for gpt-live browser sessions with guidance", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    await expect(
-      provider.createBrowserSession?.({
-        providerConfig: { apiKey: "test-key" },
-        model: "gpt-live-1",
-      }),
-    ).rejects.toThrow(OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE);
-    expect(mintSecretMock).not.toHaveBeenCalled();
   });
 
   it("keeps GA realtime browser sessions working", async () => {
@@ -56,6 +44,7 @@ describe("openai realtime voice provider with gpt-live models", () => {
     const session = await provider.createBrowserSession?.({
       providerConfig: { apiKey: "test-key" },
       model: "gpt-realtime-2.1",
+      instructions: "Keep GA behavior unchanged.",
     });
     expect(session).toMatchObject({
       transport: "webrtc",
@@ -64,6 +53,7 @@ describe("openai realtime voice provider with gpt-live models", () => {
     expect(mintSecretMock.mock.calls[0]?.[0]?.session).toMatchObject({
       type: "realtime",
       model: "gpt-realtime-2.1",
+      instructions: "Keep GA behavior unchanged.",
     });
   });
 

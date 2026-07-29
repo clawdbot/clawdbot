@@ -8,6 +8,15 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
+// Source files knip's production scan reads. Any edit to one of these can orphan
+// an export -- including an import-only edit that drops a barrel re-export's last
+// consumer -- so the scan is selected by path, not by inspecting changed lines.
+const DEADCODE_SOURCE_PATH_RE = /^(?:src|extensions|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
+
+/** Returns whether any changed path is production source knip scans. */
+export function hasDeadcodeScannedSource(changedPaths) {
+  return changedPaths.map(normalizeChangedPath).some((p) => DEADCODE_SOURCE_PATH_RE.test(p));
+}
 
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;

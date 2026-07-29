@@ -74,6 +74,38 @@ export function sessionBindingIdentity(params: {
   };
 }
 
+export type CodexRunSessionBindingAuthority = "current" | "ephemeral" | "superseded";
+
+/** Decides whether a run may share the durable stable-key binding owner. */
+export function resolveCodexRunSessionBindingAuthority(params: {
+  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  config?: OpenClawConfig;
+  storePath?: string;
+}): CodexRunSessionBindingAuthority {
+  const sessionKey = params.identity.sessionKey?.trim();
+  if (!sessionKey) {
+    return "ephemeral";
+  }
+  try {
+    const storePath =
+      params.storePath?.trim() ||
+      resolveStorePath(params.config?.session?.store, { agentId: params.identity.agentId });
+    const entry = getSessionEntry({
+      agentId: params.identity.agentId,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+      sessionKey,
+      storePath,
+    });
+    if (!entry) {
+      return "ephemeral";
+    }
+    return entry.sessionId === params.identity.sessionId ? "current" : "superseded";
+  } catch {
+    return "superseded";
+  }
+}
+
 /** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
 export function createCodexSessionGenerationSupersededError(
   sessionId: string,
@@ -216,6 +248,7 @@ const threadBindingSchema = z
     dynamicToolsFingerprint: optionalStringSchema,
     dynamicToolsContainDeferred: optionalBooleanSchema,
     webSearchThreadConfigFingerprint: optionalStringSchema,
+    nativeSkillIsolationFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
     ringZeroConfigFingerprint: optionalStringSchema,
@@ -534,11 +567,52 @@ export type CodexAppServerBindingStore = {
   withLease<T>(identity: CodexAppServerBindingIdentity, run: () => Promise<T>): Promise<T>;
 };
 
+/** Carries one prepared run identity through callers that rederive it from public params. */
+export function scopeCodexRunBindingStore(params: {
+  bindingStore: CodexAppServerBindingStore;
+  logicalIdentity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  physicalIdentity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+}): CodexAppServerBindingStore {
+  const mapSessionIdentity = (
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+  ) =>
+    identity.agentId === params.logicalIdentity.agentId &&
+    identity.sessionId === params.logicalIdentity.sessionId &&
+    identity.sessionKey?.trim() === params.logicalIdentity.sessionKey?.trim()
+      ? params.physicalIdentity
+      : identity;
+  const mapIdentity = (identity: CodexAppServerBindingIdentity) =>
+    identity.kind === "session" ? mapSessionIdentity(identity) : identity;
+  return {
+    read: (identity) => params.bindingStore.read(mapIdentity(identity)),
+    hasOtherThreadOwner: (threadId, identity) =>
+      params.bindingStore.hasOtherThreadOwner(
+        threadId,
+        identity ? mapIdentity(identity) : undefined,
+      ),
+    mutate: (identity, mutation) => params.bindingStore.mutate(mapIdentity(identity), mutation),
+    prepareSessionGenerationReclaim: (identity) =>
+      params.bindingStore.prepareSessionGenerationReclaim(mapSessionIdentity(identity)),
+    adoptSessionGeneration: (identity, expectedPreviousSessionId) =>
+      params.bindingStore.adoptSessionGeneration(
+        mapSessionIdentity(identity),
+        expectedPreviousSessionId,
+      ),
+    resetSessionGeneration: (identity) =>
+      params.bindingStore.resetSessionGeneration(mapSessionIdentity(identity)),
+    retireSessionGeneration: (identity) =>
+      params.bindingStore.retireSessionGeneration(mapSessionIdentity(identity)),
+    withThreadArchiveFence: (run) => params.bindingStore.withThreadArchiveFence(run),
+    withLease: (identity, run) => params.bindingStore.withLease(mapIdentity(identity), run),
+  };
+}
+
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
+  storePath?: string;
 }): Promise<boolean> {
   const sessionKey = params.identity.sessionKey?.trim();
   if (!sessionKey) {
@@ -552,9 +626,9 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
   // Only a stale stable-key owner needs session-store authority. Resolve it before
   // the second mutation so the session read never runs inside the binding write transaction.
   try {
-    const storePath = resolveStorePath(params.config?.session?.store, {
-      agentId: params.identity.agentId,
-    });
+    const storePath =
+      params.storePath?.trim() ||
+      resolveStorePath(params.config?.session?.store, { agentId: params.identity.agentId });
     const entry = getSessionEntry({
       agentId: params.identity.agentId,
       hydrateSkillPromptRefs: false,

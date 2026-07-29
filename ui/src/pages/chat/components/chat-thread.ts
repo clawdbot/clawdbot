@@ -1125,7 +1125,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const menu = document.createElement("div");
   menu.className = "chat-reply-context-menu";
   menu.setAttribute("role", "menu");
-  menu.setAttribute("aria-label", "Message actions");
+  menu.setAttribute("aria-label", t("chat.messages.actions"));
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
@@ -1453,7 +1453,6 @@ function renderChatThreadContents(
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
-    waitingApproval: Boolean(props.waitingApproval),
     runActive: Boolean(props.runActive),
     planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,

@@ -53,6 +53,22 @@ function moveKey(
   delete owner[legacyKey];
 }
 
+function migrateTruncateAfterCompaction(raw: Record<string, unknown>, changes: string[]): void {
+  const compaction = getRecord(getRecord(getRecord(raw.agents)?.defaults)?.compaction);
+  if (!compaction || !Object.hasOwn(compaction, "truncateAfterCompaction")) {
+    return;
+  }
+  if (
+    compaction.truncateAfterCompaction === false &&
+    Object.hasOwn(compaction, "maxActiveTranscriptBytes")
+  ) {
+    delete compaction.maxActiveTranscriptBytes;
+    changes.push("Removed maxActiveTranscriptBytes to preserve truncateAfterCompaction: false.");
+  }
+  delete compaction.truncateAfterCompaction;
+  changes.push("Removed retired agents.defaults.compaction.truncateAfterCompaction.");
+}
+
 function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string[]): void {
   const agents = getRecord(raw.agents);
   const defaults = getRecord(agents?.defaults);
@@ -515,8 +531,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         "Legacy Deepgram options moved to providerOptions.deepgram.",
         hasMediaDeepgram,
       ),
+      rule(
+        ["agents", "defaults", "compaction", "truncateAfterCompaction"],
+        "agents.defaults.compaction.truncateAfterCompaction is retired; byte-triggered compaction now opts in via maxActiveTranscriptBytes alone.",
+      ),
     ],
     apply: (raw, changes) => {
+      migrateTruncateAfterCompaction(raw, changes);
       if (Object.hasOwn(raw, "tui")) {
         delete raw.tui;
         changes.push("Removed retired tui config; the footer uses the default compact display.");

@@ -210,6 +210,7 @@ describe("navigationIconForRoute", () => {
       automation: "terminal",
       mcp: "wrench",
       memory: "book",
+      talk: "mic",
       infrastructure: "globe",
       labs: "flaskConical",
       about: "fileText",
@@ -237,6 +238,15 @@ describe("settingsSearchTextMatches", () => {
     expect(settingsSearchTextMatches("CPU usage", "cp")).toBe(true);
     expect(settingsSearchTextMatches("MCP", "cp")).toBe(false);
     expect(settingsSearchTextMatches("外観設定", "設定")).toBe(true);
+  });
+
+  it.each([
+    ["Cámara", "Ca\u0301mara"],
+    ["Ca\u0301mara", "Cámara"],
+    ["Notificación", "Notificacio\u0301n"],
+    ["Notificacio\u0301n", "Notificación"],
+  ])("matches canonically equivalent setting text %j against %j", (value, query) => {
+    expect(settingsSearchTextMatches(value, query)).toBe(true);
   });
 });
 
@@ -321,6 +331,7 @@ describe("titleForRoute", () => {
       automation: "Automation",
       mcp: "MCP",
       memory: "Memory",
+      talk: "Talk",
       infrastructure: "Infrastructure",
       labs: "Labs",
       about: "About",
@@ -362,13 +373,14 @@ describe("subtitleForRoute", () => {
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices, pairing approvals, and exec bindings.",
       config: "Language and shortcuts to core settings.",
-      profile: "Your agent's stats, streaks, and life in the reef.",
-      communications: "Messages, talk, and voice settings.",
+      profile: "Your display name, avatar, and identity on this gateway.",
+      communications: "Messages and text-to-speech settings.",
       appearance: "Theme, UI, and setup wizard settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       memory: "Memory engine, backend, search, and dreaming.",
+      talk: "Realtime voice: provider, model, and speaker voice.",
       infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
       labs: "Experimental agent and tool capabilities.",
       about: "Control UI and connected Gateway build identity.",
@@ -776,6 +788,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "connection",
       "channels",
       "communications",
+      "talk",
       "nodes",
       "agents",
       "ai-agents",

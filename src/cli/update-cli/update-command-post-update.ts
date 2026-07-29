@@ -81,6 +81,7 @@ function pickUpdateQuip(): string {
 export async function finishUpdate(params: {
   result: UpdateRunResult;
   root: string;
+  installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   requestedChannel: UpdateChannel | null;
   storedChannel: UpdateChannel | null;
@@ -161,6 +162,7 @@ export async function finishUpdate(params: {
   const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
     result: params.result,
     downgradeRisk: params.downgradeRisk,
+    installKindChanged: params.installKindChanged,
   });
 
   let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;

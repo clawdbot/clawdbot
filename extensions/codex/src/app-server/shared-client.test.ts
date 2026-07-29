@@ -301,6 +301,55 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).not.toHaveBeenCalled();
   });
 
+  it("skips auth-store resolution only while the same config-owned client stays warm", async () => {
+    const first = createClientHarness();
+    const replacement = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(replacement.client);
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockImplementation(() => {
+      mocks.resolveCodexAppServerAuthProfileStore();
+      return "openai:work";
+    });
+    const startOptions: CodexAppServerStartOptions = {
+      transport: "stdio",
+      homeScope: "agent",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+    const config = { auth: { order: { openai: ["openai:work"] } } };
+    const options = { config, startOptions, timeoutMs: 1_000 };
+
+    const firstAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(first, "openclaw/0.143.0 (Linux; test)");
+    await expect(firstAcquire).resolves.toBe(first.client);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledOnce();
+
+    await expect(getLeasedSharedCodexAppServerClient(options)).resolves.toBe(first.client);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledOnce();
+
+    await expect(
+      getLeasedSharedCodexAppServerClient({
+        ...options,
+        config: { auth: { order: { openai: ["openai:work"] } } },
+      }),
+    ).resolves.toBe(first.client);
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledTimes(2);
+
+    expect(clearSharedCodexAppServerClientIfCurrent(first.client)).toBe(true);
+    const replacementAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(replacement, "openclaw/0.143.0 (Linux; test)");
+    await expect(replacementAcquire).resolves.toBe(replacement.client);
+    expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledTimes(3);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("does not spawn after startup context exceeds its total deadline", async () => {
     vi.useFakeTimers();
     let resolveManaged: ((value: CodexAppServerStartOptions) => void) | undefined;
