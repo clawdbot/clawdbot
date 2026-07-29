@@ -13,8 +13,7 @@ import {
   runCodeModeModelMatrix,
   validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
-} from "../../scripts/code-mode-model-matrix.ts";
-import type { AgentExecEnvelope } from "../../src/commands/agent-exec.ts";
+} from "../../../scripts/code-mode-model-matrix.ts";
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
@@ -136,7 +135,7 @@ describe("Code Mode model matrix classification", () => {
     model: "qwen3.5:9b",
     provider: "ollama",
     sessionId: "session",
-  } satisfies AgentExecEnvelope;
+  } satisfies Parameters<typeof classifyCodeModeMatrixCell>[0]["envelope"];
 
   it("requires engagement, tool execution, effect, and exact final text", () => {
     expect(
