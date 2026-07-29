@@ -109,7 +109,7 @@ function relativeLuminance(color: string | RenderedColor): number {
   });
   const [red, green, blue] = channels;
   if (red === undefined || green === undefined || blue === undefined) {
-    throw new Error(`Expected three theme color channels, received ${color}`);
+    throw new Error(`Expected three theme color channels, received ${JSON.stringify(resolved)}`);
   }
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
