@@ -38,10 +38,11 @@ export function applyProjectRanking<T extends ProjectRankable>(
     return eligible;
   }
   return eligible
-    .map((entry) => ({
-      ...entry,
-      score: entry.score * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
-    }))
+    .map((entry) =>
+      Object.assign({}, entry, {
+        score: entry.score * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
+      }),
+    )
     .toSorted(
       (left, right) =>
         right.score - left.score ||
