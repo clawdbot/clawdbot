@@ -11,9 +11,39 @@ import WebSocket, { type RawData } from "ws";
 import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
+// Default matches resolveCodexAppServerRuntimeOptions().requestTimeoutMs (60s).
+// Production callers pass the resolved budget via handshakeOpts from
+// CodexAppServerClient.start; without a bound, TCP accept without upgrade leaves
+// initialize/RPC waiting forever for `open`.
+const CODEX_APP_SERVER_WS_HANDSHAKE_TIMEOUT_MS = 60_000;
+
+/** Fields `createWebSocketTransport` actually reads from start options. */
+type CodexWebSocketTransportStartOptions = Pick<
+  CodexAppServerStartOptions,
+  "url" | "transport" | "authToken" | "env"
+> & {
+  headers?: Record<string, string>;
+};
+
+function buildCodexAppServerWebSocketOptions(params: {
+  headers: Record<string, string>;
+  handshakeTimeoutMs: number;
+}): WebSocket.ClientOptions {
+  return {
+    headers: params.headers,
+    // Codex app-server closes Unix upgrade handshakes that offer compression.
+    perMessageDeflate: false,
+    handshakeTimeout: params.handshakeTimeoutMs,
+  };
+}
+
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
-  options: CodexAppServerStartOptions,
+  options: CodexWebSocketTransportStartOptions,
+  // Override the handshake timeout budget. Tests supply short floors to keep
+  // stalled-handshake regression proofs fast; production passes the resolved
+  // requestTimeoutMs from CodexAppServerClient.start.
+  handshakeOpts?: { handshakeTimeoutMs?: number },
 ): CodexAppServerTransport {
   if (!options.url) {
     throw new Error(
@@ -27,11 +57,12 @@ export function createWebSocketTransport(
     ...options.headers,
     ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
   };
-  const websocketOptions: WebSocket.ClientOptions = {
+  const handshakeTimeoutMs =
+    handshakeOpts?.handshakeTimeoutMs ?? CODEX_APP_SERVER_WS_HANDSHAKE_TIMEOUT_MS;
+  const websocketOptions = buildCodexAppServerWebSocketOptions({
     headers,
-    // Codex app-server closes Unix upgrade handshakes that offer compression.
-    perMessageDeflate: false,
-  };
+    handshakeTimeoutMs,
+  });
   const unixSocketPath = resolveCodexAppServerUnixSocketPath(options);
   const socket = unixSocketPath
     ? new WebSocket("ws://localhost/", {
@@ -43,6 +74,16 @@ export function createWebSocketTransport(
   const stdinDecoder = new StringDecoder("utf8");
   let pendingLine = "";
   let killed = false;
+
+  // ws.handshakeTimeout does not abort custom createConnection (Unix) upgrades.
+  // Mirror the same budget with an explicit CONNECTING deadline for both paths.
+  const clearHandshakeDeadline = () => clearTimeout(handshakeDeadline);
+  const handshakeDeadline = setTimeout(() => {
+    if (socket.readyState === WebSocket.CONNECTING) {
+      socket.terminate();
+    }
+  }, handshakeTimeoutMs);
+  handshakeDeadline.unref?.();
 
   const sendFrame = (frame: string) => {
     const trimmed = frame.trim();
@@ -59,12 +100,21 @@ export function createWebSocketTransport(
   // `initialize` can be written before the WebSocket open event fires. Buffer
   // whole JSON-RPC frames so stdio and websocket transports share call timing.
   socket.once("open", () => {
+    clearHandshakeDeadline();
     for (const frame of pendingFrames.splice(0)) {
       socket.send(frame);
     }
   });
-  socket.once("error", (error) => events.emit("error", error));
+  // EventEmitter throws on unhandled `error` emits. Callers like CodexAppServerClient
+  // subscribe; raw transport consumers (and handshake timeouts) may only wait on exit.
+  socket.once("error", (error) => {
+    clearHandshakeDeadline();
+    if (events.listenerCount("error") > 0) {
+      events.emit("error", error);
+    }
+  });
   socket.once("close", (code, reason) => {
+    clearHandshakeDeadline();
     killed = true;
     events.emit("exit", code, reason.toString("utf8"));
   });
@@ -93,6 +143,7 @@ export function createWebSocketTransport(
     },
   });
   const closeSocket = () => {
+    clearHandshakeDeadline();
     if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
       return;
     }
@@ -109,6 +160,7 @@ export function createWebSocketTransport(
       return killed;
     },
     kill: () => {
+      clearHandshakeDeadline();
       killed = true;
       socket.close();
     },

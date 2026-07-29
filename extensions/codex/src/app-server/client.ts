@@ -302,7 +302,10 @@ export class CodexAppServerClient {
 
   /** Starts a new app-server client using resolved runtime start options. */
   static start(options?: Partial<CodexAppServerStartOptions>): CodexAppServerClient {
-    const defaults = resolveCodexAppServerRuntimeOptions().start;
+    // One resolve owns both start defaults and the operator request-timeout budget
+    // so websocket/unix upgrades do not invent a second fixed handshake policy.
+    const runtime = resolveCodexAppServerRuntimeOptions();
+    const defaults = runtime.start;
     const startOptions = {
       ...defaults,
       ...options,
@@ -312,7 +315,11 @@ export class CodexAppServerClient {
       throw new Error("Managed Codex app-server start options must be resolved before spawn.");
     }
     if (startOptions.transport === "websocket" || startOptions.transport === "unix") {
-      return new CodexAppServerClient(createWebSocketTransport(startOptions));
+      return new CodexAppServerClient(
+        createWebSocketTransport(startOptions, {
+          handshakeTimeoutMs: runtime.requestTimeoutMs,
+        }),
+      );
     }
     return new CodexAppServerClient(createStdioTransport(startOptions));
   }

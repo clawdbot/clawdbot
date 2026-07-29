@@ -1,10 +1,12 @@
 // Codex tests cover transport websocket plugin behavior.
 import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
+import net from "node:net";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type RawData } from "ws";
+import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 
@@ -14,6 +16,53 @@ describe("Codex app-server websocket transport", () => {
   const servers: WebSocketServer[] = [];
   const httpServers: http.Server[] = [];
   const tempDirs: string[] = [];
+  const rawServers: net.Server[] = [];
+  const acceptedSockets: net.Socket[] = [];
+
+  async function listenNeverUpgradePeer(mode: "tcp" | "unix"): Promise<{
+    url?: string;
+    socketPath?: string;
+    destroyAccepted: () => void;
+  }> {
+    const accepted: net.Socket[] = [];
+    const server = net.createServer((socket) => {
+      accepted.push(socket);
+      acceptedSockets.push(socket);
+    });
+    rawServers.push(server);
+
+    if (mode === "tcp") {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const { port } = server.address() as AddressInfo;
+      return {
+        url: `ws://127.0.0.1:${port}`,
+        destroyAccepted: () => {
+          for (const socket of accepted) {
+            socket.destroy();
+          }
+        },
+      };
+    }
+
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-unix-hs-"));
+    tempDirs.push(tempDir);
+    const socketPath = path.join(tempDir, "never-upgrade.sock");
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => resolve());
+    });
+    return {
+      socketPath,
+      destroyAccepted: () => {
+        for (const socket of accepted) {
+          socket.destroy();
+        }
+      },
+    };
+  }
 
   afterEach(async () => {
     for (const client of clients) {
@@ -23,6 +72,9 @@ describe("Codex app-server websocket transport", () => {
     for (const transport of transports.splice(0)) {
       transport.kill?.();
       transport.stdin.destroy?.();
+    }
+    for (const socket of acceptedSockets.splice(0)) {
+      socket.destroy();
     }
     await Promise.all(
       servers.splice(0).map(
@@ -37,6 +89,14 @@ describe("Codex app-server websocket transport", () => {
         (server) =>
           new Promise<void>((resolve) => {
             server.close(() => resolve());
+          }),
+      ),
+    );
+    await Promise.all(
+      rawServers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
           }),
       ),
     );
@@ -105,8 +165,6 @@ describe("Codex app-server websocket transport", () => {
     }
     const transport = createWebSocketTransport({
       transport: "websocket",
-      command: "codex",
-      args: [],
       url: `ws://127.0.0.1:${address.port}`,
       headers: {},
     });
@@ -139,8 +197,6 @@ describe("Codex app-server websocket transport", () => {
     }
     const transport = createWebSocketTransport({
       transport: "websocket",
-      command: "codex",
-      args: [],
       url: `ws://127.0.0.1:${address.port}`,
       headers: {},
     });
@@ -194,6 +250,58 @@ describe("Codex app-server websocket transport", () => {
     await expect(client.request("thread/list", {})).resolves.toEqual({ data: [] });
     expect(upgradeExtensions).toEqual([undefined]);
   });
+
+  it("negative control: ws without handshakeTimeout stays CONNECTING on never-upgrade peer", async () => {
+    const peer = await listenNeverUpgradePeer("tcp");
+    const socket = new WebSocket(peer.url!);
+    const outcome = await Promise.race([
+      new Promise<"opened">((resolve) => {
+        socket.once("open", () => resolve("opened"));
+      }),
+      new Promise<"still-pending">((resolve) => {
+        setTimeout(() => resolve("still-pending"), 300);
+      }),
+    ]);
+    expect(outcome).toBe("still-pending");
+    expect(socket.readyState).toBe(WebSocket.CONNECTING);
+    socket.on("error", () => {});
+    socket.terminate();
+    peer.destroyAccepted();
+  });
+
+  it.each([
+    { mode: "tcp" as const, handshakeTimeoutMs: 200 },
+    { mode: "unix" as const, handshakeTimeoutMs: 250 },
+  ])(
+    "emits exit when the $mode websocket handshake never completes",
+    async ({ mode, handshakeTimeoutMs }) => {
+      const peer = await listenNeverUpgradePeer(mode);
+      const transport = createWebSocketTransport(
+        mode === "tcp"
+          ? { transport: "websocket", url: peer.url! }
+          : { transport: "unix", url: `unix://${peer.socketPath!}` },
+        { handshakeTimeoutMs },
+      );
+      transports.push(transport);
+
+      const startedAt = Date.now();
+      const exitResult = await new Promise<{ code: number | null; reason: string }>((resolve) => {
+        transport.once("exit", (code, reason) => {
+          resolve({
+            code: typeof code === "number" ? code : null,
+            reason: typeof reason === "string" ? reason : "",
+          });
+        });
+      });
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(elapsedMs).toBeLessThan(2_000);
+      expect(elapsedMs).toBeGreaterThanOrEqual(handshakeTimeoutMs - 100);
+      expect(transport.killed).toBe(true);
+      expect(exitResult.code).toBe(1006);
+      peer.destroyAccepted();
+    },
+  );
 });
 
 function rawDataToText(data: RawData): string {
