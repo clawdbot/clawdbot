@@ -19,6 +19,20 @@
     ],
     "channel": {
       "id": "sms",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "TWILIO_ACCOUNT_SID",
+            "TWILIO_AUTH_TOKEN",
+            "TWILIO_PHONE_NUMBER",
+            "TWILIO_SMS_FROM",
+            "TWILIO_MESSAGING_SERVICE_SID",
+            "SMS_PUBLIC_WEBHOOK_URL",
+            "SMS_WEBHOOK_PATH",
+            "SMS_ALLOWED_USERS"
+          ]
+        }
+      },
       "label": "SMS",
       "selectionLabel": "SMS (Twilio)",
       "detailLabel": "Twilio SMS",
@@ -26,7 +40,18 @@
       "docsLabel": "sms",
       "blurb": "Twilio-backed SMS with inbound webhooks and outbound replies.",
       "order": 88,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": { "fields": [
+        { "key": "accountSid", "kind": "string", "sensitive": true, "cli": { "flags": "--account-sid <sid>", "description": "Twilio account SID" } },
+        { "key": "authToken", "kind": "string", "sensitive": true, "cli": { "flags": "--auth-token <token>", "description": "Twilio auth token" } },
+        { "key": "fromNumber", "kind": "string", "cli": { "flags": "--from-number <e164>", "description": "Twilio sender phone number" } },
+        { "key": "messagingServiceSid", "kind": "string", "cli": { "flags": "--messaging-service-sid <sid>", "description": "Twilio Messaging Service SID" } },
+        { "key": "defaultTo", "kind": "string", "cli": { "flags": "--default-to <e164>", "description": "Default SMS recipient" } },
+        { "key": "webhookPath", "kind": "string", "cli": { "flags": "--webhook-path <path>", "description": "SMS webhook path" } },
+        { "key": "publicWebhookUrl", "kind": "string", "cli": { "flags": "--public-webhook-url <url>", "description": "Public SMS webhook URL" } },
+        { "key": "dmPolicy", "kind": "choice", "choices": ["pairing", "allowlist", "open", "disabled"], "cli": { "flags": "--dm-policy <policy>", "description": "SMS DM policy" } },
+        { "key": "allowFrom", "kind": "string-list", "cli": { "flags": "--allow-from <numbers>", "description": "Allowed SMS senders" } }
+      ] }
     },
     "compat": {
       "pluginApi": ">=2026.7.2"

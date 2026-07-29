@@ -3,7 +3,7 @@
  * Verifies built-in profile allowlists include expected core tool groups.
  */
 import { describe, expect, it } from "vitest";
-import { resolveCoreToolProfilePolicy } from "./tool-catalog.js";
+import { listCoreToolSections, resolveCoreToolProfilePolicy } from "./tool-catalog.js";
 
 function requireCoreToolProfilePolicy(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
   const policy = resolveCoreToolProfilePolicy(profile);
@@ -22,6 +22,14 @@ function requirePolicyAllow(profile: Parameters<typeof resolveCoreToolProfilePol
 }
 
 describe("tool-catalog", () => {
+  it("lists agents_wait only for a Swarm-enabled catalog", () => {
+    const ids = (config?: Parameters<typeof listCoreToolSections>[0]) =>
+      listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
+
+    expect(ids()).not.toContain("agents_wait");
+    expect(ids({ swarmEnabled: true })).toContain("agents_wait");
+  });
+
   it("includes code_execution, web_search, x_search, web_fetch, and update_plan in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
@@ -46,12 +54,14 @@ describe("tool-catalog", () => {
       "conversations_turn",
       "sessions_send",
       "sessions_spawn",
+      "agents_wait",
       "sessions_yield",
       "subagents",
       "session_status",
       "spawn_task",
       "dismiss_task",
       "screen",
+      "dashboard",
       "terminal",
       "cron",
       "get_goal",

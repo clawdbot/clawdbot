@@ -3,7 +3,6 @@ import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { startQaGatewayChild } from "../../gateway-child.js";
 
@@ -261,12 +260,7 @@ export type WhatsAppQaConfigOverrides = {
   groupPolicy?: "allowlist" | "disabled" | "open";
   inboundDebounceMs?: number;
   replyToMode?: "all" | "batched" | "first" | "off";
-  statusReactions?:
-    | boolean
-    | {
-        removeAckAfterReply?: boolean;
-        timing?: NonNullable<NonNullable<OpenClawConfig["messages"]>["statusReactions"]>["timing"];
-      };
+  statusReactions?: boolean;
 };
 
 export type WhatsAppQaScenarioDefinition = {

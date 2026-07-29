@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenClaw",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Let OpenClaw agents browse with you. Tabs shared with OpenClaw live in a colored tab group; drag a tab out to revoke access.",
   "icons": {
     "16": "icons/icon16.png",
@@ -9,7 +9,23 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms", "sidePanel"],
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms",
+    "sidePanel",
+    "contextMenus",
+    "scripting",
+    "activeTab"
+  ],
+  "commands": {
+    "send-page": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Send this page to OpenClaw"
+    }
+  },
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
     "default_title": "OpenClaw",

@@ -16,10 +16,14 @@ import {
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { MOONSHOT_DEFAULT_MODEL_ID } from "./provider-catalog.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
-const DEFAULT_MOONSHOT_VIDEO_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
+// Media defaults are capability-specific and intentionally independent from chat onboarding.
+const DEFAULT_MOONSHOT_IMAGE_MODEL =
+  manifest.mediaUnderstandingProviderMetadata.moonshot.defaultModels.image;
+const DEFAULT_MOONSHOT_VIDEO_MODEL =
+  manifest.mediaUnderstandingProviderMetadata.moonshot.defaultModels.video;
 const DEFAULT_MOONSHOT_VIDEO_PROMPT = "Describe the video.";
 
 async function describeMoonshotVideo(
@@ -58,6 +62,7 @@ async function describeMoonshotVideo(
     headers,
     body,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
@@ -82,7 +87,10 @@ async function describeMoonshotVideo(
 export const moonshotMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "moonshot",
   capabilities: ["image", "video"],
-  defaultModels: { image: MOONSHOT_DEFAULT_MODEL_ID, video: DEFAULT_MOONSHOT_VIDEO_MODEL },
+  defaultModels: {
+    image: DEFAULT_MOONSHOT_IMAGE_MODEL,
+    video: DEFAULT_MOONSHOT_VIDEO_MODEL,
+  },
   autoPriority: { video: 20 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,

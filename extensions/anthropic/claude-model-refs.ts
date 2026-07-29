@@ -6,7 +6,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants.js";
 
 const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
-  opus: "claude-opus-4-8",
+  opus: "claude-opus-5",
   sonnet: "claude-sonnet-5",
   fable: "claude-fable-5",
   haiku: "claude-haiku-4-5",
@@ -109,6 +109,9 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
 }
 
 function upgradeOldClaudeModelId(normalized: string): string | null {
+  if (hasRetiredVersionPrefix(normalized, "claude-opus-5")) {
+    return null;
+  }
   if (normalized.startsWith("claude-opus-4-8") || normalized.startsWith("claude-opus-4.8")) {
     return null;
   }
@@ -139,7 +142,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     ]) ||
     /^claude-opus-4-20\d{6}/.test(normalized)
   ) {
-    return "claude-opus-4-8";
+    return "claude-opus-5";
   }
   if (
     normalized === "claude-sonnet-4" ||
@@ -156,7 +159,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     return "claude-sonnet-4-6";
   }
   if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
-    return "claude-opus-4-8";
+    return "claude-opus-5";
   }
   if (
     normalized.startsWith("claude-3") &&
@@ -170,7 +173,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     normalized === "opus-4" ||
     normalized === "opus-3"
   ) {
-    return "claude-opus-4-8";
+    return "claude-opus-5";
   }
   if (
     normalized === "sonnet-4.5" ||

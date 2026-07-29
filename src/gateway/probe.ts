@@ -5,6 +5,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  readMissingScopeError,
+  type MissingScopeErrorDetails,
+} from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -49,6 +53,7 @@ export type GatewayProbeResult = {
   connectLatencyMs: number | null;
   error: string | null;
   connectErrorDetails?: unknown;
+  missingScopeErrorDetails?: MissingScopeErrorDetails;
   close: GatewayProbeClose | null;
   auth: GatewayProbeAuthSummary;
   server?: GatewayProbeServerSummary;
@@ -330,6 +335,7 @@ export async function probeGateway(opts: {
     const settleProbe = (params: {
       ok: boolean;
       error: string | null;
+      missingScopeErrorDetails?: MissingScopeErrorDetails;
       verifiedRead?: boolean;
       health: unknown;
       status: unknown;
@@ -340,6 +346,9 @@ export async function probeGateway(opts: {
         ok: params.ok,
         connectLatencyMs,
         error: params.error,
+        ...(params.missingScopeErrorDetails
+          ? { missingScopeErrorDetails: params.missingScopeErrorDetails }
+          : {}),
         connectErrorDetails,
         close,
         auth: resolveProbeAuthSummary({
@@ -477,9 +486,11 @@ export async function probeGateway(opts: {
             });
           } catch (err) {
             const error = formatErrorMessage(err);
+            const missingScopeErrorDetails = readMissingScopeError(err);
             settleProbe({
               ok: false,
               error,
+              ...(missingScopeErrorDetails ? { missingScopeErrorDetails } : {}),
               health: null,
               status: null,
               presence: null,

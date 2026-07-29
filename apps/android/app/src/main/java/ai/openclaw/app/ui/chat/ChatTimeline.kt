@@ -39,6 +39,10 @@ internal sealed class ChatTimelineItem {
     val prompt: ChatQuestionPrompt,
   ) : ChatTimelineItem()
 
+  data class TurnRecapSummary(
+    val recap: TurnRecap,
+  ) : ChatTimelineItem()
+
   object Thinking : ChatTimelineItem()
 }
 
@@ -194,6 +198,18 @@ internal fun ChatTimeline.containsUserMessageVersion(version: String): Boolean =
     message.role.trim().equals("user", ignoreCase = true) && stableMessageVersion(message) == version
   }
 
+internal fun ChatTimeline.withTurnRecap(recap: TurnRecap?): ChatTimeline {
+  if (recap == null) return this
+  // reverseLayout makes index 0 the newest visual edge. The recap replaces the terminal
+  // thinking slot there, while shifting the saved user-message anchor to the same row.
+  return copy(
+    items = listOf(ChatTimelineItem.TurnRecapSummary(recap)) + items,
+    readAnchorIndex = readAnchorIndex?.plus(1),
+    latestContentIndex = 0,
+    latestContentVersion = "$latestContentVersion:recap=${recap.runtimeMs}:${recap.outputTokens ?: ""}",
+  )
+}
+
 // Reader restoration only needs to detect changes at the live edge. Avoid hashing
 // the full transcript whenever a streamed response updates.
 private fun latestContentVersion(
@@ -273,6 +289,7 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
     is ChatTimelineItem.OutboxRecoveryHeader -> "outbox-recovery-header"
     is ChatTimelineItem.PendingTools -> "tools"
     is ChatTimelineItem.QuestionPrompt -> "question:${item.prompt.record.id}"
+    is ChatTimelineItem.TurnRecapSummary -> "turn-recap"
     is ChatTimelineItem.StreamingAssistant -> "stream"
     ChatTimelineItem.Thinking -> "thinking"
   }

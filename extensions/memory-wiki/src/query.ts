@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pMap, { pMapSkip } from "p-map";
 import type { OpenClawConfig } from "../api.js";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import {
   loadMemoryWikiCompiledCache,
@@ -211,18 +212,15 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
   const files = (
     await Promise.all(
       QUERY_DIRS.map(async (relativeDir) => {
-        const dirPath = path.join(rootDir, relativeDir);
-        const entries = await fs
-          .readdir(dirPath, { withFileTypes: true, recursive: true })
-          .catch(() => []);
+        const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
         return entries
           .filter(
-            (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
+            (entry) =>
+              entry.kind === "file" &&
+              entry.relativePath.endsWith(".md") &&
+              path.basename(entry.relativePath) !== "index.md",
           )
-          .map((entry) => {
-            const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
-            return path.relative(rootDir, absPath).split(path.sep).join("/");
-          });
+          .map((entry) => entry.relativePath.split(path.sep).join("/"));
       }),
     )
   ).flat();
@@ -1256,6 +1254,12 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     ) {
       return false;
     }
+    const sameAgentLiveOwnerId =
+      !identity.archived &&
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId === normalizedScopedAgentId
+        ? normalizedOwnerAgentId
+        : undefined;
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
       ((identity.ownerAgentId &&
@@ -1272,21 +1276,26 @@ async function createSessionMemoryPathVisibilityChecker(params: {
           allowQmdSlugFallback: false,
         })
       : [];
+    const resolvedKeys =
+      liveKeys.length > 0
+        ? liveKeys
+        : resolveTranscriptStemToSessionKeys({
+            store: combinedSessionStore,
+            stem: identity.stem,
+            allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
+            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+          });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys:
-        liveKeys.length > 0
-          ? liveKeys
-          : resolveTranscriptStemToSessionKeys({
-              store: combinedSessionStore,
-              stem: identity.stem,
-              allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
-              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-            }),
+      keys: resolvedKeys,
     });
+    if (keys.length === 0) {
+      const agentWideVisibility = visibility === "agent" || visibility === "all";
+      return Boolean(sameAgentLiveOwnerId && agentWideVisibility);
+    }
     if (!guard) {
-      return Boolean(scopedAgentId && keys.length > 0);
+      return Boolean(scopedAgentId);
     }
     return keys.some((key) => guard.check(key).allowed);
   };

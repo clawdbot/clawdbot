@@ -478,6 +478,7 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
       bundleMcpMode: backend.bundleMcpMode,
       authEpochMode: backend.authEpochMode,
       nativeToolMode: backend.nativeToolMode,
+      toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
       sideQuestionToolMode: backend.sideQuestionToolMode,
     },
     ...(authProfileId ? { authProfileId } : {}),

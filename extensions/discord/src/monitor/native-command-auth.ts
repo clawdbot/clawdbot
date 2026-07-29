@@ -237,7 +237,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const configuredDmAllowFrom =
     resolveDiscordAccountAllowFrom({
       cfg,

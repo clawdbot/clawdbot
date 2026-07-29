@@ -48,10 +48,8 @@ function containsBrokenSurrogate(value: string): boolean {
 
 async function openBuildDetails(page: Page) {
   const sidebar = page.locator("openclaw-app-sidebar");
-  const agentMenu = sidebar.getByRole("button", { name: /Agent menu/ });
-  await agentMenu.waitFor();
-  await agentMenu.click();
-  const buildLink = page.getByRole("link", { name: "Control UI build details", exact: true });
+  await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
+  const buildLink = sidebar.getByRole("link", { name: "Control UI build details", exact: true });
   await buildLink.waitFor();
   const compactText = (await buildLink.textContent()) ?? "";
   expect(compactText).toContain(`${COMPACT_BRANCH}@0123456`);
@@ -83,6 +81,7 @@ describeControlUiE2e("Control UI Unicode build identity mocked Gateway E2E", () 
     server = await startControlUiE2eServer({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
       branch: RAW_BRANCH,
       dirty: true,

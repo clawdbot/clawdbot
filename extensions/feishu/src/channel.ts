@@ -107,7 +107,7 @@ import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
-import { feishuSetupAdapter } from "./setup-core.js";
+import { feishuSetupAdapter, feishuSetupContract } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
@@ -341,30 +341,6 @@ function describeFeishuMessageTool({
   return {
     actions: Array.from(actions),
     capabilities: enabled ? ["presentation"] : [],
-  };
-}
-
-function setFeishuNamedAccountEnabled(
-  cfg: ClawdbotConfig,
-  accountId: string,
-  enabled: boolean,
-): ClawdbotConfig {
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      feishu: {
-        ...feishuCfg,
-        accounts: {
-          ...feishuCfg?.accounts,
-          [accountId]: {
-            ...feishuCfg?.accounts?.[accountId],
-            enabled,
-          },
-        },
-      },
-    },
   };
 }
 
@@ -641,7 +617,13 @@ function readFirstString(
 const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
 
 function resolveFeishuMessageActionResponsePrefix(ctx: ChannelMessageActionContext) {
-  const configured = ctx.cfg.messages?.responsePrefix;
+  const channel = ctx.cfg.channels?.feishu as
+    | { responsePrefix?: string; accounts?: Record<string, { responsePrefix?: string }> }
+    | undefined;
+  const configured =
+    (ctx.accountId ? channel?.accounts?.[ctx.accountId]?.responsePrefix : undefined) ??
+    channel?.responsePrefix ??
+    (channel === undefined ? ctx.cfg.messages?.responsePrefix : undefined);
   if (!configured) {
     return undefined;
   }
@@ -983,22 +965,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       configSchema: FeishuChannelConfigSchema,
       config: {
         ...feishuConfigAdapter,
-        setAccountEnabled: ({ cfg, accountId, enabled }) => {
-          const isDefault = accountId === DEFAULT_ACCOUNT_ID;
-          if (isDefault) {
-            return {
-              ...cfg,
-              channels: {
-                ...cfg.channels,
-                feishu: {
-                  ...cfg.channels?.feishu,
-                  enabled,
-                },
-              },
-            };
-          }
-          return setFeishuNamedAccountEnabled(cfg, accountId, enabled);
-        },
         deleteAccount: ({ cfg, accountId }) => {
           const isDefault = accountId === DEFAULT_ACCOUNT_ID;
 
@@ -1683,6 +1649,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         },
       },
       setup: feishuSetupAdapter,
+      setupContract: feishuSetupContract,
       setupWizard: feishuSetupWizard,
       messaging: {
         targetPrefixes: ["feishu", "lark"],

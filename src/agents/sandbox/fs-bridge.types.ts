@@ -21,7 +21,21 @@ export type SandboxFsStat = {
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
-  readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
+  /** Reads a safely opened regular file, rejecting growth beyond an optional byte limit. */
+  readFile(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    maxBytes?: number;
+  }): Promise<Buffer>;
+  /** Streams a regular file within the sandbox when the backend supports native copying. */
+  copyFile?(params: {
+    sourcePath: string;
+    destinationPath: string;
+    cwd?: string;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void>;
   writeFile(params: {
     filePath: string;
     cwd?: string;

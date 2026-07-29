@@ -373,6 +373,10 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+  isConfiguredSessionStoreAgentId: (
+    cfg: { agents?: { list?: Array<{ id?: string }> } },
+    agentId: string,
+  ) => agentId === "main" || cfg.agents?.list?.some((agent) => agent.id === agentId) === true,
   loadSessionStore: () => hoisted.sessionStore,
   mergeSessionEntry: (existing: object | undefined, patch: object) => ({
     ...existing,
@@ -384,6 +388,7 @@ vi.mock("../config/sessions.js", () => ({
     cfg?: { session?: { mainKey?: string } };
     agentId: string;
   }) => `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
+  resolveExistingAgentSessionStoreTargetsSync: () => [],
   resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
   updateSessionStore: async (
     _storePath: string,

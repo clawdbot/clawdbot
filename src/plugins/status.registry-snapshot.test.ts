@@ -72,7 +72,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const env = {
       ...createColdPluginHermeticEnv(tempRoot, {
         bundledPluginsDir: makeTempDir(),
-        disablePersistedRegistry: false,
       }),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_STATE_DIR: stateDir,
@@ -260,7 +259,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const config = createColdPluginConfig(fixture.rootDir, fixture.pluginId);
     const env = createColdPluginHermeticEnv(workspaceDir, {
       bundledPluginsDir: makeTempDir(),
-      disablePersistedRegistry: false,
     });
 
     await refreshPluginRegistry({

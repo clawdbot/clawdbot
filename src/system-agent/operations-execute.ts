@@ -1,5 +1,6 @@
 // Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createAgent } from "../agents/agent-create.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -250,6 +251,42 @@ export async function executeSystemAgentOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "skills-setup":
+      runtime.log(
+        [
+          "Skills setup needs an interactive session.",
+          "Run `openclaw setup` and say `configure skills`,",
+          "or run `openclaw configure --section skills` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "search-setup":
+      runtime.log(
+        [
+          "Web search setup needs an interactive session.",
+          "Run `openclaw setup` and say `configure search`,",
+          "or run `openclaw configure --section web` for the masked terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "gateway-config-setup":
+      runtime.log(
+        [
+          "Gateway configuration needs an interactive session.",
+          "Run `openclaw setup` and say `configure gateway`,",
+          "or run `openclaw configure --section gateway` for the masked terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "memory-import":
+      runtime.log(
+        [
+          "Memory import needs an interactive session.",
+          "Open the Memory page in the Control UI,",
+          "or run `openclaw onboard` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
     case "model-setup":
       runtime.log(
         [
@@ -264,7 +301,11 @@ export async function executeSystemAgentOperation(
           ? "openclaw onboard"
           : operation.target === "classic"
             ? "openclaw onboard --classic"
-            : `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`;
+            : operation.target === "channels"
+              ? `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`
+              : operation.target === "search"
+                ? "openclaw configure --section web"
+                : "openclaw configure --section gateway";
       runtime.log(
         `One-shot mode cannot open an interactive wizard. Run \`${command}\` in a terminal.`,
       );
@@ -360,32 +401,28 @@ export async function executeSystemAgentOperation(
           "OpenClaw cannot save an explicit per-agent model until that new route can be live-tested. Retry without `model`; the new agent inherits the verified default, then use `set_default_model` with agentId to live-test and save its own model.",
         );
       }
-      const workspace = resolveUserPath(operation.workspace ?? process.cwd());
       return await applyPersistentOperation({
         auditOperation: "agents.create",
         operation,
         runtime,
         opts,
         run: async (ctx) => {
-          const runAgentsAdd =
-            ctx.deps?.runAgentsAdd ??
-            (await import("../commands/agents.commands.add.js")).agentsAddCommand;
-          await ctx.commit(async () => {
-            await runAgentsAdd(
-              {
-                name: operation.agentId,
-                workspace,
-                nonInteractive: true,
-              },
-              ctx.runtime,
-              { hasFlags: true },
-            );
+          const result = await ctx.commit(async () => {
+            return await (ctx.deps?.createAgent ?? createAgent)({
+              name: operation.agentId,
+              ...(operation.workspace ? { workspace: operation.workspace } : {}),
+            });
           });
+          if (result.status === "error") {
+            throw new Error(result.message);
+          }
           return {
-            summary: `Created agent ${operation.agentId}`,
+            summary: `Created agent ${result.agentId}`,
+            bootstrapPending: result.bootstrapPending,
+            agentId: result.agentId,
             details: {
-              agentId: operation.agentId,
-              workspace,
+              agentId: result.agentId,
+              workspace: result.workspace,
             },
           };
         },

@@ -10,6 +10,16 @@ export function parseArgs(argv: unknown): {
   npmDistTag: string;
   pluginPublishScope: string;
   plugins: string;
+  parallelsRegistryPackageArtifactDirs: string[];
+  parallelsRegistryPackageArtifacts: Array<{
+    artifactDir: string;
+    artifactName: string;
+    manifestPath: string;
+    packageName: string;
+    packageVersion: string;
+    tarballPath: string;
+    tarballSha256: string;
+  }>;
   skipDispatch: boolean;
   skipLocalGeneratedCheck: boolean;
   skipParallels: boolean;
@@ -48,6 +58,7 @@ export function buildReleaseCandidateState(
   npmDistTag: unknown;
   pluginPublishScope: unknown;
   plugins: unknown;
+  parallelsRegistryPackageArtifacts: unknown;
   windowsNodeTag: unknown;
   skipParallels: unknown;
   skipTelegram: unknown;
@@ -56,6 +67,18 @@ export function buildReleaseCandidateState(
   npmPreflightRunId: unknown;
 };
 export function reconcileReleaseCandidateState(saved: unknown, expected: unknown): unknown;
+export function validateParallelsRegistryPackageArtifact(
+  artifactDir: string,
+  params: { targetSha: string; targetVersion: string },
+): {
+  artifactDir: string;
+  artifactName: string;
+  manifestPath: string;
+  packageName: string;
+  packageVersion: string;
+  tarballPath: string;
+  tarballSha256: string;
+};
 export function buildTelegramArtifactInputs(params: {
   artifact: {
     digest?: string;
@@ -120,17 +143,6 @@ export function validateCandidateCheckout({
   toolingSha: unknown;
   workflowRef: unknown;
 };
-export function validateTrustedToolingPin({
-  toolingSha,
-  pinnedToolingSha,
-  latestTrustedToolingSha,
-  isAncestor,
-}: {
-  toolingSha: string;
-  pinnedToolingSha: string;
-  latestTrustedToolingSha: string;
-  isAncestor?: (ancestor: string, target: string) => boolean;
-}): string;
 export function candidateCumulativeShippedPullRequests(
   changelog: string,
   label: string,
@@ -196,6 +208,24 @@ export function requireRunIdFromDispatchOutput(output: unknown, workflowFile: un
  */
 export function buildPublishCommand(options: unknown): string;
 export function validatePreflightManifest(manifest: unknown, params: unknown): void;
+export function preflightCorePackageTarballs(manifest: {
+  corePackageTarballs?: unknown;
+  dependencyTarballs?: unknown;
+}): Array<{
+  packageName: string;
+  packageVersion: string;
+  tarballName: string;
+  tarballSha256: string;
+}>;
+export function preflightDependencyTarballs(manifest: {
+  corePackageTarballs?: unknown;
+  dependencyTarballs?: unknown;
+}): Array<{
+  packageName: string;
+  packageVersion: string;
+  tarballName: string;
+  tarballSha256: string;
+}>;
 export function validateFullManifest(manifest: unknown, params: unknown): void;
 export function validateTrustedToolingPin({
   toolingSha,
@@ -221,26 +251,19 @@ export function validateNpmPreflightRunSource({
   headSha: string;
   workflowRef: string;
 };
-export function validateTrustedToolingPin({
-  toolingSha,
-  pinnedToolingSha,
-  latestTrustedToolingSha,
-  isAncestor,
-}: {
-  toolingSha: string;
-  pinnedToolingSha: string;
-  latestTrustedToolingSha: string;
-  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
-}): string;
 export function candidateParallelsArgs(
   tarballPath: unknown,
   dependencyTarballPaths?: unknown[],
   toolingRoot?: string,
+  registryPackageTarballPaths?: unknown[],
+  macosSnapshotHint?: string,
 ): unknown[];
 export function candidateParallelsShellCommand(
   tarballPath: unknown,
   timeoutBin: unknown,
   dependencyTarballPaths?: unknown[],
+  registryPackageTarballPaths?: unknown[],
+  macosSnapshotHint?: string,
 ): string;
 declare function gitIsAncestor(ancestor: unknown, target: unknown): boolean;
 declare function loadCandidateShippedBaseline(ref: unknown): {

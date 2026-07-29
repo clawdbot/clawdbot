@@ -6,7 +6,13 @@ import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  ThinkingCatalogEntry,
+  VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { TypingController } from "./typing.js";
@@ -61,6 +67,8 @@ export type HandleCommandsParams = {
   workspaceDir: string;
   opts?: GetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
+  /** Catalog snapshot prepared by model selection for status rendering. */
+  thinkingCatalog?: ThinkingCatalogEntry[];
   resolvedThinkLevel?: ThinkLevel;
   resolvedFastMode?: FastMode;
   resolvedVerboseLevel: VerboseLevel;

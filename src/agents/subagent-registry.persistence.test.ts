@@ -17,6 +17,7 @@ import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
+  canonicalSubagentRunFixtures,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -38,6 +39,7 @@ import {
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -131,7 +133,7 @@ describe("subagent registry persistence", () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const runs = (persisted.runs ?? {}) as Record<string, SubagentRunRecord>;
-    saveSubagentRegistryToSqlite(new Map(Object.entries(runs)));
+    saveCanonicalRunFixtures(new Map(Object.entries(runs)));
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
     }
@@ -193,6 +195,10 @@ describe("subagent registry persistence", () => {
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
     saveSubagentRegistryToSqlite(runs);
+
+  function saveCanonicalRunFixtures(runs: Map<string, SubagentRunRecord>) {
+    saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
+  }
 
   beforeEach(() => {
     announceSpy.mockReset();
@@ -396,7 +402,7 @@ describe("subagent registry persistence", () => {
         },
       },
     };
-    saveSubagentRegistryToSqlite(
+    saveCanonicalRunFixtures(
       new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
     );
     await writeChildSessionEntry({
@@ -485,6 +491,115 @@ describe("subagent registry persistence", () => {
     });
     expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
       runId: "run-live",
+    });
+  });
+
+  it("reloads waitable swarm collector completions after a gateway restart", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    const run: SubagentRunRecord = {
+      runId: "run-swarm-restart",
+      childSessionKey: "agent:worker:subagent:swarm-restart",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist collector result",
+      cleanup: "keep",
+      createdAt: 1,
+      endedAt: 2,
+      collect: true,
+      swarmRequesterSessionKey: "agent:worker:subagent:owner",
+      swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
+      groupId: "swarm:agent:main:main:parent-run",
+      outputSchema: { type: "object", required: ["answer"] },
+      completion: { required: false, resultText: "raw answer", capturedAt: 2 },
+      collectorCompletion: {
+        status: "done",
+        structured: { answer: 42 },
+        usage: { inputTokens: 10, outputTokens: 3 },
+      },
+    };
+    saveCanonicalRunFixtures(new Map([[run.runId, run]]));
+    await writeChildSessionEntry({
+      sessionKey: run.childSessionKey,
+      sessionId: "session-swarm-restart",
+      updatedAt: run.endedAt,
+    });
+
+    closeOpenClawStateDatabaseForTest();
+    const restored = loadSubagentRegistryFromSqlite().get(run.runId);
+
+    expect(restored).toMatchObject({
+      runId: run.runId,
+      collect: true,
+      swarmRequesterSessionKey: run.swarmRequesterSessionKey,
+      swarmWaitOwnerSessionKeys: run.swarmWaitOwnerSessionKeys,
+      groupId: run.groupId,
+      outputSchema: run.outputSchema,
+      completion: { resultText: "raw answer" },
+      collectorCompletion: {
+        status: "done",
+        structured: { answer: 42 },
+        usage: { inputTokens: 10, outputTokens: 3 },
+      },
+    });
+
+    restartRegistry();
+    const wait = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+    const waited = await wait.execute("wait-after-restart", {
+      ids: [run.runId],
+      timeoutSeconds: 0,
+    });
+    expect(waited.details).toMatchObject({
+      completed: [
+        {
+          runId: run.runId,
+          status: "done",
+          result: "raw answer",
+          structured: { answer: 42 },
+        },
+      ],
+      pending: [],
+    });
+  });
+
+  it("reloads queued launch and in-flight structured state", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    const run: SubagentRunRecord = {
+      runId: "run-swarm-in-flight",
+      childSessionKey: "agent:worker:subagent:swarm-in-flight",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist collector launch",
+      cleanup: "keep",
+      createdAt: 1,
+      collect: true,
+      swarmRequesterSessionKey: "agent:main:telegram:default:direct:456",
+      groupId: "logical-group",
+      outputSchema: { type: "object" },
+      execution: { status: "queued" },
+      structuredOutput: { invalidAttempts: 1, schemaError: "answer is required" },
+      queuedLaunch: {
+        request: { sessionKey: "agent:worker:subagent:swarm-in-flight" },
+        authorization: {
+          modelOverride: { provider: "openai", model: "gpt-5.4" },
+        },
+        timeoutMs: 1_000,
+        schedulerGroupKey: '["agent:main:main","logical-group"]',
+        maxConcurrent: 8,
+      },
+    };
+    saveCanonicalRunFixtures(new Map([[run.runId, run]]));
+
+    closeOpenClawStateDatabaseForTest();
+    expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+      swarmRequesterSessionKey: run.swarmRequesterSessionKey,
+      structuredOutput: run.structuredOutput,
+      queuedLaunch: run.queuedLaunch,
     });
   });
 
@@ -828,7 +943,7 @@ describe("subagent registry persistence", () => {
       attachmentsDir,
     });
 
-    saveSubagentRegistryToSqlite(
+    saveCanonicalRunFixtures(
       new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
     );
 
@@ -961,6 +1076,9 @@ describe("subagent registry persistence", () => {
       createdAt: now - 50,
       startedAt: now - 25,
       endedAt: now,
+      execution: { status: "terminal", startedAt: now - 25, endedAt: now },
+      completion: { required: false },
+      delivery: { status: "pending" },
       suppressAnnounceReason: "steer-restart",
       cleanupHandled: false,
     });

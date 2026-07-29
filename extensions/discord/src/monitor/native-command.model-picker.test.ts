@@ -71,9 +71,9 @@ function createModelPickerContext(): ModelPickerContext {
     },
     channels: {
       discord: {
+        dmPolicy: "open",
         dm: {
           enabled: true,
-          policy: "open",
         },
       },
     },

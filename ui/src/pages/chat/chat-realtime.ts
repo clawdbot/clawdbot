@@ -6,6 +6,10 @@ import {
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./realtime-talk-conversation.ts";
+import {
+  discoverRealtimeTalkCameras,
+  type RealtimeTalkCameraDevice,
+} from "./realtime-talk-input.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import { RealtimeTalkSession, type RealtimeTalkStatus } from "./realtime-talk.ts";
 
@@ -22,6 +26,7 @@ export type ChatRealtimeState = {
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream: MediaStream | null;
+  realtimeTalkCameraDevices: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable: boolean;
   realtimeTalkVideoPending: boolean;
   realtimeTalkCameraError: boolean;
@@ -31,6 +36,7 @@ export type ChatRealtimeState = {
   resetRealtimeTalkConversation: () => void;
   toggleRealtimeTalk: () => Promise<void>;
   toggleRealtimeTalkCamera: () => Promise<void>;
+  switchRealtimeTalkCamera: () => Promise<void>;
 };
 
 export function createInitialChatRealtimeState() {
@@ -41,6 +47,7 @@ export function createInitialChatRealtimeState() {
     realtimeTalkInputLevel: new RealtimeTalkLevelSignal(),
     realtimeTalkConversation: [],
     realtimeTalkVideoStream: null,
+    realtimeTalkCameraDevices: [],
     realtimeTalkVideoCapable: false,
     realtimeTalkVideoPending: false,
     realtimeTalkCameraError: false,
@@ -65,6 +72,7 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   state.realtimeTalkDetail = null;
   state.realtimeTalkInputLevel.set(0);
   state.realtimeTalkVideoStream = null;
+  state.realtimeTalkCameraDevices = [];
   state.realtimeTalkVideoCapable = false;
   state.realtimeTalkVideoPending = false;
   state.realtimeTalkCameraError = false;
@@ -75,6 +83,19 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
   const talkStatusIsError = () => state.realtimeTalkStatus === "error";
   const persistCameraPreference = (enabled: boolean) => {
     state.settings = patchSettings({ talkCameraAutoEnable: enabled });
+  };
+  const showCameraError = (error: unknown) => {
+    state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
+    state.realtimeTalkCameraError = true;
+    state.requestUpdate();
+  };
+  const refreshCameraDevices = async (session: RealtimeTalkSession) => {
+    const result = await discoverRealtimeTalkCameras(false);
+    if (state.realtimeTalkSession !== session) {
+      return;
+    }
+    state.realtimeTalkCameraDevices = result.devices;
+    state.requestUpdate();
   };
   const setRealtimeTalkCameraEnabled = async (
     enabled: boolean,
@@ -97,6 +118,9 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       persistCameraPreference(false);
     }
     try {
+      if (enabled) {
+        await session.switchCamera(loadSettings().realtimeTalkVideoDeviceId);
+      }
       await session.setVideoEnabled(enabled);
     } catch (error) {
       if (state.realtimeTalkSession !== session || talkStatusIsError()) {
@@ -106,8 +130,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
         persistCameraPreference(false);
       }
       state.realtimeTalkVideoStream = null;
-      state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
-      state.realtimeTalkCameraError = true;
+      showCameraError(error);
     } finally {
       if (state.realtimeTalkSession === session) {
         state.realtimeTalkVideoPending = false;
@@ -127,6 +150,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.realtimeTalkDetail = null;
       state.realtimeTalkInputLevel.set(0);
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkCameraDevices = [];
       state.realtimeTalkVideoCapable = false;
       state.realtimeTalkVideoPending = false;
       state.realtimeTalkCameraError = false;
@@ -144,6 +168,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     // next talk session without a reload.
     const talkSettings = loadSettings();
     const inputDeviceId = talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
+    const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
     let autoEnableCameraAttempted = false;
     state.realtimeTalkActive = true;
@@ -220,12 +245,18 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
             persistCameraPreference(true);
             state.realtimeTalkDetail = null;
             state.realtimeTalkCameraError = false;
+            void refreshCameraDevices(session);
           }
           state.requestUpdate();
         },
+        onVideoError: (error) => {
+          if (state.realtimeTalkSession === session && !talkStatusIsError()) {
+            showCameraError(error);
+          }
+        },
       },
       {},
-      { inputDeviceId },
+      { inputDeviceId, videoDeviceId },
     );
     state.realtimeTalkSession = session;
     try {
@@ -241,6 +272,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       state.realtimeTalkInputLevel.set(0);
       state.realtimeTalkVideoStream = null;
+      state.realtimeTalkCameraDevices = [];
       state.realtimeTalkVideoCapable = false;
       state.realtimeTalkVideoPending = false;
       state.realtimeTalkCameraError = false;
@@ -250,5 +282,41 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
   state.toggleRealtimeTalkCamera = async () => {
     const enabled = state.realtimeTalkVideoStream === null;
     await setRealtimeTalkCameraEnabled(enabled);
+  };
+  state.switchRealtimeTalkCamera = async () => {
+    const session = state.realtimeTalkSession;
+    const stream = state.realtimeTalkVideoStream;
+    const devices = state.realtimeTalkCameraDevices;
+    if (!session || !stream || devices.length < 2 || state.realtimeTalkVideoPending) {
+      return;
+    }
+    const activeDeviceId =
+      stream.getVideoTracks()[0]?.getSettings?.().deviceId?.trim() ||
+      loadSettings().realtimeTalkVideoDeviceId?.trim();
+    const activeIndex = devices.findIndex((device) => device.deviceId === activeDeviceId);
+    const nextDevice = devices[(activeIndex + 1) % devices.length];
+    if (!nextDevice) {
+      return;
+    }
+
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = false;
+    state.realtimeTalkDetail = null;
+    state.requestUpdate();
+    try {
+      await session.switchCamera(nextDevice.deviceId);
+      if (state.realtimeTalkSession === session) {
+        state.settings = patchSettings({ realtimeTalkVideoDeviceId: nextDevice.deviceId });
+      }
+    } catch (error) {
+      if (state.realtimeTalkSession === session && !talkStatusIsError()) {
+        showCameraError(error);
+      }
+    } finally {
+      if (state.realtimeTalkSession === session) {
+        state.realtimeTalkVideoPending = false;
+        state.requestUpdate();
+      }
+    }
   };
 }

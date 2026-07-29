@@ -67,6 +67,12 @@ private enum ScrollFollowTarget: Equatable {
     case user(UUID)
 }
 
+private struct ChatTurnRecapObservation: Equatable {
+    let sessionKey: String
+    let indicatorVisible: Bool
+    let row: ChatTurnRecapSessionRow?
+}
+
 public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
     public let rawValue: UInt8
 
@@ -118,7 +124,11 @@ public struct OpenClawChatView: View {
     @State private var isAtLiveEdge = true
     @State private var isUserScrolling = false
     @State private var isKeyboardVisible = false
+    @State private var expandedUserMessageIDs: Set<UUID> = []
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
+    @State private var turnRecapResolver = ChatTurnRecapResolver()
+    @State private var turnRecap: ChatTurnRecap?
+    @State private var turnRecapSessionKey: String?
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
     private let style: Style
@@ -145,6 +155,8 @@ public struct OpenClawChatView: View {
         static let outerPaddingHorizontal: CGFloat = 6
         static let outerPaddingVertical: CGFloat = 0
         static let composerPaddingHorizontal: CGFloat = 0
+        static let swarmPaddingHorizontal: CGFloat = 12
+        static let swarmPaddingVertical: CGFloat = 8
         static let stackSpacing: CGFloat = 0
         static let messageSpacing: CGFloat = 6
         static let messageListPaddingTop: CGFloat = 12
@@ -156,6 +168,8 @@ public struct OpenClawChatView: View {
         static let outerPaddingHorizontal: CGFloat = 6
         static let outerPaddingVertical: CGFloat = 6
         static let composerPaddingHorizontal: CGFloat = 6
+        static let swarmPaddingHorizontal: CGFloat = 6
+        static let swarmPaddingVertical: CGFloat = 0
         static let stackSpacing: CGFloat = 6
         static let messageSpacing: CGFloat = 12
         static let messageListPaddingTop: CGFloat = 10
@@ -225,6 +239,9 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
+        .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
+            self.updateTurnRecap(observation)
+        }
         .sheet(item: self.$fullMessageRequest) { request in
             ChatFullMessageReader(
                 request: request,
@@ -245,6 +262,10 @@ public struct OpenClawChatView: View {
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
             self.planPill
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
+            self.turnRecapRow
+            self.swarmProgress
+                .padding(.horizontal, Layout.swarmPaddingHorizontal)
+                .padding(.vertical, Layout.swarmPaddingVertical)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
         }
@@ -257,6 +278,11 @@ public struct OpenClawChatView: View {
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
             self.planPill
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
+                .padding(.top, Layout.stackSpacing)
+            self.turnRecapRow
+            self.swarmProgress
+                .padding(.horizontal, Layout.swarmPaddingHorizontal)
+                .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
@@ -278,6 +304,14 @@ public struct OpenClawChatView: View {
         }
     }
 
+    @ViewBuilder
+    private var swarmProgress: some View {
+        let groups = self.viewModel.activeSwarmGroups
+        if !groups.isEmpty {
+            OpenClawChatSwarmProgressView(groups: groups)
+        }
+    }
+
     private var composer: some View {
         OpenClawChatComposer(
             viewModel: self.viewModel,
@@ -296,6 +330,19 @@ public struct OpenClawChatView: View {
             talkControl: self.talkControl,
             dictationControl: self.dictationControl,
             voiceNoteControl: self.voiceNoteControl)
+    }
+
+    @ViewBuilder
+    private var turnRecapRow: some View {
+        if !self.showsWorkingIndicator,
+           self.turnRecapSessionKey == self.viewModel.sessionKey,
+           let turnRecap
+        {
+            ChatTurnRecapRow(recap: turnRecap)
+                .padding(.horizontal, Layout.outerPaddingHorizontal + Layout.messageListPaddingHorizontal)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var messageList: some View {
@@ -437,14 +484,16 @@ public struct OpenClawChatView: View {
 
         OpenClawQuestionCards(viewModel: self.viewModel)
 
-        if self.viewModel.hasBlockingRunActivity, !self.hasVisibleStreamingAssistantText {
+        if self.showsWorkingIndicator {
             ChatTypingIndicatorBubble(
                 style: self.style,
                 assistantName: self.assistantName,
                 assistantAvatarText: self.assistantAvatarText,
                 assistantAvatarTint: self.assistantAvatarTint,
                 showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean)
+                isClean: self.composerChrome == .clean,
+                runIdentity: self.viewModel.workingIndicatorIdentity,
+                outputTokens: self.viewModel.liveRunOutputTokens)
                 .equatable()
         }
 
@@ -485,9 +534,24 @@ public struct OpenClawChatView: View {
             showsAssistantAvatar: self.showsAssistantAvatars,
             isClean: self.composerChrome == .clean,
             contextWindowTokens: contextWindowTokens,
+            userMessageExpanded: self.expandedUserMessageIDs.contains(msg.id),
+            onToggleUserMessageExpanded: {
+                if self.expandedUserMessageIDs.contains(msg.id) {
+                    self.expandedUserMessageIDs.remove(msg.id)
+                } else {
+                    self.expandedUserMessageIDs.insert(msg.id)
+                }
+            },
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+            },
+            imageArtifactResolverReady: self.viewModel.healthOK,
+            loadImageArtifact: { [weak viewModel] artifactId in
+                guard let viewModel else { return nil }
+                return try await viewModel.transport.loadImageArtifact(
+                    sessionKey: viewModel.sessionKey,
+                    artifactId: artifactId)
             })
             .frame(
                 maxWidth: .infinity,
@@ -505,6 +569,8 @@ public struct OpenClawChatView: View {
                 self.copyMessageButton(for: msg)
                 self.replyMessageButton(for: msg)
                 self.openFullMessageButton(for: msg)
+                self.rewindMessageButton(for: msg)
+                self.forkMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -547,6 +613,8 @@ public struct OpenClawChatView: View {
                 self.copyMessageButton(for: msg)
                 self.replyMessageButton(for: msg)
                 self.openFullMessageButton(for: msg)
+                self.rewindMessageButton(for: msg)
+                self.forkMessageButton(for: msg)
                 Button {
                     if speech.isActive(msg.id) {
                         speech.stop()
@@ -575,6 +643,8 @@ public struct OpenClawChatView: View {
                     self.copyMessageButton(for: msg)
                     self.replyMessageButton(for: msg)
                     self.openFullMessageButton(for: msg)
+                    self.rewindMessageButton(for: msg)
+                    self.forkMessageButton(for: msg)
                 }
         }
     }
@@ -715,6 +785,30 @@ public struct OpenClawChatView: View {
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))
+    }
+
+    private var showsWorkingIndicator: Bool {
+        self.viewModel.hasBlockingRunActivity &&
+            (!self.hasVisibleStreamingAssistantText || self.viewModel.liveUsageRunID != nil)
+    }
+
+    private var turnRecapObservation: ChatTurnRecapObservation {
+        let row = self.viewModel.currentSessionEntry().map(ChatTurnRecapSessionRow.init)
+        return ChatTurnRecapObservation(
+            sessionKey: self.viewModel.sessionKey,
+            indicatorVisible: self.showsWorkingIndicator,
+            row: row)
+    }
+
+    private func updateTurnRecap(_ observation: ChatTurnRecapObservation) {
+        var resolver = self.turnRecapResolver
+        let recap = resolver.resolve(
+            sessionKey: observation.sessionKey,
+            indicatorVisible: observation.indicatorVisible,
+            row: observation.row)
+        self.turnRecapResolver = resolver
+        self.turnRecap = recap
+        self.turnRecapSessionKey = recap == nil ? nil : observation.sessionKey
     }
 
     private var hasVisibleTransientContent: Bool {
@@ -942,6 +1036,7 @@ extension OpenClawChatView {
             }
 
             var content = last.content
+            // Tool-result diff metadata arrives on the message, but the UI renders the merged block.
             content.append(
                 OpenClawChatMessageContent(
                     type: "tool_result",
@@ -953,7 +1048,9 @@ extension OpenClawChatView {
                     content: nil,
                     id: toolCallId,
                     name: message.toolName,
-                    arguments: nil))
+                    arguments: nil,
+                    details: message.details,
+                    isError: message.isError))
 
             let merged = OpenClawChatMessage(
                 id: last.id,
@@ -967,7 +1064,9 @@ extension OpenClawChatView {
                 toolName: last.toolName,
                 usage: last.usage,
                 stopReason: last.stopReason,
-                errorMessage: last.errorMessage)
+                errorMessage: last.errorMessage,
+                details: last.details,
+                isError: last.isError)
             result[result.count - 1] = merged
         }
 
@@ -1019,14 +1118,7 @@ extension OpenClawChatView {
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {
-        message.content.contains { content in
-            switch content.type ?? "text" {
-            case "file", "attachment":
-                true
-            default:
-                false
-            }
-        }
+        message.content.contains(where: \.isInlineAttachment)
     }
 
     private func toolCalls(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {
@@ -1101,6 +1193,50 @@ extension OpenClawChatView {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func rewindMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "user",
+           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
+            Button {
+                Task { await self.viewModel.rewindToMessage(message) }
+            } label: {
+                Label {
+                    Text("Rewind to Here")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+            }
+            .disabled(self.messageSessionActionsDisabled)
+        }
+    }
+
+    @ViewBuilder
+    private func forkMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "user",
+           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
+            Button {
+                Task { await self.viewModel.forkAtMessage(message) }
+            } label: {
+                Label {
+                    Text("Fork from Here")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "arrow.triangle.branch")
+                }
+            }
+            .disabled(self.messageSessionActionsDisabled)
+        }
+    }
+
+    private var messageSessionActionsDisabled: Bool {
+        !self.viewModel.canPerformMessageSessionAction
     }
 
     @ViewBuilder

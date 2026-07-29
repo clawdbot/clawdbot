@@ -419,13 +419,13 @@ export function setGatewayDedupeEntry(params: {
     incomingObservation.state === "terminal"
       ? terminalOutcomeFromSnapshot(incomingObservation.snapshot)
       : undefined;
-  if (existingOutcome && isStickyAgentRunTerminalOutcome(existingOutcome) && !incomingOutcome) {
+  if (
+    existingOutcome &&
+    isStickyAgentRunTerminalOutcome(existingOutcome) &&
+    (!incomingOutcome ||
+      mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome)
+  ) {
     return;
-  }
-  if (existingOutcome && incomingOutcome && isStickyAgentRunTerminalOutcome(existingOutcome)) {
-    if (mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome) {
-      return;
-    }
   }
 
   params.dedupe.set(params.key, params.entry);
@@ -453,7 +453,10 @@ function getFreshestDedupeSnapshot(
   const agent = snapshotsBySource.get("agent");
   const chat = snapshotsBySource.get("chat");
   if (agent && chat) {
-    return chat.recordedAt > agent.recordedAt ? chat : agent;
+    // Dedupe source freshness must not bypass the canonical sticky run outcome.
+    return chat.recordedAt > agent.recordedAt
+      ? mergeSnapshot(agent, chat)
+      : mergeSnapshot(chat, agent);
   }
   return agent ?? chat;
 }

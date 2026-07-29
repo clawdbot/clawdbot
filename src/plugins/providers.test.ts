@@ -42,7 +42,6 @@ let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").re
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolveCatalogHookProviderPluginIds: typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
 let resolveUsageHookProviderPluginContracts: typeof import("./providers.js").resolveUsageHookProviderPluginContracts;
-let resolveExternalAuthProfileCompatFallbackPluginIds: typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
 let resolveExternalAuthProfileProviderPluginIds: typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveDiscoveredProviderPluginIds;
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
@@ -526,7 +525,6 @@ describe("resolvePluginProviders", () => {
       resolveEnabledProviderPluginIds,
       resolveCatalogHookProviderPluginIds,
       resolveUsageHookProviderPluginContracts,
-      resolveExternalAuthProfileCompatFallbackPluginIds,
       resolveExternalAuthProfileProviderPluginIds,
       resolveDiscoveredProviderPluginIds,
       resolveDiscoverableProviderOwnerPluginIds,
@@ -941,38 +939,6 @@ describe("resolvePluginProviders", () => {
       }),
     ).toEqual(["external-auth-owner"]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps undeclared external auth provider fallback scoped to active external providers", () => {
-    setManifestPlugins([
-      createManifestProviderPlugin({
-        id: "declared-auth-owner",
-        providerIds: ["declared"],
-        origin: "workspace",
-        contracts: { externalAuthProviders: ["declared"] },
-      }),
-      createManifestProviderPlugin({
-        id: "legacy-auth-owner",
-        providerIds: ["legacy"],
-        origin: "workspace",
-      }),
-    ]);
-    const declaredPluginIds = new Set(["declared-auth-owner"]);
-
-    expect(
-      resolveExternalAuthProfileCompatFallbackPluginIds({
-        config: {
-          plugins: {
-            entries: {
-              "declared-auth-owner": { enabled: true },
-              "legacy-auth-owner": { enabled: true },
-            },
-          },
-        },
-        env: {} as NodeJS.ProcessEnv,
-        declaredPluginIds,
-      }),
-    ).toEqual(["legacy-auth-owner"]);
   });
 
   it("filters bundled provider plugins by allowlist by default", () => {

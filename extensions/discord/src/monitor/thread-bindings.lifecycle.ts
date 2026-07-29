@@ -24,7 +24,7 @@ import {
   MANAGERS_BY_ACCOUNT_ID,
   getThreadBindingToken,
   normalizeThreadId,
-  rememberRecentUnboundWebhookEcho,
+  refreshUnboundThreadWebhookIdentity,
   removeBindingRecord,
   saveBindingsToDisk,
   shouldPersistBindingMutations,
@@ -187,7 +187,7 @@ export function unbindThreadBindingsBySessionKey(params: {
     }
     const unbound = removeBindingRecord(bindingKey);
     if (unbound) {
-      rememberRecentUnboundWebhookEcho(unbound);
+      refreshUnboundThreadWebhookIdentity(unbound);
       removed.push(unbound);
     }
   }

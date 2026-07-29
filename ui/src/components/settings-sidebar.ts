@@ -6,7 +6,9 @@ import {
   navigationIconForRoute,
   scheduleRoutePreload,
   SETTINGS_NAVIGATION_GROUPS,
+  SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
+  settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
@@ -17,14 +19,21 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
+import { redactLoginFailureError } from "./login-gate.ts";
+import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import "./settings-save-indicator.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
   basePath: string;
   activeRouteId: RouteId;
+  activePathname?: string;
   activeSearch?: string;
   activeHash?: string;
-  connected: boolean;
+  offline: boolean;
+  queuedOutboxCount?: number;
+  lastError: string | null;
   version: string;
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
@@ -32,10 +41,12 @@ type SettingsSidebarProps = {
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   onExit: () => void;
+  onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
   onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
+  saveIndicator: SettingsSaveIndicatorProps;
 };
 
 type SettingsNavigationGroupView = {
@@ -49,6 +60,9 @@ type SettingsNavigationItemView = {
 };
 
 function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): boolean {
+  if (block.pathname) {
+    return false;
+  }
   const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
   return [settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
     (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
@@ -66,8 +80,15 @@ function filterSettingsNavigationGroups(
       items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
     }));
   }
-  const allRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-  const directRoutes = allRoutes.filter((routeId) =>
+  const sidebarRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+  const searchableRoutes = [
+    ...new Set([
+      ...sidebarRoutes,
+      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
+      ...blockMatches.map((block) => block.routeId),
+    ]),
+  ];
+  const directRoutes = searchableRoutes.filter((routeId) =>
     [
       settingsNavigationLabelForRoute(routeId),
       titleForRoute(routeId),
@@ -91,7 +112,7 @@ function filterSettingsNavigationGroups(
   const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
   const seenBlocks = new Set<string>();
   for (const block of blockMatches) {
-    const blockKey = `${block.routeId}\u0000${block.search ?? ""}\u0000${block.hash}`;
+    const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
     if (seenBlocks.has(blockKey)) {
       continue;
     }
@@ -115,7 +136,7 @@ function filterSettingsNavigationGroups(
           },
         ]
       : []),
-    ...allRoutes
+    ...searchableRoutes
       .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
       .map((routeId) => ({
         labelKey: null,
@@ -125,7 +146,8 @@ function filterSettingsNavigationGroups(
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
-  const active = !props.searchQuery && props.activeRouteId === routeId;
+  const active =
+    !props.searchQuery && settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
       href=${pathForRoute(routeId, props.basePath)}
@@ -165,9 +187,11 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
 }
 
 function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock) {
-  const href = pathForRoute(block.routeId, props.basePath) + (block.search ?? "") + block.hash;
+  const pathname = block.pathname ?? pathForRoute(block.routeId, props.basePath);
+  const href = pathname + (block.search ?? "") + block.hash;
   const active =
     props.activeRouteId === block.routeId &&
+    (block.pathname === undefined || props.activePathname === block.pathname) &&
     props.activeHash === block.hash &&
     (block.search === undefined || props.activeSearch === block.search);
   return html`
@@ -188,6 +212,7 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
         }
         event.preventDefault();
         props.onNavigate(block.routeId, {
+          ...(block.pathname ? { pathname: block.pathname } : {}),
           ...(block.search ? { search: block.search } : {}),
           hash: block.hash,
         });
@@ -198,10 +223,17 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
   `;
 }
 
+function syncSettingsSearchScrollShadow(nav: HTMLElement) {
+  // The nav's top padding scrolls away with its rows. Keep the fixed search
+  // region visually separated once content reaches that boundary.
+  nav
+    .closest(".settings-sidebar")
+    ?.querySelector(".settings-sidebar__search")
+    ?.classList.toggle("settings-sidebar__search--scrolled", nav.scrollTop > 0);
+}
+
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
-  const gatewayStatus = t("chat.gatewayStatus", {
-    status: props.connected ? t("common.online") : t("common.offline"),
-  });
+  const reconnecting = t("connection.reconnecting");
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
     props.searchBlockMatches ?? [],
@@ -255,7 +287,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             `
           : nothing}
       </div>
-      <nav class="settings-sidebar__nav" aria-label=${t("common.settingsSections")}>
+      <nav
+        class="settings-sidebar__nav"
+        aria-label=${t("common.settingsSections")}
+        @scroll=${(event: Event) =>
+          syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
+      >
         ${navigationGroups.length === 0
           ? html`<p class="settings-sidebar__empty" role="status">
               ${t("nav.settingsSearchNoResults")}
@@ -282,14 +319,16 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         .onUpdate=${props.onUpdate}
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
-        <span
-          class="sidebar-status__dot ${props.connected
-            ? "sidebar-connection-status--online"
-            : "sidebar-connection-status--offline"}"
-          role="img"
-          aria-label=${gatewayStatus}
-        ></span>
-        <span class="settings-sidebar__footer-status">${gatewayStatus}</span>
+        ${props.offline
+          ? renderOfflineSidebarStatus({
+              queuedOutboxCount: props.queuedOutboxCount ?? 0,
+              reconnecting,
+              title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
+              onRetry: props.onRetryConnect,
+            })
+          : html`<openclaw-settings-save-indicator
+              .props=${props.saveIndicator}
+            ></openclaw-settings-save-indicator>`}
         ${props.version
           ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
           : nothing}

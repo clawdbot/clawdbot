@@ -8,10 +8,24 @@ import {
   buildLiveCronProbeMessage,
   createLiveCronProbeSpec,
   isClaudeLikeLiveAgent,
+  resolveOpenClawCliProcessArgs,
   shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
 
 describe("live-agent-probes", () => {
+  it("uses the source runner when packaged CLI output is absent", () => {
+    expect(resolveOpenClawCliProcessArgs(["cron", "list"], false)).toEqual([
+      "scripts/run-node.mjs",
+      "cron",
+      "list",
+    ]);
+    expect(resolveOpenClawCliProcessArgs(["cron", "list"], true)).toEqual([
+      "openclaw.mjs",
+      "cron",
+      "list",
+    ]);
+  });
+
   it("only special-cases Claude-like retry prompts", () => {
     expect(isClaudeLikeLiveAgent("claude")).toBe(true);
     expect(isClaudeLikeLiveAgent("claude-cli")).toBe(true);

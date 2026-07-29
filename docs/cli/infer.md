@@ -214,6 +214,7 @@ Speech synthesis and TTS provider/persona state.
 ```bash
 openclaw infer tts convert --text "hello from openclaw" --output ./hello.mp3 --json
 openclaw infer tts convert --text "Your build is complete" --output ./build-complete.mp3 --json
+openclaw infer tts convert --provider xiaomi --text "Provider-only selection" --output ./xiaomi.mp3 --json
 openclaw infer tts providers --json
 openclaw infer tts personas --json
 openclaw infer tts status --json
@@ -222,6 +223,7 @@ openclaw infer tts status --json
 Notes:
 
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
+- Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - Use `tts providers`, `tts voices`, `tts personas`, `tts set-provider`, and `tts set-persona` to inspect and configure TTS behavior.
 
 ## Video

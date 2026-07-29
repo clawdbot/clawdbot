@@ -19,6 +19,7 @@ import {
   resolveProfile,
   type ResolvedBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   BROWSER_BRIDGES,
@@ -53,7 +54,7 @@ import {
   issueNoVncObserverToken,
 } from "./novnc-auth.js";
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
-import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
+import { buildSandboxContainerName, resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
@@ -69,6 +70,8 @@ const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
 const CDP_AUTH_TOKEN_ENV_KEY = "OPENCLAW_BROWSER_CDP_AUTH_TOKEN";
 const SANDBOX_BROWSER_IMAGE_CONTRACT_LABEL = "org.openclaw.sandbox-browser.contract";
+const browserContainerLifecycleQueue = new KeyedAsyncQueue();
+const browserNetworkLifecycleQueue = new KeyedAsyncQueue();
 
 function buildSandboxCdpAuthHeader(token: string): string {
   return `Basic ${Buffer.from(`openclaw:${token}`).toString("base64")}`;
@@ -99,6 +102,7 @@ async function waitForSandboxCdp(params: {
           headers: { Authorization: buildSandboxCdpAuthHeader(params.authToken) },
           signal: ctrl.signal,
         });
+        await res.body?.cancel().catch(() => undefined);
         if (res.ok) {
           return true;
         }
@@ -211,14 +215,16 @@ async function ensureDockerNetwork(
   if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }
-  const inspect = await execDocker(["network", "inspect", network], { allowFailure: true });
-  if (inspect.code === 0) {
-    return;
-  }
-  await execDocker(["network", "create", "--driver", "bridge", network]);
+  await browserNetworkLifecycleQueue.enqueue(normalized, async () => {
+    const inspect = await execDocker(["network", "inspect", network], { allowFailure: true });
+    if (inspect.code === 0) {
+      return;
+    }
+    await execDocker(["network", "create", "--driver", "bridge", network]);
+  });
 }
 
-export async function ensureSandboxBrowser(params: {
+type EnsureSandboxBrowserParams = {
   scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -227,17 +233,38 @@ export async function ensureSandboxBrowser(params: {
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
   ssrfPolicy?: SsrFPolicy;
-}): Promise<SandboxBrowserContext | null> {
+};
+
+export async function ensureSandboxBrowser(
+  params: EnsureSandboxBrowserParams,
+): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
   }
   if (!isToolAllowed(params.cfg.tools, "browser")) {
     return null;
   }
+  if (normalizeOptionalLowercaseString(params.cfg.browser.network) === "none") {
+    throw new Error(
+      'Sandbox browser network mode "none" is unsupported because browser control requires a host-reachable published CDP port. Use "bridge", a custom bridge network, or disable the sandbox browser.',
+    );
+  }
 
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
-  const name = `${params.cfg.browser.containerPrefix}${slug}`;
-  const containerName = name.slice(0, 63);
+  const containerName = buildSandboxContainerName(params.cfg.browser.containerPrefix, slug);
+
+  // Independent agent runs can converge on one Docker resource. Serialize the
+  // full lifecycle so followers re-read container and bridge state after the
+  // preceding create, start, or replacement has settled.
+  return await browserContainerLifecycleQueue.enqueue(containerName, async () => {
+    return await ensureSandboxBrowserContainer(params, containerName);
+  });
+}
+
+async function ensureSandboxBrowserContainer(
+  params: EnsureSandboxBrowserParams,
+  containerName: string,
+): Promise<SandboxBrowserContext> {
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
   const stopExistingForContainer = async () => {
     await stopCachedBrowserBridgesForContainer(containerName);
@@ -265,7 +292,7 @@ export async function ensureSandboxBrowser(params: {
       vncPort: params.cfg.browser.vncPort,
       noVncPort: params.cfg.browser.noVncPort,
       headless: params.cfg.browser.headless,
-      enableNoVnc: params.cfg.browser.enableNoVnc,
+      noVncEnabled: params.cfg.browser.noVncEnabled,
       autoStartTimeoutMs: params.cfg.browser.autoStartTimeoutMs,
       cdpSourceRange,
     },
@@ -388,7 +415,7 @@ export async function ensureSandboxBrowser(params: {
       args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
     }
     args.push("-e", `OPENCLAW_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`);
-    args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.enableNoVnc ? "1" : "0"}`);
+    args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.noVncEnabled ? "1" : "0"}`);
     args.push("-e", `OPENCLAW_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
     args.push("-e", `${CDP_AUTH_TOKEN_ENV_KEY}=${cdpAuthToken}`);
     args.push(

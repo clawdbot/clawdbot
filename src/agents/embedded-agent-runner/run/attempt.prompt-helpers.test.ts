@@ -278,7 +278,6 @@ describe("resolvePromptBuildHookResult drain cache", () => {
       runAgentTurnPrepare,
       runHeartbeatPromptContribution,
       runBeforePromptBuild: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(async () => undefined),
     };
 
     const result = await resolvePromptBuildHookResult({

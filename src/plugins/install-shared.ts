@@ -166,6 +166,7 @@ export function buildDirectoryInstallResult(params: {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  setup?: import("./manifest.js").PluginManifestSetup;
 }): InstallPluginResult {
   return {
     ok: true,
@@ -174,6 +175,7 @@ export function buildDirectoryInstallResult(params: {
     manifestName: params.manifestName,
     version: params.version,
     extensions: params.extensions,
+    ...(params.setup ? { setup: params.setup } : {}),
   };
 }
 
@@ -356,6 +358,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  setup?: import("./manifest.js").PluginManifestSetup;
   targetDir?: string;
   extensionsDir?: string;
   logger: PluginInstallLogger;
@@ -402,6 +405,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
       manifestName: params.manifestName,
       version: params.version,
       extensions: params.extensions,
+      setup: params.setup,
     });
   }
 
@@ -442,6 +446,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     manifestName: params.manifestName,
     version: params.version,
     extensions: params.extensions,
+    setup: params.setup,
   });
 }
 

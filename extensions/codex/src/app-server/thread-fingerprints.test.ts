@@ -1,5 +1,79 @@
 import { describe, expect, it } from "vitest";
-import { readActiveCodexTurnIdsFromResume } from "./thread-fingerprints.js";
+import type { JsonObject } from "./protocol.js";
+import {
+  fingerprintCodexThreadConfig,
+  readActiveCodexTurnIdsFromResume,
+} from "./thread-fingerprints.js";
+
+describe("fingerprintCodexThreadConfig", () => {
+  const request = {
+    model: "gpt-5.6-sol",
+    modelProvider: "openai",
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+    personality: "none",
+    serviceTier: "fast",
+    developerInstructions: "Keep the current conversation private.",
+    config: { features: { hooks: true, plugins: false } },
+  };
+
+  it("stabilizes equivalent config without exposing instructions or profile", () => {
+    const fingerprint = fingerprintCodexThreadConfig(request, "openai:personal");
+
+    expect(fingerprint).toBe(
+      fingerprintCodexThreadConfig(
+        { ...request, config: { features: { plugins: false, hooks: true } } },
+        "openai:personal",
+      ),
+    );
+    expect(fingerprint).not.toContain("private");
+    expect(fingerprint).not.toContain("openai:personal");
+  });
+
+  it.each<{ setting: string; patch: JsonObject }>([
+    { setting: "model", patch: { model: "gpt-5.6-terra" } },
+    { setting: "model provider", patch: { modelProvider: "custom" } },
+    { setting: "requested model provider", patch: { requestedModelProvider: "custom" } },
+    { setting: "approval policy", patch: { approvalPolicy: "on-request" } },
+    { setting: "approval reviewer", patch: { approvalsReviewer: "guardian" } },
+    { setting: "sandbox", patch: { sandbox: "read-only" } },
+    { setting: "service tier", patch: { serviceTier: "flex" } },
+    { setting: "base instructions", patch: { baseInstructions: "Different base policy." } },
+    { setting: "developer instructions", patch: { developerInstructions: "Different policy." } },
+    { setting: "effective config", patch: { config: { features: { hooks: false } } } },
+  ])("invalidates reuse when $setting changes", ({ patch }) => {
+    expect(fingerprintCodexThreadConfig({ ...request, ...patch }, "openai:personal")).not.toBe(
+      fingerprintCodexThreadConfig(request, "openai:personal"),
+    );
+  });
+
+  it("invalidates reuse when the selected authentication profile changes", () => {
+    expect(fingerprintCodexThreadConfig(request, "openai:work")).not.toBe(
+      fingerprintCodexThreadConfig(request, "openai:personal"),
+    );
+  });
+
+  it("invalidates reuse when the native dynamic tool catalog changes", () => {
+    expect(fingerprintCodexThreadConfig(request, "openai:personal", "tools-after")).not.toBe(
+      fingerprintCodexThreadConfig(request, "openai:personal", "tools-before"),
+    );
+  });
+
+  it("distinguishes an omitted service tier from an explicit clear", () => {
+    const { serviceTier: _serviceTier, ...withoutServiceTier } = request;
+
+    expect(fingerprintCodexThreadConfig(withoutServiceTier, "openai:personal")).not.toBe(
+      fingerprintCodexThreadConfig({ ...withoutServiceTier, serviceTier: null }, "openai:personal"),
+    );
+  });
+
+  it("preserves an explicitly omitted native model selection", () => {
+    expect(
+      fingerprintCodexThreadConfig({ ...request, requestedModel: null }, "openai:personal"),
+    ).not.toBe(fingerprintCodexThreadConfig(request, "openai:personal"));
+  });
+});
 
 describe("readActiveCodexTurnIdsFromResume", () => {
   it("uses the bounded initial turns page when Codex returns one", () => {

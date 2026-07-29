@@ -6,6 +6,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 import {
@@ -23,6 +24,7 @@ import type {
   ChannelSetupStatus,
   ChannelSetupStatusContext,
 } from "./setup-wizard-types.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
 export type {
@@ -48,6 +50,7 @@ function createWizardAccountScope(params: {
   cfg: OpenClawConfig;
   channelKey: string;
   accountId: string;
+  setupSurface?: ChannelSetupAdapter;
 }): { cfg: OpenClawConfig; restore: (cfg: OpenClawConfig) => OpenClawConfig } {
   const accountId = normalizeAccountId(params.accountId);
   const initialChannel = getChannelSection(params.cfg, params.channelKey);
@@ -60,6 +63,7 @@ function createWizardAccountScope(params: {
   const cfg = moveSingleAccountChannelSectionToDefaultAccount({
     cfg: params.cfg,
     channelKey: params.channelKey,
+    setupSurface: params.setupSurface,
   });
   const channel = getChannelSection(cfg, params.channelKey);
   const previousDefaultAccount = channel.defaultAccount;
@@ -139,20 +143,28 @@ function applySetupInput(params: {
   accountId: string;
   input: ChannelSetupInput;
 }) {
-  const setup = params.plugin.setup;
+  const setup = resolveChannelSetupExecutionAdapter(params.plugin);
   if (!setup?.applyAccountConfig) {
     throw new Error(`${params.plugin.id} does not support setup`);
+  }
+  let input: unknown = params.input;
+  if (params.plugin.setupContract) {
+    const parsed = params.plugin.setupContract.parseInput(input);
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    input = parsed.value;
   }
   const resolvedAccountId =
     setup.resolveAccountId?.({
       cfg: params.cfg,
       accountId: params.accountId,
-      input: params.input,
+      input,
     }) ?? params.accountId;
   const validationError = setup.validateInput?.({
     cfg: params.cfg,
     accountId: resolvedAccountId,
-    input: params.input,
+    input,
   });
   if (validationError) {
     throw new Error(validationError);
@@ -160,7 +172,7 @@ function applySetupInput(params: {
   let next = setup.applyAccountConfig({
     cfg: params.cfg,
     accountId: resolvedAccountId,
-    input: params.input,
+    input,
   });
   if (params.input.name?.trim() && setup.applyAccountName) {
     next = setup.applyAccountName({
@@ -267,11 +279,22 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             defaultAccountId,
           }));
 
-      const accountScope = createWizardAccountScope({
-        cfg,
-        channelKey: plugin.id,
-        accountId,
-      });
+      const channel = getChannelSection(cfg, plugin.id);
+      // Wizards that explicitly own account selection may use defaultAccount as a
+      // top-level routing label. Only inject temporary scope when generic selection
+      // owns the account or an accounts map proves that scoped storage is in use.
+      const shouldScopeAccount =
+        wizard.resolveShouldPromptAccountIds === undefined ||
+        resolvedShouldPromptAccountIds ||
+        channel.accounts !== undefined;
+      const accountScope = shouldScopeAccount
+        ? createWizardAccountScope({
+            cfg,
+            channelKey: plugin.id,
+            accountId,
+            setupSurface: plugin.setup,
+          })
+        : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;
       let credentialValues = collectCredentialValues({
         wizard,
