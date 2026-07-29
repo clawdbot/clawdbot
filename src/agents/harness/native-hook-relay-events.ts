@@ -5,10 +5,7 @@ import {
 import { getGlobalHookRunnerRegistry } from "../../plugins/hook-runner-global-state.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { getToolHookMatcherScope } from "../../plugins/hooks.js";
-import {
-  buildCodexNativeToolMatcher,
-  mergePluginToolMatcherScopes,
-} from "../../plugins/tool-hook-matcher.js";
+import { mergePluginToolMatcherScopes } from "../../plugins/tool-hook-matcher.js";
 import { getTrustedToolPolicyMatcherScope } from "../../plugins/trusted-tool-policy.js";
 import {
   cancelDeferredPluginToolApproval,
@@ -78,7 +75,7 @@ export function nativeHookRelayEventHasLocalWork(
 export function nativeHookRelayEventToolMatcher(
   registration: ActiveNativeHookRelayRegistration,
   event: NativeHookRelayEvent,
-): string | undefined {
+): readonly string[] | undefined {
   if (event === "pre_tool_use") {
     if (nativePreToolUseMayRunLoopDetection(registration)) {
       return undefined;
@@ -86,20 +83,18 @@ export function nativeHookRelayEventToolMatcher(
     // Relay selection and policy execution must read the same composed registry
     // so active, pinned, and isolated plugin sources cannot diverge.
     const policyRegistry = getGlobalHookRunnerRegistry();
-    return buildCodexNativeToolMatcher(
-      mergePluginToolMatcherScopes([
-        getGlobalToolHookMatcherScope("before_tool_call"),
-        getTrustedToolPolicyMatcherScope(policyRegistry),
-      ]),
-    );
+    const scope = mergePluginToolMatcherScopes([
+      getGlobalToolHookMatcherScope("before_tool_call"),
+      getTrustedToolPolicyMatcherScope(policyRegistry),
+    ]);
+    return scope?.matchAll ? undefined : scope?.toolNames;
   }
   if (event === "post_tool_use") {
-    return buildCodexNativeToolMatcher(
-      mergePluginToolMatcherScopes([
-        getGlobalToolHookMatcherScope("after_tool_call"),
-        getAgentToolResultMiddlewareMatcherScope("codex"),
-      ]),
-    );
+    const scope = mergePluginToolMatcherScopes([
+      getGlobalToolHookMatcherScope("after_tool_call"),
+      getAgentToolResultMiddlewareMatcherScope("codex"),
+    ]);
+    return scope?.matchAll ? undefined : scope?.toolNames;
   }
   return undefined;
 }

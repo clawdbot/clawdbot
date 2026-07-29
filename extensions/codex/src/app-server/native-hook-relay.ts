@@ -42,6 +42,12 @@ const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 
+const CODEX_HOOK_MATCHER_NAMES_BY_OPENCLAW_TOOL_ID: Readonly<Record<string, readonly string[]>> = {
+  exec: ["Bash", "exec", "exec_command"],
+  apply_patch: ["apply_patch", "Write", "Edit"],
+  spawn_agent: ["spawn_agent", "Agent"],
+};
+
 type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
 
 export type CodexNativePreToolUseFailure = {
@@ -293,7 +299,9 @@ export function buildCodexNativeHookRelayConfig(params: {
     const command = params.relay.commandForEvent(event, {
       timeoutMs: resolveCodexNativeHookRelayCommandTimeoutMs(timeout),
     });
-    const matcher = selectedNoopPreToolUse ? undefined : params.relay.toolMatcherForEvent(event);
+    const matcher = selectedNoopPreToolUse
+      ? undefined
+      : buildCodexNativeToolMatcher(params.relay.toolMatcherForEvent(event));
     config[`hooks.${codexEvent}`] = [
       {
         ...(matcher ? { matcher } : {}),
@@ -352,6 +360,38 @@ function resolveCodexNativeHookRelayCommandTimeoutMs(hookTimeoutSec: number | un
     Math.max(CODEX_NATIVE_HOOK_RELAY_COMMAND_MIN_PARENT_MARGIN_MS, Math.floor(parentTimeoutMs / 5)),
   );
   return Math.max(1, parentTimeoutMs - parentMarginMs);
+}
+
+function buildCodexNativeToolMatcher(toolNames: readonly string[] | undefined): string | undefined {
+  if (toolNames === undefined) {
+    return undefined;
+  }
+  if (toolNames.length === 0) {
+    throw new TypeError("Codex native hook matcher requires at least one tool name");
+  }
+  const nativeNames = new Set<string>();
+  let hasCustomToolName = false;
+  for (const toolName of toolNames) {
+    const canonicalToolName = toolName.trim();
+    if (!canonicalToolName || canonicalToolName === "*") {
+      throw new TypeError("Codex native hook matcher requires canonical OpenClaw tool ids");
+    }
+    const nativeAliases = CODEX_HOOK_MATCHER_NAMES_BY_OPENCLAW_TOOL_ID[canonicalToolName];
+    if (!nativeAliases) {
+      hasCustomToolName = true;
+    }
+    for (const nativeName of nativeAliases ?? [canonicalToolName]) {
+      nativeNames.add(nativeName);
+    }
+  }
+  const sortedNames = Array.from(nativeNames).toSorted();
+  if (!hasCustomToolName && sortedNames.every((toolName) => /^[A-Za-z0-9_]+$/.test(toolName))) {
+    return sortedNames.join("|");
+  }
+  const escapedNames = sortedNames.map((toolName) =>
+    toolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  );
+  return `(?i)^(?:${escapedNames.join("|")})$`;
 }
 
 function codexCommandHookTrustedHash(params: {
