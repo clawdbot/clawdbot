@@ -319,6 +319,22 @@ export function registerSlackMessageEvents(params: {
         if (channelType === "im" || channelType === "mpim") {
           return;
         }
+        // Modern Slack group DMs (mpims) use C-prefixed channel ids and
+        // app_mention events carry no channel_type, so the prefix inference
+        // above reports "channel" for them. Confirm against the event-carried
+        // type cache (fed by message.mpim) and, on a miss, conversations.info
+        // before treating this as a channel mention — otherwise group-DM
+        // mentions run down the channel path and are double-handled alongside
+        // the paired message.mpim event.
+        if (channelType === "channel" && !mention.channel_type) {
+          const scope = eventScope ?? undefined;
+          const knownType =
+            ctx.recallSlackChannelType(mention.channel, scope) ??
+            (await ctx.resolveChannelName(mention.channel, scope)).type;
+          if (knownType === "mpim") {
+            return;
+          }
+        }
 
         // Emit a per-inbound receipt before dispatch so a silently-dropped mention
         // (e.g. router consumes it without a tool call) still leaves journal evidence,
