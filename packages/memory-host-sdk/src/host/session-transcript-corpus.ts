@@ -189,13 +189,11 @@ function resolveSessionStoreTranscriptCorpusSource(
         ? { sessionFile: candidate, sessionId, transcriptSource: "file" }
         : null;
     }
-    const canonicalAgentsRoot = path.dirname(
-      path.dirname(resolveSessionTranscriptsDirForAgent(agentId)),
+    const canonicalAgentsRoot = normalizeRealComparablePath(
+      path.dirname(path.dirname(resolveSessionTranscriptsDirForAgent(agentId))),
     );
-    const relativeAgentPath = path.relative(
-      normalizeComparablePath(canonicalAgentsRoot),
-      normalizeComparablePath(sessionFile),
-    );
+    const canonicalSessionFile = normalizeRealComparablePath(sessionFile);
+    const relativeAgentPath = path.relative(canonicalAgentsRoot, canonicalSessionFile);
     const isUnderCanonicalAgentsRoot =
       relativeAgentPath !== ".." &&
       !relativeAgentPath.startsWith(`..${path.sep}`) &&
@@ -206,9 +204,9 @@ function resolveSessionStoreTranscriptCorpusSource(
     const rootAgentId = rootAgentSegment
       ? extractAgentIdFromSessionsDir(path.join(canonicalAgentsRoot, rootAgentSegment, "sessions"))
       : null;
-    const pathAgentId = extractAgentIdFromSessionPath(sessionFile);
-    // Every path below agents/<id> belongs to that agent, including custom
-    // stores; accepting a sibling custom path would leak its transcript.
+    const pathAgentId = extractAgentIdFromSessionPath(canonicalSessionFile);
+    // Authorize real paths so a junction below one agent cannot redirect
+    // indexing into a sibling agent's canonical or custom transcript store.
     if (
       (isUnderCanonicalAgentsRoot &&
         (!rootAgentId || normalizeAgentId(rootAgentId) !== normalizeAgentId(agentId))) ||
@@ -216,7 +214,7 @@ function resolveSessionStoreTranscriptCorpusSource(
     ) {
       return null;
     }
-    return normalizeRealComparablePath(resolved) === normalizeRealComparablePath(sessionFile)
+    return normalizeRealComparablePath(resolved) === canonicalSessionFile
       ? { sessionFile, sessionId, transcriptSource: "file" }
       : null;
   } catch {

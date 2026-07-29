@@ -237,6 +237,44 @@ describe("memory session directory ownership", () => {
     }
   });
 
+  it("never indexes another agent's transcript through a linked sessions directory", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+      const otherSessionsDir = path.join(tmpDir, "agents", "ops", "sessions");
+      const otherSessionFile = path.join(otherSessionsDir, "private.jsonl");
+      const linkedDir = path.join(sessionsDir, "linked");
+      const linkedSessionFile = path.join(linkedDir, "private.jsonl");
+      const sessionKey = "agent:main:chat:linked-cross-agent";
+      fsSync.mkdirSync(sessionsDir, { recursive: true });
+      fsSync.mkdirSync(otherSessionsDir, { recursive: true });
+      fsSync.writeFileSync(otherSessionFile, "");
+      fsSync.symlinkSync(otherSessionsDir, linkedDir, "dir");
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey, storePath: path.join(sessionsDir, "sessions.json") },
+        { sessionFile: linkedSessionFile, sessionId: "private", updatedAt: 1 },
+      );
+
+      const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          agentId: "main",
+          sessionFile: sessionKey,
+          sessionId: "private",
+          transcriptSource: "sqlite",
+        }),
+      );
+      expect(entries).not.toContainEqual(
+        expect.objectContaining({ sessionFile: otherSessionFile }),
+      );
+      expect(entries).not.toContainEqual(
+        expect.objectContaining({ sessionFile: linkedSessionFile }),
+      );
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it("never ingests a nested transcript from another agent's sessions directory", async () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
