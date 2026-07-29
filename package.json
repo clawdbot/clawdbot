@@ -1709,6 +1709,7 @@
     "test:docker:agents-delete-shared-workspace": "bash scripts/e2e/agents-delete-shared-workspace-docker.sh",
     "test:docker:all": "node scripts/test-docker-all.mjs",
     "test:docker:browser-cdp-snapshot": "bash scripts/e2e/browser-cdp-snapshot-docker.sh",
+    "test:docker:sandbox-browser-sidecar": "bash scripts/e2e/sandbox-browser-sidecar-docker.sh",
     "test:docker:bundled-plugin-install-uninstall": "bash scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
     "test:docker:commitments-safety": "bash scripts/e2e/commitments-safety-docker.sh",
