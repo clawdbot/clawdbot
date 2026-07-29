@@ -93,7 +93,6 @@ describe("proof: mcp-schema-guard (#106665)", () => {
         healthyA!.result != null && malformed!.result === undefined && healthyB!.result != null,
     };
 
-    // eslint-disable-next-line no-console
     console.log(JSON.stringify(proof, null, 2));
 
     expect(healthyA!.result).not.toBeNull();
