@@ -1799,8 +1799,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       }
       if (!pendingDiffers) {
         const committedSessionKey = routeState.committedSessionKey;
-        const committedSessionDeleted = (routeContext.sessions?.state.deletedSessions ?? []).some(
-          ({ key, agentId }) =>
+        const committedSessionDeleted =
+          committedSessionKey !== undefined &&
+          (routeContext.sessions?.state.deletedSessions ?? []).some(({ key, agentId }) =>
             uiSessionEventMatches(
               {
                 agentsList: routeContext.agents.state.agentsList,
@@ -1810,7 +1811,7 @@ class OpenClawShell extends OpenClawLightDomElement {
               key,
               agentId,
             ),
-        );
+          );
         if (committedSessionDeleted) {
           // An older route can commit after deletion recovery has started.
           // Never let it persist or reselect the session we just retired.
