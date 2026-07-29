@@ -572,6 +572,7 @@ describe("qa cli runtime", () => {
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.scenarioIds).toContain("channel-chat-baseline");
     expect(suiteArgs.scenarioIds).toContain("thread-follow-up");
+    expect(suiteArgs.expandScenarioChannels).toBe(true);
     expect(suiteArgs.adapterFactories).toBe(
       listLiveTransportQaAdapterFactories.mock.results[0]?.value,
     );
@@ -627,7 +628,7 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.scenarioIds).not.toContain("control-ui-qa-channel-image-roundtrip");
   });
 
-  it("rejects explicit profile selections with an incompatible scenario", async () => {
+  it("rejects explicit profile selections outside the profile taxonomy", async () => {
     await expect(
       runQaProfileCommand({
         repoRoot: "/tmp/openclaw-repo",
@@ -635,7 +636,7 @@ describe("qa cli runtime", () => {
         scenarioIds: ["control-ui-qa-channel-image-roundtrip"],
       }),
     ).rejects.toThrow(
-      "qa run --qa-profile smoke-ci cannot run explicitly selected scenario(s): control-ui-qa-channel-image-roundtrip (channelDriver=qa-channel).",
+      "qa run did not find taxonomy scenarios for --qa-profile smoke-ci --scenario control-ui-qa-channel-image-roundtrip.",
     );
 
     expect(runQaSuite).not.toHaveBeenCalled();
@@ -991,28 +992,61 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("passes runtime-pair suite selection through to the host runner", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "mock-openai",
-      scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: "openclaw,codex",
-    });
+  it.each([
+    ["openclaw,codex", ["openclaw", "codex"]],
+    ["codex,openclaw", ["codex", "openclaw"]],
+    [" codex , pi ", ["codex", "openclaw"]],
+  ] as const)(
+    "passes the requested %s runtime order through to the host runner",
+    async (runtimePair, expectedRuntimePair) => {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair,
+      });
 
-    expect(runQaSuite).toHaveBeenCalledWith({
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputDir: undefined,
-      transportId: "qa-channel",
-      channelDriver: undefined,
-      channelDriverSelection: undefined,
-      providerMode: "mock-openai",
-      primaryModel: undefined,
-      alternateModel: undefined,
-      fastMode: undefined,
-      scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: ["openclaw", "codex"],
-    });
-  });
+      expect(runQaSuite).toHaveBeenCalledWith({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        outputDir: undefined,
+        transportId: "qa-channel",
+        channelDriver: undefined,
+        channelDriverSelection: undefined,
+        providerMode: "mock-openai",
+        primaryModel: undefined,
+        alternateModel: undefined,
+        fastMode: undefined,
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair: [...expectedRuntimePair],
+      });
+    },
+  );
+
+  it.each([
+    ["openclaw,openclaw", /different runtimes/i],
+    ["codex,codex", /different runtimes/i],
+    ["pi,openclaw", /different runtimes/i],
+    ["openclaw,,codex", /exactly two runtimes/i],
+    ["openclaw,codex,", /exactly two runtimes/i],
+    [",openclaw,codex", /exactly two runtimes/i],
+    ["openclaw", /exactly two runtimes/i],
+    ["openclaw,codex,openclaw", /exactly two runtimes/i],
+  ] as const)(
+    "rejects the invalid %s runtime pair before starting a harness",
+    async (runtimePair, expectedError) => {
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          providerMode: "mock-openai",
+          scenarioIds: ["approval-turn-tool-followthrough"],
+          runtimePair,
+        }),
+      ).rejects.toThrow(expectedError);
+
+      expect(runQaSuite).not.toHaveBeenCalled();
+      expect(runQaMultipass).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects unknown runtime-pair ids at the CLI boundary", async () => {
     await expect(
@@ -2215,6 +2249,15 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("preserves the canonical runtime order for JSONL replay", async () => {
+    await expect(
+      runQaJsonlReplayCommand({
+        repoRoot: process.cwd(),
+        runtimePair: "codex,openclaw",
+      }),
+    ).rejects.toThrow('--runtime-pair for jsonl-replay must be "openclaw,codex".');
+  });
+
   it("keeps JSONL replay mock-only until real runtime cell replay is wired", async () => {
     await expect(
       runQaJsonlReplayCommand({
@@ -2464,23 +2507,29 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
-  it("passes runtime-pair suite selection through to the multipass runner", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      runner: "multipass",
-      providerMode: "mock-openai",
-      scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: "codex,openclaw",
-      allowFailures: true,
-    });
+  it.each([
+    ["openclaw,codex", ["openclaw", "codex"]],
+    ["codex,openclaw", ["codex", "openclaw"]],
+  ] as const)(
+    "passes the requested %s runtime order through to the multipass runner",
+    async (runtimePair, expectedRuntimePair) => {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+        providerMode: "mock-openai",
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair,
+        allowFailures: true,
+      });
 
-    expect(runQaMultipass).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        runtimePair: ["openclaw", "codex"],
-      }),
-    );
-  });
+      expect(runQaMultipass).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoRoot: path.resolve("/tmp/openclaw-repo"),
+          runtimePair: [...expectedRuntimePair],
+        }),
+      );
+    },
+  );
 
   it("passes live suite selection through to the multipass runner", async () => {
     await runQaSuiteCommand({

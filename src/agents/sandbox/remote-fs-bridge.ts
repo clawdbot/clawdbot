@@ -80,7 +80,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;
+    maxBytes?: number;
   }): Promise<Buffer> {
+    if (
+      params.maxBytes !== undefined &&
+      (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0)
+    ) {
+      throw new RangeError("Sandbox file read limit must be a non-negative safe integer.");
+    }
     const target = this.resolveTarget(params);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
     if (
@@ -96,6 +103,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         target.mountRootPath,
         path.posix.dirname(relativePath) === "." ? "" : path.posix.dirname(relativePath),
         path.posix.basename(relativePath),
+        ...(params.maxBytes === undefined ? [] : [String(params.maxBytes)]),
       ],
       signal: params.signal,
     });

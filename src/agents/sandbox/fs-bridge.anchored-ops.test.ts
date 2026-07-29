@@ -15,6 +15,7 @@ import {
   getDockerScript,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
+  mockedOpenRootFile,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
 
@@ -78,6 +79,71 @@ describe("sandbox fs bridge anchored ops", () => {
       await expect(bridge.readFile({ filePath: testCase.filePath })).resolves.toEqual(
         Buffer.from(testCase.contents),
       );
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { name: "empty files", contents: "", maxBytes: 0 },
+    { name: "files at the exact limit", contents: "hello", maxBytes: 5 },
+    {
+      name: "files spanning bounded read chunks",
+      contents: "x".repeat(64 * 1024 + 1),
+      maxBytes: 64 * 1024 + 1,
+    },
+  ])("reads $name through one pinned descriptor", async (testCase) => {
+    await withTempDir("openclaw-fs-bridge-bounded-read-", async (stateDir) => {
+      const { bridge } = await createSeededSandboxFsBridge(stateDir, {
+        rootContents: testCase.contents,
+      });
+
+      await expect(
+        bridge.readFile({ filePath: "from.txt", maxBytes: testCase.maxBytes }),
+      ).resolves.toEqual(Buffer.from(testCase.contents));
+      expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { name: "oversized files", maxBytes: 4, error: /exceeds 4 bytes/ },
+    { name: "negative limits", maxBytes: -1, error: /non-negative safe integer/ },
+    { name: "unsafe limits", maxBytes: Number.NaN, error: /non-negative safe integer/ },
+  ])("rejects $name without an unbounded read", async (testCase) => {
+    await withTempDir("openclaw-fs-bridge-bounded-reject-", async (stateDir) => {
+      const { bridge } = await createSeededSandboxFsBridge(stateDir, {
+        rootContents: "hello",
+      });
+
+      await expect(
+        bridge.readFile({ filePath: "from.txt", maxBytes: testCase.maxBytes }),
+      ).rejects.toThrow(testCase.error);
+      expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects files that grow after the sandbox descriptor is opened", async () => {
+    await withTempDir("openclaw-fs-bridge-bounded-growth-", async (stateDir) => {
+      const { bridge, workspaceDir } = await createSeededSandboxFsBridge(stateDir, {
+        rootContents: "hello",
+      });
+      const openRootFile = mockedOpenRootFile.getMockImplementation();
+      if (!openRootFile) {
+        throw new Error("expected the real sandbox root-file opener");
+      }
+      mockedOpenRootFile.mockImplementationOnce(async (params) => {
+        const opened = await openRootFile(params);
+        if (opened.ok) {
+          await fs.appendFile(path.join(workspaceDir, "from.txt"), "!");
+        }
+        return opened;
+      });
+
+      await expect(bridge.readFile({ filePath: "from.txt", maxBytes: 5 })).rejects.toThrow(
+        /exceeds 5 bytes/,
+      );
+      expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
       expect(mockedExecDockerRaw).not.toHaveBeenCalled();
     });
   });

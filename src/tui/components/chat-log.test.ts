@@ -342,255 +342,45 @@ describe("ChatLog", () => {
     expect(chatLog.hasVisibleBtw()).toBe(false);
   });
 
-  it("preserves pending user messages across history rebuilds", () => {
+  it("updates an existing canonical user component without appending another row", () => {
     const chatLog = new ChatLog(40);
 
-    chatLog.addPendingUser("run-1", "queued hello");
-    chatLog.clearAll({ preservePendingUsers: true });
-    chatLog.addSystem("session agent:main:main");
-    chatLog.restorePendingUsers();
+    chatLog.addUser("Original authoritative prompt.", { messageId: "shared-user" });
+    chatLog.addUser("Updated authoritative prompt.", { messageId: "shared-user" });
 
-    const rendered = chatLog.render(120).join("\n");
-    expect(rendered).toContain("queued hello");
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children).toHaveLength(1);
+    expect(rendered).toContain("Updated authoritative prompt.");
+    expect(rendered).not.toContain("Original authoritative prompt.");
+  });
+
+  it("clears user and pending component references before the next projected session", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addLiveUser("Previous session prompt.", { messageId: "previous-user" });
+    chatLog.addPendingUser("previous-run", "Previous pending prompt.");
+    chatLog.clearAll();
+    chatLog.addUser("Selected session prompt.", { messageId: "selected-user" });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Selected session prompt.");
+    expect(rendered).not.toContain("Previous session prompt.");
+    expect(rendered).not.toContain("Previous pending prompt.");
+    expect(chatLog.countPendingUsers()).toBe(0);
+    expect(chatLog.children).toHaveLength(1);
+  });
+
+  it("updates a pending viewport component in place for the same run", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "Original pending prompt.");
+    chatLog.addPendingUser("run-1", "Updated pending prompt.");
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children).toHaveLength(1);
     expect(chatLog.countPendingUsers()).toBe(1);
-  });
-
-  it("preserves live users when same-session history is rebuilt from a stale snapshot", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("Sent from the other client.", {
-      messageId: "shared-user",
-      runId: "shared-run",
-    });
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.addUser("Already persisted in history.", { messageId: "history-user" });
-    chatLog.restoreLiveUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("Sent from the other client.");
-    expect(rendered.indexOf("Already persisted in history.")).toBeLessThan(
-      rendered.indexOf("Sent from the other client."),
-    );
-    expect(chatLog.children).toHaveLength(2);
-  });
-
-  it("does not resurrect historical users omitted by the authoritative history snapshot", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addUser("Deleted historical prompt.", {
-      messageId: "deleted-history-user",
-      messageSeq: 1,
-    });
-    chatLog.addLiveUser("New authoritative live prompt.", {
-      messageId: "live-user",
-      messageSeq: 3,
-    });
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.addUser("Current authoritative history.", {
-      messageId: "current-history-user",
-      messageSeq: 2,
-    });
-    chatLog.restoreLiveUsers(4);
-    chatLog.finalizeAssistant("Current authoritative reply.");
-    chatLog.restoreLiveUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).not.toContain("Deleted historical prompt.");
-    expect(rendered.match(/New authoritative live prompt\./g)).toHaveLength(1);
-    expect(rendered.indexOf("New authoritative live prompt.")).toBeLessThan(
-      rendered.indexOf("Current authoritative reply."),
-    );
-  });
-
-  it("stops restoring live users after authoritative history adopts their identity", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("Adopted live prompt.", {
-      messageId: "adopted-user",
-      messageSeq: 1,
-    });
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.addUser("Adopted live prompt.", {
-      messageId: "adopted-user",
-      messageSeq: 1,
-    });
-    chatLog.restoreLiveUsers();
-
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.addUser("Replacement branch prompt.", {
-      messageId: "replacement-user",
-      messageSeq: 2,
-    });
-    chatLog.restoreLiveUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("Replacement branch prompt.");
-    expect(rendered).not.toContain("Adopted live prompt.");
-  });
-
-  it("restores a missing canonical user before its higher-sequence persisted reply", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("Authoritative shared prompt.", {
-      messageId: "shared-user",
-      messageSeq: 1,
-      runId: "shared-run",
-    });
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.addSystem("session agent:main:main");
-    chatLog.restoreLiveUsers(2);
-    chatLog.finalizeAssistant("Already persisted reply.");
-    chatLog.restoreLiveUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered.match(/Authoritative shared prompt\./g)).toHaveLength(1);
-    expect(rendered.indexOf("Authoritative shared prompt.")).toBeLessThan(
-      rendered.indexOf("Already persisted reply."),
-    );
-  });
-
-  it("restores live canonical users only before higher-sequence history rows", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("First missing prompt.", {
-      messageId: "shared-user-2",
-      messageSeq: 2,
-    });
-    chatLog.addLiveUser("Second missing prompt.", {
-      messageId: "shared-user-4",
-      messageSeq: 4,
-    });
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.addUser("First persisted prompt.", {
-      messageId: "history-user-1",
-      messageSeq: 1,
-    });
-    chatLog.restoreLiveUsers(3);
-    chatLog.addUser("Third persisted prompt.", {
-      messageId: "history-user-3",
-      messageSeq: 3,
-    });
-    chatLog.restoreLiveUsers(5);
-    chatLog.finalizeAssistant("Fifth persisted reply.");
-    chatLog.restoreLiveUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    const messages = [
-      "First persisted prompt.",
-      "First missing prompt.",
-      "Third persisted prompt.",
-      "Second missing prompt.",
-      "Fifth persisted reply.",
-    ];
-    let previousMessage: string | undefined;
-    for (const message of messages) {
-      if (previousMessage !== undefined) {
-        expect(rendered.indexOf(previousMessage)).toBeLessThan(rendered.indexOf(message));
-      }
-      previousMessage = message;
-    }
-  });
-
-  it("does not restore a live user already included in rebuilt authoritative history", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("Original live prompt.", {
-      messageId: "shared-user",
-      runId: "shared-run",
-    });
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.addUser("Authoritative persisted prompt.", { messageId: "shared-user" });
-    chatLog.restoreLiveUsers();
-
-    let rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("Authoritative persisted prompt.");
-    expect(rendered).not.toContain("Original live prompt.");
-    expect(chatLog.children).toHaveLength(1);
-
-    chatLog.addLiveUser("Updated persisted prompt.", {
-      messageId: "shared-user",
-      runId: "shared-run",
-    });
-
-    rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("Updated persisted prompt.");
-    expect(rendered).not.toContain("Authoritative persisted prompt.");
-    expect(chatLog.children).toHaveLength(1);
-  });
-
-  it("restores multiple live users in canonical event order", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("First shared prompt.", {
-      messageId: "shared-user-1",
-      runId: "shared-run-1",
-    });
-    chatLog.addLiveUser("Second shared prompt.", {
-      messageId: "shared-user-2",
-      runId: "shared-run-2",
-    });
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.addUser("Already persisted in history.", { messageId: "history-user" });
-    chatLog.restoreLiveUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered.indexOf("Already persisted in history.")).toBeLessThan(
-      rendered.indexOf("First shared prompt."),
-    );
-    expect(rendered.indexOf("First shared prompt.")).toBeLessThan(
-      rendered.indexOf("Second shared prompt."),
-    );
-    expect(chatLog.children).toHaveLength(3);
-  });
-
-  it("restores both live and pending users across a same-session history rebuild", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("Sent from the other client.", {
-      messageId: "shared-user",
-      runId: "shared-run",
-    });
-    chatLog.addPendingUser("local-run", "My pending prompt.");
-    chatLog.clearAll({ preserveLiveUsers: true, preservePendingUsers: true });
-    chatLog.addUser("Already persisted in history.", { messageId: "history-user" });
-    chatLog.restoreLiveUsers();
-    chatLog.restorePendingUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("Sent from the other client.");
-    expect(rendered).toContain("My pending prompt.");
-    expect(chatLog.countPendingUsers()).toBe(1);
-    expect(chatLog.children).toHaveLength(3);
-  });
-
-  it.each([
-    { clear: "session switch", options: undefined },
-    { clear: "pending-only rebuild", options: { preservePendingUsers: true } },
-  ])("does not leak live users after a $clear", ({ options }) => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("A previous session's prompt.", {
-      messageId: "previous-session-user",
-      runId: "previous-session-run",
-    });
-    chatLog.clearAll(options);
-    chatLog.addUser("Current session history.", { messageId: "current-session-user" });
-    chatLog.restoreLiveUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("Current session history.");
-    expect(rendered).not.toContain("A previous session's prompt.");
-    expect(chatLog.children).toHaveLength(1);
-  });
-
-  it("does not append the same pending component twice when it is already mounted", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "queued hello");
-    chatLog.restorePendingUsers();
-
-    expect(chatLog.children.length).toBe(1);
-    expect(chatLog.render(120).join("\n")).toContain("queued hello");
+    expect(rendered).toContain("Updated pending prompt.");
+    expect(rendered).not.toContain("Original pending prompt.");
   });
 
   it("inserts another client's persisted prompt ahead of an already-streaming reply", () => {
@@ -1041,97 +831,6 @@ describe("ChatLog", () => {
     },
   );
 
-  it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
-    const chatLog = new ChatLog(40);
-    chatLog.addPendingUser("shared-run", "Persisted prompt.");
-    chatLog.updateAssistant("Already streaming.", "shared-run");
-
-    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
-    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("Persisted prompt.");
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "UserMessageComponent",
-      "AssistantMessageComponent",
-    ]);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("preserves a different pending prompt when another client uses the same run", () => {
-    const chatLog = new ChatLog(40);
-    chatLog.addPendingUser("shared-run", "My local steering prompt.");
-    chatLog.updateAssistant("Already streaming.", "shared-run");
-
-    chatLog.addLiveUser("Another client's persisted prompt.", {
-      messageId: "shared-remote-user",
-      runId: "shared-run",
-    });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("My local steering prompt.");
-    expect(rendered).toContain("Another client's persisted prompt.");
-    expect(rendered.indexOf("Another client's persisted prompt.")).toBeLessThan(
-      rendered.indexOf("Already streaming."),
-    );
-    expect(chatLog.countPendingUsers()).toBe(1);
-  });
-
-  it("deduplicates a replayed live prompt already loaded from authoritative history", () => {
-    const chatLog = new ChatLog(40);
-    chatLog.addUser("Loaded from history.", { messageId: "history-user" });
-
-    chatLog.addLiveUser("Loaded from history.", {
-      messageId: "history-user",
-      runId: "history-run",
-    });
-
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "UserMessageComponent",
-    ]);
-    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Loaded from history.");
-  });
-
-  it("re-keys a pending user in place without moving its position", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("local", "queued hello", 1_000);
-    chatLog.startAssistant("hi there", "r-accepted");
-
-    expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
-
-    const rendered = chatLog.render(120).join("\n");
-    expect(rendered.indexOf("queued hello")).toBeLessThan(rendered.indexOf("hi there"));
-    // The row is now addressable by the gateway-assigned runId.
-    expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("reconciles pending users against rebuilt history using timestamps", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "queued hello", 2_000);
-
-    expect(
-      chatLog.reconcilePendingUsers([
-        { text: "queued hello", timestamp: 2_100 },
-        { text: "older", timestamp: 1_000 },
-      ]),
-    ).toEqual(["run-1"]);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("reconciles pending users when the gateway clock is slightly behind the client", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "queued hello", 65_000);
-
-    expect(chatLog.reconcilePendingUsers([{ text: "queued hello", timestamp: 20_000 }])).toEqual([
-      "run-1",
-    ]);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
   it("dismisses a pending system notice by runId", () => {
     const chatLog = new ChatLog(40);
 
@@ -1157,16 +856,5 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("first notice");
     expect(rendered).toContain("second notice");
     expect(chatLog.children.length).toBe(1);
-  });
-
-  it("does not hide a new repeated prompt when only older history matches", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "continue", 5_000);
-
-    expect(chatLog.reconcilePendingUsers([{ text: "continue", timestamp: -56_000 }])).toStrictEqual(
-      [],
-    );
-    expect(chatLog.countPendingUsers()).toBe(1);
   });
 });

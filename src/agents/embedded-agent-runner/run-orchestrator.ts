@@ -31,6 +31,7 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
+import { resolveProjectKey } from "../project-memory-scope.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -65,6 +66,7 @@ import { createEmbeddedRunProgressController } from "./run/progress-controller.j
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 import { assertAgentHarnessRunAdmission, backfillSessionKey } from "./run/session-bootstrap.js";
+import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
@@ -226,14 +228,22 @@ async function runEmbeddedAgentInternal(
         });
         params = rebound.runParams;
         const workspaceResolution = rebound.workspaceResolution;
+        const repoRoot =
+          resolveSystemPromptRepoRoot({
+            config: rebound.runParams.config,
+            workspaceDir: workspaceResolution.workspaceDir,
+            cwd: rebound.runParams.cwd,
+          }) ?? null;
+        const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
+        const activeProjectKeys = prepareEmbeddedSessionActiveProjectKeys(
+          params.sessionId,
+          projectKey,
+        );
         const preparedModelRuntime = Object.freeze({
           ...preparedModelRuntimeOwnerSnapshot,
-          repoRoot:
-            resolveSystemPromptRepoRoot({
-              config: rebound.runParams.config,
-              workspaceDir: workspaceResolution.workspaceDir,
-              cwd: rebound.runParams.cwd,
-            }) ?? null,
+          repoRoot,
+          projectKey,
+          activeProjectKeys,
         });
         const preparedAgentId = workspaceResolution.agentId;
         const resolvedWorkspace = workspaceResolution.workspaceDir;

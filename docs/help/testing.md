@@ -174,10 +174,7 @@ checks keep exhaustive live/Docker soak behind `run_release_soak=true`; the
 from manual dispatch with the mock parity lane, live Matrix lane,
 Convex-managed live Telegram lane, and Convex-managed live Discord lane as
 parallel jobs. Scheduled QA and release checks run the catalog-derived Matrix
-selection through the shared live adapter. The Matrix CLI and workflow have no
-curated profiles: scenario channel eligibility defines default membership,
-explicit `--scenario` flags narrow local runs, and CI fans the same selection
-across deterministic shards. `OpenClaw Release Checks` runs parity plus the
+selection through the shared live adapter. `OpenClaw Release Checks` runs parity plus the
 reusable Matrix live-adapter lane and Telegram lane before release approval. Release
 transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
 avoid normal provider-plugin startup. These live transport gateways

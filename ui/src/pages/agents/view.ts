@@ -133,6 +133,7 @@ type AgentsProps = {
   onChannelsRefresh: () => void;
   onOpenMemoryImport?: () => void;
   onOpenMemorySettings?: () => void;
+  onOpenAgentDefaults: () => void;
   onCronRefresh: () => void;
   onCronRunNow: (jobId: string) => void;
   onSkillsFilterChange: (next: string) => void;
@@ -235,6 +236,13 @@ export function renderAgents(props: AgentsProps) {
           : nothing}
       </section>
       <section class="agents-main">
+        <div class="settings-group">
+          ${renderSettingsNavRow({
+            title: t("agents.defaults.title"),
+            description: t("agents.defaults.description"),
+            onClick: props.onOpenAgentDefaults,
+          })}
+        </div>
         ${!selectedAgent
           ? renderSettingsSection(
               { title: t("agents.selectTitle") },

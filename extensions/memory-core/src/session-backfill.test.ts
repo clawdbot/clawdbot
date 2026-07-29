@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import {
@@ -56,8 +55,7 @@ async function seedCanonicalTranscript(
     ...messages.map((message) => Date.parse(message.timestamp)),
   );
   await fs.mkdir(sessionsDir, { recursive: true });
-  const sessionFile = formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
-  const entry = { sessionFile, sessionId, updatedAt };
+  const entry = { sessionId, updatedAt };
   await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
   for (const message of messages) {
     await appendSessionTranscriptMessageByIdentity({

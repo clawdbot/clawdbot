@@ -1215,7 +1215,7 @@ function createRawOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const { response, release } = await fetchWithSsrFGuard({
+        const { response, release, refreshTimeout } = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
             method: "POST",
@@ -1374,6 +1374,9 @@ function createRawOllamaStreamFn(
 
           for await (const chunk of parseNdjsonStream(reader)) {
             throwIfOllamaStreamAborted(options?.signal);
+            // Keep guarded timeouts tied to stream progress so slow remote
+            // inference is not aborted while Ollama is still emitting tokens.
+            refreshTimeout?.();
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta && shouldEmitThinking) {
               if (!streamStarted) {

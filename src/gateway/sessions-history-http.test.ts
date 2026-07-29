@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -16,6 +16,7 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { SessionHistorySseState } from "./session-history-state.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -897,6 +898,116 @@ describe("session history HTTP endpoints", () => {
         id: appendedId,
       });
     });
+  });
+
+  test("bounds retained SSE history without truncating full history or live updates", async () => {
+    const retainedMessageLimit = 1_000;
+    const initialMessageCount = retainedMessageLimit + 2;
+    const sessionKey = "agent:main:main";
+    const { storePath } = await seedSession();
+    await replaceTranscriptEvents(
+      {
+        agentId: AGENT_ID,
+        sessionId: "sess-main",
+        sessionKey,
+        storePath,
+      },
+      [
+        { type: "session", version: 1, id: "sess-main" },
+        ...Array.from({ length: initialMessageCount }, (_, index) => ({
+          id: `history-message-${index + 1}`,
+          parentId: index === 0 ? null : `history-message-${index}`,
+          message: makeTranscriptAssistantMessage({ text: `history message ${index + 1}` }),
+        })),
+      ],
+    );
+
+    const snapshotSpy = vi.spyOn(SessionHistorySseState.prototype, "snapshot");
+    try {
+      await withGatewayHarness(async (harness) => {
+        const stream = await openSessionHistorySse(harness.port, sessionKey);
+        try {
+          const initialEvent = await readSseEvent(stream.reader, stream.streamState);
+          expect(initialEvent.event).toBe("history");
+          const initialMessages = (initialEvent.data as SessionHistoryBody).messages ?? [];
+          expect(initialMessages).toHaveLength(initialMessageCount);
+          expect(initialMessages[0]?.content?.[0]?.text).toBe("history message 1");
+
+          const retained = snapshotSpy.mock.results.at(-1)?.value as
+            | { messages?: SessionHistoryMessage[] }
+            | undefined;
+          expect(retained?.messages).toHaveLength(retainedMessageLimit);
+          expect(retained?.messages?.[0]?.content?.[0]?.text).toBe("history message 3");
+
+          const cursorStream = await openSessionHistorySse(harness.port, sessionKey, {
+            query: `?cursor=${initialMessageCount + 1}`,
+          });
+          try {
+            const cursorEvent = await readSseEvent(cursorStream.reader, cursorStream.streamState);
+            expect(cursorEvent.event).toBe("history");
+            expect((cursorEvent.data as SessionHistoryBody).messages).toHaveLength(
+              initialMessageCount,
+            );
+            const cursorSnapshot = snapshotSpy.mock.results.at(-1)?.value as
+              | { messages?: SessionHistoryMessage[] }
+              | undefined;
+            expect(cursorSnapshot?.messages).toHaveLength(retainedMessageLimit);
+            expect(cursorSnapshot?.messages?.[0]?.content?.[0]?.text).toBe("history message 3");
+
+            const messageId = await appendVisibleAssistantMessage({
+              sessionKey,
+              text: "live history message",
+              storePath,
+            });
+            const lastSequence = initialMessages.at(-1)?.["__openclaw"]?.seq;
+            expect(lastSequence).toEqual(expect.any(Number));
+            await expectMessageEventMatch(stream, {
+              text: "live history message",
+              seq: (lastSequence ?? 0) + 1,
+              id: messageId,
+            });
+
+            const liveRetained = snapshotSpy.mock.results.findLast((result) => {
+              const snapshot = result.value as { messages?: SessionHistoryMessage[] } | undefined;
+              return snapshot?.messages?.at(-1)?.content?.[0]?.text === "live history message";
+            })?.value as { messages?: SessionHistoryMessage[] } | undefined;
+            expect(liveRetained?.messages).toHaveLength(retainedMessageLimit);
+            expect(liveRetained?.messages?.at(-1)?.content?.[0]?.text).toBe("live history message");
+
+            const refreshedCursorEvent = await readSseEvent(
+              cursorStream.reader,
+              cursorStream.streamState,
+            );
+            expect(refreshedCursorEvent.event).toBe("history");
+            const refreshedCursorMessages =
+              (refreshedCursorEvent.data as SessionHistoryBody).messages ?? [];
+            expect(refreshedCursorMessages).toHaveLength(initialMessageCount);
+            expect(refreshedCursorMessages[0]?.content?.[0]?.text).toBe("history message 1");
+
+            const refreshedCursorSnapshot = snapshotSpy.mock.results.at(-1)?.value as
+              | { messages?: SessionHistoryMessage[] }
+              | undefined;
+            expect(refreshedCursorSnapshot?.messages).toHaveLength(retainedMessageLimit);
+
+            const completeHistory = await vi.waitFor(
+              async () => await readSessionHistoryBody(harness.port, sessionKey),
+              { interval: 25, timeout: 5_000 },
+            );
+            expect(completeHistory.messages).toHaveLength(initialMessageCount + 1);
+            expect(completeHistory.messages?.[0]?.content?.[0]?.text).toBe("history message 1");
+            expect(completeHistory.messages?.at(-1)?.content?.[0]?.text).toBe(
+              "live history message",
+            );
+          } finally {
+            await cursorStream.reader.cancel();
+          }
+        } finally {
+          await stream.reader.cancel();
+        }
+      });
+    } finally {
+      snapshotSpy.mockRestore();
+    }
   });
 
   test("streams identity-only transcript updates over SSE", async () => {

@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دیکته"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"زنده"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رشته گفتگو"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"باز کردن رشته گفتگو"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← بکشید →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نگه دارید"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ضربه بزنید"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"دو بار ضربه بزنید"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"نمایش پیام‌های جدید"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"برای مشاهده گفتگو در اینجا، Live را شروع کنید."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جدید"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تایپ"</string>

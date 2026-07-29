@@ -1,4 +1,5 @@
-import { html, nothing } from "lit";
+import { html, noChange, nothing, type TemplateResult } from "lit";
+import { AsyncDirective, directive } from "lit/async-directive.js";
 import { until } from "lit/directives/until.js";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -15,17 +16,93 @@ import {
 } from "./chat-message-local-media.ts";
 import {
   cacheManagedImageBlobUrl,
-  cacheManagedImageBlobUrlMiss,
-  hasRecentManagedImageBlobUrlMiss,
+  isChatMediaResourceCurrent,
+  notifyChatMediaResourceSubscribers,
+  observeChatMediaResource,
+  observeChatMediaResourceSubscriber,
   readManagedImageBlobUrl,
+  releaseChatMediaResourceSubscriber,
   retainManagedImageBlobUrl,
+  scheduleChatMediaResourceRefresh,
+  trimManagedImageMissResources,
+  type ChatMediaResource,
   type ImageBlock,
   type ImageRenderOptions,
   type RenderableImageBlock,
 } from "./chat-message-media.ts";
 
 const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
-const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
+const MANAGED_OUTGOING_IMAGE_RETRY_MS = 5_000;
+
+class ManagedImageResourceDirective extends AsyncDirective {
+  private cacheKey: string | undefined;
+  private image: RenderableImageBlock | undefined;
+  private options: ImageRenderOptions | undefined;
+  private renderImageElement:
+    | ((image: RenderableImageBlock, previewUrl: string) => TemplateResult)
+    | undefined;
+  private onRequestUpdate: (() => void) | undefined;
+  private readonly requestUpdate = () => this.onRequestUpdate?.();
+
+  override render(
+    image: RenderableImageBlock,
+    options: ImageRenderOptions | undefined,
+    renderImageElement: (image: RenderableImageBlock, previewUrl: string) => TemplateResult,
+  ) {
+    this.image = image;
+    this.options = options;
+    this.renderImageElement = renderImageElement;
+    if (!this.isConnected) {
+      releaseChatMediaResourceSubscriber(this.requestUpdate);
+      this.cacheKey = undefined;
+      this.onRequestUpdate = options?.onRequestUpdate;
+      return noChange;
+    }
+
+    const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(
+      image.displayUrl,
+      options,
+      image.artifactId,
+    );
+    if (
+      (this.cacheKey !== undefined && this.cacheKey !== cacheKey) ||
+      this.onRequestUpdate !== options?.onRequestUpdate
+    ) {
+      releaseChatMediaResourceSubscriber(this.requestUpdate);
+    }
+    this.cacheKey = cacheKey;
+    this.onRequestUpdate = options?.onRequestUpdate;
+
+    // A transcript shares one pane callback across many guarded rows. Lit owns
+    // each image part, so only disconnecting that part may release its resource.
+    if (this.onRequestUpdate) {
+      observeChatMediaResourceSubscriber(this.onRequestUpdate, this.requestUpdate);
+    }
+    const subscriptionOptions = this.onRequestUpdate
+      ? { ...options, onRequestUpdate: this.requestUpdate }
+      : options;
+    const preview = resolveManagedOutgoingImageBlobUrl(
+      image.displayUrl,
+      subscriptionOptions,
+      image.artifactId,
+    ).then((previewUrl) => (previewUrl ? renderImageElement(image, previewUrl) : nothing));
+    return until(preview, nothing);
+  }
+
+  protected override disconnected() {
+    releaseChatMediaResourceSubscriber(this.requestUpdate);
+  }
+
+  protected override reconnected() {
+    if (this.image && this.renderImageElement) {
+      // Guarded transcript rows can skip their next pane render. Reinstall the
+      // image promise and its subscriber directly when Lit reconnects its part.
+      this.setValue(this.render(this.image, this.options, this.renderImageElement));
+    }
+  }
+}
+
+const renderManagedImageResource = directive(ManagedImageResourceDirective);
 
 export function resolveRenderableMessageImages(
   images: ImageBlock[],
@@ -33,15 +110,19 @@ export function resolveRenderableMessageImages(
 ): RenderableImageBlock[] {
   return images.flatMap((img) => {
     const isLocalImage = isLocalAssistantAttachmentSource(img.url);
+    const localMediaPreviewRoots = opts?.localMediaPreviewRoots ?? [];
+    // Until bootstrap supplies roots, let authenticated Gateway metadata decide.
     const canProxyLocalImage =
-      isLocalImage && isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
+      isLocalImage &&
+      (localMediaPreviewRoots.length === 0 ||
+        isLocalAttachmentPreviewAllowed(img.url, localMediaPreviewRoots));
     if (isLocalImage && !canProxyLocalImage) {
       return [];
     }
     const availability = canProxyLocalImage
       ? resolveAssistantAttachmentAvailability(
           img.url,
-          opts?.localMediaPreviewRoots ?? [],
+          localMediaPreviewRoots,
           opts?.basePath,
           opts?.authToken,
           opts?.onRequestUpdate,
@@ -134,15 +215,7 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
     if (!isManagedOutgoingImageSource(img.displayUrl)) {
       return renderImageElement(img, img.displayUrl);
     }
-    const preview = resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId).then(
-      (previewUrl) => {
-        if (!previewUrl) {
-          return nothing;
-        }
-        return renderImageElement(img, previewUrl);
-      },
-    );
-    return until(preview, nothing);
+    return renderManagedImageResource(img, opts, renderImageElement);
   };
 
   return html` <div class="chat-message-images">${images.map((img) => renderImage(img))}</div> `;
@@ -201,16 +274,34 @@ async function resolveManagedOutgoingImageBlobUrl(
 ): Promise<string | null> {
   const authToken = opts?.authToken?.trim() ?? "";
   const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId);
+  const resource = observeChatMediaResource<string | null>(
+    "managed-image",
+    cacheKey,
+    opts?.onRequestUpdate,
+    `${source}::${artifactId?.trim() ?? ""}`,
+  );
   const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
+    resource.value = cached;
+    resource.retryAttempted = false;
+    resource.unavailableAt = undefined;
     return cached;
   }
-  if (hasRecentManagedImageBlobUrlMiss(cacheKey)) {
-    return null;
+  if (resource.value === null) {
+    if (
+      resource.retryAttempted ||
+      resource.unavailableAt === undefined ||
+      Date.now() - resource.unavailableAt < MANAGED_OUTGOING_IMAGE_RETRY_MS
+    ) {
+      return null;
+    }
+    resource.retryAttempted = true;
+    resource.value = undefined;
   }
-  let pending = managedImageBlobUrlCache.get(cacheKey);
-  if (!pending) {
-    pending = (async () => {
+  if (!resource.pending) {
+    const controller = new AbortController();
+    resource.abortController = controller;
+    const pending = (async () => {
       const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
       const artifactDownload =
         requesterSessionKey && artifactId && opts?.resolveArtifactDownload
@@ -218,6 +309,9 @@ async function resolveManagedOutgoingImageBlobUrl(
               .resolveArtifactDownload({ sessionKey: requesterSessionKey, artifactId })
               .catch(() => null)
           : null;
+      if (!isChatMediaResourceCurrent(resource)) {
+        return null;
+      }
       const requestUrl = artifactDownload?.url ?? source;
       const headers = new Headers({ Accept: "image/*" });
       if (!artifactDownload && authToken) {
@@ -226,7 +320,6 @@ async function resolveManagedOutgoingImageBlobUrl(
       if (!artifactDownload && requesterSessionKey) {
         headers.set("x-openclaw-requester-session-key", requesterSessionKey);
       }
-      const controller = new AbortController();
       const timeout = setTimeout(() => {
         controller.abort(
           new DOMException("managed outgoing image fetch timed out", "TimeoutError"),
@@ -242,29 +335,60 @@ async function resolveManagedOutgoingImageBlobUrl(
           signal: controller.signal,
         });
         if (!res.ok) {
-          cacheManagedImageBlobUrlMiss(cacheKey);
-          return null;
+          return markManagedOutgoingImageUnavailable(resource);
         }
         const blob = await res.blob();
         if (!blob.type.startsWith("image/")) {
-          cacheManagedImageBlobUrlMiss(cacheKey);
+          return markManagedOutgoingImageUnavailable(resource);
+        }
+        if (!isChatMediaResourceCurrent(resource)) {
           return null;
         }
         const blobUrl = URL.createObjectURL(blob);
         cacheManagedImageBlobUrl(cacheKey, blobUrl);
+        resource.value = blobUrl;
+        resource.retryAttempted = false;
+        resource.unavailableAt = undefined;
         return blobUrl;
       } catch {
         // The render path treats a missing preview as `nothing`; never reject
         // its `until` promise for an optional image fetch or body failure.
-        cacheManagedImageBlobUrlMiss(cacheKey);
-        return null;
+        return markManagedOutgoingImageUnavailable(resource);
       } finally {
         clearTimeout(timeout);
       }
     })().finally(() => {
-      managedImageBlobUrlCache.delete(cacheKey);
+      if (resource.abortController === controller) {
+        resource.abortController = undefined;
+      }
+      if (resource.pending === pending) {
+        resource.pending = undefined;
+      }
+      trimManagedImageMissResources();
+      notifyChatMediaResourceSubscribers(resource);
     });
-    managedImageBlobUrlCache.set(cacheKey, pending);
+    resource.pending = pending;
   }
-  return pending;
+  return resource.pending;
+}
+
+function markManagedOutgoingImageUnavailable(resource: ChatMediaResource<string | null>): null {
+  if (!isChatMediaResourceCurrent(resource)) {
+    return null;
+  }
+  resource.value = null;
+  resource.unavailableAt = Date.now();
+  if (!resource.retryAttempted) {
+    scheduleChatMediaResourceRefresh(resource, Date.now() + MANAGED_OUTGOING_IMAGE_RETRY_MS, () => {
+      if (resource.value !== null) {
+        return;
+      }
+      // A missing preview gets one lifecycle-owned retry, never a polling loop.
+      resource.retryAttempted = true;
+      resource.value = undefined;
+      resource.unavailableAt = undefined;
+      notifyChatMediaResourceSubscribers(resource);
+    });
+  }
+  return null;
 }

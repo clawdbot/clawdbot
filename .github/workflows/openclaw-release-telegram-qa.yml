@@ -1235,6 +1235,7 @@ jobs:
           candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"
           sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"
           [[ "$(stat -c '%F:%a:%u:%g' "$candidate_artifacts_dir")" == "directory:700:${sut_uid}:${sut_gid}" ]]
+          sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "${candidate_artifacts_dir}/qa-runtime"
           evidence_relative=".trusted-qa-evidence/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           evidence_root="${CANDIDATE_ROOT}/${evidence_relative}"
           boundary_evidence_dir="${evidence_root}/process-boundary"
@@ -2772,6 +2773,16 @@ jobs:
       actions: read
       contents: read
     steps:
+      # Identity binds this checkout to the workflow definition that received
+      # the OIDC token. Do not execute status code from the release candidate.
+      - name: Checkout trusted Telegram status helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
+          ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Record advisory status
         id: record_status
         env:
@@ -2796,119 +2807,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          status=failure
-          if [[ "$IDENTITY_RESULT" == "cancelled" ||
-                "$BUILD_RESULT" == "cancelled" ||
-                "$ATTESTATION_RESULT" == "cancelled" ||
-                "$RUN_RESULT" == "cancelled" ]]; then
-            status=cancelled
-          elif [[ "$IDENTITY_STATUS" == "success" &&
-                  "$BUILD_STATUS" == "success" &&
-                  "$ATTESTATION_STATUS" == "success" &&
-                  "$EXECUTION_STATUS" == "success" ]]; then
-            status=success
-          fi
-
-          candidate_artifact=null
-          if [[ "$CANDIDATE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-                "$CANDIDATE_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
-                "$ARCHIVE_NAME" == "release-telegram-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}.tar.zst" &&
-                "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ &&
-                -n "$CANDIDATE_VERSION" ]]; then
-            candidate_artifact="$(
-              jq -cn \
-                --arg id "$CANDIDATE_ARTIFACT_ID" \
-                --arg name "$ARCHIVE_NAME" \
-                --arg digest "$CANDIDATE_ARTIFACT_DIGEST" \
-                --arg runId "$GITHUB_RUN_ID" \
-                --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-                --arg fileName "$ARCHIVE_NAME" \
-                --arg sha256 "$ARCHIVE_SHA256" \
-                --arg sourceSha "$TARGET_SHA" \
-                --arg version "$CANDIDATE_VERSION" \
-                '{
-                  id: $id,
-                  name: $name,
-                  digest: $digest,
-                  runId: $runId,
-                  runAttempt: $runAttempt,
-                  fileName: $fileName,
-                  sha256: $sha256,
-                  sourceSha: $sourceSha,
-                  version: $version
-                }'
-            )"
-          fi
-          if [[ "$status" == "success" ]]; then
-            [[ "$candidate_artifact" != "null" &&
-                  "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ &&
-                  "$TARGET_SHA" =~ ^[a-f0-9]{40}$ &&
-                  "$EVIDENCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-                  "$EVIDENCE_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
-                  "$EVIDENCE_ARTIFACT_NAME" == "release-qa-live-telegram-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}" ]]
-          fi
-
-          status_dir=".artifacts/release-check-status"
-          status_file="${status_dir}/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
-          evidence_file="${status_dir}/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
-          mkdir -p "$status_dir"
-          step_outcomes="identity:${IDENTITY_STATUS} build:${BUILD_STATUS} attest:${ATTESTATION_STATUS} execute:${EXECUTION_STATUS}"
-          {
-            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
-            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
-            printf 'target_sha=%s\n' "$TARGET_SHA"
-            printf 'workflow_sha=%s\n' "$WORKFLOW_SHA"
-            printf 'job=%s\n' "qa_live_telegram_release_checks"
-            printf 'variant=\n'
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "$RUN_RESULT"
-            printf 'step_outcomes=%s\n' "$step_outcomes"
-          } >"$status_file"
-          jq -n \
-            --arg status "$status" \
-            --arg jobStatus "$RUN_RESULT" \
-            --arg identityOutcome "identity:${IDENTITY_STATUS}" \
-            --arg buildOutcome "build:${BUILD_STATUS}" \
-            --arg attestOutcome "attest:${ATTESTATION_STATUS}" \
-            --arg executeOutcome "execute:${EXECUTION_STATUS}" \
-            --arg runId "$GITHUB_RUN_ID" \
-            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-            --arg workflowSha "$WORKFLOW_SHA" \
-            --arg targetSha "$TARGET_SHA" \
-            --arg evidenceId "$EVIDENCE_ARTIFACT_ID" \
-            --arg evidenceName "$EVIDENCE_ARTIFACT_NAME" \
-            --arg evidenceDigest "$EVIDENCE_ARTIFACT_DIGEST" \
-            --argjson candidateArtifact "$candidate_artifact" \
-            '{
-              version: 1,
-              kind: "release-check-status",
-              job: "qa_live_telegram_release_checks",
-              status: $status,
-              jobStatus: $jobStatus,
-              stepOutcomes: [
-                $identityOutcome,
-                $buildOutcome,
-                $attestOutcome,
-                $executeOutcome
-              ],
-              runId: $runId,
-              runAttempt: $runAttempt,
-              workflowSha: $workflowSha,
-              targetSha: $targetSha,
-              evidenceArtifact: {
-                id: $evidenceId,
-                name: $evidenceName,
-                digest: $evidenceDigest,
-                runId: $runId,
-                runAttempt: $runAttempt
-              },
-              candidateArtifact: $candidateArtifact
-            }' >"$evidence_file"
-          {
-            echo "status=$status"
-            echo "status_file=$status_file"
-            echo "evidence_file=$evidence_file"
-          } >>"$GITHUB_OUTPUT"
+          node scripts/release-telegram-qa.mjs advisory-status
 
       - name: Upload advisory status
         if: always()

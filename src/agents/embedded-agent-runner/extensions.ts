@@ -52,9 +52,24 @@ function snapshotToolSendReceipt(details: unknown): unknown {
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
-  runId?: string,
+  context: {
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    runId?: string;
+  },
 ): ExtensionFactory {
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
+  const { agentId, sessionKey, runId } = context;
+  // Snapshot the prepared session once; tool results must never rediscover
+  // mutable session identity after a later turn has started.
+  const sessionId = context.sessionId ?? sessionManager.getSessionId?.();
+  const runner = createAgentToolResultMiddlewareRunner({
+    runtime: "openclaw",
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
       const event = recordFromUnknown(rawEvent) as AgentToolResultEvent;
@@ -178,6 +193,9 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
   runId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
@@ -209,6 +227,13 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
+  factories.push(
+    buildAgentToolResultMiddlewareFactory(params.sessionManager, {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    }),
+  );
   return factories;
 }

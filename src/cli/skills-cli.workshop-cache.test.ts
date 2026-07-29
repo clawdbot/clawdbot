@@ -117,6 +117,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       expect.objectContaining({
         method: "skills.proposals.apply",
         params: { agentId: "main", proposalId: proposal.record.id },
+        timeoutMs: 1_850_000,
       }),
     );
     expect(gatewayRefreshState.getSkillsSnapshotVersion(mocks.workspaceDir)).toBeGreaterThan(
@@ -159,5 +160,73 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     await expect(workshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
       record: { status: "pending" },
     });
+  });
+
+  it("evaluates the exact inspected draft through the gateway plugin registry", async () => {
+    mocks.gatewayApply = async (request) => {
+      if (request.method === "skills.proposals.inspect") {
+        return {
+          record: {
+            id: "proposal-evaluate",
+            draftHash: "a".repeat(64),
+          },
+          revisionHash: "b".repeat(64),
+          content: "# Evaluate\n",
+        };
+      }
+      expect(request).toMatchObject({
+        method: "skills.proposals.evaluate",
+        params: {
+          agentId: "main",
+          proposalId: "proposal-evaluate",
+          expectedRevisionHash: "b".repeat(64),
+          correlationId: "optimizer-run-7",
+        },
+        timeoutMs: 650_000,
+      });
+      return {
+        record: { id: "proposal-evaluate" },
+        evaluation: {
+          proposedVersion: "0.2.0",
+          revisionHash: "b".repeat(64),
+          outcomes: [
+            {
+              evaluatorId: "skill-spector",
+              pluginId: "nvidia-evals",
+              pluginVersion: "1.2.3",
+              status: "completed",
+              result: { decision: "revise", summary: "Tighten the trigger." },
+            },
+          ],
+        },
+      };
+    };
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await program.parseAsync(
+      [
+        "skills",
+        "workshop",
+        "evaluate",
+        "proposal-evaluate",
+        "--correlation-id",
+        "optimizer-run-7",
+      ],
+      { from: "user" },
+    );
+
+    expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
+      "skills.proposals.inspect",
+      "skills.proposals.evaluate",
+    ]);
+    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "skill-spector (nvidia-evals@1.2.3)  completed revise: Tighten the trigger.",
+      ),
+    );
   });
 });

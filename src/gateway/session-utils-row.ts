@@ -457,6 +457,7 @@ export function buildGatewaySessionRow(params: {
     thinkingOptions: thinkingProjection.thinkingOptions,
     thinkingDefault: thinkingProjection.thinkingDefault,
     fastMode: entry?.fastMode,
+    toolOverrides: entry?.toolOverrides,
     effectiveFastMode: fastModeState.mode,
     effectiveFastModeSource: fastModeState.source,
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,

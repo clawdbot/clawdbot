@@ -132,6 +132,7 @@ function createSignalProcess() {
   type SignalName = "SIGINT" | "SIGTERM";
   const listeners = new Map<SignalName, Set<() => void>>();
   const processLike = {
+    exitCode: undefined as NodeJS.Process["exitCode"],
     on(signal: SignalName, handler: () => void) {
       const current = listeners.get(signal) ?? new Set<() => void>();
       current.add(handler);
@@ -1581,23 +1582,58 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("logs non-ok gateway summaries when payloads are empty", async () => {
-    await withTempStore(async () => {
-      callGateway.mockResolvedValue({
-        runId: "idem-1",
-        status: "timeout",
-        summary: "aborted",
-        result: {
-          payloads: [],
-          meta: { aborted: true },
-        },
+  it.each(["timeout", "error", "cancelled"])(
+    "logs an empty-payload %s summary and marks the process unsuccessful",
+    async (status) => {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        callGateway.mockResolvedValue({
+          runId: "idem-1",
+          status,
+          summary: status,
+          result: {
+            payloads: [],
+            meta: { stopReason: status },
+          },
+        });
+
+        await agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+          process: signals.processLike,
+        });
+
+        expect(runtime.log).toHaveBeenCalledWith(status);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(signals.processLike.exitCode).toBe(1);
       });
+    },
+  );
 
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+  it.each(["timeout", "error", "cancelled"])(
+    "writes a %s gateway result before exiting nonzero in JSON mode",
+    async (status) => {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        const response = {
+          runId: "idem-1",
+          status,
+          summary: status === "timeout" ? "aborted" : "failed",
+          result: {
+            payloads: [{ text: "Agent did not complete", isError: true }],
+            meta: { stopReason: status },
+          },
+        };
+        callGateway.mockResolvedValue(response);
 
-      expect(runtime.log).toHaveBeenCalledWith("aborted");
-    });
-  });
+        await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime, {
+          process: signals.processLike,
+        });
+
+        expect(jsonRuntime.writeJson).toHaveBeenCalledWith(response, 2);
+        expect(jsonRuntime.exit).not.toHaveBeenCalled();
+        expect(signals.processLike.exitCode).toBe(1);
+      });
+    },
+  );
 
   it("surfaces duplicate in-flight gateway runs without pretending a reply arrived", async () => {
     await withTempStore(async () => {

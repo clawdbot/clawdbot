@@ -192,6 +192,55 @@ describe("sandbox pinned mutation helper", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "bounds pinned file reads and rejects growth on the opened descriptor",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-bounded-read-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(path.join(workspace, "exact.txt"), "hello", "utf8");
+        await fs.writeFile(path.join(workspace, "empty.txt"), "", "utf8");
+        await fs.writeFile(path.join(workspace, "growing.txt"), "hello", "utf8");
+
+        const exact = runMutation(["read", workspace, "", "exact.txt", "5"]);
+        expect(exact.status).toBe(0);
+        expect(exact.stdout).toBe("hello");
+
+        const oversized = runMutation(["read", workspace, "", "exact.txt", "4"]);
+        expect(oversized.status).not.toBe(0);
+        expect(oversized.stdout).toBe("");
+        expect(oversized.stderr).toMatch(/bounded read limit/i);
+
+        const empty = runMutation(["read", workspace, "", "empty.txt", "0"]);
+        expect(empty.status).toBe(0);
+        expect(empty.stdout).toBe("");
+
+        const growingSource = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+          "        if max_bytes is not None and file_stat.st_size > max_bytes:",
+          [
+            "        if basename == 'growing.txt':",
+            "            growth_fd = os.open(basename, os.O_WRONLY | os.O_APPEND, dir_fd=parent_fd)",
+            "            try:",
+            "                write_all(growth_fd, b'!')",
+            "            finally:",
+            "                os.close(growth_fd)",
+            "        if max_bytes is not None and file_stat.st_size > max_bytes:",
+          ].join("\n"),
+        );
+        const grown = runMutationWithSource(growingSource, [
+          "read",
+          workspace,
+          "",
+          "growing.txt",
+          "5",
+        ]);
+        expect(grown.status).not.toBe(0);
+        expect(grown.stdout).toBe("");
+        expect(grown.stderr).toMatch(/bounded read limit/i);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "copies regular files atomically and rejects hardlinked sources",
     async () => {
       await withTempDir({ prefix: "openclaw-mutation-copy-" }, async (root) => {

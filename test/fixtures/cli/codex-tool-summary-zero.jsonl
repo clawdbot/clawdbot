@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"thread-zero"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"message-zero","type":"agent_message","text":"zero tools"}}
+{"type":"turn.completed","usage":{"input_tokens":3,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2,"reasoning_output_tokens":0}}

@@ -268,6 +268,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     return new Set(
       [
         ...result.candidates,
+        ...(result.unavailableCandidates ?? []),
         ...result.manualProviders,
         ...(result.authOptions ?? []),
         ...(result.recommendedInstalls ?? []),
@@ -461,6 +462,24 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     );
   }
 
+  private selectManualProvider(providerId: string): void {
+    if (providerId !== this.manualProviderId) {
+      this.manualApiKey = "";
+    }
+    this.manualProviderId = providerId;
+    this.manualError = null;
+  }
+
+  private async useManualProvider(providerId: string): Promise<void> {
+    this.selectManualProvider(providerId);
+    await this.updateComplete;
+    const input = this.renderRoot.querySelector<HTMLInputElement>(
+      '.model-setup__manual input[type="password"]',
+    );
+    input?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    input?.focus();
+  }
+
   private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
     const result = await this.detect();
     if (!result) {
@@ -531,10 +550,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.wizardMode = "prepare";
         void this.wizard.start(option.id, "openclaw.setup.prepare.start");
       },
-      onManualProviderChange: (providerId) => {
-        this.manualProviderId = providerId;
-        this.manualError = null;
-      },
+      onManualProviderChange: (providerId) => this.selectManualProvider(providerId),
+      onUseManualProvider: (providerId) => void this.useManualProvider(providerId),
       onManualApiKeyChange: (apiKey) => {
         this.manualApiKey = apiKey;
         this.manualError = null;

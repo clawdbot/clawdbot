@@ -2293,6 +2293,177 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
+
+  it("disables the default sandbox browser network without granting inherited egress", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              enabled: true,
+              network: " NONE ",
+              autoStart: false,
+            },
+          },
+        },
+        entries: {
+          main: { default: true },
+          inherited: {
+            sandbox: {
+              browser: {
+                enabled: true,
+                headless: true,
+              },
+            },
+          },
+          isolated: {
+            sandbox: {
+              browser: {
+                network: "isolated-browser-net",
+              },
+            },
+          },
+          blankEnabled: {
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "   ",
+              },
+            },
+          },
+          blankInherited: {
+            sandbox: {
+              browser: {
+                network: "",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "agents.defaults.sandbox.browser.network",
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.entries.inherited.sandbox.browser because it inherited unsupported browser network "none".',
+      "Set agents.entries.isolated.sandbox.browser.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.",
+      "Set agents.entries.blankInherited.sandbox.browser.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.",
+      'Disabled agents.defaults.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.defaults?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      autoStart: false,
+    });
+    expect(res.config?.agents?.entries?.inherited?.sandbox?.browser).toEqual({
+      enabled: false,
+      headless: true,
+    });
+    expect(res.config?.agents?.entries?.isolated?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "isolated-browser-net",
+    });
+    expect(res.config?.agents?.entries?.blankEnabled?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "   ",
+    });
+    expect(res.config?.agents?.entries?.blankInherited?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "",
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("disables explicit per-agent network none in keyed rosters", () => {
+    const raw = {
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "none",
+                headless: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["agents.entries"]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.entries.main.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.entries?.main?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      headless: true,
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("disables explicit per-agent network none in legacy list rosters", () => {
+    const raw = {
+      agents: {
+        list: [
+          {
+            id: "legacy",
+            default: true,
+            sandbox: {
+              browser: {
+                network: "NONE",
+                autoStart: false,
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toContainEqual({
+      path: "agents.list",
+      message: expect.stringContaining('sandbox.browser.network = "none"'),
+    });
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.list.0.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.entries?.legacy?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      autoStart: false,
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("leaves supported sandbox browser networks unchanged", () => {
+    const raw = {
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "openclaw-sandbox-browser",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([]);
+    expect(migrateLegacyConfigForTest(raw)).toEqual({ config: null, changes: [] });
+  });
 });
 
 describe("legacy migrate MCP server type aliases", () => {
@@ -2708,123 +2879,73 @@ describe("legacy bundled provider discovery migrate", () => {
 });
 
 describe("legacy migrate heartbeat config", () => {
-  it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
-    const res = migrateLegacyConfigForTest({
-      heartbeat: {
-        model: "anthropic/claude-3-5-haiku-20241022",
-        every: "30m",
+  it.each([
+    [
+      "moves top-level heartbeat into agents.defaults.heartbeat",
+      { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
+      "agents",
+      { model: "anthropic/claude-sonnet-4-6", every: "30m" },
+      [
+        "Moved heartbeat → agents.defaults.heartbeat.",
+        'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
+      ],
+    ],
+    [
+      "moves top-level heartbeat visibility into channels.defaults.heartbeat",
+      { heartbeat: { showOk: true, showAlerts: false, useIndicator: false } },
+      "channels",
+      { showOk: true, showAlerts: false, useIndicator: false },
+      ["Moved heartbeat visibility → channels.defaults.heartbeat."],
+    ],
+    [
+      "keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat",
+      {
+        heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" },
+        agents: { defaults: { heartbeat: { every: "1h", target: "telegram" } } },
       },
-    });
-
-    expect(res.changes).toStrictEqual([
-      "Moved heartbeat → agents.defaults.heartbeat.",
-      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
-    ]);
-    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      model: "anthropic/claude-sonnet-4-6",
-      every: "30m",
-    });
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-  });
-
-  it("moves top-level heartbeat visibility into channels.defaults.heartbeat", () => {
-    const res = migrateLegacyConfigForTest({
-      heartbeat: {
-        showOk: true,
-        showAlerts: false,
-        useIndicator: false,
+      "agents",
+      { every: "1h", target: "telegram", model: "anthropic/claude-sonnet-4-6" },
+      [
+        "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
+        'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
+      ],
+    ],
+    [
+      "keeps explicit channels.defaults.heartbeat values when merging top-level heartbeat visibility",
+      {
+        heartbeat: { showOk: true, showAlerts: true },
+        channels: { defaults: { heartbeat: { showOk: false, useIndicator: false } } },
       },
-    });
-
-    expect(res.changes).toStrictEqual([
-      "Moved heartbeat visibility → channels.defaults.heartbeat.",
-    ]);
-    expect(res.config?.channels?.defaults?.heartbeat).toEqual({
-      showOk: true,
-      showAlerts: false,
-      useIndicator: false,
-    });
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-  });
-
-  it("keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat", () => {
-    const res = migrateLegacyConfigForTest({
-      heartbeat: {
-        model: "anthropic/claude-3-5-haiku-20241022",
-        every: "30m",
-      },
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "1h",
-            target: "telegram",
-          },
+      "channels",
+      { showOk: false, showAlerts: true, useIndicator: false },
+      [
+        "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
+      ],
+    ],
+    [
+      "preserves agents.defaults.heartbeat precedence over top-level heartbeat legacy key",
+      {
+        agents: { defaults: { heartbeat: { every: "1h", target: "telegram" } } },
+        heartbeat: {
+          every: "30m",
+          target: "discord",
+          model: "anthropic/claude-3-5-haiku-20241022",
         },
       },
-    });
+      "agents",
+      { every: "1h", target: "telegram", model: "anthropic/claude-sonnet-4-6" },
+      undefined,
+    ],
+  ] as const)("%s", (_name, raw, owner, heartbeat, expectedChanges) => {
+    const res = migrateLegacyConfigForTest(raw);
+    const defaults = (res.config?.[owner] as { defaults?: { heartbeat?: unknown } } | undefined)
+      ?.defaults;
 
-    expect(res.changes).toStrictEqual([
-      "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
-      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
-    ]);
-    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      every: "1h",
-      target: "telegram",
-      model: "anthropic/claude-sonnet-4-6",
-    });
+    expect(defaults?.heartbeat).toEqual(heartbeat);
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-  });
-
-  it("keeps explicit channels.defaults.heartbeat values when merging top-level heartbeat visibility", () => {
-    const res = migrateLegacyConfigForTest({
-      heartbeat: {
-        showOk: true,
-        showAlerts: true,
-      },
-      channels: {
-        defaults: {
-          heartbeat: {
-            showOk: false,
-            useIndicator: false,
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toStrictEqual([
-      "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
-    ]);
-    expect(res.config?.channels?.defaults?.heartbeat).toEqual({
-      showOk: false,
-      showAlerts: true,
-      useIndicator: false,
-    });
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-  });
-
-  it("preserves agents.defaults.heartbeat precedence over top-level heartbeat legacy key", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "1h",
-            target: "telegram",
-          },
-        },
-      },
-      heartbeat: {
-        every: "30m",
-        target: "discord",
-        model: "anthropic/claude-3-5-haiku-20241022",
-      },
-    });
-
-    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      every: "1h",
-      target: "telegram",
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+    if (expectedChanges) {
+      expect(res.changes).toStrictEqual(expectedChanges);
+    }
   });
 
   it("drops blocked prototype keys when migrating top-level heartbeat", () => {
@@ -2857,136 +2978,112 @@ describe("legacy migrate heartbeat config", () => {
 });
 
 describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
-  it("seeds allowedOrigins for bind=lan with no existing controlUi config", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
-    expect(res.changes).toStrictEqual([
-      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
-    ]);
-  });
+  const defaultOrigins = ["http://localhost:18789", "http://127.0.0.1:18789"] as const;
+  const defaultSeedChange =
+    'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.';
 
-  it("seeds allowedOrigins using configured port", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "lan",
-        port: 9000,
-        auth: { mode: "token", token: "tok" },
-      },
-    });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:9000",
-      "http://127.0.0.1:9000",
-    ]);
-  });
-
-  it("seeds allowedOrigins including custom bind host for bind=custom", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
+  it.each([
+    [
+      "seeds allowedOrigins for bind=lan with no existing controlUi config",
+      { bind: "lan", auth: { mode: "token", token: "tok" } },
+      defaultOrigins,
+      [defaultSeedChange],
+      undefined,
+      undefined,
+    ],
+    [
+      "seeds allowedOrigins using configured port",
+      { bind: "lan", port: 9000, auth: { mode: "token", token: "tok" } },
+      ["http://localhost:9000", "http://127.0.0.1:9000"],
+      undefined,
+      undefined,
+      undefined,
+    ],
+    [
+      "seeds allowedOrigins including custom bind host for bind=custom",
+      {
         bind: "custom",
         customBindHost: "192.168.1.100",
         auth: { mode: "token", token: "tok" },
       },
-    });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-      "http://192.168.1.100:18789",
-    ]);
-  });
-
-  it("does not overwrite existing allowedOrigins — returns null (no migration needed)", () => {
-    // When allowedOrigins already exists, the migration is a no-op.
-    // applyLegacyDoctorMigrations returns next=null when changes.length===0, so config is null.
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "tok" },
-        controlUi: { allowedOrigins: ["https://control.example.com"] },
-      },
-    });
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
-  });
-
-  it("does not migrate when dangerouslyAllowHostHeaderOriginFallback is set — returns null", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "tok" },
-        controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
-      },
-    });
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
-  });
-
-  it("seeds allowedOrigins when existing entries are blank strings", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
+      [...defaultOrigins, "http://192.168.1.100:18789"],
+      undefined,
+      undefined,
+      undefined,
+    ],
+    [
+      "seeds allowedOrigins when existing entries are blank strings",
+      {
         bind: "lan",
         auth: { mode: "token", token: "tok" },
         controlUi: { allowedOrigins: ["", "   "] },
       },
-    });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
-    expect(res.changes).toStrictEqual([
-      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
-    ]);
-  });
-
-  it("does not migrate loopback bind — returns null", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
-  });
-
-  it("preserves existing controlUi fields when seeding allowedOrigins", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
+      defaultOrigins,
+      [defaultSeedChange],
+      undefined,
+      undefined,
+    ],
+    [
+      "preserves existing controlUi fields when seeding allowedOrigins",
+      {
         bind: "lan",
         auth: { mode: "token", token: "tok" },
         controlUi: { basePath: "/app" },
       },
-    });
-    expect(res.config?.gateway?.controlUi?.basePath).toBe("/app");
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
+      defaultOrigins,
+      undefined,
+      undefined,
+      "/app",
+    ],
+    [
+      "seeds allowedOrigins for non-loopback host aliases before normalizing bind",
+      { bind: "0.0.0.0", auth: { mode: "token", token: "tok" } },
+      defaultOrigins,
+      [defaultSeedChange, 'Normalized gateway.bind "0.0.0.0" → "lan".'],
+      "lan",
+      undefined,
+    ],
+  ] as const)("%s", (_name, gateway, origins, expectedChanges, expectedBind, expectedBasePath) => {
+    const res = migrateLegacyConfigForTest({ gateway });
+
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual(origins);
+    if (expectedChanges) {
+      expect(res.changes).toStrictEqual(expectedChanges);
+    }
+    if (expectedBind) {
+      expect(res.config?.gateway?.bind).toBe(expectedBind);
+    }
+    if (expectedBasePath) {
+      expect(res.config?.gateway?.controlUi?.basePath).toBe(expectedBasePath);
+    }
   });
 
-  it("seeds allowedOrigins for non-loopback host aliases before normalizing bind", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "0.0.0.0",
+  it.each([
+    [
+      "does not overwrite existing allowedOrigins — returns null (no migration needed)",
+      {
+        bind: "lan",
         auth: { mode: "token", token: "tok" },
+        controlUi: { allowedOrigins: ["https://control.example.com"] },
       },
-    });
-    expect(res.config?.gateway?.bind).toBe("lan");
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
-    expect(res.changes).toStrictEqual([
-      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
-      'Normalized gateway.bind "0.0.0.0" → "lan".',
-    ]);
+    ],
+    [
+      "does not migrate when dangerouslyAllowHostHeaderOriginFallback is set — returns null",
+      {
+        bind: "lan",
+        auth: { mode: "token", token: "tok" },
+        controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
+      },
+    ],
+    [
+      "does not migrate loopback bind — returns null",
+      { bind: "loopback", auth: { mode: "token", token: "tok" } },
+    ],
+  ] as const)("%s", (_name, gateway) => {
+    const res = migrateLegacyConfigForTest({ gateway });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("does not seed allowedOrigins for loopback host aliases", () => {
@@ -3003,35 +3100,23 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 });
 
 describe("gateway.port out-of-range repair migrate", () => {
-  it("removes gateway.port above TCP max and records a change", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: { port: 65_536 },
-    });
+  it.each([
+    ["removes gateway.port above TCP max and records a change", 65_536, false],
+    ["removes gateway.port zero and records a change", 0, false],
+    ["preserves valid gateway.port values", 65_535, true],
+    ["leaves gateway.port set to 1 (valid minimum) untouched", 1, true],
+  ] as const)("%s", (_name, port, valid) => {
+    const res = migrateLegacyConfigForTest({ gateway: { port } });
 
+    if (valid) {
+      expect(res.config).toBeNull();
+      expect(res.changes).toEqual([]);
+      return;
+    }
     expect(res.changes).toStrictEqual([
-      "Removed out-of-range gateway.port (65536). Valid TCP ports are 1–65535; the gateway will use the default port 18789.",
+      `Removed out-of-range gateway.port (${port}). Valid TCP ports are 1–65535; the gateway will use the default port 18789.`,
     ]);
     expect(res.config).not.toHaveProperty("gateway");
-  });
-
-  it("removes gateway.port zero and records a change", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: { port: 0 },
-    });
-
-    expect(res.changes).toStrictEqual([
-      "Removed out-of-range gateway.port (0). Valid TCP ports are 1–65535; the gateway will use the default port 18789.",
-    ]);
-    expect(res.config).not.toHaveProperty("gateway");
-  });
-
-  it("preserves valid gateway.port values", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: { port: 65_535 },
-    });
-
-    expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
   });
 
   it("preserves other gateway keys when removing the port", () => {
@@ -3065,15 +3150,6 @@ describe("gateway.port out-of-range repair migrate", () => {
 
     const second = migrateLegacyConfigForTest(first.config);
     expect(second.changes).toStrictEqual([]);
-  });
-
-  it("leaves gateway.port set to 1 (valid minimum) untouched", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: { port: 1 },
-    });
-
-    expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
   });
 });
 
@@ -3158,6 +3234,7 @@ describe("legacy model compat migrate", () => {
               "xai/grok-4-fast-reasoning",
               "openai/gpt-4o-transcribe",
               "openai/gpt-4o-mini-tts",
+              "openai/constructor",
             ],
           },
           models: {
@@ -3231,6 +3308,7 @@ describe("legacy model compat migrate", () => {
         "xai/grok-4.3",
         "openai/gpt-4o-transcribe",
         "openai/gpt-4o-mini-tts",
+        "openai/constructor",
       ],
     });
     expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");

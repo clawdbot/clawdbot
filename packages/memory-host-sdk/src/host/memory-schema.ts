@@ -8,8 +8,9 @@ import {
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
 import {
-  dropDisabledMemoryChunkFts,
+  dropDisabledMemoryFts,
   dropMemoryPathFtsTriggers,
+  ensureMemoryChunkFtsSchema,
   ensureMemoryPathFtsSchema,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNKS_TABLE,
@@ -654,7 +655,7 @@ export function ensureMemoryIndexSchema(params: {
   `);
   migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable, ftsTable);
   provenanceSchema.ensureMemoryChunkProvenance(params.db);
-  dropDisabledMemoryChunkFts(params.db, ftsTable, params.ftsEnabled);
+  dropDisabledMemoryFts(params.db, ftsTable, params.ftsEnabled);
   if (params.cacheEnabled) {
     const updatedAtIndex =
       embeddingCacheTable === MEMORY_EMBEDDING_CACHE_TABLE
@@ -680,27 +681,7 @@ export function ensureMemoryIndexSchema(params: {
     try {
       const tokenizer = params.ftsTokenizer ?? "unicode61";
       const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
-      params.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS ${ftsTable} USING fts5(\n` +
-          `  text,\n` +
-          `  id UNINDEXED,\n` +
-          `  path UNINDEXED,\n` +
-          `  source UNINDEXED,\n` +
-          `  model UNINDEXED,\n` +
-          `  start_line UNINDEXED,\n` +
-          `  end_line UNINDEXED\n` +
-          `${tokenizeClause});`,
-      );
-      // A migration rebuilds an existing FTS table in its savepoint. If the
-      // table is new, this same empty-table bootstrap covers all canonical rows.
-      params.db.exec(`
-        INSERT INTO ${ftsTable} (
-          text, id, path, source, model, start_line, end_line
-        )
-        SELECT text, id, path, source, model, start_line, end_line
-        FROM ${MEMORY_INDEX_CHUNKS_TABLE}
-        WHERE NOT EXISTS (SELECT 1 FROM ${ftsTable} LIMIT 1);
-      `);
+      ensureMemoryChunkFtsSchema({ db: params.db, ftsTable, tokenizeClause });
       // Deprecated custom FTS tables preserve their body-only contract. The
       // canonical index owns the separate path table and its source triggers.
       if (ftsTable === MEMORY_INDEX_FTS_TABLE) {

@@ -6,7 +6,6 @@ type CronActiveJobState = {
   generation: number;
   nextToken: number;
   emptyWaiters: Set<() => void>;
-  activeJobIds?: Set<string>;
 };
 
 const CRON_ACTIVE_JOB_STATE_KEY = Symbol.for("openclaw.cron.activeJobs");
@@ -17,7 +16,6 @@ export type CronActiveJobMarker = {
   token: number;
   scheduleMutated?: true;
   jobRemoved?: true;
-  legacy?: boolean;
   preserveAcrossGenerationAdvance?: boolean;
 };
 
@@ -29,31 +27,11 @@ function getCronActiveJobState(): CronActiveJobState {
     generation: 0,
     nextToken: 1,
     emptyWaiters: new Set<() => void>(),
-    activeJobIds: new Set<string>(),
   }));
   state.generation ??= 0;
   state.nextToken ??= 1;
   state.activeJobs ??= new Map<string, CronActiveJobMarker>();
   state.emptyWaiters ??= new Set<() => void>();
-  state.activeJobIds ??= new Set<string>();
-  if (state.activeJobIds) {
-    for (const [jobId, marker] of state.activeJobs) {
-      if (marker.legacy === true && !state.activeJobIds.has(jobId)) {
-        state.activeJobs.delete(jobId);
-      }
-    }
-    for (const jobId of state.activeJobIds) {
-      if (!state.activeJobs.has(jobId)) {
-        state.activeJobs.set(jobId, {
-          jobId,
-          generation: state.generation,
-          token: state.nextToken,
-          legacy: true,
-        });
-        state.nextToken += 1;
-      }
-    }
-  }
   return state;
 }
 
@@ -99,7 +77,6 @@ export function markCronJobActive(
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
   };
   state.activeJobs.set(jobId, marker);
-  state.activeJobIds?.add(jobId);
   return marker;
 }
 
@@ -115,7 +92,6 @@ export function clearCronJobActive(jobId: string, marker?: CronActiveJobMarker) 
     (!marker || (marker.jobId === jobId && marker.token === activeMarker.token))
   ) {
     state.activeJobs.delete(jobId);
-    state.activeJobIds?.delete(jobId);
   }
   notifyActiveCronJobWaitersIfEmpty(state);
 }
@@ -235,7 +211,6 @@ export function advanceCronActiveJobGeneration() {
     }
     if (marker.generation < state.generation - 1) {
       state.activeJobs.delete(jobId);
-      state.activeJobIds?.delete(jobId);
     }
   }
   notifyActiveCronJobWaitersIfEmpty(state);
@@ -246,6 +221,5 @@ export function resetCronActiveJobs() {
   const state = getCronActiveJobState();
   state.generation += 1;
   state.activeJobs.clear();
-  state.activeJobIds?.clear();
   notifyActiveCronJobWaitersIfEmpty(state);
 }

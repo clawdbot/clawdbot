@@ -51,6 +51,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     recordAgentDispatchCompleted,
     recordProcessed,
     replyResult,
+    replyOperationRunState,
     replyRoute,
     routeReplyToOriginating,
     sendFinalPayload,
@@ -283,6 +284,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   // ledger intentionally does not own. Directedness gates both the fallback and
   // eligibility: only a turn that positively addressed the bot may surface a
   // visible failure notice.
+  const replyAcceptedByActiveRun = replyOperationRunState.admission?.status === "accepted";
   const noVisibleReplyFallbackAllowed = () =>
     noVisibleReplyFallbackDirected &&
     !suppressDelivery &&
@@ -290,6 +292,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     sourceReplyDeliveryMode !== "message_tool_only" &&
     !emptyFinalAllowedAsSilent &&
     !getObservedReplyDelivery() &&
+    !replyAcceptedByActiveRun &&
     !turnLedger.hasVisibleDelivery() &&
     !turnLedger.hasForeignQueuedAdmissions();
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
@@ -386,6 +389,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       !turnLedger.hasVisibleDelivery() &&
       !noVisibleReplyFallbackDelivered &&
       !getObservedReplyDelivery() &&
+      !replyAcceptedByActiveRun &&
       !emptyFinalAllowedAsSilent
         ? { noVisibleReplyFallbackEligible: true }
         : {}),

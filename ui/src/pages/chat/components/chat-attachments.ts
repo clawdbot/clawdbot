@@ -15,7 +15,7 @@ import {
 } from "../attachment-payload-store.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
-  "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
+  "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
@@ -98,13 +98,6 @@ export function isEditableDropTarget(event: DragEvent): boolean {
 
 function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
   return props.getAttachments?.() ?? props.attachments ?? [];
-}
-
-function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boolean {
-  if (file.type.startsWith("video/")) {
-    return false;
-  }
-  return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
 }
 
 function clickComposerInput(target: HTMLElement, selector: string) {
@@ -190,7 +183,9 @@ function compactPastedTextPreview(text: string): string | null {
 }
 
 function pastedTextPreview(attachment: ChatAttachment): string {
-  return pastedTextPreviews.get(attachment) ?? attachment.fileName ?? "Attached file";
+  return (
+    pastedTextPreviews.get(attachment) ?? attachment.fileName ?? t("chat.attachments.attachedFile")
+  );
 }
 
 function appendPastedTextToDraft(draft: string, text: string): string {
@@ -225,9 +220,6 @@ function dataImageClipboardFile(
   const mimeType = match[1]?.toLowerCase();
   const base64Source = match[2];
   if (!mimeType || !base64Source) {
-    return null;
-  }
-  if (!isSupportedChatAttachmentFile({ name: baseName, type: mimeType })) {
     return null;
   }
   const base64 = base64Source.replace(/\s+/g, "");
@@ -297,14 +289,13 @@ function readAttachmentFile(
 }
 
 async function appendAttachmentFiles(files: readonly File[], props: ChatAttachmentControlsProps) {
-  const supported = files.filter(isSupportedChatAttachmentFile);
-  if (!props.onAttachmentsChange || supported.length === 0) {
+  if (!props.onAttachmentsChange || files.length === 0) {
     return;
   }
   props.onPendingReadsChange?.(1);
   try {
     const additions = (
-      await Promise.all(supported.map((file) => readAttachmentFile(file, props)))
+      await Promise.all(files.map((file) => readAttachmentFile(file, props)))
     ).filter((attachment): attachment is ChatAttachment => attachment !== null);
     if (props.readSignal?.aborted) {
       for (const attachment of additions) {
@@ -578,11 +569,13 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                     </div>
                   `
                 : html`
-                    <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
+                    <openclaw-tooltip
+                      .content=${att.fileName ?? t("chat.attachments.attachedFile")}
+                    >
                       <div class="chat-attachment-file">
                         <span class="chat-attachment-file__icon">${icons.paperclip}</span>
                         <span class="chat-attachment-file__name"
-                          >${att.fileName ?? "Attached file"}</span
+                          >${att.fileName ?? t("chat.attachments.attachedFile")}</span
                         >
                       </div>
                     </openclaw-tooltip>

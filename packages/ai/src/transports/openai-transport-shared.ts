@@ -98,18 +98,6 @@ export function createModelStreamCooperativeScheduler(
   };
 }
 
-export function resolveCacheRetention(
-  cacheRetention: string | undefined,
-): "short" | "long" | "none" {
-  if (cacheRetention === "short" || cacheRetention === "long" || cacheRetention === "none") {
-    return cacheRetention;
-  }
-  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
-    return "long";
-  }
-  return "short";
-}
-
 export function resolvePromptCacheKey(
   options: Pick<BaseOpenAIStreamOptions, "promptCacheKey" | "sessionId"> | undefined,
   cacheRetention: "short" | "long" | "none",

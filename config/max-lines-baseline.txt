@@ -188,7 +188,6 @@ extensions/oc-path/src/oc-path/find.ts
 extensions/oc-path/src/oc-path/universal.ts
 extensions/ollama/index.test.ts
 extensions/ollama/index.ts
-extensions/ollama/src/setup.ts
 extensions/ollama/src/stream-runtime.test.ts
 extensions/ollama/src/stream.ts
 extensions/openai/image-generation-provider.test.ts
@@ -382,8 +381,6 @@ src/agents/cli-runner/claude-live-session.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
-src/agents/code-mode-namespaces.ts
-src/agents/code-mode.test.ts
 src/agents/command/attempt-execution.cli.test.ts
 src/agents/command/attempt-execution.test.ts
 src/agents/command/attempt-execution.ts
@@ -592,7 +589,6 @@ src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
-src/cli/plugins-install-command.ts
 src/cli/program/register.status-health-sessions.ts
 src/cli/run-main.exit.test.ts
 src/cli/run-main.ts

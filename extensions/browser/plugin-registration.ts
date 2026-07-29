@@ -14,6 +14,7 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { isBrowserMachineOutput } from "./cli-output-mode.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
@@ -33,10 +34,6 @@ const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
   () => import("./register.runtime.js"),
 );
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
-}
 
 function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
@@ -92,6 +89,7 @@ function createLazyBrowserTool(opts?: {
   return {
     label: "Browser",
     name: "browser",
+    resultContentSource: "network",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     outputSchema: BrowserToolOutputSchema,

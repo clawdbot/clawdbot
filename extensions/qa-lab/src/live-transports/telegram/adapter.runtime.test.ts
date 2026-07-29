@@ -78,7 +78,7 @@ describe("Telegram QA transport adapter", () => {
           getMeCalls += 1;
           return getMeCalls === 1
             ? { id: 1, is_bot: true, first_name: "driver", username: "driver_bot" }
-            : { id: 2, is_bot: true, first_name: "sut", username: "sut_bot" };
+            : { id: 2, is_bot: true, first_name: "sut", username: "openclaw_qa_bot" };
         }
         if (method === "sendMessage") {
           sendMessageCalls += 1;
@@ -111,7 +111,21 @@ describe("Telegram QA transport adapter", () => {
       "sendMessage",
       expect.objectContaining({
         chat_id: "-100123",
-        text: "@sut_bot reply exactly: QA-MARKER",
+        text: "@openclaw_qa_bot reply exactly: QA-MARKER",
+      }),
+    );
+    await adapter.sendInbound?.({
+      conversation: { id: "logical-room", kind: "group" },
+      senderId: "driver",
+      text: "/status",
+      nativeCommand: { name: "status" },
+    });
+    expect(mocks.callTelegramApi).toHaveBeenCalledWith(
+      "placeholder",
+      "sendMessage",
+      expect.objectContaining({
+        chat_id: "-100123",
+        text: "/status@openclaw_qa_bot",
       }),
     );
 
@@ -122,7 +136,7 @@ describe("Telegram QA transport adapter", () => {
           message_id: 11,
           date: 100,
           chat: { id: -100123 },
-          from: { id: 2, is_bot: true, username: "sut_bot" },
+          from: { id: 2, is_bot: true, username: "openclaw_qa_bot" },
           text: "preview",
           reply_to_message: { message_id: 10 },
         },
@@ -161,7 +175,7 @@ describe("Telegram QA transport adapter", () => {
           message_id: 11,
           date: 101,
           chat: { id: -100123 },
-          from: { id: 2, is_bot: true, username: "sut_bot" },
+          from: { id: 2, is_bot: true, username: "openclaw_qa_bot" },
           text: "final",
         },
       },

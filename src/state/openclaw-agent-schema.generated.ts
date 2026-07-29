@@ -429,7 +429,8 @@ CREATE TABLE IF NOT EXISTS memory_index_chunks (
   embedding TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),
-  triggers TEXT
+  triggers TEXT,
+  project_key TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_index_chunk_provenance (

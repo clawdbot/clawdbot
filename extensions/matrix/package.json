@@ -9,12 +9,12 @@
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.1",
-    "@matrix-org/matrix-sdk-crypto-wasm": "18.3.1",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.4.0",
     "fake-indexeddb": "6.2.5",
     "markdown-it": "14.3.0",
-    "matrix-js-sdk": "41.9.0-rc.0",
+    "matrix-js-sdk": "41.9.0",
     "music-metadata": "11.14.0",
-    "typebox": "1.3.6",
+    "typebox": "1.3.8",
     "zod": "4.4.3"
   },
   "devDependencies": {

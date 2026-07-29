@@ -684,7 +684,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         agentID: String? = nil,
         expectedSessionRoutingContract: String? = nil,
         message: String,
-        thinking: String,
+        thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?,

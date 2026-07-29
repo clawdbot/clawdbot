@@ -22,6 +22,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -34,6 +35,7 @@ export {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -327,6 +329,12 @@ export function authorizeOperatorScopesForRequiredScope(
       return { allowed: true };
     }
     return { allowed: false, missingScope: READ_SCOPE };
+  }
+  if (requiredScope === TALK_SCOPE) {
+    if (scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE)) {
+      return { allowed: true };
+    }
+    return { allowed: false, missingScope: TALK_SCOPE };
   }
   if (scopes.includes(requiredScope)) {
     return { allowed: true };
