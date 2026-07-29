@@ -12,7 +12,7 @@ import {
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import {
@@ -24,6 +24,7 @@ import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "
 import { safeEqualSecret } from "../security/secret-equal.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
@@ -1234,8 +1235,8 @@ export async function handleManagedOutgoingImageHttpRequest(
     return false;
   }
 
-  if (req.method !== "GET") {
-    sendMethodNotAllowed(res, "GET");
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
 
@@ -1303,21 +1304,25 @@ export async function handleManagedOutgoingImageHttpRequest(
     return true;
   }
 
-  let body: Buffer;
+  let opened: Awaited<ReturnType<typeof openLocalFileSafely>>;
   try {
-    body = (
-      await readLocalFileSafely({
-        filePath: resolveManagedImageOriginalPath(record),
-      })
-    ).buffer;
+    opened = await openLocalFileSafely({
+      filePath: resolveManagedImageOriginalPath(record),
+    });
   } catch {
     sendStatus(res, 404, "not found");
     return true;
   }
 
-  res.statusCode = 200;
+  let handleClosed = false;
+  const closeOpenedHandle = async () => {
+    if (handleClosed) {
+      return;
+    }
+    handleClosed = true;
+    await opened.handle.close().catch(() => {});
+  };
   res.setHeader("content-type", record.original.contentType || "application/octet-stream");
-  res.setHeader("content-length", String(body.byteLength));
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader(
@@ -1330,7 +1335,40 @@ export async function handleManagedOutgoingImageHttpRequest(
     "content-disposition",
     `inline; filename="${safeAttachmentFilename(record.original.filename)}"`,
   );
-  res.end(body);
+  const byteResponse = resolveByteResponse({
+    file: opened.stat,
+    method: req.method,
+    rangeHeader: req.headers.range,
+    ifRangeHeader: req.headers["if-range"],
+  });
+  writeByteHeaders(res, byteResponse);
+  if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
+    await closeOpenedHandle();
+    res.end();
+    return true;
+  }
+
+  // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
+  const stream = opened.handle.createReadStream({
+    start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
+    end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
+    autoClose: false,
+  });
+  const finishClose = () => {
+    void closeOpenedHandle();
+  };
+  stream.once("end", finishClose);
+  stream.once("close", finishClose);
+  stream.once("error", () => {
+    void closeOpenedHandle();
+    if (!res.headersSent) {
+      sendStatus(res, 404, "not found");
+    } else {
+      res.destroy();
+    }
+  });
+  res.once("close", finishClose);
+  stream.pipe(res);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

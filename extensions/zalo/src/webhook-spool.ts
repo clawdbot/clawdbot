@@ -6,6 +6,8 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { ZaloApiError, type ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
@@ -42,14 +44,6 @@ type ZaloWebhookIngress = {
   start: () => void;
   stop: () => Promise<void>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function parseRawRecord(rawEvent: string): Record<string, unknown> {
   let parsed: unknown;

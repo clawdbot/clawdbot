@@ -2,6 +2,7 @@ import {
   extractProjectKeysFromCuratedEntry,
   normalizeProjectAnnotationKey,
   splitCuratedMarkdownEntries,
+  stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
@@ -44,13 +45,6 @@ export function filterProjectScopedCuratedContextFiles(params: {
       .join("\n");
     return content === file.content ? file : { path: file.path, content };
   });
-}
-
-function cleanProjectMemorySnippet(value: string): string {
-  return value
-    .replace(/<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->/giu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
 }
 
 function truncateEntry(value: string, maxChars: number): string {
@@ -106,7 +100,7 @@ function buildProjectMemoryBootstrap(params: {
   }
   for (const entry of candidates) {
     const snippet = truncateEntry(
-      cleanProjectMemorySnippet(entry.snippet),
+      stripMemoryAnnotationCarriers(entry.snippet).replace(/\s+/gu, " ").trim(),
       PROJECT_MEMORY_ENTRY_MAX_CHARS,
     );
     if (!snippet) {

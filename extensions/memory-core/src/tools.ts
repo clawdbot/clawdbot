@@ -1,8 +1,9 @@
 // Memory Core plugin module implements tools behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type {
-  MemoryReadResult,
-  MemorySource,
+import {
+  stripMemoryAnnotationCarriers,
+  type MemoryReadResult,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
@@ -756,7 +757,11 @@ export function createMemorySearchTool(options: {
                   rawResults = rawResults.filter((hit) => hit.source === "memory");
                 }
                 const status = activeMemory.manager.status();
-                const decorated = decorateCitations(rawResults, includeCitations);
+                const payloadResults = rawResults.map((result) => ({
+                  ...result,
+                  snippet: stripMemoryAnnotationCarriers(result.snippet),
+                }));
+                const decorated = decorateCitations(payloadResults, includeCitations);
                 const memoryResults =
                   status.backend === "qmd"
                     ? clampResultsByInjectedChars(

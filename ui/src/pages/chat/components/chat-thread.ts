@@ -17,7 +17,7 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
-import { COPY_LABEL } from "../../../components/copy-button.ts";
+import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
@@ -931,7 +931,7 @@ export function renderChatPinnedMessages(
           requestUpdate();
         }}
       >
-        ${icons.bookmark} ${entries.length} pinned
+        ${icons.bookmark} ${t("chat.thread.pinnedCount", { count: String(entries.length) })}
         <span class="collapse-chevron ${state.pinnedExpanded ? "" : "collapse-chevron--collapsed"}"
           >${icons.chevronDown}</span
         >
@@ -943,7 +943,7 @@ export function renderChatPinnedMessages(
                 ({ index, text, role }) => html`
                   <div class="agent-chat__pinned-item">
                     <span class="agent-chat__pinned-role"
-                      >${role === "user" ? userRoleLabel : "Assistant"}</span
+                      >${role === "user" ? userRoleLabel : t("common.assistant")}</span
                     >
                     <span class="agent-chat__pinned-text"
                       >${truncateUtf16Safe(text, 100)}${text.length > 100 ? "..." : ""}</span
@@ -1210,9 +1210,9 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   }
   if (canCopy) {
     const action = createMessageActionContextButton({
-      label: COPY_LABEL,
+      label: copyMarkdownLabel(),
       disabled: false,
-      tooltip: COPY_LABEL,
+      tooltip: copyMarkdownLabel(),
       onClick: () => {
         removeReplyContextMenu();
         copyButton?.click();

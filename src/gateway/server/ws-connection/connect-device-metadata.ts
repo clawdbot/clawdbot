@@ -6,6 +6,8 @@ import {
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../../../infra/device-pairing.js";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  isMobilePairingSetupBootstrapProfile,
+  isVoiceNodePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
@@ -23,7 +25,7 @@ export function resolvePairedAccessScopes(
   return normalizeSortedUniqueTrimmedStringList(scopes);
 }
 
-export function isSetupCodeMobileBootstrapClient(client: {
+function isSetupCodeMobileBootstrapClient(client: {
   id?: string;
   platform?: string;
   deviceFamily?: string;
@@ -37,6 +39,34 @@ export function isSetupCodeMobileBootstrapClient(client: {
     return /^(?:ios|ipados)(?:\s|$)/u.test(platform) && /^(?:iphone|ipad|ios)$/u.test(deviceFamily);
   }
   return false;
+}
+
+/** Embedded voice nodes must prove the canonical node-host and ESP32 metadata tuple. */
+function isSetupCodeVoiceNodeBootstrapClient(client: {
+  id?: string;
+  platform?: string;
+  deviceFamily?: string;
+}): boolean {
+  const platform = normalizeDeviceMetadataForAuth(client.platform);
+  const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
+  return (
+    client.id === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    /^esp32(?:\s|$)/u.test(platform) &&
+    deviceFamily === "esp32"
+  );
+}
+
+/** Match a closed setup profile to the client metadata class allowed to redeem it silently. */
+export function isSetupCodeHandoffBootstrapClient(params: {
+  profile: DeviceBootstrapProfile;
+  client: { id?: string; platform?: string; deviceFamily?: string };
+}): boolean {
+  return (
+    (isMobilePairingSetupBootstrapProfile(params.profile) &&
+      isSetupCodeMobileBootstrapClient(params.client)) ||
+    (isVoiceNodePairingSetupBootstrapProfile(params.profile) &&
+      isSetupCodeVoiceNodeBootstrapClient(params.client))
+  );
 }
 
 export function isControlUiOperatorBootstrapProfile(params: {

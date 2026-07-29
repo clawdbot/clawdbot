@@ -190,7 +190,9 @@ function compactPastedTextPreview(text: string): string | null {
 }
 
 function pastedTextPreview(attachment: ChatAttachment): string {
-  return pastedTextPreviews.get(attachment) ?? attachment.fileName ?? "Attached file";
+  return (
+    pastedTextPreviews.get(attachment) ?? attachment.fileName ?? t("chat.attachments.attachedFile")
+  );
 }
 
 function appendPastedTextToDraft(draft: string, text: string): string {
@@ -578,11 +580,13 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                     </div>
                   `
                 : html`
-                    <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
+                    <openclaw-tooltip
+                      .content=${att.fileName ?? t("chat.attachments.attachedFile")}
+                    >
                       <div class="chat-attachment-file">
                         <span class="chat-attachment-file__icon">${icons.paperclip}</span>
                         <span class="chat-attachment-file__name"
-                          >${att.fileName ?? "Attached file"}</span
+                          >${att.fileName ?? t("chat.attachments.attachedFile")}</span
                         >
                       </div>
                     </openclaw-tooltip>

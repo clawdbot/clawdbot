@@ -146,6 +146,25 @@ describe("active-memory trigger recall", () => {
     expect(context).not.toContain("Global deployment guidance.");
   });
 
+  it("excludes annotation carriers from injected trigger context", () => {
+    const matches = selectStrongTriggerMatches(
+      "Review the alpha deployment",
+      [
+        result({
+          snippet:
+            "Alpha-only deployment guidance. <!-- trigger: alpha deployment --> <!-- importance: 8 --> <!-- project: alpha-key -->",
+          triggers: "alpha deployment",
+          projectKey: "alpha-key",
+        }),
+      ],
+      ["alpha-key"],
+    );
+
+    const context = buildTriggerRecallContext(matches);
+    expect(context).toContain("Alpha-only deployment guidance.");
+    expect(context).not.toContain("<!--");
+  });
+
   it("blocks every oversized entry fragment when its project is inactive", () => {
     const fragments = [
       result({

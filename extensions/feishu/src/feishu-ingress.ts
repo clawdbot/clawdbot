@@ -8,6 +8,7 @@ import {
   type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { getFeishuRuntime } from "./runtime.js";
@@ -76,10 +77,6 @@ export class FeishuIngressPermanentError extends Error {
     super(message, options);
     this.name = "FeishuIngressPermanentError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readString(value: unknown): string | null {

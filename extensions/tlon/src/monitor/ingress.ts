@@ -5,8 +5,10 @@ import {
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTlonRuntime } from "../runtime.js";
 import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
 
@@ -56,14 +58,6 @@ class TlonIngressShutdownError extends Error {
     super("Tlon ingress stopped before dispatch adoption.");
     this.name = "TlonIngressShutdownError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {

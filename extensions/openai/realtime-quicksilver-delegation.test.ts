@@ -17,11 +17,20 @@ afterEach(() => {
 });
 
 describe("GPT-Live sideband protocol", () => {
-  it.each(["session.updated", "output_audio.delta"])("ignores %s server-side", (type) => {
+  it("ignores session.updated server-side", () => {
+    const type = "session.updated";
     expect(parseOpenAIQuicksilverEvent(JSON.stringify({ type }))).toEqual({
       kind: "ignored",
       eventType: type,
     });
+  });
+
+  it("parses direct WebSocket audio", () => {
+    expect(
+      parseOpenAIQuicksilverEvent(
+        JSON.stringify({ type: "output_audio.delta", audio: "AQIDBA==" }),
+      ),
+    ).toEqual({ kind: "audio", data: "AQIDBA==" });
   });
 
   it("parses session expiry and transcript events", () => {

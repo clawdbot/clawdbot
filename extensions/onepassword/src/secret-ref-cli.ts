@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
@@ -107,10 +108,6 @@ function writeLine(message = ""): void {
 
 function writeJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
