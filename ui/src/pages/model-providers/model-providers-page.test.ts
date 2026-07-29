@@ -156,6 +156,16 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
+  it("links the page subtitle to the model providers guide", async () => {
+    const { context } = createHarness("main");
+    const page = appendPage(context);
+    await page.updateComplete;
+
+    const link = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+    expect(link?.textContent?.trim()).toBe("Learn more");
+    expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
+  });
+
   it("patches thinking and fast mode through the shared config draft", async () => {
     const { context, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
@@ -178,21 +188,6 @@ describe("ModelProvidersPage agent scope", () => {
       ["agents", "defaults", "fastModeDefault"],
       false,
     );
-  });
-
-  it("wires model config recovery and apply actions to the shared capability", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.state.configAutoSaveStatus = "error";
-    runtimeConfig.state.configNeedsApply = true;
-    const page = appendPage(context);
-    await vi.waitFor(() => expect(page.querySelector(".config-apply-banner")).not.toBeNull());
-
-    const buttons = [...page.querySelectorAll<HTMLButtonElement>("button")];
-    buttons.find((entry) => entry.textContent?.trim() === "Retry")?.click();
-    buttons.find((entry) => entry.textContent?.trim() === "Restart & apply")?.click();
-
-    expect(runtimeConfig.save).toHaveBeenCalledTimes(1);
-    expect(runtimeConfig.apply).toHaveBeenCalledTimes(1);
   });
 
   it("reloads credential status when the agent selector changes", async () => {

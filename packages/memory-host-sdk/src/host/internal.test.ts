@@ -15,6 +15,7 @@ import {
   normalizeExtraMemoryPaths,
   remapChunkLines,
   runWithConcurrency,
+  stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
 
@@ -318,6 +319,25 @@ describe("memory host SDK package internals", () => {
       [5, 6],
       [7, 7],
     ]);
+  });
+
+  it("strips recall annotation carriers while preserving source line positions", () => {
+    const text = [
+      "- Keep the gateway local. <!-- trigger: gateway setup --> <!-- importance: 9 -->",
+      "  <!-- project: github.com/openclaw/openclaw -->",
+      "  Keep this ordinary <!-- note: visible --> comment.",
+    ].join("\n");
+
+    const stripped = stripMemoryAnnotationCarriers(text);
+
+    expect(stripped).toBe(
+      [
+        "- Keep the gateway local.",
+        "",
+        "  Keep this ordinary <!-- note: visible --> comment.",
+      ].join("\n"),
+    );
+    expect(stripped.split("\n")).toHaveLength(text.split("\n").length);
   });
 
   it("keeps promotion headings and markers out of neighboring entries", () => {

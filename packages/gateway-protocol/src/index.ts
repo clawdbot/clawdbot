@@ -26,8 +26,10 @@ export type {
 export * from "./schema/board.js";
 export {
   SessionCreatedActorSchema,
+  SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionRow,
+  type SessionToolOverrides,
 } from "./schema/sessions-row.js";
 export * from "./schema/sessions-suggestions.js";
 export * from "./migration-api.js";

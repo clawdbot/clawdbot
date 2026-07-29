@@ -28,7 +28,8 @@ describe("project memory bootstrap", () => {
       startLine: 2,
       endLine: 2,
       score: 0.8,
-      snippet: "Use the release helper. <!-- project: github.com/OpenClaw/OpenClaw -->",
+      snippet:
+        "Use the release helper. <!-- trigger: release helper --> <!-- importance: 8 --> <!-- project: github.com/OpenClaw/OpenClaw -->",
       source: "memory" as const,
       projectKey: "github.com/OpenClaw/OpenClaw",
       importance: 8,
@@ -61,7 +62,16 @@ describe("project memory bootstrap", () => {
     const rendered = lines.join("\n");
     expect(rendered).toContain("Use the release helper.");
     expect(rendered).not.toContain("Foreign fact");
+    expect(rendered).not.toContain("<!--");
     expect(rendered.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it("includes entries from every project retained in the session active set", async () => {
+    const rendered = (
+      await prepareEntries(entries, ["github.com/example/other", "github.com/OpenClaw/OpenClaw"])
+    ).join("\n");
+    expect(rendered).toContain("Use the release helper.");
+    expect(rendered).toContain("Foreign fact.");
   });
 
   it("never emits a partial entry or exceeds the hard budget", async () => {

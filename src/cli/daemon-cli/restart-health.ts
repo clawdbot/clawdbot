@@ -1,8 +1,8 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
+import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import { classifyPortListener, inspectPortUsage, type PortUsage } from "../../infra/ports.js";
 import {
   hasActiveStartupMigrationLease,

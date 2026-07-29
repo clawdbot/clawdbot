@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
 - **Control UI cloud workspace conflicts:** surface staged-ref guidance, bounded conflicted paths, structured transcript events, and sidebar attention for cloud worker results that kept local versions.
 - **Control UI update recovery:** the "A new version is available" Reload button now waits out the gateway restart that stranded the chunk and reloads as soon as it answers, instead of silently doing nothing and leaving a manual hard reload as the only way out.
 - **Control UI sender identity polish:** attributed user messages show the author's real avatar in an always-visible gutter on identity-resolving gateways, sender labels drop the opaque profile-UUID suffix (new and historical transcripts), and profile-id senders resolve avatars through the canonical gateway route.
@@ -22,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - **TUI fuzzy selectors:** delegate list matching to pi-tui, adding slash-token and alpha-number matching while removing the local matcher fork.
 - **macOS paired-node terminals:** advertise duplex Codex and Claude terminal resume commands from the embedded node host and forward interactive input and cancellation through the native app bridge. (#107335)
 - **Control UI catalog terminals:** open eligible Codex and Claude Code sessions in the native CLI on their Gateway or paired-node host, with viewer-versus-terminal preferences, validated resume commands, and an interactive PTY relay. (#107086)
+- **Control UI coding catalogs:** show provider brand icons beside Claude Code and Codex session catalog headings in the sidebar.
 - **Skill Workshop history review:** add a manual, newest-first session scan that progressively searches older substantial work for conservative skill ideas, stores only SQLite cursor metadata, and leaves up to three results as pending proposals even when autonomous self-learning is disabled. (#106182)
 - **SQLite snapshots:** add `openclaw backup sqlite create|list|verify|restore` for compact, verified global and per-agent database artifacts with fresh-target-only restore. (#94805) Thanks @giodl73-repo.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
@@ -51,6 +53,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Skill Workshop offline apply:** preserve configless local proposal apply after upgrades under exclusive Gateway startup ownership, while keeping running Gateway snapshot invalidation fail-closed when CLI credentials are unavailable.
+- **macOS and Control UI keyboard navigation:** let Tab traverse links and controls inside embedded Dashboard, browser, and Canvas web views, and keep shortcuts working on non-Latin keyboard layouts without firing during IME composition.
+- **Control UI session diffs:** hide unchanged checkout modifications and untracked files that already existed when a thread started, so the diff panel attributes only files touched by that session. Fixes #115628.
+- **Code Mode small-model repair:** give malformed pre-dispatch `exec` calls one bounded correction turn, expose typed failure-phase and bridge-dispatch evidence, and stop retries after nested tools begin. Fixes #115311.
 - **Shared state corruption recovery:** evict only the exact cached SQLite owner after proven read or write corruption so a repaired database recovers without a Gateway restart while caller-injected handles remain untouched. Fixes #114269. Thanks @rizquuula.
 - **Dev-channel updates:** finish package-to-git switches in a fresh CLI process even when source SHA and version metadata are unchanged, preventing stale hashed chunks from loading after the global package root changes.
 - **Parallels release smoke:** preserve Windows installer reboot results across Parallels, wait for WSL MSI/default-version readiness, force explicit test-owned gateway stops, and reset Linux package, config, and cache state before install lanes, preventing false prerequisite, safety-gate, and stale-config failures.

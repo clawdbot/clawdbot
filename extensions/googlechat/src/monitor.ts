@@ -2,7 +2,7 @@
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   resolveChannelInboundRouteEnvelope,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   type ChannelBotLoopProtectionFacts,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -286,7 +286,7 @@ async function processMessageWithPipeline(params: {
       };
     }
   }
-  const media = toInboundMediaFacts(mediaInputs);
+  const media = await toInboundMediaFactsWithMetadata(mediaInputs);
 
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`

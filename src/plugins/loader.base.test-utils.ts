@@ -1789,6 +1789,13 @@ describe("loadOpenClawPlugins", () => {
           api.registerAgentToolResultMiddleware(() => undefined, {
             runtimes: ["openclaw"],
           });
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push("rollback-hook-fired");
+            },
+            { name: "reload-rollback-hook" },
+          );
           api.on("gateway_stop", async () => {});
         },
       };`,
@@ -1811,7 +1818,7 @@ describe("loadOpenClawPlugins", () => {
     };
 
     const activeRegistry = loadOpenClawPlugins(loadOptions);
-    const expectRegistrationsIntact = () => {
+    const expectRegistrationsIntact = async () => {
       expect(getActivePluginRegistry()).toBe(activeRegistry);
       expect(getRegisteredAgentHarness("codex")).toBeDefined();
       expect(getPluginCommandSpecs().map((entry) => entry.name)).toEqual(["pair"]);
@@ -1820,8 +1827,11 @@ describe("loadOpenClawPlugins", () => {
       ]);
       expect(activeRegistry.agentToolResultMiddlewares).toHaveLength(1);
       expect(activeRegistry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["rollback-hook-fired"]);
     };
-    expectRegistrationsIntact();
+    await expectRegistrationsIntact();
 
     const manifestRegistry = await import("./manifest-registry.js");
     const manifestSpy = vi
@@ -1832,7 +1842,7 @@ describe("loadOpenClawPlugins", () => {
 
     try {
       expect(() => loadOpenClawPlugins(loadOptions)).toThrow("corrupt plugin manifest");
-      expectRegistrationsIntact();
+      await expectRegistrationsIntact();
     } finally {
       manifestSpy.mockRestore();
     }
@@ -1858,7 +1868,7 @@ describe("loadOpenClawPlugins", () => {
         onlyPluginIds: ["reload-rollback", "reload-rollback-failure"],
       }),
     ).toThrow("plugin load failed: reload-rollback-failure: Error: register failed");
-    expectRegistrationsIntact();
+    await expectRegistrationsIntact();
   });
 
   it("rejects malformed plugin agent harness registrations", () => {
@@ -1979,6 +1989,72 @@ describe("loadOpenClawPlugins", () => {
 
     clearInternalHooks();
   });
+
+  it.each(["disabled", "removed"] as const)(
+    "clears legacy internal hooks when their plugin is %s",
+    async (nextState) => {
+      useNoBundledPlugins();
+      const plugin = writePlugin({
+        id: "internal-hook-lifecycle",
+        filename: "internal-hook-lifecycle.cjs",
+        body: `module.exports = {
+          id: "internal-hook-lifecycle",
+          register(api) {
+            api.registerHook(
+              "gateway:startup",
+              (event) => {
+                event.messages.push("legacy-hook-fired");
+              },
+              { name: "legacy-lifecycle-hook" },
+            );
+          },
+        };`,
+      });
+
+      clearInternalHooks();
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["internal-hook-lifecycle"],
+          },
+        },
+      });
+
+      const activeEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(activeEvent);
+      expect(activeEvent.messages).toEqual(["legacy-hook-fired"]);
+
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins:
+            nextState === "disabled"
+              ? {
+                  load: { paths: [plugin.file] },
+                  allow: ["internal-hook-lifecycle"],
+                  entries: {
+                    "internal-hook-lifecycle": {
+                      enabled: false,
+                    },
+                  },
+                }
+              : {
+                  allow: [],
+                },
+        },
+      });
+
+      const retiredEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(retiredEvent);
+      expect(retiredEvent.messages).toStrictEqual([]);
+
+      clearInternalHooks();
+    },
+  );
 
   it("injects plugin config into internal hook event context", async () => {
     useNoBundledPlugins();

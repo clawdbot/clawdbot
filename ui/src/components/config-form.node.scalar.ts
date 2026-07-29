@@ -13,7 +13,7 @@ import {
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
 import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
-import { hintForPath, REDACTED_PLACEHOLDER } from "./config-form.shared.ts";
+import { hintForPath, redactedPlaceholder } from "./config-form.shared.ts";
 
 export function renderTextInput(
   params: ConfigNodeRenderParams & { inputType: "text" | "number" },
@@ -39,7 +39,7 @@ export function renderTextInput(
       ? rawAvailable
         ? t("configForm.structuredSecretRaw")
         : t("configForm.structuredSecretFile")
-      : REDACTED_PLACEHOLDER
+      : redactedPlaceholder()
     : (hint?.placeholder ??
       (schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatUnknownText(schema.default) })

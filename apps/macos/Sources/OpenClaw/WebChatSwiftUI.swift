@@ -566,18 +566,20 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             connection: self.connection)
     }
 
-    func loadImageArtifact(
+    func loadMediaArtifact(
         sessionKey: String,
-        artifactId: String) async throws -> OpenClawChatLoadedImage?
+        artifactId: String,
+        kind: OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
     {
         guard let serverLease = await connection.captureServerLease() else {
             throw OpenClawChatTransportSendError.notDispatched
         }
         let target = self.sessionTarget(for: sessionKey)
-        return try await self.connection.loadImageArtifact(
+        return try await self.connection.loadMediaArtifact(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
             artifactId: artifactId,
+            kind: kind,
             ifCurrentServerLease: serverLease)
     }
 
@@ -876,7 +878,11 @@ private struct MacChatSurface: View {
                     emptyAssistantPrompts: Self.emptyAssistantPrompts,
                     talkControl: self.talkControl,
                     voiceNoteControl: self.voiceNoteControl,
-                    speech: self.speech)
+                    speech: self.speech,
+                    mediaPlaybackAllowed: {
+                        !AppStateStore.shared.talkEnabled &&
+                            !self.voiceNoteRecorder.ownsPendingChatAttachment
+                    })
             } else {
                 OpenClawChatView(
                     viewModel: self.viewModel,
@@ -886,7 +892,11 @@ private struct MacChatSurface: View {
                     emptyAssistantPrompts: Self.emptyAssistantPrompts,
                     talkControl: self.talkControl,
                     voiceNoteControl: self.voiceNoteControl,
-                    speech: self.speech)
+                    speech: self.speech,
+                    mediaPlaybackAllowed: {
+                        !AppStateStore.shared.talkEnabled &&
+                            !self.voiceNoteRecorder.ownsPendingChatAttachment
+                    })
             }
         }
         .onAppear { self.audioInputCatalog.start() }

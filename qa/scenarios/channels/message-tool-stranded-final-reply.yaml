@@ -9,14 +9,14 @@ scenario:
     secondary:
       - channels.direct-final-reply
       - channels.qa-channel-final-reply
-  objective: Reproduce #85714 end to end under messages.visibleReplies=message_tool. A long private final reply that never calls the message tool must warn, enqueue one recovery retry by default, and deliver the original reply via message(action=send).
+  objective: Reproduce #85714 and #115555 end to end under messages.visibleReplies=message_tool. A substantive CJK private final below the raw character threshold must warn, enqueue one recovery retry, and deliver the reply via message(action=send).
   gatewayConfigPatch:
     messages:
       visibleReplies: message_tool
   successCriteria:
-    - The mock provider first returns a long normal final answer and does not plan the message tool.
+    - The mock provider first returns a substantive CJK final below the raw character threshold and does not plan the message tool.
     - The gateway logs the private-final WARN from source-reply/private-final and enqueues one retry.
-    - The retry turn calls message(action=send), and the direct conversation receives the marker exactly once.
+    - The retry turn retains the original CJK final, calls message(action=send), and the direct conversation receives the marker exactly once.
     - Recovery does not loop after the single retry delivery.
   docsRefs:
     - docs/channels/qa-channel.md
@@ -26,13 +26,14 @@ scenario:
     - src/auto-reply/reply/dispatch-from-config.ts
   execution:
     kind: flow
-    summary: Send a direct message_tool_only turn whose model reply omits the message tool, then verify the default one-shot retry delivers via message(action=send).
+    summary: Send a direct message_tool_only turn whose CJK model reply omits the message tool, then verify the default one-shot retry delivers via message(action=send).
     config:
       requiredProviderMode: mock-openai
       conversationId: qa-stranded-dm
       promptSnippet: qa stranded final recovery check
       prompt: "qa stranded final recovery check. Include `QA-STRANDED-85714` in a thorough multi-sentence answer, but do not call any tool yet."
       expectedMarker: QA-STRANDED-85714
+      expectedPrivateFinal: "QA-STRANDED-85714：近 7 日營收較前期增加 5.09%，已連續兩週回升。最大風險是集中：前五大站台占正營收 86.5%，已超過 85% 觀察門檻。近 30 日最大單一產品占 44.2%，亦超過 40% 門檻。建議先維持成長節奏並優先降低集中風險，不建議只看總額就全面加碼。成長主因仍待業務確認，我尚未取得該線的回覆。"
       privateFinalLogNeedle: "source-reply/private-final"
       retryPromptNeedle: "you did not call message(action=send)"
 
@@ -97,7 +98,10 @@ flow:
             message:
               expr: "`expected exactly one stranded-reply retry that delivers via the message tool, saw ${retryDeliveryRequests.length}`"
         - assert:
-            expr: "!env.mock || retryDeliveryRequests.every((request) => request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === config.expectedMarker)"
+            expr: "!env.mock || retryDeliveryRequests.every((request) => String(request.allInputText ?? '').includes(config.expectedPrivateFinal))"
+            message: expected the recovery prompt to preserve the complete original CJK private final
+        - assert:
+            expr: "!env.mock || retryDeliveryRequests.every((request) => request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === config.expectedPrivateFinal)"
             message:
               expr: "`expected message(action=send) with the marker, saw ${JSON.stringify(retryDeliveryRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null })))} `"
         - set: matchingOutbound
@@ -107,6 +111,9 @@ flow:
             expr: matchingOutbound.length === 1
             message:
               expr: "`expected exactly one recovered visible reply, saw ${matchingOutbound.length}`"
+        - assert:
+            expr: "String(matchingOutbound[0]?.text ?? '') === config.expectedPrivateFinal"
+            message: expected the channel to deliver the complete original CJK private final unchanged
         - call: sleep
           args:
             - expr: liveTurnTimeoutMs(env, 8000)

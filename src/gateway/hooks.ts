@@ -13,6 +13,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
+  commitHookTransformMappingReload,
   hasHookTemplateExpressions,
   type HookMappingResolved,
   resolveHookMappings,
@@ -108,6 +109,10 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       allowedSessionKeyPrefixes,
     },
   };
+}
+
+export function commitHooksConfigReload(): void {
+  commitHookTransformMappingReload();
 }
 
 function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<string> {
@@ -224,6 +229,13 @@ type HookAgentPayload = {
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
+  delivery:
+    | { mode: "none" }
+    | {
+        mode: "announce";
+        channel: HookMessageChannel;
+        to?: string;
+      };
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -263,6 +275,76 @@ export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
 /** Resolve hook delivery opt-out; any value except false means deliver. */
 export function resolveHookDeliver(raw: unknown): boolean {
   return raw !== false;
+}
+
+/** Normalize webhook delivery intent before any isolated cron work is scheduled. */
+function normalizeHookAgentDelivery(params: { deliver: unknown; channel: unknown; to: unknown }):
+  | {
+      ok: true;
+      value: Pick<HookAgentPayload, "deliver" | "channel" | "to" | "delivery">;
+    }
+  | { ok: false; error: string } {
+  const deliver = resolveHookDeliver(params.deliver);
+  if (!deliver) {
+    return {
+      ok: true,
+      value: {
+        deliver,
+        channel: "last",
+        to: undefined,
+        delivery: { mode: "none" },
+      },
+    };
+  }
+  const to = normalizeOptionalString(params.to);
+  const channel = resolveHookChannel(params.channel);
+  if (!channel) {
+    return { ok: false, error: getHookChannelError() };
+  }
+  const hasChannel = params.channel !== undefined;
+  const hasTo = params.to !== undefined;
+  if (!hasChannel && !hasTo) {
+    return {
+      ok: true,
+      value: {
+        deliver,
+        channel,
+        to,
+        delivery: { mode: "none" },
+      },
+    };
+  }
+  if (hasTo && !to) {
+    return {
+      ok: false,
+      error: "to must be a non-empty string for hook delivery",
+    };
+  }
+  if (!hasChannel || !to) {
+    return {
+      ok: false,
+      error: "channel and to must be set together for hook delivery",
+    };
+  }
+  if (channel === "last") {
+    return {
+      ok: false,
+      error: "channel must name a concrete channel for hook delivery",
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      deliver,
+      channel,
+      to,
+      delivery: {
+        mode: "announce",
+        channel,
+        to,
+      },
+    },
+  };
 }
 
 function resolveOptionalHookIdempotencyKey(raw: unknown): string | undefined {
@@ -435,18 +517,19 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
   const sessionKey = normalizeOptionalString(sessionKeyRaw);
-  const channel = resolveHookChannel(payload.channel);
-  if (!channel) {
-    return { ok: false, error: getHookChannelError() };
+  const delivery = normalizeHookAgentDelivery({
+    deliver: payload.deliver,
+    channel: payload.channel,
+    to: payload.to,
+  });
+  if (!delivery.ok) {
+    return delivery;
   }
-  const toRaw = payload.to;
-  const to = normalizeOptionalString(toRaw);
   const modelRaw = payload.model;
   const model = normalizeOptionalString(modelRaw);
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
-  const deliver = resolveHookDeliver(payload.deliver);
   const thinkingRaw = payload.thinking;
   const thinking = normalizeOptionalString(thinkingRaw);
   const timeoutRaw = payload.timeoutSeconds;
@@ -463,9 +546,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       idempotencyKey,
       wakeMode,
       sessionKey,
-      deliver,
-      channel,
-      to,
+      ...delivery.value,
       model,
       thinking,
       timeoutSeconds,

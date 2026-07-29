@@ -36,7 +36,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: http: https:; connect-src ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: http: https:; media-src 'self' data: blob: http: https:; connect-src ipc: http://ipc.localhost",
       "capabilities": [
         {
           "identifier": "local-companion",
@@ -95,6 +95,18 @@
     ],
     "resources": {
       "../../../scripts/install-cli.sh": "install-cli.sh"
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "deb": {
+        "depends": [
+          "gstreamer1.0-libav",
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-plugins-bad"
+        ]
+      }
     },
     "macOS": {
       "minimumSystemVersion": "13.0"

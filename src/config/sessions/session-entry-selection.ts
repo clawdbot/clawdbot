@@ -31,6 +31,7 @@ export function inheritSessionSelection(
       : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
+    ...(parentEntry.toolOverrides ? { toolOverrides: parentEntry.toolOverrides } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
     ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
     ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),

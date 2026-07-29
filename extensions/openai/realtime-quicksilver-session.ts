@@ -20,6 +20,10 @@ import {
   type OpenAIQuicksilverTranscriptEntry,
 } from "./realtime-quicksilver-instructions.js";
 import {
+  releaseOpenAIQuicksilverSession,
+  reserveOpenAIQuicksilverSession,
+} from "./realtime-quicksilver-session-limit.js";
+import {
   connectOpenAIQuicksilverSideband,
   type OpenAIQuicksilverSocket,
   type OpenAIQuicksilverSocketFactory,
@@ -36,9 +40,10 @@ import {
   type OpenAIQuicksilverInitialItem,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
+import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 export const OPENAI_QUICKSILVER_OFFER_PATH = "/plugins/openai/realtime/calls";
 export const OPENAI_QUICKSILVER_CAPABILITIES = {
-  transports: ["webrtc" as const],
+  transports: ["webrtc" as const, "gateway-relay" as const],
   handlesAgentConsult: true as const,
   supportsToolCalls: false,
   supportsVideoFrames: false,
@@ -46,7 +51,6 @@ export const OPENAI_QUICKSILVER_CAPABILITIES = {
 
 const OPENAI_QUICKSILVER_PENDING_TTL_MS = 60_000;
 const OPENAI_QUICKSILVER_SESSION_TTL_MS = 30 * 60_000;
-const OPENAI_QUICKSILVER_MAX_SESSIONS = 8;
 const OPENAI_QUICKSILVER_MAX_SDP_BYTES = 256 * 1024;
 const OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS = 30_000;
 const WEBSOCKET_OPEN = 1;
@@ -246,6 +250,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
     }
     activeSessions.delete(session.token);
     reservations.delete(session.token);
+    releaseOpenAIQuicksilverSession(session.token);
     clearTimeout(session.timer);
     session.consultController?.abort(new Error("GPT-Live delegation stopped"));
     session.abortController.abort(new Error("GPT-Live session closed"));
@@ -343,6 +348,11 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       }
       return;
     }
+    // WebRTC carries media separately; only the direct backend bridge consumes
+    // Frameless output_audio.delta events received on the provider WebSocket.
+    if (event.kind === "audio") {
+      return;
+    }
     const delegationInput = event.prompt;
     if (!delegationInput.trim()) {
       params.logger.debug?.("OpenAI GPT-Live ignored an empty client delegation");
@@ -416,6 +426,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (offer.expiresAt <= now) {
         pendingOffers.delete(token);
         reservations.delete(token);
+        releaseOpenAIQuicksilverSession(token);
       }
     }
   };
@@ -429,20 +440,18 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (cleanedUp || shutdownController.signal.aborted) {
         throw new Error("OpenAI GPT-Live sessions are stopping; restart Gateway and try again");
       }
-      if (!request.runAgentConsult) {
+      const model = request.model?.trim();
+      if (!model) {
+        throw new Error("OpenAI realtime browser sessions require a model");
+      }
+      if (isOpenAIGptLiveModel(model) && !request.runAgentConsult) {
         throw new Error("OpenAI GPT-Live requires the Gateway agent-consult runtime");
       }
       prunePendingOffers();
-      if (reservations.size >= OPENAI_QUICKSILVER_MAX_SESSIONS) {
-        throw new Error("Too many concurrent OpenAI GPT-Live sessions; try again in a minute");
-      }
-      const model = request.model?.trim();
-      if (!model) {
-        throw new Error("OpenAI GPT-Live requires a model");
-      }
       const voice = resolveOpenAIQuicksilverVoice(request.voice);
       const token = randomBytes(32).toString("base64url");
       const expiresAt = Date.now() + OPENAI_QUICKSILVER_PENDING_TTL_MS;
+      reserveOpenAIQuicksilverSession(token, { expiresAtMs: expiresAt });
       pendingOffers.set(token, {
         auth,
         expiresAt,
@@ -475,6 +484,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         closeSession(active);
       } else {
         reservations.delete(session.clientSecret);
+        releaseOpenAIQuicksilverSession(session.clientSecret);
       }
     },
   };
@@ -548,10 +558,6 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         respondText(res, 400, "SDP offer is required");
         return true;
       }
-      const runAgentConsult = offer.request.runAgentConsult;
-      if (!runAgentConsult) {
-        throw new Error("OpenAI GPT-Live requires the Gateway agent-consult runtime");
-      }
       const upstreamSignal = AbortSignal.any([
         lifecycleSignal,
         AbortSignal.timeout(OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS),
@@ -569,6 +575,18 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         signal: upstreamSignal,
         fetchImpl: params.fetchImpl,
       });
+      if (call.kind === "ga-realtime") {
+        res.statusCode = call.status;
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("content-type", "application/sdp");
+        res.setHeader("x-content-type-options", "nosniff");
+        res.end(call.answerSdp);
+        return true;
+      }
+      const runAgentConsult = offer.request.runAgentConsult;
+      if (!runAgentConsult) {
+        throw new Error("OpenAI GPT-Live requires the Gateway agent-consult runtime");
+      }
       const connected = await connectOpenAIQuicksilverSideband({
         auth: offer.auth,
         createSocket,
@@ -597,6 +615,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         partialTranscriptRole: undefined,
       };
       activeSessions.set(token, session);
+      reserveOpenAIQuicksilverSession(token);
       reservationTransferred = true;
       attachSidebandHandlers(session, runAgentConsult);
       const terminalEvent = connected.detachBuffer();
@@ -648,6 +667,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       inFlightOffers.delete(token);
       if (!reservationTransferred) {
         reservations.delete(token);
+        releaseOpenAIQuicksilverSession(token);
       }
     }
   };
@@ -672,6 +692,9 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       closeSession(session);
     }
     await Promise.allSettled(inFlightHandlers);
+    for (const token of reservations) {
+      releaseOpenAIQuicksilverSession(token);
+    }
     reservations.clear();
   };
 

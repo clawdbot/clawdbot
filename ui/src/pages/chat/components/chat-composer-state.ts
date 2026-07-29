@@ -29,6 +29,8 @@ function createChatComposerState(): ChatComposerState {
     microphoneDevices: [],
     microphoneWarning: null,
     microphoneDiscoveryRequest: 0,
+    capabilityMenuOpen: false,
+    capabilityMenuView: "root",
     textareaRef: null,
     dictation: null,
     dictationDraftKey: null,

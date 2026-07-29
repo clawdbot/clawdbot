@@ -3,6 +3,7 @@
  */
 import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
@@ -65,6 +66,45 @@ type KeyMoveChangeContext = {
   targetValue: unknown;
   mappedValue: unknown;
 };
+
+/** Collects a channel's root config and object-shaped account overrides in config order. */
+export function collectChannelAccountScopes(params: {
+  cfg: OpenClawConfig;
+  channelId: string;
+}): Array<{
+  prefix: string;
+  pathSegments: string[];
+  account: Record<string, unknown>;
+}> {
+  const scopes: Array<{
+    prefix: string;
+    pathSegments: string[];
+    account: Record<string, unknown>;
+  }> = [];
+  const pathSegments = ["channels", params.channelId];
+  const channels = asObjectRecord(params.cfg.channels);
+  const channel = asObjectRecord(channels?.[params.channelId]);
+  if (!channel) {
+    return scopes;
+  }
+  scopes.push({ prefix: pathSegments.join("."), pathSegments, account: channel });
+  const accounts = asObjectRecord(channel.accounts);
+  if (!accounts) {
+    return scopes;
+  }
+  for (const [accountId, value] of Object.entries(accounts)) {
+    const account = asObjectRecord(value);
+    if (account) {
+      const accountPathSegments = [...pathSegments, "accounts", accountId];
+      scopes.push({
+        prefix: accountPathSegments.join("."),
+        pathSegments: accountPathSegments,
+        account,
+      });
+    }
+  }
+  return scopes;
+}
 
 function readKeyMovePath(entry: Record<string, unknown>, path: readonly string[], own = true) {
   let current = entry;

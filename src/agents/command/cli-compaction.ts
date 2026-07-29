@@ -569,14 +569,13 @@ async function compactNativeHarnessCliTranscript(params: {
       return { compacted: false };
     }
     if (isIntentionalNativeAutoCompactionSkip(result)) {
-      if (params.sessionEntry.modelSelectionLocked === true) {
-        return { compacted: false };
-      }
-      return {
-        compacted: false,
-        fallbackToContextEngine: true,
-        failureReason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
-      };
+      // Codex owns automatic thread compaction (codex-rs runs it inline during
+      // turns); falling back to context-engine compaction here fought that
+      // ownership and failed OAuth-only sessions with "No API key found".
+      log.info(
+        `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON}`,
+      );
+      return { compacted: false };
     }
     const recoverableBindingFailure = isRecoverableNativeHarnessBindingFailure(result);
     const fallbackToContextEngine =

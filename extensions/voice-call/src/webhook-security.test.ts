@@ -732,36 +732,30 @@ describe("verifyTwilioWebhook", () => {
     expect(result.verificationUrl).toBe(webhookUrl);
   });
 
-  it("uses request query when publicUrl omits it", () => {
+  it("uses the configured public path with the request query", () => {
     const authToken = "test-auth-token";
-    const publicUrl = "https://example.com/voice/webhook";
-    const urlWithQuery = `${publicUrl}?callId=abc&turnToken=secret-turn-token`;
+    const publicUrl = "https://example.com/proxy/voice/webhook";
+    const urlWithQuery = `${publicUrl}?callId=abc`;
     const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
-
-    const signature = twilioSignature({
-      authToken,
-      url: urlWithQuery,
-      postBody,
-    });
-
-    const result = verifyTwilioWebhook(
-      {
+    const verifySignedUrl = (signedUrl: string) =>
+      verifyTwilioSignedRequest({
         headers: {
           host: "example.com",
           "x-forwarded-proto": "https",
-          "x-twilio-signature": signature,
+          "x-twilio-signature": twilioSignature({ authToken, url: signedUrl, postBody }),
         },
         rawBody: postBody,
-        url: "http://local/voice/webhook?callId=abc&turnToken=secret-turn-token",
-        method: "POST",
-        query: { callId: "abc", turnToken: "secret-turn-token" },
-      },
-      authToken,
-      { publicUrl },
-    );
+        authToken,
+        publicUrl,
+      });
 
+    const result = verifySignedUrl(urlWithQuery);
     expect(result.ok).toBe(true);
     expect(result.verificationUrl).toBe(urlWithQuery);
+
+    const localPathResult = verifySignedUrl("https://example.com/voice/webhook?callId=abc");
+    expect(localPathResult.ok).toBe(false);
+    expect(localPathResult.reason).toContain(`${publicUrl}?callId=***`);
   });
 
   it("redacts query params from invalid Twilio signature diagnostics", () => {

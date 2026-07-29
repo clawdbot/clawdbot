@@ -18,6 +18,7 @@ import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
+  isDefaultInstallIdentity: vi.fn(() => true),
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   registerBundledHealthChecks: vi.fn(),
   runDoctorHealthRepairs: vi.fn(),
@@ -161,6 +162,11 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayService: vi.fn(),
   getSkillCuratorDoctorWarning: vi.fn(),
 }));
+
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: mocks.isDefaultInstallIdentity };
+});
 
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
 

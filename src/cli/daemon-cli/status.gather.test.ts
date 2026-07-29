@@ -55,6 +55,22 @@ const inspectPortUsage = vi.fn<(port: number) => Promise<PortUsageTestSummary>>(
     hints: [],
   }),
 );
+const inspectPortUsages = vi.fn<
+  (ports: readonly number[]) => Promise<Map<number, PortUsageTestSummary>>
+>(
+  async (ports) =>
+    new Map(
+      ports.map((port) => [
+        port,
+        {
+          port,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+      ]),
+    ),
+);
 const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>(
   async (port: number) => ({
     port,
@@ -232,6 +248,7 @@ vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
 vi.mock("../../infra/ports.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
+  inspectPortUsages: (ports: readonly number[]) => inspectPortUsages(ports),
   formatPortDiagnostics: () => [],
 }));
 
@@ -314,6 +331,20 @@ describe("gatherDaemonStatus", () => {
       listeners: [],
       hints: [],
     }));
+    inspectPortUsages.mockReset();
+    inspectPortUsages.mockImplementation(async (ports: readonly number[]) => {
+      return new Map(
+        ports.map((port) => [
+          port,
+          {
+            port,
+            status: "free" as const,
+            listeners: [],
+            hints: [],
+          },
+        ]),
+      );
+    });
     inspectPortConnections.mockClear();
     inspectWindowsGatewayFirewall.mockClear();
     inspectWindowsGatewayFirewall.mockResolvedValue({
@@ -380,6 +411,17 @@ describe("gatherDaemonStatus", () => {
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+  });
+
+  it("batches daemon and CLI port status inspection when ports differ", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(inspectPortUsages).toHaveBeenCalledWith([19001, 18789]);
+    expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
   it("reports the heap limit from the installed Gateway service", async () => {
@@ -1149,12 +1191,19 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("includes the last gateway error when the service is listening but the RPC probe fails", async () => {
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
+    inspectPortUsages.mockResolvedValueOnce(
+      new Map([
+        [
+          19001,
+          {
+            port: 19001,
+            status: "busy",
+            listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+            hints: [],
+          },
+        ],
+      ]),
+    );
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://127.0.0.1:19001",
@@ -1185,12 +1234,6 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("does not read local gateway errors for an explicit probe URL", async () => {
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://remote.example:18790",
@@ -1215,12 +1258,6 @@ describe("gatherDaemonStatus", () => {
         auth: { token: "daemon-token" },
       },
     };
-    inspectPortUsage.mockResolvedValueOnce({
-      port: 19001,
-      status: "busy",
-      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-      hints: [],
-    });
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       url: "wss://remote.example:18790",

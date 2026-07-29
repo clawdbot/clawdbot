@@ -1112,6 +1112,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   async search(query: string, opts?: MemoryIndexSearchOptions): Promise<MemorySearchResult[]> {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+      return [];
+    }
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
@@ -1119,7 +1123,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ? Math.min(200, Math.max(maxResults, maxResults * 4))
       : maxResults;
     const candidateMinScore = hasActiveProject ? minScore / 1.15 : minScore;
-    const results = await this.searchUnranked(query, {
+    const results = await this.searchUnranked(normalizedQuery, {
       ...opts,
       maxResults: candidateMaxResults,
       minScore: candidateMinScore,
@@ -1131,15 +1135,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private async searchUnranked(
-    query: string,
+    normalizedQuery: string,
     opts?: MemoryIndexSearchOptions,
   ): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
       opts?.onDebug?.({ backend: "builtin" });
-      const normalizedQuery = query.trim();
-      if (!normalizedQuery) {
-        return [];
-      }
       if (this.providerRequirement.mode === "required") {
         await this.ensureProviderInitialized();
         this.assertRequiredProviderAvailable("search");
@@ -1498,27 +1498,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
     const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
-    return readCuratedMemoryTriggerCandidates(this.db, limit, opts?.activeProjectKeys).map(
-      (row) => {
-        const result: MemorySearchResult = {
-          path: row.path,
-          startLine: row.start_line,
-          endLine: row.end_line,
-          score: 0,
-          snippet: row.text,
-          source: "memory",
-        };
-        if (typeof row.importance === "number") {
-          result.importance = row.importance;
-        }
-        if (typeof row.triggers === "string" && row.triggers.trim()) {
-          result.triggers = row.triggers.trim();
-        }
-        if (typeof row.project_key === "string" && row.project_key.trim()) {
-          result.projectKey = row.project_key.trim();
-        }
-        return result;
-      },
+    return this.toCuratedMemorySearchResults(
+      readCuratedMemoryTriggerCandidates(this.db, limit, opts?.activeProjectKeys),
     );
   }
 
@@ -1527,7 +1508,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     limit?: number;
   }): Promise<MemorySearchResult[]> {
     const limit = Math.max(1, Math.min(512, Math.floor(opts.limit ?? 48)));
-    return readCuratedProjectMemoryCandidates(this.db, limit, opts.activeProjectKeys).map((row) => {
+    return this.toCuratedMemorySearchResults(
+      readCuratedProjectMemoryCandidates(this.db, limit, opts.activeProjectKeys),
+    );
+  }
+
+  private toCuratedMemorySearchResults(
+    rows: ReturnType<typeof readCuratedMemoryTriggerCandidates>,
+  ): MemorySearchResult[] {
+    return rows.map((row) => {
       const result: MemorySearchResult = {
         path: row.path,
         startLine: row.start_line,

@@ -2,6 +2,7 @@ import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptParams,
   AgentMessage,
+  AnyAgentTool,
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -248,8 +249,13 @@ export async function runCopilotExecution(context: {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  let codeModeEngaged: boolean | undefined;
   try {
     let sdkTools: SdkTool[] = [];
+    let resultContentSourceByToolName = new Map<
+      string,
+      NonNullable<AnyAgentTool["resultContentSource"]>
+    >();
     if (!settledToolFinalization) {
       try {
         const toolBridge = await createToolBridge({
@@ -287,7 +293,13 @@ export async function runCopilotExecution(context: {
             }),
         });
         cleanupToolBridge = toolBridge.cleanup;
+        codeModeEngaged = toolBridge.codeModeEngaged;
         sdkTools = toolBridge.sdkTools;
+        resultContentSourceByToolName = new Map(
+          toolBridge.sourceTools.flatMap((tool) =>
+            tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
+          ),
+        );
       } catch (error: unknown) {
         const result = createResult(input, {
           messagesSnapshot: messages,
@@ -438,6 +450,7 @@ export async function runCopilotExecution(context: {
         })),
         modelRef,
         now,
+        resultContentSourceByToolName,
       },
     });
     activeRunHandleRef = registerCopilotActiveRun({
@@ -609,6 +622,7 @@ export async function runCopilotExecution(context: {
     aborted,
     attemptStartedAt,
     bridge,
+    codeModeEngaged,
     downgradedFromResume,
     externalAbort,
     hookContext,

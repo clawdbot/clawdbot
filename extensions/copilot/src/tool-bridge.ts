@@ -145,6 +145,11 @@ interface CopilotToolBridgeInput {
 
 interface CopilotToolBridge {
   cleanup?: () => void;
+  /**
+   * Resolved code-mode gate for the run, so the attempt result can report it.
+   * Optional because a stubbed bridge simply leaves engagement unreported.
+   */
+  codeModeEngaged?: boolean;
   sdkTools: SdkTool[];
   sourceTools: AnyAgentTool[];
 }
@@ -161,7 +166,7 @@ export async function createCopilotToolBridge(
   input: CopilotToolBridgeInput,
 ): Promise<CopilotToolBridge> {
   if (!input.allowModelTools && !supportsModelTools(input.modelProvider)) {
-    return { sdkTools: [], sourceTools: [] };
+    return { codeModeEngaged: false, sdkTools: [], sourceTools: [] };
   }
 
   const attemptParams = input.attemptParams ?? ({} as CopilotToolAttemptParams);
@@ -186,7 +191,7 @@ export async function createCopilotToolBridge(
       }
     : toolPlan;
   if (!effectiveToolPlan.constructTools) {
-    return { sdkTools: [], sourceTools: [] };
+    return { codeModeEngaged: false, sdkTools: [], sourceTools: [] };
   }
 
   const createOpenClawCodingTools =
@@ -268,6 +273,11 @@ export async function createCopilotToolBridge(
 
   return {
     cleanup: toolSurfaceRuntime.cleanup,
+    // Harness runs resolve `tools.codeMode: "auto"` inside the tool surface
+    // bridge, so this is the only place that knows whether the turn actually
+    // got code-mode controls. Without it the run reports `codeModeEngaged`
+    // as unset and telemetry cannot tell "off" from "harness did not report".
+    codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     sdkTools: filteredTools.map((sourceTool) =>
       convertOpenClawToolToSdkTool(sourceTool, {
         abortSignal: input.abortSignal,

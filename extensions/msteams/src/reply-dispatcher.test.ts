@@ -1,4 +1,5 @@
 // Msteams tests cover reply dispatcher plugin behavior.
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
@@ -74,6 +75,8 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sendMSTeamsMessagesMock.mockReset().mockResolvedValue([]);
+    renderReplyPayloadsToMessagesMock.mockReset().mockReturnValue([]);
     getGlobalHookRunnerMock.mockReturnValue(undefined);
     lastStreamMock = undefined;
 
@@ -166,7 +169,9 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   type DispatcherOptions = {
     onReplyStart?: () => Promise<void> | void;
-    deliver: (payload: { text: string }) => Promise<void> | void;
+    deliver: (payload: {
+      text: string;
+    }) => ReturnType<ReturnType<typeof createMSTeamsReplyDispatcher>["delivery"]["deliver"]>;
   };
 
   type PipelineArgs = {
@@ -184,9 +189,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     }
     return {
       onReplyStart: created.dispatcherOptions.onReplyStart,
-      deliver: async (payload) => {
-        await created.delivery.deliver(payload, { kind: "final" });
-      },
+      deliver: (payload) => created.delivery.deliver(payload, { kind: "final" }),
     };
   }
 
@@ -459,8 +462,13 @@ describe("createMSTeamsReplyDispatcher", () => {
     getStreamMock().close.mockResolvedValueOnce(undefined);
 
     dispatcher.replyOptions.onPartialReply?.({ text: "streamed" });
-    await options.deliver({ text: "streamed final" });
+    const result = await options.deliver({ text: "streamed final" });
     await dispatcher.dispatcherOptions.onSettled?.();
+    await expect(result?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["fallback-id"],
+      content: "streamed final",
+    });
 
     expect(renderReplyPayloadsToMessagesMock).toHaveBeenCalledWith(
       [{ text: "streamed final" }],
@@ -672,7 +680,6 @@ describe("createMSTeamsReplyDispatcher", () => {
       { content: "two" },
     ] as never);
     sendMSTeamsMessagesMock
-      .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }))
       .mockResolvedValueOnce(["id-1"] as never)
       .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }));
 
@@ -683,8 +690,17 @@ describe("createMSTeamsReplyDispatcher", () => {
     );
     const options = dispatcherOptions();
 
-    await options.deliver({ text: "block content" });
+    const result = await options.deliver({ text: "block content" });
+    const finalization = expect(result?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        visibleReplySent: true,
+        messageIds: ["id-1"],
+        content: "block content",
+      },
+    });
     await dispatcher.dispatcherOptions.onSettled?.();
+    await finalization;
 
     expect(onSentMessageIds).toHaveBeenCalledWith(["id-1"]);
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
@@ -710,5 +726,103 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.dispatcherOptions.onSettled?.();
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("returns queued delivery identity only after the provider send runs", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
+    const dispatcher = createDispatcher("groupchat", {
+      streaming: { block: { enabled: false } },
+    });
+
+    expect(dispatcher.delivery.observeMessageSent).toBe(true);
+    const result = await dispatcher.delivery.deliver({ text: "hello" }, { kind: "final" });
+    let settled = false;
+    void result?.finalization?.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled();
+
+    await dispatcher.dispatcherOptions.onSettled?.();
+    await expect(result?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["id-1"],
+      content: "hello",
+    });
+  });
+
+  it("keeps suppressed queued sends non-visible", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue([]);
+    const onSentMessageIds = vi.fn();
+    const dispatcher = createDispatcher(
+      "groupchat",
+      { streaming: { block: { enabled: false } } },
+      { onSentMessageIds },
+    );
+
+    const result = await dispatcher.delivery.deliver({ text: "hello" }, { kind: "final" });
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    await expect(result?.finalization).resolves.toEqual({
+      visibleReplySent: false,
+    });
+    expect(onSentMessageIds).not.toHaveBeenCalled();
+  });
+
+  it("returns native stream identity and final content after close", async () => {
+    const dispatcher = createDispatcher("personal");
+    dispatcher.replyOptions.onPartialReply?.({ text: "streamed" });
+
+    const result = await dispatcher.delivery.deliver({ text: "streamed final" }, { kind: "final" });
+    expect(getStreamMock().close).not.toHaveBeenCalled();
+
+    await dispatcher.dispatcherOptions.onSettled?.();
+    await expect(result?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["stream-final"],
+      content: "streamed final",
+    });
+  });
+
+  it("settles delivery when sent-message ID observation throws", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
+    const dispatcher = createDispatcher(
+      "groupchat",
+      { streaming: { block: { enabled: false } } },
+      {
+        onSentMessageIds: () => {
+          throw new Error("observer failed");
+        },
+      },
+    );
+
+    const result = await dispatcher.delivery.deliver({ text: "hello" }, { kind: "final" });
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    await expect(result?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["id-1"],
+      content: "hello",
+    });
+  });
+
+  it("preserves a never-dispatched queued failure for core event suppression", async () => {
+    const failure = new PlatformMessageNotDispatchedError("local media load failed", {
+      cause: new Error("missing file"),
+    });
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ mediaUrl: "/missing/file" }] as never);
+    sendMSTeamsMessagesMock.mockRejectedValue(failure);
+    const dispatcher = createDispatcher("groupchat", {
+      streaming: { block: { enabled: false } },
+    });
+
+    const result = await dispatcher.delivery.deliver({ text: "attachment" }, { kind: "final" });
+    const finalization = expect(result?.finalization).rejects.toBe(failure);
+    await dispatcher.dispatcherOptions.onSettled?.();
+    await finalization;
   });
 });

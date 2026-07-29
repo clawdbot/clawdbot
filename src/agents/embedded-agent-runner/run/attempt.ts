@@ -7,11 +7,13 @@ import { resolveContextEngineOwnerPluginId } from "../../../context-engine/regis
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import {
+  AgentRunTerminalOutcomeError,
+  buildAgentRunTerminalOutcomeFromAttempt,
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
-import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveAgentDir } from "../../agent-scope.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
@@ -55,6 +57,7 @@ export async function runEmbeddedAttempt(
   const runAbortController = new AbortController();
   const {
     agentCoreThinkingLevel,
+    defaultAgentId,
     effectiveCwd,
     effectiveFsWorkspaceOnly,
     effectiveWorkspace,
@@ -226,11 +229,6 @@ export async function runEmbeddedAttempt(
       resolvedWorkspace,
       sessionAgentId,
       sessionLabel: params.sessionKey ?? params.sessionId,
-    });
-    const { defaultAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-      agentId: params.agentId,
     });
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
@@ -490,6 +488,15 @@ export async function runEmbeddedAttempt(
         }),
       });
     }
+  } catch (error) {
+    const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
+      terminal: executionState.terminal,
+      abortSignal: params.abortSignal,
+    });
+    if (terminalOutcome.status === "timeout") {
+      throw new AgentRunTerminalOutcomeError(error, terminalOutcome);
+    }
+    throw error;
   } finally {
     externalAbortController.dispose();
     clearToolActivityRun(params.runId);

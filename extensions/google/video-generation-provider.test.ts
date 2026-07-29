@@ -270,7 +270,26 @@ describe("google video generation provider", () => {
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
   });
 
-  it("strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK", async () => {
+  it.each([
+    {
+      name: "strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      expectedBaseUrl: "https://generativelanguage.googleapis.com",
+      prompt: "A tiny robot watering a windowsill garden",
+    },
+    {
+      name: "does NOT strip /v1beta when it appears mid-path (end-anchor proof)",
+      baseUrl: "https://proxy.example.com/v1beta/route",
+      expectedBaseUrl: "https://proxy.example.com/v1beta/route",
+      prompt: "test",
+    },
+    {
+      name: "passes baseUrl unchanged when no /v1beta suffix is present",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      expectedBaseUrl: "https://generativelanguage.googleapis.com",
+      prompt: "test",
+    },
+  ])("$name", async ({ baseUrl, expectedBaseUrl, prompt }) => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
       source: "env",
@@ -285,24 +304,15 @@ describe("google video generation provider", () => {
       },
     });
 
-    const provider = buildGoogleVideoGenerationProvider();
-    await provider.generateVideo({
+    await buildGoogleVideoGenerationProvider().generateVideo({
       provider: "google",
       model: "veo-3.1-fast-generate-preview",
-      prompt: "A tiny robot watering a windowsill garden",
-      cfg: {
-        models: {
-          providers: {
-            google: { baseUrl: "https://generativelanguage.googleapis.com/v1beta", models: [] },
-          },
-        },
-      },
+      prompt,
+      cfg: { models: { providers: { google: { baseUrl, models: [] } } } },
       durationSeconds: 3,
     });
 
-    expect(firstGoogleClientHttpOptions().baseUrl).toBe(
-      "https://generativelanguage.googleapis.com",
-    );
+    expect(firstGoogleClientHttpOptions().baseUrl).toBe(expectedBaseUrl);
   });
 
   it("downloads MLDev direct video uri responses without routing through the Files API", async () => {
@@ -393,6 +403,111 @@ describe("google video generation provider", () => {
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+  });
+
+  it("cancels each captured failed video download without waiting for its cloned stream", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const capturedResponses: Response[] = [];
+    const canceledBodies: ReadableStream<Uint8Array>[] = [];
+    const fetchMock = vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+        },
+      });
+      const response = new Response(body, {
+        status: 503,
+        statusText: "Service Unavailable",
+      });
+      capturedResponses.push(response.clone());
+      const responseBody = response.body;
+      if (!responseBody) {
+        throw new Error("expected a streaming video download response");
+      }
+      const cancel = responseBody.cancel.bind(responseBody);
+      vi.spyOn(responseBody, "cancel").mockImplementation((reason) => {
+        canceledBodies.push(responseBody);
+        return cancel(reason);
+      });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(
+        buildGoogleVideoGenerationProvider().generateVideo({
+          provider: "google",
+          model: "veo-3.1-fast-generate-preview",
+          prompt: "A tiny robot watering a windowsill garden",
+          cfg: {},
+          durationSeconds: 3,
+        }),
+      ).rejects.toThrow("Failed to download Google generated video: 503 Service Unavailable");
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(canceledBodies).toHaveLength(2);
+      expect(canceledBodies[0]).not.toBe(canceledBodies[1]);
+    } finally {
+      await Promise.all(
+        capturedResponses.map(async (response) => {
+          await response.body?.cancel();
+        }),
+      );
+    }
+  });
+
+  it("preserves the video download error when a failed response has no body", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    const fetchMock = vi.fn(
+      async () => new Response(null, { status: 503, statusText: "Service Unavailable" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      buildGoogleVideoGenerationProvider().generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Failed to download Google generated video: 503 Service Unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("downloads SDK file handles through the bounded REST media endpoint", async () => {
@@ -664,72 +779,6 @@ describe("google video generation provider", () => {
     ).rejects.toThrow("sdk 404");
 
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("does NOT strip /v1beta when it appears mid-path (end-anchor proof)", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          { video: { videoBytes: Buffer.from("mp4").toString("base64"), mimeType: "video/mp4" } },
-        ],
-      },
-    });
-
-    const provider = buildGoogleVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-      prompt: "test",
-      cfg: {
-        models: {
-          providers: { google: { baseUrl: "https://proxy.example.com/v1beta/route", models: [] } },
-        },
-      },
-      durationSeconds: 3,
-    });
-
-    expect(firstGoogleClientHttpOptions().baseUrl).toBe("https://proxy.example.com/v1beta/route");
-  });
-
-  it("passes baseUrl unchanged when no /v1beta suffix is present", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
-      response: {
-        generatedVideos: [
-          { video: { videoBytes: Buffer.from("mp4").toString("base64"), mimeType: "video/mp4" } },
-        ],
-      },
-    });
-
-    const provider = buildGoogleVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "google",
-      model: "veo-3.1-fast-generate-preview",
-      prompt: "test",
-      cfg: {
-        models: {
-          providers: {
-            google: { baseUrl: "https://generativelanguage.googleapis.com", models: [] },
-          },
-        },
-      },
-      durationSeconds: 3,
-    });
-
-    expect(firstGoogleClientHttpOptions().baseUrl).toBe(
-      "https://generativelanguage.googleapis.com",
-    );
   });
 
   it("rejects mixed image and video inputs", async () => {

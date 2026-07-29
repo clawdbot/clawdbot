@@ -117,35 +117,38 @@ nodeLinker: hoisted
 blockExoticSubdeps: true
 
 overrides:
-  "@anthropic-ai/sdk": 0.112.3
-  "@opentelemetry/core": 2.9.0
-  "@opentelemetry/propagator-jaeger": 2.9.0
-  "@aws-sdk/core": 3.975.3
-  "@aws-sdk/credential-provider-node": 3.972.70
-  "@aws-sdk/xml-builder": 3.972.36
-  hono: 4.12.31
+  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.146.0
+  "@anthropic-ai/sdk": 0.115.0
+  "@opentelemetry/core": 2.10.0
+  "@opentelemetry/propagator-jaeger": 2.10.0
+  "@aws-sdk/core": 3.977.1
+  "@aws-sdk/credential-provider-node": 3.972.72
+  "@aws-sdk/xml-builder": 3.972.37
+  hono: 4.12.32
   "@hono/node-server": 2.0.12
   axios: 1.18.1
-  fast-uri: 3.1.4
+  fast-uri: 4.1.1
   follow-redirects: 1.16.0
   defu: 6.1.7
   fast-xml-parser: 5.10.1
-  request: "npm:@cypress/request@3.0.10"
+  request: "npm:@cypress/request@4.0.1"
   request-promise: "npm:@cypress/request-promise@5.0.0"
-  basic-ftp: 6.0.1
+  basic-ftp: 6.0.2
   brace-expansion: 5.0.8
   file-type: 22.0.1
-  form-data: 2.5.6
-  ip-address: 10.2.0
+  form-data: 4.0.6
+  "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
+  ip-address: 10.3.1
   minimatch: 10.2.5
   path-to-regexp: 8.4.2
   qs: 6.15.3
+  sharp: 0.35.3
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.6
+  typebox: 1.3.8
   tar: 7.5.22
-  tough-cookie: 4.1.4
+  tough-cookie: 5.1.2
   yauzl: 3.4.0
-  protobufjs: 7.6.5
+  protobufjs: 8.7.1
   uuid: 14.0.1
 
 allowBuilds:
@@ -161,7 +164,9 @@ allowBuilds:
   esbuild: true
   koffi: false
   node-llama-cpp: false
+  onnxruntime-node: false
   protobufjs: true
+  sharp: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true

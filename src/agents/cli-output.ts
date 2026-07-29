@@ -14,6 +14,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
+import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
 export type CliUsage = {
   input?: number;
@@ -51,6 +52,7 @@ export type CliOutput = {
   usage?: CliUsage;
   /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
   diagnosticUsage?: CliUsage;
+  toolSummary?: ToolSummaryTrace;
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
   diagnostics?: {

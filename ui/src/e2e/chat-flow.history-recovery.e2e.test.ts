@@ -17,6 +17,35 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("keeps valid assistant history visible after a malformed transcript block", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const visibleAnswer = "The valid assistant answer remains visible.";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [null, { type: "output_text", text: visibleAnswer }],
+          timestamp: Date.parse("2026-07-12T14:30:00.000Z"),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".chat-thread").getByText(visibleAnswer, { exact: true }).waitFor({
+        timeout: 10_000,
+      });
+      expect((await gateway.getRequests("chat.startup")).length).toBeGreaterThan(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("shows persisted user messages after opening History and scrolling mixed history", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

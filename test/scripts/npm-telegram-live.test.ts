@@ -392,7 +392,31 @@ describe("package Telegram live Docker E2E", () => {
     ).toThrow("invalid OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: 7samples");
   });
 
-  it("gates package Telegram status on the summary artifact", async () => {
+  it.each(["fail", "skip", "skipped", "timeout"])(
+    "fails package Telegram QA when a scenario has %s status",
+    async (status) => {
+      const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
+      writeFileSync(
+        summaryPath,
+        JSON.stringify({
+          kind: "openclaw.qa.evidence-summary",
+          schemaVersion: 2,
+          generatedAt: "2026-05-01T00:00:00.000Z",
+          entries: [{ result: { status } }],
+        }),
+        "utf8",
+      );
+
+      await expect(
+        testing.shouldFailPackageTelegramRun(
+          { summaryPath },
+          { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "" },
+        ),
+      ).resolves.toBe(true);
+    },
+  );
+
+  it("passes package Telegram QA when every scenario passes", async () => {
     const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
     writeFileSync(
       summaryPath,
@@ -400,7 +424,7 @@ describe("package Telegram live Docker E2E", () => {
         kind: "openclaw.qa.evidence-summary",
         schemaVersion: 2,
         generatedAt: "2026-05-01T00:00:00.000Z",
-        entries: [{ result: { status: "fail" } }],
+        entries: [{ result: { status: "pass" } }],
       }),
       "utf8",
     );
@@ -410,7 +434,7 @@ describe("package Telegram live Docker E2E", () => {
         { summaryPath },
         { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "" },
       ),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
   });
 
   it("does not read package Telegram summaries when failures are allowed", async () => {

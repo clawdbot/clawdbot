@@ -423,6 +423,59 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   ws.close();
 });
 
+test.each([
+  ["my-ngc", "nvidia/nemotron-3-ultra-550b-a55b"],
+  ["my-ngc", "z-ai/glm-5.2"],
+  ["my-ngc", "deepseek-ai/deepseek-v4-pro"],
+  ["my-ngc:nvidia", "nvidia/nemotron-3-ultra-550b-a55b"],
+])(
+  "sessions.list preserves custom provider %s and nested models over WebSocket",
+  async (provider, model) => {
+    const { storePath } = await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("sess-parent"),
+        "dashboard:child": sessionStoreEntry("sess-custom-provider", {
+          modelProvider: provider,
+          model,
+          parentSessionKey: "agent:main:main",
+        }),
+      },
+    });
+    await seedSessionTranscript({
+      sessionId: "sess-custom-provider",
+      sessionKey: "agent:main:dashboard:child",
+      storePath,
+      messages: [
+        {
+          role: "user",
+          content: `List ${provider}/${model} sessions.`,
+        },
+        {
+          role: "assistant",
+          provider,
+          model,
+          content: `${provider} remains a model provider, not a plugin directory.`,
+        },
+      ],
+    });
+
+    const { ws } = await openClient();
+    const listed = await rpcReq<{
+      sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+    }>(ws, "sessions.list", {});
+    ws.close();
+
+    expect(listed.ok, JSON.stringify(listed)).toBe(true);
+    expect(
+      listed.payload?.sessions.find((session) => session.key === "agent:main:dashboard:child"),
+    ).toMatchObject({
+      modelProvider: provider,
+      model,
+    });
+  },
+);
+
 test("sessions.list uses the gateway model catalog for effective thinking defaults", async () => {
   testState.agentConfig = {
     model: { primary: "test-provider/reasoner" },

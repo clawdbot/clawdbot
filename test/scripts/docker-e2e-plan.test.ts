@@ -126,6 +126,26 @@ describe("scripts/lib/docker-e2e-plan", () => {
     );
   });
 
+  it("plans the package-backed sandbox browser sidecar lane", () => {
+    const plan = planFor({
+      selectedLaneNames: ["sandbox-browser-sidecar"],
+    });
+
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:sandbox-browser-sidecar",
+        imageKind: "functional",
+        live: false,
+        name: "sandbox-browser-sidecar",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 4,
+      },
+    ]);
+    expect(plan.needs.functionalImage).toBe(true);
+  });
+
   it("routes live Docker scripts through the nested trusted release harness", () => {
     const sourceLane = allReleasePathLanes({ releaseProfile: "beta" }).find(
       (candidate) => candidate.name === "live-codex-npm-plugin",

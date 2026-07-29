@@ -21,6 +21,7 @@ export {
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
 export {
+  createTestInboundDebounceFlush,
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,

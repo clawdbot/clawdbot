@@ -33,6 +33,10 @@ const untrustedSchemaIdentities = new WeakMap<object, number>();
 let nextCatalogToolIdentity = 1;
 let nextUntrustedSchemaIdentity = 1;
 
+export function getReusableCatalogSnapshotCountForTest(): number {
+  return reusableCatalogSnapshots.size;
+}
+
 function reusableCatalogKey(input: {
   sessionId?: string;
   sessionKey?: string;
@@ -410,7 +414,12 @@ export function applyToolCatalogCompaction(
     };
   }
 
-  const reusableKey = reusableCatalogKey(params);
+  // Hook-wrapped entries carry run context and have fresh executable identities, so
+  // their snapshots cannot be reused and would only retain the completed run.
+  const hasHookBoundEntry = catalog.some((entry) =>
+    isToolWrappedWithBeforeToolCallHook(entry.tool as AnyAgentTool),
+  );
+  const reusableKey = hasHookBoundEntry ? undefined : reusableCatalogKey(params);
   const reusableSnapshot = reusableKey ? reusableCatalogSnapshots.get(reusableKey) : undefined;
   if (reusableSnapshot?.fingerprint === incomingFingerprint) {
     restoreToolSearchCatalog({

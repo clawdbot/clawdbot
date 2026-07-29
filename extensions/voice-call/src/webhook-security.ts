@@ -320,7 +320,8 @@ function buildTwilioVerificationUrl(
   try {
     const base = new URL(publicUrl);
     const requestUrl = new URL(ctx.url);
-    base.pathname = requestUrl.pathname;
+    // Proxies may rewrite the local request path. Preserve the provider-facing
+    // publicUrl path and apply only per-request query parameters.
     base.search = requestUrl.search;
     return base.toString();
   } catch {

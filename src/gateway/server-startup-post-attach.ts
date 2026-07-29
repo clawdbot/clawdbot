@@ -29,6 +29,7 @@ import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js"
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
+import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
   createGatewayStartupOutcomeRecorder,
@@ -1209,13 +1210,22 @@ export async function startGatewayPostAttachRuntime(
             loaderStatsAfter.sourceTransformFallbacks - loaderStatsBefore.sourceTransformFallbacks,
           ],
         ]);
+        let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
         try {
-          const { scheduleRestartAbortedMainSessionRecovery } =
-            await loadMainSessionRestartRecoveryModule();
-          scheduleRestartAbortedMainSessionRecovery({
-            cfg: params.cfgAtStart,
-            gatewayRuntime: params.recoveryRuntime,
-          });
+          if (params.isClosing?.() !== true) {
+            const { scheduleRestartAbortedMainSessionRecovery } =
+              await loadMainSessionRestartRecoveryModule();
+            // Closing can begin while the runtime module is loading; a late owner
+            // would miss lifetime registration and race the replacement gateway.
+            if (params.isClosing?.() !== true) {
+              mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
+                cfg: params.cfgAtStart,
+                delayMs: 0,
+                shouldContinue: () => params.isClosing?.() !== true,
+                gatewayRuntime: params.recoveryRuntime,
+              });
+            }
+          }
         } catch (err) {
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }
@@ -1234,7 +1244,11 @@ export async function startGatewayPostAttachRuntime(
           reportPluginServices(result.pluginServices);
         }
         const postReadySidecars = [...result.postReadySidecars];
-        const gatewayLifetimeSidecars = [scheduleContextCachePrewarm(params)];
+        const gatewayLifetimeSidecars = [
+          scheduleContextCachePrewarm(params),
+          scheduleGatewayHandlerPrewarm(params),
+          ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
+        ];
         if (workerEnvironmentSidecar) {
           gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
         }

@@ -2,13 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import {
-  emitMemorySecretResolveDiagnostics,
-  loadMemoryCommandConfig,
-  resolveAgent,
-  resolveMemoryPluginConfig,
-  withMemoryManagerForAgent,
-} from "./cli-runtime-common.js";
+import { resolveMemoryPluginConfig, withMemoryCommand } from "./cli-runtime-common.js";
 import { defaultRuntime, shortenHomePath, theme } from "./cli.host.runtime.js";
 import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
@@ -27,16 +21,13 @@ export async function runMemorySessionBackfill(
   opts: MemorySessionBackfillOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory session-backfill");
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
-  const agentId = resolveAgent(cfg, opts.agent);
-  await withMemoryManagerForAgent({
-    cfg,
-    agentId,
+  await withMemoryCommand({
+    commandName: "memory session-backfill",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
     purpose: "status",
-    acquireLocalService: hostOptions?.acquireLocalService,
-    withLease: hostOptions?.withLease,
-    run: async (manager) => {
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
       const workspaceDir = manager.status().workspaceDir?.trim();
       if (!workspaceDir) {
         defaultRuntime.error("Memory session-backfill requires a resolvable workspace directory.");
@@ -95,9 +86,16 @@ export async function runMemorySessionBackfill(
         `${heading("Session Backfill")} ${muted(`(${agentId})`)}`,
         muted(`workspace=${shortenHomePath(workspaceDir)}`),
         muted(
-          `days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
+          `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
         ),
       ];
+      for (const batch of result.batches ?? []) {
+        lines.push(
+          muted(
+            `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
+          ),
+        );
+      }
       for (const day of result.days) {
         lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
         lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
@@ -117,16 +115,13 @@ export async function runMemoryRemHarness(
   opts: MemoryRemHarnessOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-harness");
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
-  const agentId = resolveAgent(cfg, opts.agent);
-  await withMemoryManagerForAgent({
-    cfg,
-    agentId,
+  await withMemoryCommand({
+    commandName: "memory rem-harness",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
     purpose: "status",
-    acquireLocalService: hostOptions?.acquireLocalService,
-    withLease: hostOptions?.withLease,
-    run: async (manager) => {
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
@@ -285,16 +280,13 @@ export async function runMemoryRemBackfill(
   opts: MemoryRemBackfillOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-backfill");
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
-  const agentId = resolveAgent(cfg, opts.agent);
-  await withMemoryManagerForAgent({
-    cfg,
-    agentId,
+  await withMemoryCommand({
+    commandName: "memory rem-backfill",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
     purpose: "status",
-    acquireLocalService: hostOptions?.acquireLocalService,
-    withLease: hostOptions?.withLease,
-    run: async (manager) => {
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);

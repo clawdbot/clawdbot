@@ -1,7 +1,7 @@
 import {
   buildChannelInboundEventContext,
   resolveChannelInboundRouteEnvelope,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 // Qa Channel plugin module implements inbound behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -91,7 +91,7 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
       });
     }
   }
-  return toInboundMediaFacts(mediaList);
+  return await toInboundMediaFactsWithMetadata(mediaList);
 }
 
 function resolveQaGroupConfig(params: {
