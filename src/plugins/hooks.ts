@@ -541,12 +541,8 @@ export function createHookRunner(
     normalizePositiveTimeoutMs(hook.timeoutMs) ??
     normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
 
-  const getClaimingHookTimeoutMs = (
-    hookName: PluginHookName,
-    hook: PluginHookRegistration,
-  ): number | undefined =>
-    normalizePositiveTimeoutMs(hook.timeoutMs) ??
-    normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
+  const getClaimingHookTimeoutMs = (hook: PluginHookRegistration): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs);
 
   const withHookTimeout = async <T>(
     promise: Promise<T>,
@@ -728,7 +724,7 @@ export function createHookRunner(
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
         );
-        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+        const timeoutMs = getClaimingHookTimeoutMs(hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return handlerResult;
@@ -779,7 +775,7 @@ export function createHookRunner(
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
         );
-        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+        const timeoutMs = getClaimingHookTimeoutMs(hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
