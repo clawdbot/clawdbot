@@ -5,6 +5,7 @@ import {
 } from "@openclaw/gateway-protocol/frame-guards";
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
+import type { GatewayPendingRequest } from "./pending-request.js";
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -147,17 +148,6 @@ type ConnectTimingState = {
   usedFallback: boolean;
 };
 type CloseSnapshot = Omit<GatewayProtocolCloseContext, "code" | "reason">;
-type PendingRequest = {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  expectFinal: boolean;
-  acceptedNotified: boolean;
-  onAccepted?: (payload: unknown) => void;
-  cleanup?: () => void;
-  unbounded: boolean;
-  method: string;
-  startedAtMs: number;
-};
 
 /**
  * Browser-safe gateway wire client. Environment adapters own transport and auth
@@ -165,7 +155,7 @@ type PendingRequest = {
  */
 export class GatewayProtocolClient<TPlan> {
   private socket: GatewayProtocolSocket | null = null;
-  private readonly pending = new Map<string, PendingRequest>();
+  private readonly pending = new Map<string, GatewayPendingRequest>();
   private readonly listeners = new GatewayEventListeners<EventFrame>();
   private stopped = true;
   private generation = 0;
@@ -251,7 +241,7 @@ export class GatewayProtocolClient<TPlan> {
       options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
-      const pending: PendingRequest = {
+      const pending: GatewayPendingRequest = {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal: options?.expectFinal === true,
@@ -673,7 +663,7 @@ export class GatewayProtocolClient<TPlan> {
 
   private finishRequestTiming(
     id: string,
-    pending: PendingRequest,
+    pending: GatewayPendingRequest,
     ok: boolean,
     errorCode?: string,
   ): void {
