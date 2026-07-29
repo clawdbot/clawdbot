@@ -36,6 +36,18 @@ describe("plugin tool hook matchers", () => {
     );
   });
 
+  it("rejects sparse matchers before native relay matcher construction", () => {
+    const sparseMatcher: string[] = [];
+    sparseMatcher.length = 1;
+
+    expect(() => normalizePluginToolMatcher(sparseMatcher)).toThrow(
+      "tool hook matcher entries must be non-empty strings",
+    );
+    expect(() =>
+      buildCodexNativeToolMatcher(createPluginToolMatcherScope([sparseMatcher])),
+    ).toThrow("tool hook matcher entries must be non-empty strings");
+  });
+
   it("expands canonical tools to exact Codex matcher alternatives", () => {
     expect(
       buildCodexNativeToolMatcher(createPluginToolMatcherScope([["exec"], ["apply_patch"]])),

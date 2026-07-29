@@ -43,8 +43,9 @@ export function normalizePluginToolMatcher(matcher: PluginToolMatcher): string[]
   if (!Array.isArray(matcher)) {
     throw new TypeError("tool hook matcher must be an array of tool names");
   }
+  const entries = Array.from(matcher);
   if (
-    matcher.some(
+    entries.some(
       (toolName) =>
         typeof toolName !== "string" || normalizeLowercaseStringOrEmpty(toolName).length === 0,
     )
@@ -52,7 +53,7 @@ export function normalizePluginToolMatcher(matcher: PluginToolMatcher): string[]
     throw new TypeError("tool hook matcher entries must be non-empty strings");
   }
   const normalized = Array.from(
-    new Set(matcher.map((toolName) => normalizePluginToolName(toolName))),
+    new Set(entries.map((toolName) => normalizePluginToolName(toolName))),
   ).toSorted();
   if (normalized.includes("*")) {
     return undefined;
