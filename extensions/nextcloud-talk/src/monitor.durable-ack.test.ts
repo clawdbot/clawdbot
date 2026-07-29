@@ -45,7 +45,7 @@ describe("Nextcloud Talk durable webhook acknowledgement", () => {
   it("does not mark ignored webhook events as durable", async () => {
     const harness = await startWebhookServer({
       path: "/nextcloud-ignored-event",
-      onWebhook: vi.fn(async () => "ignored"),
+      onWebhook: vi.fn(async () => "ignored" as const),
     });
     const { body, headers } = createSignedCreateMessageRequest();
     const response = await fetch(harness.webhookUrl, { method: "POST", headers, body });
