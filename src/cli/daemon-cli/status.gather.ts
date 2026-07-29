@@ -17,7 +17,7 @@ import type {
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
-import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -345,7 +345,7 @@ export type DaemonStatus = {
     healthy: boolean;
     staleGatewayPids: number[];
   };
-  extraServices: Array<{ label: string; detail: string; scope: string }>;
+  extraServices: ExtraGatewayService[];
   /**
    * Plugin version drift report. Surfaces active official external plugins
    * whose installed version does not match the running gateway version, which

@@ -204,6 +204,21 @@ async function withProcessEnv(
   }
 }
 
+describe("createMxcSandboxBackendFactory", () => {
+  test("hashes workspace-qualified scopes without truncating their identity", async () => {
+    const createBackend = createMxcSandboxBackendFactory(baseConfig);
+    const handle = await createBackend({
+      sessionKey: "agent:main:main",
+      scopeKey: `agent:main:workspace:${"a".repeat(32)}`,
+      workspaceDir: baseParams.workdir,
+      agentWorkspaceDir: baseParams.workdir,
+      cfg: createSandboxBackendTestConfig({ workspaceAccess: "rw" }),
+    });
+
+    expect(handle.runtimeId).toMatch(/^openclaw-mxc-workspace-[a-f0-9]{32}$/u);
+  });
+});
+
 describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests)", () => {
   beforeEach(() => {
     spawnCommandMock.mockReset();
@@ -726,6 +741,20 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       expect(await bridge?.readFile({ filePath: "notes/one.txt", cwd: workdir })).toEqual(
         Buffer.from("hello mxc"),
       );
+      await expect(
+        bridge?.readFile({
+          filePath: "notes/one.txt",
+          cwd: workdir,
+          maxBytes: "hello mxc".length,
+        }),
+      ).resolves.toEqual(Buffer.from("hello mxc"));
+      await expect(
+        bridge?.readFile({
+          filePath: "notes/one.txt",
+          cwd: workdir,
+          maxBytes: "hello mxc".length - 1,
+        }),
+      ).rejects.toThrow();
       expect(await bridge?.stat({ filePath: "notes/one.txt", cwd: workdir })).toMatchObject({
         type: "file",
         size: "hello mxc".length,

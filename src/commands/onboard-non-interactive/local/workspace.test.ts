@@ -68,4 +68,21 @@ describe("resolveNonInteractiveWorkspaceDir", () => {
 
     expect(resolved).toBe(path.join(stateDir, "workspace"));
   });
+
+  it("ignores blank CLI and configured workspace values", () => {
+    const home = path.join(root, "home");
+    const stateDir = path.join(root, "scratch-state");
+    const resolved = resolveNonInteractiveWorkspaceDir({
+      opts: { workspace: "   " },
+      baseConfig: { agents: { defaults: { workspace: "\t" } } },
+      defaultWorkspaceDir: path.join(home, ".openclaw", "workspace"),
+      env: {
+        HOME: home,
+        OPENCLAW_HOME: home,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+    });
+
+    expect(resolved).toBe(path.join(stateDir, "workspace"));
+  });
 });

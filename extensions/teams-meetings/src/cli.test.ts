@@ -9,7 +9,9 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
 }));
 
 import { registerTeamsMeetingsCli } from "./cli.js";
-import { resolveTeamsMeetingsConfig } from "./config.js";
+import { teamsMeetingsConfig } from "./config.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 
 const MEETING_URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_cli_probe%40thread.v2/0";

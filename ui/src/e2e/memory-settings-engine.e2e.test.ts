@@ -1,0 +1,146 @@
+// Control UI tests cover memory engine ordering and serialized config writes.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { chromium, type Browser } from "playwright";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  canRunPlaywrightChromium,
+  installMockGateway,
+  resolvePlaywrightChromiumExecutablePath,
+  startControlUiE2eServer,
+  type ControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
+
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
+const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "memory-settings-engine",
+);
+
+let browser: Browser;
+let server: ControlUiE2eServer;
+
+function configResponse(engineId: string, hash: string) {
+  const config = { plugins: { slots: { memory: engineId } } };
+  return {
+    config,
+    hash,
+    appliedConfigHash: hash,
+    issues: [],
+    raw: JSON.stringify(config),
+    valid: true,
+  };
+}
+
+const memoryPlugins = [
+  {
+    id: "memory-lancedb",
+    name: "Memory LanceDB",
+    installed: true,
+    enabled: true,
+    state: "enabled",
+    kind: ["memory"],
+  },
+  {
+    id: "memory-core",
+    name: "OpenClaw Memory",
+    installed: true,
+    enabled: true,
+    state: "enabled",
+    kind: ["memory"],
+  },
+];
+
+describeControlUiE2e("Control UI memory engine settings mocked Gateway E2E", () => {
+  beforeAll(async () => {
+    if (!chromiumAvailable) {
+      throw new Error(
+        `Playwright Chromium is not available at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+      );
+    }
+    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    await server?.close();
+  });
+
+  it("keeps the default engine first and drains Off before selecting it", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const initialConfig = configResponse("memory-lancedb", "memory-hash-1");
+    const selectedConfig = configResponse("memory-core", "memory-hash-2");
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": initialConfig,
+        "plugins.list": { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/memory/settings`);
+      expect(response?.status()).toBe(200);
+
+      const engineGroup = page.locator("wa-radio-group.settings-segmented").first();
+      await engineGroup.waitFor();
+      await expect
+        .poll(async () =>
+          (await engineGroup.locator("wa-radio").allTextContents()).map((label) => label.trim()),
+        )
+        .toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
+
+      await gateway.deferNext("config.set");
+      await gateway.deferNext("plugins.setEnabled");
+      await engineGroup.getByRole("radio", { name: "Off", exact: true }).click();
+      const pendingOffSave = await gateway.waitForRequest("config.set");
+      expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
+
+      await engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true }).click();
+      expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
+
+      await gateway.resolveDeferred("config.set", { ok: true, hash: "mock-config-hash-1" });
+      const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
+      expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
+
+      await gateway.setMethodResponse("config.get", selectedConfig);
+      await gateway.resolveDeferred("plugins.setEnabled", {
+        ok: true,
+        plugin: memoryPlugins[1],
+        restartRequired: false,
+      });
+
+      const selected = engineGroup.getByRole("radio", {
+        name: "OpenClaw Memory",
+        exact: true,
+      });
+      await expect.poll(() => selected.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => page.getByText("Could not change the memory engine").count()).toBe(0);
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page
+          .locator(".settings-page > .settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "01-openclaw-memory-selected.png"),
+          });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+});

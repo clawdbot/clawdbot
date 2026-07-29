@@ -31,6 +31,7 @@ import {
   buildOpenAICompatibleReplayPolicy,
   selectPreferredLocalModelId,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   buildOllamaModelDefinition,
@@ -714,6 +715,7 @@ async function augmentConfiguredOllamaCatalogModels(params: {
 
 // Local and cloud own distinct auth/catalog policy but share native transport and replay rules.
 const OLLAMA_SHARED_PROVIDER_HOOKS = {
+  ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
   createStreamFn: ({ config, model, provider }) => {
     if (model.api !== "ollama") {
       return undefined;
@@ -739,6 +741,8 @@ const OLLAMA_SHARED_PROVIDER_HOOKS = {
 } satisfies Pick<
   ProviderPlugin,
   | "createStreamFn"
+  | "normalizeToolSchemas"
+  | "inspectToolSchemas"
   | "buildReplayPolicy"
   | "resolveReasoningOutputMode"
   | "resolveThinkingProfile"

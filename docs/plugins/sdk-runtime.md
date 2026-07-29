@@ -397,6 +397,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     List connected nodes and invoke a node-host command from Gateway-loaded plugin code or from plugin CLI commands. Use this when a plugin owns local work on a paired device, for example a browser or audio bridge on another Mac.
 
     ```typescript
+    const controller = new AbortController();
     const { nodes } = await api.runtime.nodes.list({ connected: true });
 
     const result = await api.runtime.nodes.invoke({
@@ -404,8 +405,15 @@ two-party event loops that do not go through the shared inbound reply runner.
       command: "my-plugin.command",
       params: { action: "start" },
       timeoutMs: 30000,
+      signal: controller.signal,
     });
     ```
+
+    Pass the agent tool or request `AbortSignal` as `signal` when the caller can
+    be canceled. Gateway-loaded calls forward cancellation to the paired node;
+    node-host command handlers receive it as `context.signal` so they can stop
+    in-flight requests and release local resources. Existing calls that omit the
+    signal retain their previous behavior.
 
     `nodes.list(...)` includes each connected node's advertised
     `nodePluginTools` descriptors when that node exposes plugin or MCP-backed

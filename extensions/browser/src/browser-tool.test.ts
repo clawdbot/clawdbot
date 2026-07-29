@@ -619,6 +619,10 @@ function blockBrowserNodeGateway(count = 1): () => void {
 }
 
 describe("browser tool output schema", () => {
+  it("marks browser results as network content", () => {
+    expect(createBrowserTool().resultContentSource).toBe("network");
+  });
+
   it("accepts snapshot details", async () => {
     const tool = createBrowserTool();
     const result = await tool.execute?.("call-1", {

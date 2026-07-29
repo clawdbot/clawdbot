@@ -8,6 +8,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import { convertMessages } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
@@ -70,7 +71,6 @@ import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   createModelStreamCooperativeScheduler,
   log,
-  resolveCacheRetention,
   resolvePromptCacheKey,
   sortTransportToolsByName,
   throwIfModelStreamAborted,

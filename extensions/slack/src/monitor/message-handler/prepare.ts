@@ -16,7 +16,7 @@ import {
   resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
   resolveUnmentionedGroupInboundPolicy,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
@@ -331,7 +331,7 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
     mediaReadIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
     mediaTotalTimeoutMs: SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
   });
-  return toInboundMediaFacts(content?.effectiveDirectMedia, {
+  return await toInboundMediaFactsWithMetadata(content?.effectiveDirectMedia, {
     kind: "image",
     messageId: params.message.ts,
   });
@@ -1527,7 +1527,7 @@ export async function prepareSlackMessage(params: {
 
   // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
-  const inboundMedia = toInboundMediaFacts(effectiveMedia, {
+  const inboundMedia = await toInboundMediaFactsWithMetadata(effectiveMedia, {
     transcribed: (entry) =>
       effectiveMedia === effectiveDirectMedia && entry === preflightAudioMedia,
   });

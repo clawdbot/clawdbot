@@ -107,9 +107,13 @@ const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
 const GATEWAY_NETWORK_DOCKER_E2E_PATH = "scripts/e2e/gateway-network-docker.sh";
 const BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH = "scripts/e2e/browser-cdp-snapshot-docker.sh";
+const SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH = "scripts/e2e/sandbox-browser-sidecar-docker.sh";
+const SANDBOX_BROWSER_SIDECAR_SCENARIO_PATH =
+  "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH,
+  SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH,
   "scripts/e2e/qr-import-docker.sh",
   "scripts/lib/docker-e2e-image.sh",
   "scripts/sandbox-browser-setup.sh",
@@ -323,6 +327,25 @@ fi
     );
     expect(installE2eSmoke).toContain("docker_e2e_docker_run_cmd run --rm \\");
     expect(installE2eSmoke).not.toContain("docker run --rm \\");
+  });
+
+  it("runs the sandbox browser sidecar proof from the package-installed image", () => {
+    const runner = readFileSync(SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH, "utf8");
+    const scenario = readFileSync(SANDBOX_BROWSER_SIDECAR_SCENARIO_PATH, "utf8");
+
+    expect(runner).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"');
+    expect(runner).toContain("docker_e2e_build_or_reuse");
+    expect(runner).toContain("--network host");
+    expect(runner).toContain('--group-add "$SOCKET_GID"');
+    expect(runner).toContain('-v "$DOCKER_SOCKET:/var/run/docker.sock"');
+    expect(runner).toContain('-v "$SCENARIO_ROOT:$SCENARIO_ROOT"');
+    expect(runner).toContain("scripts/docker/sandbox/Dockerfile.browser");
+    expect(runner).toContain("remove_prefixed_containers");
+    expect(scenario).toContain('from "openclaw/plugin-sdk/agent-harness-runtime"');
+    expect(scenario).toContain("Promise.all([");
+    expect(scenario).toContain('"sandbox", "list", "--browser", "--json"');
+    expect(scenario).toContain('"sandbox", "recreate", "--browser", "--session"');
+    expect(scenario).not.toMatch(/from\s+["'][.]{1,2}\/.*src\//u);
   });
 
   it("gives cleanup-smoke builds enough Node heap while preserving explicit callers", () => {

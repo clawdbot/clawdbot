@@ -257,6 +257,8 @@ export async function runCliFallbackCandidate(params: {
                         itemId: payload.itemId,
                         kind: "preamble",
                         progressText: payload.text,
+                        // The block bridge owns durability; this event remains a progress preview.
+                        ...(bridgeCliDurableCommentary ? { suppressDurableProgress: true } : {}),
                       }),
                     );
                   }
@@ -298,6 +300,7 @@ export async function runCliFallbackCandidate(params: {
             workspaceDir: turn.followupRun.run.workspaceDir,
             cwd: turn.followupRun.run.cwd,
             config: params.runtimeConfig,
+            toolOverrides: turn.followupRun.run.toolOverrides,
             prompt: turn.commandBody,
             transcriptPrompt: turn.transcriptCommandBody,
             media: turn.followupRun.media,

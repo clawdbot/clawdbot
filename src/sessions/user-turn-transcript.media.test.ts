@@ -244,6 +244,33 @@ describe("buildPersistedUserTurnMessage media projection", () => {
       expectedMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true }],
     },
     {
+      name: "probed video metadata",
+      media: [
+        {
+          path: "/tmp/clip.mp4",
+          contentType: "video/mp4",
+          durationMs: 12_346,
+          width: 1280,
+          height: 720,
+        },
+      ],
+      expectedLegacy: {
+        MediaPath: "/tmp/clip.mp4",
+        MediaPaths: ["/tmp/clip.mp4"],
+        MediaType: "video/mp4",
+        MediaTypes: ["video/mp4"],
+      },
+      expectedMedia: [
+        {
+          path: "/tmp/clip.mp4",
+          contentType: "video/mp4",
+          durationMs: 12_346,
+          width: 1280,
+          height: 720,
+        },
+      ],
+    },
+    {
       name: "workspace-relative attachment",
       media: [
         {

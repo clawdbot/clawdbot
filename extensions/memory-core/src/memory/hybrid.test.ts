@@ -6,6 +6,7 @@ import {
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
 } from "./hybrid.js";
+import { applyProjectRanking } from "./project-ranking.js";
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
@@ -109,6 +110,53 @@ describe("memory hybrid helpers", () => {
     expect(neutral[0]?.score).toBeCloseTo(0.8);
     expect(important[0]?.score).toBeCloseTo(1);
     expect(low[0]?.score).toBeCloseTo(0.64);
+  });
+
+  it("boosts active-project results, demotes foreign results, and leaves global results neutral", async () => {
+    const merged = applyProjectRanking(
+      await mergeHybridResults({
+        vectorWeight: 1,
+        textWeight: 0,
+        keyword: [],
+        vector: [
+          {
+            id: "same",
+            path: "MEMORY.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "same",
+            vectorScore: 0.8,
+            projectKey: "github.com/openclaw/openclaw",
+          },
+          {
+            id: "global",
+            path: "MEMORY.md",
+            startLine: 2,
+            endLine: 2,
+            source: "memory",
+            snippet: "global",
+            vectorScore: 0.8,
+          },
+          {
+            id: "foreign",
+            path: "MEMORY.md",
+            startLine: 3,
+            endLine: 3,
+            source: "memory",
+            snippet: "foreign",
+            vectorScore: 0.8,
+            projectKey: "github.com/example/other",
+          },
+        ],
+      }),
+      ["github.com/openclaw/openclaw"],
+    );
+    expect(merged.map((entry) => [entry.snippet, entry.score])).toEqual([
+      ["same", 0.9199999999999999],
+      ["global", 0.8],
+      ["foreign", 0.7200000000000001],
+    ]);
   });
 
   it("uses path BM25 only for partial path-only hybrid hits", async () => {

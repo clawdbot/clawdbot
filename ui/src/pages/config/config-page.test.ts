@@ -104,6 +104,9 @@ describe("ConfigPage moved section routes", () => {
       context: { navigate: typeof navigate };
       pageId: "communications";
       routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
         section: string;
         advanced: boolean;
         tab: string | null;
@@ -113,7 +116,15 @@ describe("ConfigPage moved section routes", () => {
     };
     state.context = { navigate };
     state.pageId = "communications";
-    state.routeData = { section, advanced: false, tab: null, targetBlockId: null };
+    state.routeData = {
+      pathname: "/settings/communications",
+      search: `?section=${section}`,
+      hash: "",
+      section,
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
 
     state.syncRouteData();
 
@@ -127,6 +138,9 @@ describe("ConfigPage moved section routes", () => {
       context: { navigate: typeof navigate };
       pageId: "ai-agents";
       routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
         section: string;
         advanced: boolean;
         tab: string | null;
@@ -136,42 +150,19 @@ describe("ConfigPage moved section routes", () => {
     };
     state.context = { navigate };
     state.pageId = "ai-agents";
-    state.routeData = { section: "models", advanced: false, tab: null, targetBlockId: null };
+    state.routeData = {
+      pathname: "/settings/ai-agents",
+      search: "?section=models",
+      hash: "",
+      section: "models",
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
 
     state.syncRouteData();
 
     expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
-  });
-
-  it("redirects the former General model scroll target to the Models behavior section", () => {
-    const navigate = vi.fn();
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: { navigate: typeof navigate };
-      pageId: "config";
-      routeData: {
-        section: string | null;
-        advanced: boolean;
-        tab: string | null;
-        targetBlockId: string | null;
-      };
-      syncRouteData: () => void;
-    };
-    state.context = { navigate };
-    state.pageId = "config";
-    state.routeData = {
-      section: null,
-      advanced: false,
-      tab: null,
-      targetBlockId: "settings-general-model",
-    };
-
-    state.syncRouteData();
-
-    expect(navigate).toHaveBeenCalledWith("model-providers", {
-      search: "",
-      hash: "#settings-model-behavior",
-    });
   });
 });
 

@@ -90,6 +90,15 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     if (url) {
       media.url = url;
     }
+    if (fact.durationMs) {
+      media.durationMs = fact.durationMs;
+    }
+    if (fact.width) {
+      media.width = fact.width;
+    }
+    if (fact.height) {
+      media.height = fact.height;
+    }
     if (!contentType && fact.kind) {
       media.kind = fact.kind;
     }

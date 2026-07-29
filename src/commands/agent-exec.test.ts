@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-outcome.js";
 import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
@@ -167,6 +168,27 @@ describe("agent exec strict result classification", () => {
     });
     expect(envelope.payloads).toEqual([{ text: "done", mediaUrl: null }]);
   });
+
+  it("projects the embedded outer tool summary", () => {
+    const envelope = classifyAgentExecResult({
+      payloads: [{ text: "done" }],
+      meta: {
+        durationMs: 10,
+        toolSummary: {
+          calls: 2,
+          tools: ["read", "write"],
+          failures: 1,
+          totalToolTimeMs: 25,
+        },
+      },
+    });
+    expect(envelope.toolSummary).toEqual({
+      calls: 2,
+      tools: ["read", "write"],
+      failures: 1,
+      totalToolTimeMs: 25,
+    });
+  });
 });
 
 describe("agent exec command composition", () => {
@@ -237,6 +259,36 @@ describe("agent exec command composition", () => {
     });
   });
 
+  it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
+    const { runtime } = createRuntime();
+    const timeout = new AgentRunTerminalOutcomeError(
+      new Error("attempt aborted before prompt submission"),
+      {
+        reason: "hard_timeout",
+        status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    );
+
+    const result = await agentExecCommand("inspect", { json: true }, runtime, {
+      runAgent: vi.fn(async () => {
+        throw timeout;
+      }),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 2,
+      envelope: {
+        status: "timeout",
+        error: {
+          kind: "timeout",
+          message: "attempt aborted before prompt submission",
+        },
+      },
+    });
+  });
+
   it("creates and removes ephemeral state around the embedded run", async () => {
     const { runtime } = createRuntime();
     let observedStateDir = "";
@@ -262,6 +314,47 @@ describe("agent exec command composition", () => {
       },
     });
     await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("applies explicit Code Mode and lean local-model controls to the isolated config", async () => {
+    const { runtime } = createRuntime();
+    let observedConfig: unknown;
+
+    const result = await agentExecCommand(
+      "inspect",
+      { codeMode: "code", localModelLean: true },
+      runtime,
+      {
+        runAgent: vi.fn(async () => {
+          observedConfig = JSON.parse(
+            await fs.readFile(process.env.OPENCLAW_CONFIG_PATH ?? "", "utf8"),
+          );
+          return successResult();
+        }),
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(observedConfig).toMatchObject({
+      agents: { defaults: { experimental: { localModelLean: true } } },
+      tools: { codeMode: true },
+    });
+  });
+
+  it("rejects invalid programmatic Code Mode values", async () => {
+    const { runtime } = createRuntime();
+
+    const result = await agentExecCommand("inspect", { codeMode: "invalid" as never }, runtime, {
+      runAgent: vi.fn(async () => successResult()),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      envelope: {
+        status: "error",
+        error: { kind: "exception", message: "--code-mode must be one of direct, auto, code." },
+      },
+    });
   });
 
   it("classifies cleanup failures before emitting the JSON envelope", async () => {

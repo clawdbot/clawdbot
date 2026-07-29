@@ -21,11 +21,13 @@ import {
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertProposalId,
   MAX_PROPOSAL_SUPPORT_FILES,
   PROPOSAL_DRAFT_FILE,
 } from "./store-record.js";
+import { appendSkillProposalEvent, type NewSkillProposalEvent } from "./store-sqlite-event.js";
 import {
   insertProposal,
   parseSkillProposalRow,
@@ -51,6 +53,7 @@ import {
   type SkillProposalRollback,
   type SkillProposalSupportFile,
   type SkillProposalSupportFileInput,
+  type SkillProposalEvent,
 } from "./types.js";
 
 const WORKSHOP_REL_DIR = "skill-workshop";
@@ -61,8 +64,8 @@ const TARGET_LEASE_MS = 60_000;
 const TARGET_LEASE_WAIT_MS = 5_000;
 export {
   MAX_PROPOSAL_SUPPORT_FILES,
-  parseSkillProposalRecord,
-  parseSkillProposalRollback,
+  validateSkillProposalRecord,
+  validateSkillProposalRollback,
 } from "./store-record.js";
 export { readSkillProposalRollback, writeSkillProposalRollback } from "./store-sqlite-rollback.js";
 
@@ -201,7 +204,11 @@ export async function readSkillProposal(
       symlinks: "reject",
     },
   );
-  return { record: stored.record, content: draft.buffer.toString("utf8") };
+  return {
+    record: stored.record,
+    revisionHash: hashSkillProposalRevision(stored.record),
+    content: draft.buffer.toString("utf8"),
+  };
 }
 
 export async function readSkillProposalRecord(
@@ -225,8 +232,9 @@ export async function writeSkillProposal(params: {
   workspaceDir: string;
   ownerAgentId?: string;
   maxPending: number;
+  event?: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
-}): Promise<void> {
+}): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
   assertSkillProposalContentSize(params.content);
   ensureSkillWorkshopSchema(params.store);
@@ -244,7 +252,7 @@ export async function writeSkillProposal(params: {
   }
 
   try {
-    runOpenClawStateWriteTransaction(
+    return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
         const existing = executeSqliteQueryTakeFirstSync(
@@ -273,6 +281,7 @@ export async function writeSkillProposal(params: {
           ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
           workspaceDir: params.workspaceDir,
         });
+        return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
       },
       databaseOptions(params.store),
       { operationLabel: "skill-workshop.proposal.create" },
@@ -292,8 +301,9 @@ export async function replaceSkillProposalDraft(params: {
   previousSupportFiles?: readonly SkillProposalSupportFile[];
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
+  event?: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
-}): Promise<void> {
+}): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
   assertSkillProposalContentSize(params.content);
   const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
@@ -315,10 +325,11 @@ export async function replaceSkillProposalDraft(params: {
       await stateRoot.remove(path.join(relativeDir, filePath)).catch(() => undefined);
     }
   }
-  await updateSkillProposalRecord({
+  return await updateSkillProposalRecord({
     record: params.record,
     store: params.store,
     invalidateRollback: true,
+    event: params.event,
   });
 }
 
@@ -326,10 +337,11 @@ export async function updateSkillProposalRecord(params: {
   record: SkillProposalRecord;
   store?: SkillWorkshopStoreOptions;
   invalidateRollback?: boolean;
-}): Promise<void> {
+  event?: NewSkillProposalEvent;
+}): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
   ensureSkillWorkshopSchema(params.store);
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
       const current = executeSqliteQueryTakeFirstSync(
@@ -351,6 +363,7 @@ export async function updateSkillProposalRecord(params: {
         );
       }
       updateProposal(db, current, params.record);
+      return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
     },
     databaseOptions(params.store),
     { operationLabel: "skill-workshop.proposal.update" },
@@ -513,6 +526,16 @@ async function reconcileInterruptedApply(
         status: "applied",
         updatedAt: now,
         appliedAt: now,
+      });
+      appendSkillProposalEvent(db, {
+        eventId: crypto.randomUUID(),
+        proposalId,
+        proposedVersion: record.proposedVersion,
+        revisionHash: hashSkillProposalRevision(record),
+        type: "applied",
+        occurredAt: now,
+        actor: { type: "system" },
+        payload: { recovered: true },
       });
       return true;
     },

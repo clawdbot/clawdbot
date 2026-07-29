@@ -182,6 +182,13 @@ internal val defaultChatThinkingLevelSelection =
     isGatewayProvided = false,
   )
 
+internal data class ChatActiveRunPresentation(
+  val count: Int = 0,
+  val runId: String? = null,
+  val clockKey: String? = null,
+  val outputTokens: Long? = null,
+)
+
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.
  */

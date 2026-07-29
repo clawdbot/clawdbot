@@ -48,6 +48,7 @@ import type {
 } from "./index.js";
 import * as schemaExportRegistry from "./schema-export-registry.js";
 import type * as Schema from "./schema.js";
+import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import * as validatorRegistry from "./validator-registry.js";
 
 /**
@@ -85,6 +86,21 @@ describe("protocol export registries", () => {
     expectTypeOf<ModelsListParams>().toEqualTypeOf<Schema.ModelsListParams>();
     expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
     expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
+  });
+
+  it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
+    expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
+      schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
+      schemaExportRegistry.SkillsProposalEvaluateResultSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
+      schemaExportRegistry.SkillsProposalEventsListParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
+      schemaExportRegistry.SkillsProposalEventsListResultSchema,
+    );
   });
 });
 
@@ -152,6 +168,29 @@ describe("lazy protocol validators", () => {
         expectedLifecycleRevision: "",
       }),
     ).toBe(false);
+  });
+
+  it("validates sparse session tool overrides", () => {
+    const key = "agent:main:main";
+    expect(
+      validateSessionsPatchParams({
+        key,
+        toolOverrides: {
+          mcpServers: { docs: false },
+          mcpToolsDeny: { github: ["delete_issue"] },
+          skills: { release: true },
+          webSearch: false,
+        },
+      }),
+    ).toBe(true);
+    expect(validateSessionsPatchParams({ key, toolOverrides: null })).toBe(true);
+    expect(
+      validateSessionsPatchParams({ key, toolOverrides: { mcpServers: { docs: "no" } } }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({ key, toolOverrides: { mcpToolsDeny: { github: [1] } } }),
+    ).toBe(false);
+    expect(validateSessionsPatchParams({ key, toolOverrides: { unknown: true } })).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -403,6 +442,7 @@ describe("lazy protocol validators", () => {
     expect(
       protocol.validateSkillsProposalRequestRevisionParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
         targetAgentId: "writer",
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
@@ -426,6 +466,52 @@ describe("lazy protocol validators", () => {
         hiddenPrompt: "do not accept caller-provided hidden prompts",
       }),
     ).toBe(false);
+  });
+
+  it("accepts support-file-only Skill Workshop revisions", () => {
+    expect(
+      protocol.validateSkillsProposalReviseParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
+        supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("validates Skill Workshop evaluation and event replay params", () => {
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "b".repeat(64),
+        correlationId: "evaluation-1",
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "stale",
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "x".repeat(257),
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "😀".repeat(200),
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalEventsListParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        afterSequence: 41,
+        limit: 200,
+      }),
+    ).toBe(true);
+    expect(protocol.validateSkillsProposalEventsListParams({ limit: 201 })).toBe(false);
   });
 
   it("can still compile every exported protocol validator", () => {

@@ -47,6 +47,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
   buildOpenClawToolFallbackText,
@@ -818,6 +819,10 @@ export function buildAgentSystemPrompt(params: {
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
   /** Watched same-agent group sessions prepared before synchronous prompt assembly. */
   preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
+  /** Per-turn learned facts restricted to the currently active repository. */
+  projectMemoryBootstrap?: string[];
+  /** Prepared repository identities used to filter curated raw context fail-closed. */
+  activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -832,10 +837,12 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents",
     find: "Find files by glob",
     ls: "List directories",
-    exec:
-      promptSurface === "cli_backend"
+    exec: params.codeModeActive
+      ? "Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
+      : promptSurface === "cli_backend"
         ? "Run shell on connected node; sync; host=node"
         : "Run shell; pty for TTY CLIs",
+    wait: "Resume a suspended Code Mode exec",
     process: "Control background exec",
     web_search: "Web search",
     web_fetch: "Fetch/extract URL",
@@ -956,10 +963,11 @@ export function buildAgentSystemPrompt(params: {
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
   const toolSchemaDirectoryPrompt = params.toolSchemaDirectoryPrompt?.trim();
-  const renderOpenClawToolWorkflowHints = shouldRenderOpenClawToolWorkflowHints({
-    surface: promptSurface,
-    hasToolList: toolLines.length > 0,
-  });
+  const renderOpenClawToolWorkflowHints =
+    shouldRenderOpenClawToolWorkflowHints({
+      surface: promptSurface,
+      hasToolList: toolLines.length > 0,
+    }) && params.codeModeActive !== true;
 
   const hasGateway = availableTools.has("gateway");
   const hasOpenClaw = availableTools.has("openclaw");
@@ -1057,16 +1065,19 @@ export function buildAgentSystemPrompt(params: {
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
-  const memorySection = buildMemorySection({
-    isMinimal,
-    includeMemorySection: params.includeMemorySection,
-    availableTools,
-    citationsMode: params.memoryCitationsMode,
-    agentId: params.runtimeInfo?.agentId,
-    agentSessionKey: params.runtimeInfo?.sessionKey,
-    sandboxed: params.sandboxInfo?.enabled === true,
-    prepared: params.preparedMemoryPrompt,
-  });
+  const memorySection = [
+    ...buildMemorySection({
+      isMinimal,
+      includeMemorySection: params.includeMemorySection,
+      availableTools,
+      citationsMode: params.memoryCitationsMode,
+      agentId: params.runtimeInfo?.agentId,
+      agentSessionKey: params.runtimeInfo?.sessionKey,
+      sandboxed: params.sandboxInfo?.enabled === true,
+      prepared: params.preparedMemoryPrompt,
+    }),
+    ...normalizeStringEntries(params.projectMemoryBootstrap),
+  ];
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
@@ -1082,7 +1093,12 @@ export function buildAgentSystemPrompt(params: {
       .join("\n");
   }
 
-  const contextFiles = prepareContextFilesForPrompt(params.contextFiles);
+  const contextFiles = prepareContextFilesForPrompt(
+    filterProjectScopedCuratedContextFiles({
+      contextFiles: params.contextFiles,
+      activeProjectKeys: params.activeProjectKeys,
+    }),
+  );
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,

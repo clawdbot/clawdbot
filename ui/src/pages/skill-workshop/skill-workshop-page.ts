@@ -30,6 +30,7 @@ import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
   requestSkillWorkshopRevision,
+  runSkillWorkshopEvaluation,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
   type SkillWorkshopRouteData,
@@ -246,6 +247,10 @@ function renderSkillWorkshopPage(
                 void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
                   requestUpdate,
                 );
+                requestUpdate();
+              },
+              onEvaluate: (key) => {
+                void runSkillWorkshopEvaluation(state, context, key).finally(requestUpdate);
                 requestUpdate();
               },
               onRevise: (key) => {

@@ -51,6 +51,10 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   workspaceDir?: string;
   /** Run-prepared repository root; null means discovery completed without a match. */
   repoRoot?: string | null;
+  /** Stable identity derived from repoRoot; null means the run is outside a repository. */
+  projectKey?: string | null;
+  /** Session active project set, ordered most-recent first; empty before run binding. */
+  activeProjectKeys: readonly string[];
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
@@ -63,7 +67,7 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   createStores: () => PreparedModelRuntimeStores;
 }>;
 
-export type PreparedConfiguredRuntimeModel = Readonly<{
+type PreparedConfiguredRuntimeModel = Readonly<{
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
@@ -553,6 +557,7 @@ async function buildSnapshot(
   return Object.freeze({
     ...(input.agentId ? { agentId: input.agentId } : {}),
     agentDir: input.agentDir,
+    activeProjectKeys: [],
     ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,

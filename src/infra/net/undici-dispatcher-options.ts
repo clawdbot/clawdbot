@@ -180,9 +180,12 @@ export function buildHttp1EnvHttpProxyAgentOptions(
   options?: UndiciEnvHttpProxyAgentOptions,
   timeoutMs?: number,
 ): NonNullable<UndiciEnvHttpProxyAgentOptions> {
+  // Undici 8.7 began forwarding plain HTTP by default. OpenClaw keeps CONNECT
+  // tunneling so managed and explicit proxies retain one target-isolation contract.
+  const proxyOptions = { proxyTunnel: true, ...options };
   return withHttp1OnlyDispatcherOptions(
     addIpSafeProxyClientFactory(
-      addUndiciAgentFactory(addActiveManagedProxyTlsOptions(options) ?? {}),
+      addUndiciAgentFactory(addActiveManagedProxyTlsOptions(proxyOptions) ?? proxyOptions),
     ),
     timeoutMs,
     { connect: true, proxyTls: true },
@@ -197,9 +200,10 @@ export function buildHttp1ProxyAgentOptions(
     typeof options === "string" || options instanceof URL
       ? { uri: options.toString() }
       : { ...options };
+  const proxyOptions = { proxyTunnel: true, ...normalized };
   return withHttp1OnlyDispatcherOptions(
     addIpSafeProxyClientFactory(
-      addUndiciAgentFactory(addActiveManagedProxyTlsOptions(normalized as object)),
+      addUndiciAgentFactory(addActiveManagedProxyTlsOptions(proxyOptions)),
     ),
     timeoutMs,
     { proxyTls: true },

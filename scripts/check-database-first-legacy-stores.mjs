@@ -962,6 +962,17 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return `${objectName}.${propertyName}`;
   }
 
+  function shadowObjectPropertyScopes(scopes, objectName, value, targetScope = lastScope(scopes)) {
+    const prefix = `${objectName}.`;
+    for (const scope of scopes) {
+      for (const name of scope.keys()) {
+        if (name.startsWith(prefix)) {
+          targetScope.set(name, value);
+        }
+      }
+    }
+  }
+
   function resolveLegacyPathIdentifier(name) {
     return scopeForRead(legacyPathScopes, name)?.get(name) === true;
   }
@@ -1598,35 +1609,15 @@ export function collectDatabaseFirstLegacyStoreViolations(
       if (resolveFsSafeStoreFactoryAlias(bindingName)) {
         lastScope(fsSafeStoreFactoryAliasScopes).set(bindingName, null);
       }
-      const prefix = `${bindingName}.`;
-      for (const scope of fsSafeStoreFactoryAliasScopes) {
-        for (const alias of scope.keys()) {
-          if (alias.startsWith(prefix)) {
-            lastScope(fsSafeStoreFactoryAliasScopes).set(alias, null);
-          }
-        }
-      }
+      shadowObjectPropertyScopes(fsSafeStoreFactoryAliasScopes, bindingName, null);
       if (resolveFsSafeStore(bindingName)) {
         lastScope(fsSafeStoreScopes).set(bindingName, false);
       }
       if (resolveFsSafeJsonStore(bindingName)) {
         lastScope(fsSafeJsonStoreScopes).set(bindingName, false);
       }
-      const storePrefix = `${bindingName}.`;
-      for (const scope of fsSafeStoreScopes) {
-        for (const alias of scope.keys()) {
-          if (alias.startsWith(storePrefix)) {
-            lastScope(fsSafeStoreScopes).set(alias, false);
-          }
-        }
-      }
-      for (const scope of fsSafeJsonStoreScopes) {
-        for (const alias of scope.keys()) {
-          if (alias.startsWith(storePrefix)) {
-            lastScope(fsSafeJsonStoreScopes).set(alias, false);
-          }
-        }
-      }
+      shadowObjectPropertyScopes(fsSafeStoreScopes, bindingName, false);
+      shadowObjectPropertyScopes(fsSafeJsonStoreScopes, bindingName, false);
     }
   }
 
@@ -1707,24 +1698,11 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function clearFsWriteObjectAliases(scope, objectName) {
-    const prefix = `${objectName}.`;
-    for (const name of scope.keys()) {
-      if (name.startsWith(prefix)) {
-        scope.set(name, null);
-      }
-    }
+    shadowObjectPropertyScopes([scope], objectName, null, scope);
   }
 
   function shadowVisibleFsWriteObjectAliases(objectName) {
-    const prefix = `${objectName}.`;
-    const currentScope = lastScope(fsWriteAliasScopes);
-    for (const scope of fsWriteAliasScopes) {
-      for (const name of scope.keys()) {
-        if (name.startsWith(prefix)) {
-          currentScope.set(name, null);
-        }
-      }
-    }
+    shadowObjectPropertyScopes(fsWriteAliasScopes, objectName, null);
   }
 
   function setFsWriteObjectAlias(scope, name, writeName, conditionalWrite) {
@@ -1770,37 +1748,13 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function clearFsSafeStoreObjectAliases(storeScope, jsonStoreScope, objectName) {
-    const prefix = `${objectName}.`;
-    for (const name of storeScope.keys()) {
-      if (name.startsWith(prefix)) {
-        storeScope.set(name, false);
-      }
-    }
-    for (const name of jsonStoreScope.keys()) {
-      if (name.startsWith(prefix)) {
-        jsonStoreScope.set(name, false);
-      }
-    }
+    shadowObjectPropertyScopes([storeScope], objectName, false, storeScope);
+    shadowObjectPropertyScopes([jsonStoreScope], objectName, false, jsonStoreScope);
   }
 
   function shadowVisibleFsSafeStoreObjectAliases(objectName) {
-    const prefix = `${objectName}.`;
-    const currentStoreScope = lastScope(fsSafeStoreScopes);
-    const currentJsonStoreScope = lastScope(fsSafeJsonStoreScopes);
-    for (const scope of fsSafeStoreScopes) {
-      for (const name of scope.keys()) {
-        if (name.startsWith(prefix)) {
-          currentStoreScope.set(name, false);
-        }
-      }
-    }
-    for (const scope of fsSafeJsonStoreScopes) {
-      for (const name of scope.keys()) {
-        if (name.startsWith(prefix)) {
-          currentJsonStoreScope.set(name, false);
-        }
-      }
-    }
+    shadowObjectPropertyScopes(fsSafeStoreScopes, objectName, false);
+    shadowObjectPropertyScopes(fsSafeJsonStoreScopes, objectName, false);
   }
 
   function setFsSafeStoreObjectAlias(
@@ -1929,13 +1883,8 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function clearFsModuleObjectProperties(scope, objectName) {
-    const prefix = `${objectName}.`;
     scope.set(objectName, false);
-    for (const name of scope.keys()) {
-      if (name.startsWith(prefix)) {
-        scope.set(name, false);
-      }
-    }
+    shadowObjectPropertyScopes([scope], objectName, false, scope);
   }
 
   function registerFsModuleObjectProperties(
@@ -4043,23 +3992,11 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
 
     function resolveBodyFsWriteAlias(name) {
-      for (let index = bodyFsWriteAliasScopes.length - 1; index >= 0; index--) {
-        const scope = bodyFsWriteAliasScopes[index];
-        if (scope.has(name)) {
-          return scope.get(name) ?? null;
-        }
-      }
-      return null;
+      return scopeForRead(bodyFsWriteAliasScopes, name)?.get(name) ?? null;
     }
 
     function resolveBodyFsModuleBinding(name) {
-      for (let index = bodyFsModuleBindingScopes.length - 1; index >= 0; index--) {
-        const scope = bodyFsModuleBindingScopes[index];
-        if (scope.has(name)) {
-          return scope.get(name) === true;
-        }
-      }
-      return false;
+      return scopeForRead(bodyFsModuleBindingScopes, name)?.get(name) === true;
     }
 
     function resolveBodyFsModuleProperty(pathParts) {
@@ -4080,12 +4017,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
 
     function isFsModuleShadowed(name) {
-      for (let index = fsModuleShadowScopes.length - 1; index >= 0; index--) {
-        if (fsModuleShadowScopes[index].has(name)) {
-          return true;
-        }
-      }
-      return false;
+      return fsModuleShadowScopes.some((scope) => scope.has(name));
     }
 
     function isWrapperRequireName(name) {
@@ -4139,34 +4071,15 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
 
     function resolveBodyRequireAlias(name) {
-      for (let index = bodyRequireAliasScopes.length - 1; index >= 0; index--) {
-        const scope = bodyRequireAliasScopes[index];
-        if (scope.has(name)) {
-          return scope.get(name) === true;
-        }
-      }
-      return false;
+      return scopeForRead(bodyRequireAliasScopes, name)?.get(name) === true;
     }
 
     function shadowVisibleBodyFsWriteObjectAliases(objectName) {
-      const prefix = `${objectName}.`;
-      const currentScope = lastScope(bodyFsWriteAliasScopes);
-      for (const scope of bodyFsWriteAliasScopes) {
-        for (const name of scope.keys()) {
-          if (name.startsWith(prefix)) {
-            currentScope.set(name, null);
-          }
-        }
-      }
+      shadowObjectPropertyScopes(bodyFsWriteAliasScopes, objectName, null);
     }
 
     function clearBodyFsWriteObjectAliases(scope, objectName) {
-      const prefix = `${objectName}.`;
-      for (const name of scope.keys()) {
-        if (name.startsWith(prefix)) {
-          scope.set(name, null);
-        }
-      }
+      shadowObjectPropertyScopes([scope], objectName, null, scope);
     }
 
     function setBodyFsWriteObjectAlias(scope, name, writeName) {
@@ -4229,12 +4142,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
 
     function isFsAliasShadowed(name) {
-      for (let index = fsAliasShadowScopes.length - 1; index >= 0; index--) {
-        if (fsAliasShadowScopes[index].has(name)) {
-          return true;
-        }
-      }
-      return false;
+      return fsAliasShadowScopes.some((scope) => scope.has(name));
     }
 
     function isWrapperFsModuleExpression(expression) {
@@ -4490,24 +4398,11 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
 
     function clearNestedWrapperObjectMethods(scope, objectName) {
-      const prefix = `${objectName}.`;
-      for (const name of scope.keys()) {
-        if (name.startsWith(prefix)) {
-          scope.set(name, null);
-        }
-      }
+      shadowObjectPropertyScopes([scope], objectName, null, scope);
     }
 
     function shadowVisibleNestedWrapperObjectMethods(objectName) {
-      const prefix = `${objectName}.`;
-      const currentScope = lastScope(nestedWrapperFunctionScopes);
-      for (const scope of nestedWrapperFunctionScopes) {
-        for (const name of scope.keys()) {
-          if (name.startsWith(prefix)) {
-            currentScope.set(name, null);
-          }
-        }
-      }
+      shadowObjectPropertyScopes(nestedWrapperFunctionScopes, objectName, null);
     }
 
     function markNestedWrapperObjectUnknown(
@@ -6345,12 +6240,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function clearWrapperObjectMethods(scope, objectName) {
-    const prefix = `${objectName}.`;
-    for (const name of scope.keys()) {
-      if (name.startsWith(prefix)) {
-        scope.set(name, null);
-      }
-    }
+    shadowObjectPropertyScopes([scope], objectName, null, scope);
   }
 
   function clearWrapperObjectMethod(scope, methodName) {
@@ -6359,15 +6249,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function shadowVisibleWrapperObjectMethods(objectName) {
-    const prefix = `${objectName}.`;
-    const currentScope = lastScope(wrapperFunctionScopes);
-    for (const scope of wrapperFunctionScopes) {
-      for (const name of scope.keys()) {
-        if (name.startsWith(prefix)) {
-          currentScope.set(name, null);
-        }
-      }
-    }
+    shadowObjectPropertyScopes(wrapperFunctionScopes, objectName, null);
   }
 
   function copyWrapperObjectMethods(

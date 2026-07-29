@@ -9,7 +9,7 @@ export type SlackSystemEventHandler = (args: {
 export type SlackSystemEventTestOverrides = {
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
-  channelType?: "im" | "channel" | "mpim";
+  channelType?: "im" | "channel" | "group" | "mpim";
   channelUsers?: string[];
   reactionMode?: "off" | "own" | "all" | "allowlist";
   reactionAllowlist?: Array<string | number>;

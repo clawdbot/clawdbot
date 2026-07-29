@@ -64,7 +64,7 @@ function candidate(runId: string, messages: unknown[]): ExperienceReviewCandidat
           },
         },
       },
-      skills: { workshop: { autonomous: { enabled: true } } },
+      skills: { workshop: { autonomous: { mode: "propose" } } },
     },
     transcript: formatSkillExperienceReviewTranscript(messages),
     modelIterations: 10,
@@ -142,7 +142,10 @@ describeLive("skill experience review live OpenAI eval", () => {
       { role: "assistant", content: "Done." },
     ];
 
-    await runSkillExperienceReview(candidate("live-positive", positiveMessages));
+    const positiveCandidate = candidate("live-positive", positiveMessages);
+    await runSkillExperienceReview(positiveCandidate, {
+      getCurrentConfig: () => positiveCandidate.config ?? {},
+    });
     const afterPositive = await listSkillProposals({ workspaceDir });
     expect(afterPositive.proposals).toHaveLength(1);
     expect(afterPositive.proposals[0]).toMatchObject({ status: "pending" });
@@ -165,7 +168,10 @@ describeLive("skill experience review live OpenAI eval", () => {
       { role: "assistant", content: "All ten one-time receipts are valid." },
     ];
 
-    await runSkillExperienceReview(candidate("live-negative", negativeMessages));
+    const negativeCandidate = candidate("live-negative", negativeMessages);
+    await runSkillExperienceReview(negativeCandidate, {
+      getCurrentConfig: () => negativeCandidate.config ?? {},
+    });
     const afterNegative = await listSkillProposals({ workspaceDir });
     expect(afterNegative.proposals).toEqual(afterPositive.proposals);
   }, 180_000);

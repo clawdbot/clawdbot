@@ -622,6 +622,7 @@ async function handleChatHistoryRequest({
     sessionInfo,
     thinkingLevel,
     fastMode: entry?.fastMode,
+    toolOverrides: entry?.toolOverrides,
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     ...(includeAgentsList && startupAgentsList ? { agentsList: startupAgentsList } : {}),

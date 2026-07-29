@@ -106,7 +106,7 @@ afterEach(() => {
 });
 
 describe("doctor agent memory schema repair", () => {
-  it("adds both recall columns, preserves rows, and lists the repair", async () => {
+  it("adds recall metadata columns, preserves rows, and lists the durable repair", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
     recreatePreProvenanceMemoryIndexChunks(databasePath);
     const writeNote = vi.fn();
@@ -148,12 +148,16 @@ describe("doctor agent memory schema repair", () => {
         "updated_at",
         "importance",
         "triggers",
+        "project_key",
       ]);
       expect(
-        database.prepare("SELECT id, text, importance, triggers FROM memory_index_chunks").get(),
+        database
+          .prepare("SELECT id, text, importance, triggers, project_key FROM memory_index_chunks")
+          .get(),
       ).toEqual({
         id: "pre-provenance-sentinel",
         importance: null,
+        project_key: null,
         text: "sentinel text",
         triggers: null,
       });
