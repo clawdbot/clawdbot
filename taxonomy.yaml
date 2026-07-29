@@ -8368,6 +8368,12 @@ surfaces:
           - name: Sender Authorization
             coverageIds: [slack.sender-authorization]
             description: Covers Sender Authorization across Slack DM routing, `dmPolicy`, `allowFrom`, pairing approvals, group DMs/MPIMs, account-level allowlist inheritance, command authorization in DMs, and sender identity normalization.
+          - name: MPIM routing
+            coverageIds: [slack.mpim]
+            description: Covers group direct-message routing and app-mention dispatch in Slack MPIM conversations.
+          - name: Delivery dedupe
+            coverageIds: [slack.delivery-dedupe]
+            description: Covers single-delivery enforcement when one Slack event arrives through overlapping message and app-mention paths.
         docs:
           - docs/channels/slack.md
           - docs/channels/bot-loop-protection.md
