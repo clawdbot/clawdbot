@@ -40,20 +40,37 @@ function buildAddFilePatch(targetPath: string): string {
 *** End Patch`;
 }
 
-function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
-  const files = new Map<string, string>(
+function createMemoryPatchSandbox(
+  initialFiles: Record<string, string | Buffer> = {},
+  options: { supportsExclusiveCreate?: boolean } = {},
+) {
+  const files = new Map<string, string | Buffer>(
     Object.entries(initialFiles).map(([filePath, contents]) => [`/sandbox/${filePath}`, contents]),
   );
   const writeFile = vi.fn(async ({ filePath, data }) => {
-    files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
+    files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
   });
+  const createFileExclusive = vi.fn(async ({ filePath, data }) => {
+    if (files.has(filePath)) {
+      return "exists" as const;
+    }
+    files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
+    return "created" as const;
+  });
+  const mkdirp = vi.fn(async () => {});
   const bridge: SandboxFsBridge = {
     resolvePath: ({ filePath }) => ({
       relativePath: filePath,
       containerPath: `/sandbox/${filePath}`,
     }),
-    readFile: async ({ filePath }) => Buffer.from(files.get(filePath) ?? "", "utf8"),
+    readFile: async ({ filePath }) => {
+      const contents = files.get(filePath);
+      return typeof contents === "string"
+        ? Buffer.from(contents, "utf8")
+        : Buffer.from(contents ?? "");
+    },
     writeFile,
+    ...(options.supportsExclusiveCreate === false ? {} : { createFileExclusive }),
     remove: async ({ filePath }) => {
       files.delete(filePath);
     },
@@ -70,12 +87,14 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
         ? null
         : { type: "file", size: Buffer.byteLength(contents), mtimeMs: 0 };
     },
-    mkdirp: async () => {},
+    mkdirp,
   };
   return {
     files,
     bridge,
     writeFile,
+    createFileExclusive,
+    mkdirp,
     options: {
       cwd: "/local/workspace",
       sandbox: {
@@ -107,6 +126,68 @@ async function expectMissingPath(operation: Promise<unknown>) {
 }
 
 describe("applyPatch", () => {
+  const priceUpdatePatch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`;
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])("preserves a valid UTF-8 BOM in $name updates", async ({ workspaceOnly }) => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "source.txt");
+      await fs.writeFile(filePath, Buffer.from("\uFEFFheading\nprice: 5\n", "utf8"));
+
+      await applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly });
+
+      await expect(fs.readFile(filePath)).resolves.toEqual(
+        Buffer.from("\uFEFFheading\nprice: 7\n", "utf8"),
+      );
+    });
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])("rejects invalid UTF-8 in $name updates without changing bytes", async ({ workspaceOnly }) => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "source.txt");
+      const original = Buffer.concat([
+        Buffer.from("heading\nprice: 5\n"),
+        Buffer.from([0xff, 0xfe]),
+      ]);
+      await fs.writeFile(filePath, original);
+
+      await expect(applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+        /not valid UTF-8/,
+      );
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    });
+  });
+
+  it("preserves a valid UTF-8 BOM in sandbox updates", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": Buffer.from("\uFEFFheading\nprice: 5\n", "utf8"),
+    });
+
+    await applyPatch(priceUpdatePatch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("\uFEFFheading\nprice: 7\n");
+  });
+
+  it("rejects invalid sandbox UTF-8 before writing or changing bytes", async () => {
+    const original = Buffer.concat([Buffer.from("heading\nprice: 5\n"), Buffer.from([0xff, 0xfe])]);
+    const memory = createMemoryPatchSandbox({ "source.txt": original });
+
+    await expect(applyPatch(priceUpdatePatch, memory.options)).rejects.toThrow(/not valid UTF-8/);
+
+    expect(memory.writeFile).not.toHaveBeenCalled();
+    expect(memory.files.get("/sandbox/source.txt")).toEqual(original);
+  });
+
   it("adds a file", async () => {
     const memory = createMemoryPatchSandbox();
     const patch = `*** Begin Patch
@@ -118,6 +199,198 @@ describe("applyPatch", () => {
 
     expect(memory.files.get("/sandbox/hello.txt")).toBe("hello\n");
     expect(result.summary.added).toEqual(["hello.txt"]);
+  });
+
+  it("rejects an add hunk that targets an existing file", async () => {
+    const memory = createMemoryPatchSandbox({ "notes.txt": "keep me\n" });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create notes\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("keep me\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])(
+    "keeps existing contents in $name when an add hunk targets them",
+    async ({ workspaceOnly }) => {
+      await withWorkspaceTempDir(async (dir) => {
+        const target = path.join(dir, "notes.txt");
+        await fs.writeFile(target, "IMPORTANT USER DATA\nsecond line\n", "utf8");
+        const tool = createApplyPatchTool({ cwd: dir, workspaceOnly });
+        const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+        await expect(
+          tool.execute("call-add-existing", { input: patch }, undefined),
+        ).rejects.toThrow(/Cannot create notes\.txt: the file already exists/);
+        expect(await fs.readFile(target, "utf8")).toBe("IMPORTANT USER DATA\nsecond line\n");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses existing symlinks in both host modes without changing their targets",
+    async () => {
+      for (const workspaceOnly of [true, false]) {
+        await withWorkspaceTempDir(async (dir) => {
+          const target = path.join(dir, "target.txt");
+          const link = path.join(dir, "notes.txt");
+          await fs.writeFile(target, "keep me\n", "utf8");
+          await fs.symlink("target.txt", link);
+          const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+          await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+            /Cannot create notes\.txt: the file already exists/,
+          );
+          await expect(fs.readFile(target, "utf8")).resolves.toBe("keep me\n");
+          await expect(fs.readlink(link)).resolves.toBe("target.txt");
+        });
+      }
+    },
+  );
+
+  it("refuses an add hunk when a competing writer creates the target mid-patch", async () => {
+    const memory = createMemoryPatchSandbox();
+    memory.mkdirp.mockImplementation(async () => {
+      memory.files.set("/sandbox/notes.txt", "written by another writer\n");
+    });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create notes\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("written by another writer\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+  });
+
+  it("refuses a move hunk when a competing writer creates the destination mid-patch", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
+    memory.mkdirp.mockImplementation(async () => {
+      memory.files.set("/sandbox/dest.txt", "written by another writer\n");
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create dest\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("written by another writer\n");
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
+  });
+
+  it("allows an add hunk after the same path is deleted in the patch", async () => {
+    const memory = createMemoryPatchSandbox({ "notes.txt": "old\n" });
+    const patch = `*** Begin Patch
+*** Delete File: notes.txt
+*** Add File: notes.txt
++new
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("new\n");
+    expect(result.summary.added).toEqual(["notes.txt"]);
+  });
+
+  it("rejects a move hunk that targets an existing file", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+      "dest.txt": "keep me\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create dest\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("keep me\n");
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])(
+    "preserves source and destination when a move target exists in $name",
+    async ({ workspaceOnly }) => {
+      await withWorkspaceTempDir(async (dir) => {
+        await fs.writeFile(path.join(dir, "source.txt"), "foo\nbar\n", "utf8");
+        await fs.writeFile(path.join(dir, "dest.txt"), "keep me\n", "utf8");
+        const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+        await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+          /Cannot create dest\.txt: the file already exists/,
+        );
+        await expect(fs.readFile(path.join(dir, "source.txt"), "utf8")).resolves.toBe("foo\nbar\n");
+        await expect(fs.readFile(path.join(dir, "dest.txt"), "utf8")).resolves.toBe("keep me\n");
+      });
+    },
+  );
+
+  it("fails closed on sandbox adds when atomic create is unavailable", async () => {
+    const memory = createMemoryPatchSandbox({}, { supportsExclusiveCreate: false });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++new
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /does not support atomic file creation/,
+    );
+    expect(memory.files.has("/sandbox/notes.txt")).toBe(false);
+  });
+
+  it("still permits sandbox updates when atomic create is unavailable", async () => {
+    const memory = createMemoryPatchSandbox(
+      { "source.txt": "before\n" },
+      { supportsExclusiveCreate: false },
+    );
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-before
++after
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).resolves.toMatchObject({
+      summary: { modified: ["source.txt"] },
+    });
+    expect(memory.files.get("/sandbox/source.txt")).toBe("after\n");
   });
 
   it("updates and moves a file", async () => {

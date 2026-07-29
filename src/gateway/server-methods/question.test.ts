@@ -52,6 +52,7 @@ const requestParams = {
   ],
   agentId: "main",
   sessionKey: "agent:main:main",
+  runId: "run-main",
   timeoutMs: 100,
 };
 
@@ -68,6 +69,7 @@ describe("question gateway methods", () => {
       "question.requested",
       expect.objectContaining({
         id,
+        runId: "run-main",
         questions: [expect.objectContaining({ header: "Destination" })],
         status: "pending",
       }),
@@ -75,12 +77,12 @@ describe("question gateway methods", () => {
 
     expect(await call("question.get", { id })).toEqual([
       true,
-      { question: expect.objectContaining({ id, status: "pending" }) },
+      { question: expect.objectContaining({ id, runId: "run-main", status: "pending" }) },
       undefined,
     ]);
     expect(await call("question.list", {})).toEqual([
       true,
-      { questions: [expect.objectContaining({ id })] },
+      { questions: [expect.objectContaining({ id, runId: "run-main" })] },
       undefined,
     ]);
   });

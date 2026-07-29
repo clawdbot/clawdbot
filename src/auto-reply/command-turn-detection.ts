@@ -9,6 +9,9 @@ import {
 } from "./command-turn-context.js";
 
 function resolveCommandBody(input: CommandTurnContextInput): string | undefined {
+  if (typeof input.commandText === "string") {
+    return input.commandText;
+  }
   return (
     normalizeOptionalString(input.CommandBody) ??
     normalizeOptionalString(input.BodyForCommands) ??
@@ -18,6 +21,9 @@ function resolveCommandBody(input: CommandTurnContextInput): string | undefined 
 }
 
 function resolveVisibleMessageBody(input: CommandTurnContextInput): string | undefined {
+  if (typeof input.rawText === "string") {
+    return input.rawText;
+  }
   return normalizeOptionalString(input.RawBody) ?? normalizeOptionalString(input.Body);
 }
 

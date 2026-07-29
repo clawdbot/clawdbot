@@ -364,7 +364,6 @@ describe("session startup catch-up", () => {
       sessionKey,
       storePath,
       entry: {
-        sessionFile: marker,
         sessionId,
         updatedAt: params.updatedAt ?? 10,
       },
@@ -400,8 +399,8 @@ describe("session startup catch-up", () => {
       },
     ]);
 
-    await expect(harness.catchUp()).resolves.toEqual([session.marker]);
-    expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
+    await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
     expect(harness.isSessionsDirty()).toBe(true);
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
@@ -460,8 +459,8 @@ describe("session startup catch-up", () => {
       },
     ]);
 
-    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.marker]);
-    expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.sessionKey]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
     expect(harness.isSessionsDirty()).toBe(true);
     expect(harness.syncCalls).toEqual([]);
   });
@@ -623,7 +622,7 @@ describe("session startup catch-up", () => {
     await harness.processPendingSessionDeltas();
     await Promise.resolve();
 
-    expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
     expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
   });
 
@@ -675,7 +674,6 @@ describe("session startup catch-up", () => {
       sessionKey,
       storePath,
       entry: {
-        sessionFile: marker,
         sessionId,
         updatedAt: 10,
       },

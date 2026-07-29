@@ -6,7 +6,6 @@ scenario:
     primary:
       - matrix.conversation-routing-and-delivery
   execution:
-    profiles: { "matrix:all": 18, "matrix:transport": 17 }
     kind: flow
     channel: matrix
     timeoutMs: 60000

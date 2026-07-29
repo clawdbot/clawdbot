@@ -23,6 +23,7 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  shouldAllowControlUiDeviceAuthMigration,
   shouldClearUnboundScopesForMissingDeviceIdentity,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
@@ -105,6 +106,7 @@ export async function authenticateGatewayConnect(
     isControlUi,
     controlUiConfig: configSnapshot.gateway?.controlUi,
     deviceRaw,
+    deviceAuthMigrationPending: context.handler.isControlUiDeviceAuthMigrationPending?.(),
   });
   const device = controlUiAuthPolicy.device;
   const hasBootstrapProof = Boolean(connectParams.auth?.bootstrapToken);
@@ -252,19 +254,30 @@ export async function authenticateGatewayConnect(
       authOk,
       authMethod,
     });
-    const preserveInsecureLocalControlUiScopes = false;
-    const decision = evaluateMissingDeviceIdentity({
-      hasDeviceIdentity: Boolean(device),
-      role,
-      isControlUi,
-      controlUiAuthPolicy,
-      trustedProxyAuthOk,
-      localBackendSelfPairingOk: skipLocalBackendSelfPairing,
-      sharedAuthOk,
-      authOk,
-      hasSharedAuth,
-      isLocalClient,
-    });
+    const allowDeviceLessControlUiMigration =
+      !device &&
+      shouldAllowControlUiDeviceAuthMigration({
+        policy: controlUiAuthPolicy,
+        role,
+        sharedAuthOk,
+        trustedProxyAuthOk,
+        authMethod,
+      });
+    const preserveInsecureLocalControlUiScopes = allowDeviceLessControlUiMigration;
+    const decision = allowDeviceLessControlUiMigration
+      ? ({ kind: "allow" } as const)
+      : evaluateMissingDeviceIdentity({
+          hasDeviceIdentity: Boolean(device),
+          role,
+          isControlUi,
+          controlUiAuthPolicy,
+          trustedProxyAuthOk,
+          localBackendSelfPairingOk: skipLocalBackendSelfPairing,
+          sharedAuthOk,
+          authOk,
+          hasSharedAuth,
+          isLocalClient,
+        });
     // Device-less shared auth clears self-declared scopes by default.
     // Only first-party local control paths preserve scopes: backend self-
     // calls and CLI shared-secret calls that already proved loopback auth.
@@ -446,6 +459,13 @@ export async function authenticateGatewayConnect(
     resolvedAuth.mode,
     authMethod,
   );
+  const allowControlUiDeviceAuthMigration = shouldAllowControlUiDeviceAuthMigration({
+    policy: controlUiAuthPolicy,
+    role,
+    sharedAuthOk,
+    trustedProxyAuthOk,
+    authMethod,
+  });
 
   return {
     resolvedAuth,
@@ -477,6 +497,7 @@ export async function authenticateGatewayConnect(
     issuedBootstrapProfile,
     handoffBootstrapProfile,
     trustedProxyAuthOk,
+    allowControlUiDeviceAuthMigration,
     skipControlUiPairingForDevice,
     skipLocalBackendSelfPairing,
     rejectUnauthorized,

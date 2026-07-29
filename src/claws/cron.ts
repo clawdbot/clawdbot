@@ -1,5 +1,7 @@
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
+import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
+import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob } from "../cron/types.js";
 import {
   openOpenClawStateDatabase,
@@ -8,7 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan, ClawCronJob } from "./types.js";
 
-const CLAW_CRON_REF_SCHEMA_VERSION = "openclaw.clawCronRef.v1" as const;
+export const CLAW_CRON_REF_SCHEMA_VERSION = "openclaw.clawCronRef.v1" as const;
 
 export type PersistedClawCronRef = {
   schemaVersion: typeof CLAW_CRON_REF_SCHEMA_VERSION;
@@ -41,6 +43,7 @@ export type ClawCronGateway = {
   get?: (schedulerJobId: string) => Promise<unknown>;
   list?: (agentId: string) => Promise<unknown>;
   remove: (schedulerJobId: string) => Promise<unknown>;
+  waitUntilAgentAvailable?: (agentId: string) => Promise<void>;
 };
 
 export class ClawCronInstallError extends Error {
@@ -167,7 +170,7 @@ function updateRef(
   return updated;
 }
 
-function schedulerJobFromResult(value: unknown): { id: string } | undefined {
+export function clawCronSchedulerJobFromResult(value: unknown): { id: string } | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -204,7 +207,10 @@ function schedulerJobByDeclarationKey(
   return match ? { id: match.id as string } : undefined;
 }
 
-function clawCronGatewayInput(agentId: string, ref: PersistedClawCronRef): Record<string, unknown> {
+export function clawCronGatewayInput(
+  agentId: string,
+  ref: PersistedClawCronRef,
+): Record<string, unknown> {
   const job = ref.job;
   return {
     name: job.name ?? job.id,
@@ -249,15 +255,24 @@ export function clawCronGatewayJobMatchesRef(
   ) {
     return false;
   }
+  const comparableLive = { ...live, payload: { ...live.payload } } as CronJob;
+  applyDefaultCronToolsAllow(expected);
+  applyDefaultCronToolsAllow(comparableLive);
+  const expectedWithPolicy = {
+    ...expected,
+    ...(comparableLive.scheduledToolPolicy
+      ? { scheduledToolPolicy: createTrustedCronScheduledToolPolicy() }
+      : {}),
+  };
   try {
     return (
       resolveCronJobConfigRevision({
-        ...expected,
+        ...expectedWithPolicy,
         id: live.id,
         createdAtMs: live.createdAtMs,
         updatedAtMs: live.updatedAtMs,
         state: live.state,
-      }) === resolveCronJobConfigRevision(live as CronJob)
+      }) === resolveCronJobConfigRevision(comparableLive)
     );
   } catch {
     return false;
@@ -267,7 +282,7 @@ export function clawCronGatewayJobMatchesRef(
 export async function installClawCronJobs(
   plan: ClawAddPlan,
   options: OpenClawStateDatabaseOptions & {
-    gateway?: Pick<ClawCronGateway, "add" | "list">;
+    gateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable">;
     nowMs?: number;
   } = {},
 ): Promise<PersistedClawCronRef[]> {
@@ -283,6 +298,7 @@ export async function installClawCronJobs(
     );
   }
   const refs: PersistedClawCronRef[] = [];
+  let agentAvailable = false;
   for (const action of actions) {
     const details = action.details as (ClawCronJob & { agentId?: string }) | undefined;
     if (!details?.id) {
@@ -307,13 +323,17 @@ export async function installClawCronJobs(
     }
     let result: { id: string } | undefined;
     try {
+      if (!agentAvailable) {
+        await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
+        agentAvailable = true;
+      }
       if (options.gateway.list) {
         result = schedulerJobByDeclarationKey(
           await options.gateway.list(plan.agent.finalId),
           pending.declarationKey,
         );
       }
-      result ??= schedulerJobFromResult(
+      result ??= clawCronSchedulerJobFromResult(
         await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, pending)),
       );
       if (!result) {
@@ -388,4 +408,42 @@ export function markClawCronRefRemoved(
     (candidate) => candidate.manifestId === manifestId,
   );
   return ref ? updateRef(ref, { status: "removed" }, options) : undefined;
+}
+
+export function upsertClawCronRef(
+  ref: PersistedClawCronRef,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db /* sqlite-allow-raw: Claw cron lifecycle provenance write. */
+      .prepare(
+        `INSERT INTO claw_cron_refs (
+         agent_id, manifest_id, schema_version, declaration_key, scheduler_job_id,
+         status, job_json, error, created_at_ms, updated_at_ms
+       ) VALUES (
+         @agent_id, @manifest_id, @schema_version, @declaration_key, @scheduler_job_id,
+         @status, @job_json, @error, @created_at_ms, @updated_at_ms
+       )
+       ON CONFLICT(agent_id, manifest_id) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         declaration_key = excluded.declaration_key,
+         scheduler_job_id = excluded.scheduler_job_id,
+         status = excluded.status,
+         job_json = excluded.job_json,
+         error = excluded.error,
+         updated_at_ms = excluded.updated_at_ms`,
+      )
+      .run({
+        agent_id: ref.agentId,
+        manifest_id: ref.manifestId,
+        schema_version: ref.schemaVersion,
+        declaration_key: ref.declarationKey,
+        scheduler_job_id: ref.schedulerJobId ?? null,
+        status: ref.status,
+        job_json: JSON.stringify(ref.job),
+        error: ref.error ?? null,
+        created_at_ms: ref.createdAtMs,
+        updated_at_ms: ref.updatedAtMs,
+      });
+  }, options);
 }

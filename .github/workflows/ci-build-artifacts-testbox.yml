@@ -145,7 +145,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             .artifacts/build-all-cache/
@@ -182,7 +182,7 @@ jobs:
 
       - name: Save dist build cache
         if: steps.dist-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             .artifacts/build-all-cache/

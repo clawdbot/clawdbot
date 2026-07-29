@@ -35,6 +35,11 @@ describe("base64 helpers", () => {
       expected: undefined,
     },
     {
+      name: "canonicalizeBase64 rejects nonzero pad bits",
+      actual: canonicalizeBase64("ZE=="),
+      expected: undefined,
+    },
+    {
       name: "estimateBase64DecodedBytes handles whitespace",
       actual: estimateBase64DecodedBytes("SGV s bG8= \n"),
       expected: 5,

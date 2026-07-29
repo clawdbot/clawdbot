@@ -98,6 +98,9 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "agents",
     "agents-core",
     "agents-embedded-agent",
+    "agents-embedded-agent-incomplete-turn",
+    "agents-embedded-agent-overflow-compaction",
+    "agents-embedded-agent-run",
     "agents-support",
     "agents-tools",
     "auto-reply",
@@ -107,6 +110,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "boundary",
     "bundled",
     "channels",
+    "cli-process",
     "cli",
     "commands",
     "commands-light",
@@ -207,6 +211,7 @@ export function createScopedVitestConfig(
     isolate?: boolean;
     name?: string;
     fileParallelism?: boolean;
+    hookTimeout?: number;
     intersectIncludeFile?: boolean;
     pool?: "forks" | "threads";
     passWithNoTests?: boolean;
@@ -271,6 +276,7 @@ export function createScopedVitestConfig(
       ...(options?.fileParallelism === undefined
         ? {}
         : { fileParallelism: options.fileParallelism }),
+      ...(options?.hookTimeout === undefined ? {} : { hookTimeout: options.hookTimeout }),
       ...(scopedGroupOrder === undefined
         ? {}
         : {

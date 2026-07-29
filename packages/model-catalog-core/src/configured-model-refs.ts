@@ -1,9 +1,5 @@
 // Collects configured model references from OpenClaw config-shaped objects.
-
-/** Narrow unknown values to plain records. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** One configured model reference plus its config path. */
 export type ConfiguredModelRef = {
@@ -19,6 +15,28 @@ export const AGENT_MODEL_CONFIG_KEYS = [
   "voiceModel",
   "pdfModel",
 ] as const;
+
+/** List raw refs from one string or primary/fallback model selector. */
+export function listModelRefsFromConfigValue(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const refs: string[] = [];
+  if (typeof value.primary === "string") {
+    refs.push(value.primary);
+  }
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      if (typeof fallback === "string") {
+        refs.push(fallback);
+      }
+    }
+  }
+  return refs;
+}
 
 /** Collect configured model references from agents, channels, hooks, and message config. */
 export function collectConfiguredModelRefs(
@@ -85,6 +103,10 @@ export function collectConfiguredModelRefs(
   if (isRecord(agents.entries)) {
     for (const [agentId, entry] of Object.entries(agents.entries)) {
       collectFromAgent(`agents.entries.${agentId}`, entry);
+    }
+  } else if (Array.isArray(agents.list)) {
+    for (const [index, entry] of agents.list.entries()) {
+      collectFromAgent(`agents.list.${index}`, entry);
     }
   }
   if (options.includeChannelModelOverrides !== false) {

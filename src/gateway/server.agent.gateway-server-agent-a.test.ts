@@ -367,6 +367,53 @@ describe("gateway server agent", () => {
     expect(persisted?.spawnedBy).toBe("agent:main:main");
   });
 
+  test("agent stamps create-on-run session rows without guessing an actor", async () => {
+    await setTestSessionStore({ entries: {} });
+    const sessionKey = "agent:main:dashboard:create-on-run";
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "hi",
+      sessionKey,
+      idempotencyKey: "idem-agent-create-on-run",
+    });
+    expect(res.ok).toBe(true);
+    await waitForAgentCommandCall("idem-agent-create-on-run");
+
+    expect(
+      loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath }),
+    ).toMatchObject({
+      createdVia: "run",
+      createdAt: expect.any(Number),
+    });
+    expect(
+      loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath })?.createdActor,
+    ).toBeUndefined();
+  });
+
+  test("agent links the previous generation when a missing transcript rotates the session", async () => {
+    const sessionKey = "agent:main:dashboard:rotate-missing-transcript";
+    await setTestSessionStore({
+      entries: {
+        [sessionKey]: {
+          sessionId: "missing-transcript-generation",
+          status: "failed",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "continue",
+      sessionKey,
+      idempotencyKey: "idem-agent-rotate-missing-transcript",
+    });
+    expect(res.ok).toBe(true);
+    await waitForAgentCommandCall("idem-agent-rotate-missing-transcript");
+
+    const persisted = loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath });
+    expect(persisted?.sessionId).not.toBe("missing-transcript-generation");
+    expect(persisted?.previousSessionId).toBe("missing-transcript-generation");
+  });
+
   test("agent derives sessionKey from agentId", async () => {
     testState.agentsConfig = { list: [{ id: "ops" }] };
     await setTestSessionStore({

@@ -183,6 +183,9 @@ describe("deliverMatrixReplies", () => {
       replies: [
         { text: "Reasoning:\n_hidden_" },
         { text: "<think>still hidden</think>" },
+        { text: "<mm:think>MiniMax private reasoning</mm:think>" },
+        { text: "<mm:thought>MiniMax private thought</mm:thought>" },
+        { text: "<antml:thinking>Anthropic private reasoning</antml:thinking>" },
         { text: "Visible answer" },
       ],
       roomId: "room:5",
@@ -196,6 +199,90 @@ describe("deliverMatrixReplies", () => {
     expect(sendCall(0)[0]).toBe("room:5");
     expect(sendCall(0)[1]).toBe("Visible answer");
     expect(sendOptions(0).cfg).toBe(cfg);
+  });
+
+  it("delivers literal reasoning tags inside Markdown code", async () => {
+    const text = "Use `<mm:think>example</mm:think>` literally.";
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text }],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe(text);
+  });
+
+  it("strips namespaced reasoning while delivering visible Matrix replies", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "<mm:think>MiniMax private reasoning</mm:think>Visible MiniMax answer" },
+        { text: "<antml:thinking>Anthropic private reasoning</antml:thinking>Visible answer" },
+        { text: "<br>Visible HTML answer<mm:think>MiniMax private reasoning</mm:think>" },
+        { text: "Visible safe answer<mm:think>unfinished private reasoning" },
+        { text: "Visible answer<think>old reasoning</think><think>unfinished private reasoning" },
+        { text: "<thinking>private reasoning</think>Visible alias answer" },
+        { text: "<final>Visible final answer" },
+      ],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(7);
+    expect(sendCall(0)[1]).toBe("Visible MiniMax answer");
+    expect(sendCall(1)[1]).toBe("Visible answer");
+    expect(sendCall(2)[1]).toBe("<br>Visible HTML answer");
+    expect(sendCall(3)[1]).toBe("Visible safe answer");
+    expect(sendCall(4)[1]).toBe("Visible answer");
+    expect(sendCall(5)[1]).toBe("Visible alias answer");
+    expect(sendCall(6)[1]).toBe("Visible final answer");
+  });
+
+  it("preserves significant whitespace in visible Markdown replies", async () => {
+    const text = "    indented Markdown code\n\nVisible line with a hard break  \nnext line";
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text }],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe(text.trim());
+  });
+
+  it("delivers Matrix media without a reasoning-only caption", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "<mm:think>MiniMax private reasoning</mm:think>",
+          mediaUrl: "https://example.com/a.jpg",
+        },
+      ],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe("");
+    expect(sendOptions(0).mediaUrl).toBe("https://example.com/a.jpg");
   });
 
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {

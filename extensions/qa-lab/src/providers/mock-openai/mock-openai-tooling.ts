@@ -125,6 +125,45 @@ export function buildToolCallEventsWithArgs(
   ];
 }
 
+export function buildCustomToolCallEventsWithInput(name: string, input: string): StreamEvent[] {
+  const call = buildMockFunctionCall(name, { input });
+  const itemId = call.itemId.replace(/^fc_/, "ctc_");
+  const item = {
+    type: "custom_tool_call",
+    id: itemId,
+    call_id: call.callId,
+    name,
+    input,
+    status: "completed",
+  };
+  return [
+    {
+      type: "response.created",
+      response: { id: call.responseId },
+    },
+    {
+      type: "response.output_item.added",
+      item: { ...item, input: "", status: "in_progress" },
+    },
+    {
+      type: "response.custom_tool_call_input.delta",
+      item_id: itemId,
+      call_id: call.callId,
+      delta: input,
+    },
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
+        id: call.responseId,
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
 export function extractRememberedFact(userTexts: string[]) {
   for (const text of userTexts) {
     const qaCanaryMatch = /\bqa canary code is\s+([A-Za-z0-9-]+)/i.exec(text);
@@ -170,6 +209,19 @@ export function buildQaToolSearchArgs(
 ): Record<string, unknown> {
   if (failureMode && targetTool === "web_search") {
     return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
+  }
+  if (failureMode && targetTool === "apply_patch") {
+    return {
+      input: [
+        "*** Begin Patch",
+        "*** Update File: ../runtime-tool-fixture-denied.txt",
+        "@@",
+        "-runtime-tool-fixture-denied-original",
+        "+runtime patch outside the workspace",
+        "*** End Patch",
+        "",
+      ].join("\n"),
+    };
   }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };

@@ -6,10 +6,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
 import { mergeDeep } from "../infra/deep-merge.js";
-import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
@@ -26,12 +27,10 @@ function resolveAgentTtsOverride(
   cfg: OpenClawConfig,
   agentId: string | undefined,
 ): TtsConfig | undefined {
-  if (!agentId || !Array.isArray(cfg.agents?.list)) {
+  if (!agentId) {
     return undefined;
   }
-  const normalized = normalizeAgentId(agentId);
-  const agent = cfg.agents.list.find((entry) => normalizeAgentId(entry.id) === normalized);
-  return agent?.tts;
+  return resolveAgentConfig(cfg, agentId)?.tts;
 }
 
 function resolveTtsConfigContext(

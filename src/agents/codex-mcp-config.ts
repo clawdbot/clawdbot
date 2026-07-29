@@ -12,10 +12,10 @@ import {
 } from "../plugins/bundle-mcp.js";
 import { isRecord } from "../utils.js";
 import {
-  applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
+  normalizeBundleMcpServerConfig,
   normalizeStringRecord,
-} from "./cli-runner/bundle-mcp-adapter-shared.js";
+} from "./bundle-mcp-adapter.js";
 import type {
   CodexBundleMcpThreadConfig,
   CodexMcpServersConfig,
@@ -111,8 +111,7 @@ export function normalizeCodexMcpServerConfig(
   name: string,
   server: BundleMcpServerConfig,
 ): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
-  applyCommonServerConfig(next, server);
+  const next = normalizeBundleMcpServerConfig(server);
   applyCodexToolFilter(next, name, server);
   const defaultToolsApprovalMode = resolveCodexDefaultToolsApprovalMode(server);
   if (defaultToolsApprovalMode) {

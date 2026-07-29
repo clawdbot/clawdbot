@@ -110,8 +110,6 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
   const promptToolResultMaxChars = resolveLiveToolResultMaxChars({
     contextWindowTokens: contextTokenBudget,
-    cfg: attempt.config,
-    agentId: input.sessionAgentId,
   });
   const promptToolResultAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
     contextWindowTokens: contextTokenBudget,

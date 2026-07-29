@@ -15,6 +15,7 @@ export type DispatchFromConfigResult = {
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;
   noVisibleReplyFallbackEligible?: boolean;
+  noVisibleReplyFallbackDelivered?: boolean;
   beforeAgentRunBlocked?: boolean;
   sessionMetadataChanges?: CommandSessionMetadataChange[];
 };

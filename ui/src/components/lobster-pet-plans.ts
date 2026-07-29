@@ -10,6 +10,7 @@ import type {
 } from "./lobster-pet-contract.ts";
 import {
   LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
   lobsterPetName,
   mulberry32,
   SPOT_ZONES,
@@ -186,12 +187,6 @@ export const VISIT_FIRST_DELAY_MS = [15_000, 180_000] as const;
 export const VISIT_STAY_MS = [90_000, 300_000] as const;
 export const VISIT_GAP_MS = [360_000, 1_080_000] as const;
 
-// Some ledge visits spook the logo: a beat after the crab settles in, the
-// brand mark ducks away, and it pops back once the visit ends. Rolled from a
-// dedicated seeded stream so tests can probe arrivals purely.
-export const LOGO_SCARE_CHANCE = 0.3;
-export const LOGO_SCARE_DELAY_MS = 900;
-
 // Rare-event loads, planned per seed so tests can probe them purely: a molt
 // load sheds its shell during the first idle act and sizes up one tier; a
 // twin load brings a mini copycat along on every visit.
@@ -201,13 +196,6 @@ export function isLobsterMoltLoad(seed: number): boolean {
 
 export function isLobsterTwinLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x7715) >>> 0)() < 0.04;
-}
-
-// On a logo load the pet's first scheduled visit skips the ledge entirely:
-// it climbs up top and fills in for the brand logo until the stay ends.
-// Offline summons still report to the ledge - status duty outranks cosplay.
-export function isLobsterLogoLoad(seed: number): boolean {
-  return mulberry32((seed ^ 0x1063) >>> 0)() < 0.12;
 }
 
 export type LobsterPasserPlan = {
@@ -273,8 +261,8 @@ export type LobsterLoadIdentity = {
 };
 
 // Rare per-load identities, resolved on top of the seeded look: the Elder
-// outranks an old-friend return, and retro looks (grail or anniversary dress
-// code) are never repainted. Lobsterdex completion is snapshotted here too,
+// outranks an old-friend return, and retro-geometry looks (grail or anniversary
+// dress code) are never repainted. Lobsterdex completion is snapshotted here too,
 // so the golden ledge trim appears between loads, never mid-visit.
 export function resolveLobsterLoadIdentity(
   seed: number,
@@ -304,7 +292,7 @@ export function resolveLobsterLoadIdentity(
       },
     };
   }
-  if (look.palette.id === "retro") {
+  if (look.palette.id === "retro" || look.palette.id === "goldenretro") {
     return base;
   }
   const known = [...seen]
@@ -321,7 +309,11 @@ export function resolveLobsterLoadIdentity(
     ...base,
     oldFriend: true,
     friendName: getLobsterdexEntries().get(palette.id)?.name ?? null,
-    look: { ...look, palette },
+    look: {
+      ...look,
+      palette,
+      chimeraParts: palette.id === "chimera" ? canonicalLobsterLook(palette).chimeraParts : null,
+    },
   };
 }
 
@@ -343,7 +335,7 @@ export const LOBSTER_BOTTLE_FORTUNES = [
   "somewhere, a test is green because of you",
   "swim sideways when forward fails",
   "the reef remembers kind commits",
-  "even the abyss keeps a night light",
+  "even the deep keeps a night light",
   "barnacles are only patient passengers",
   "no current lasts forever",
   "bury your treasure in version control",

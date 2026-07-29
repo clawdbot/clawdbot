@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type {
   WorkboardArtifact,
   WorkboardAttachment,
@@ -20,6 +20,7 @@ import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type {
   PersistedWorkboardAttachment,
@@ -399,7 +400,7 @@ function createDatabase(dbPath: string): {
   if (!fs.existsSync(dbPath)) {
     fs.closeSync(fs.openSync(dbPath, "a", WORKBOARD_SQLITE_FILE_MODE));
   }
-  const db = new DatabaseSync(dbPath);
+  const db = openNodeSqliteDatabase(dbPath);
   let maintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
   try {
     maintenance = configureSqliteConnectionPragmas(db, {

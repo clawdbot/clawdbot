@@ -113,6 +113,7 @@ function addLoadedPlugin(
 }
 
 function createLookUpTableForTest(params: {
+  installRecords?: PluginLookUpTable["index"]["installRecords"];
   manifestRegistry?: PluginLookUpTable["manifestRegistry"];
   pluginIds?: readonly string[];
   workerProviderIds?: readonly string[];
@@ -126,7 +127,7 @@ function createLookUpTableForTest(params: {
       migrationVersion: 1,
       policyHash: "test",
       generatedAtMs: 1,
-      installRecords: {},
+      installRecords: params.installRecords ?? {},
       plugins: [],
       diagnostics: [],
     },
@@ -544,9 +545,17 @@ describe("loadGatewayPlugins", () => {
   test("reuses a provided lookup table for startup scope and auto-enable manifests", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     const manifestRegistry = { plugins: [], diagnostics: [] };
+    const installRecords = {
+      telegram: {
+        source: "npm" as const,
+        spec: "@openclaw/telegram@1.0.0",
+        installPath: "/tmp/plugins/telegram",
+      },
+    };
 
     loadGatewayPluginsForTest({
       pluginLookUpTable: createLookUpTableForTest({
+        installRecords,
         manifestRegistry,
         pluginIds: ["telegram"],
       }),
@@ -559,6 +568,7 @@ describe("loadGatewayPlugins", () => {
       manifestRegistry,
     });
     expect(getLastPluginLoadOption("manifestRegistry")).toBe(manifestRegistry);
+    expect(getLastPluginLoadOption("installRecords")).toEqual(installRecords);
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["telegram"]);
   });
 

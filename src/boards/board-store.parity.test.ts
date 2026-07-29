@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { migrateLegacyMediaPersistence } from "../infra/state-migrations.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -41,6 +42,35 @@ function createSqliteStore(): BoardStore {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("does not select the HTML BLOB when preparing board view metadata", () => {
+  const stateDir = tempDirs.make("openclaw-board-projection-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const sessionKey = "agent:main:projection";
+  seedSession(env, "main", sessionKey);
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const store = new SqliteBoardStore({
+    resolveSession: () => ({ agentId: "main", sessionKey }),
+    env,
+  });
+  store.putWidget({
+    sessionKey,
+    name: "status",
+    content: { kind: "html", html: "x".repeat(256 * 1024) },
+  });
+  const prepare = vi.spyOn(database.db, "prepare");
+
+  const prepared = store.getSnapshotWithHtmlViewMetadata(sessionKey);
+
+  const widgetSelects = prepare.mock.calls
+    .map(([sql]) => sql)
+    .filter((sql) => /select .* from "board_widgets"/iu.test(sql));
+  expect(widgetSelects).toHaveLength(1);
+  expect(widgetSelects[0]).toContain('"sha256"');
+  expect(widgetSelects[0]).not.toContain('"html"');
+  expect(prepared.htmlViewMetadata.get("status")).not.toHaveProperty("html");
+  prepare.mockRestore();
 });
 
 describe.each([
@@ -86,6 +116,20 @@ describe.each([
       revision: 1,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
+    const preparedView = store.getSnapshotWithHtmlViewMetadata("agent:main:board");
+    expect(preparedView).toMatchObject({
+      snapshot: { revision: 1 },
+      htmlViewMetadata: new Map([
+        [
+          "weather",
+          expect.objectContaining({
+            revision: 1,
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          }),
+        ],
+      ]),
+    });
+    expect(preparedView.htmlViewMetadata.get("weather")).not.toHaveProperty("html");
 
     // Legacy clients omit heightMode on resize; explicit user sizing must pin.
     const resized = store.applyOps("agent:main:board", [
@@ -510,7 +554,7 @@ describe("SqliteBoardStore persistence", () => {
     expect(store.readWidgetMcpApp(sessionKey, "legacy-app")).toBeUndefined();
   });
 
-  it("lazily creates board tables for an existing v13 database", () => {
+  it("migrates board tables into an existing v14 database", () => {
     const stateDir = tempDirs.make("openclaw-board-lazy-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:board";
@@ -521,27 +565,28 @@ describe("SqliteBoardStore persistence", () => {
     closeOpenClawStateDatabaseForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
-    const existingV13 = new DatabaseSync(databasePath);
-    existingV13.exec(`
+    const existingV14 = new DatabaseSync(databasePath);
+    existingV14.exec(`
       DROP TABLE board_widgets;
       DROP TABLE board_tabs;
-      PRAGMA user_version = 13;
-      UPDATE schema_meta SET schema_version = 13 WHERE meta_key = 'primary';
+      PRAGMA user_version = 14;
+      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
-    existingV13.close();
+    existingV14.close();
+
+    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
 
     const reopened = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(
       reopened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'board_tabs'")
         .get(),
-    ).toBeUndefined();
+    ).toEqual({ name: "board_tabs" });
 
     const store = new SqliteBoardStore({
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
     });
-    // Reads before any write must see "no boards", not "no such table".
     expect(store.getSnapshot(sessionKey)).toMatchObject({ revision: 0, tabs: [], widgets: [] });
     expect(store.readWidgetHtml(sessionKey, "status")).toBeUndefined();
     expect(store.listSessionsWithBoards()).toEqual([]);
@@ -579,7 +624,7 @@ describe("SqliteBoardStore persistence", () => {
     ).toEqual({ name: "idx_agent_board_widgets_tab_position" });
   });
 
-  it("upgrades the unreleased v13 board constraint before storing plugin widgets", () => {
+  it("upgrades the v14 board constraint before storing plugin widgets", () => {
     const stateDir = tempDirs.make("openclaw-board-plugin-kind-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:board";
@@ -622,8 +667,12 @@ describe("SqliteBoardStore persistence", () => {
         ON board_widgets(session_key, tab_id, position);
       COMMIT;
       PRAGMA foreign_keys = ON;
+      PRAGMA user_version = 14;
+      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
     closeOpenClawAgentDatabasesForTest();
+
+    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
 
     const upgradedStore = new SqliteBoardStore({
       resolveSession: () => ({ agentId: "main", sessionKey }),
@@ -682,6 +731,39 @@ describe("SqliteBoardStore persistence", () => {
       ),
     ).toBe(false);
     expect(existsSync(path.join(stateDir, "agents", "attacker-selected"))).toBe(false);
+  });
+
+  it("rejects board writes for transcript-only placeholder nodes", () => {
+    const stateDir = tempDirs.make("openclaw-board-transcript-only-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:transcript-only";
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare(
+        `INSERT INTO session_nodes (
+           session_key, current_session_id, entry_json, updated_at
+         ) VALUES (?, 'transcript-only-session', '{}', 1)`,
+      )
+      .run(sessionKey);
+    database.db
+      .prepare(
+        `INSERT INTO session_windows (
+           session_id, session_key, session_scope, created_at, updated_at
+         ) VALUES ('transcript-only-session', ?, 'conversation', 1, 1)`,
+      )
+      .run(sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+
+    expect(() =>
+      store.putWidget({
+        sessionKey,
+        name: "status",
+        content: { kind: "html", html: "no" },
+      }),
+    ).toThrow("board session not found");
   });
 
   it("canonicalizes aliases before reading and writing board rows", () => {

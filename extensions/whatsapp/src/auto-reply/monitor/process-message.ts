@@ -36,6 +36,7 @@ import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
+import type { EchoTracker } from "./echo.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
@@ -195,16 +196,9 @@ export async function processMessage(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<typeof getChildLogger>;
   backgroundTasks: Set<Promise<unknown>>;
-  rememberSentText: (
-    text: string | undefined,
-    opts: {
-      combinedBody?: string;
-      combinedBodySessionKey?: string;
-      logVerboseMessage?: boolean;
-    },
-  ) => void;
-  echoHas: (key: string) => boolean;
-  echoForget: (key: string) => void;
+  rememberSentText: EchoTracker["rememberText"];
+  echoHas: EchoTracker["has"];
+  echoForget: EchoTracker["forget"];
   buildCombinedEchoKey: (p: { sessionKey: string; combinedBody: string }) => string;
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];

@@ -32,6 +32,7 @@ title: Memory recall after context switch
 scenario:
   id: memory-recall
   surface: session-memory
+  runtimePairLane: core
   coverage:
     primary:
       - session-memory.memory-recall

@@ -12,7 +12,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
+import java.math.RoundingMode
+import java.text.NumberFormat
 import java.util.Locale
 
 internal data class TurnRecap(
@@ -215,16 +218,8 @@ internal class TurnRecapResolver(
 
 @Composable
 internal fun ChatTurnRecapRow(recap: TurnRecap) {
-  val duration = formatLocalizedChatDurationCompact(recap.runtimeMs.coerceAtLeast(1_000L))
-  val tokens =
-    recap.outputTokens?.let { count ->
-      val format = turnRecapTokenFormat(count)
-      if (format.singular) {
-        nativeStringResource("1 token")
-      } else {
-        nativeStringResource("\$count tokens", format.count)
-      }
-    }
+  val duration = formatLocalizedChatDurationFull(recap.runtimeMs.coerceAtLeast(1_000L))
+  val tokens = recap.outputTokens?.let { localizedChatOutputTokens(it) }
   Row(
     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -243,10 +238,35 @@ internal fun ChatTurnRecapRow(recap: TurnRecap) {
   }
 }
 
-internal fun turnRecapTokenFormat(count: Long): TurnRecapTokenFormat = TurnRecapTokenFormat(singular = count == 1L, count = formatCompactTokenCount(count))
+@Composable
+internal fun localizedChatOutputTokens(count: Long): String {
+  val locale = LocalConfiguration.current.locales[0]
+  val format = turnRecapTokenFormat(count, locale)
+  return if (format.singular) {
+    nativeStringResource("1 token")
+  } else {
+    nativeStringResource("\$count tokens", format.count)
+  }
+}
 
-internal fun formatCompactTokenCount(count: Long): String {
-  fun decimal(value: Double): String = String.format(Locale.US, "%.1f", value).removeSuffix(".0")
+internal fun turnRecapTokenFormat(
+  count: Long,
+  locale: Locale = Locale.getDefault(),
+): TurnRecapTokenFormat = TurnRecapTokenFormat(singular = count == 1L, count = formatCompactTokenCount(count, locale))
+
+internal fun formatCompactTokenCount(
+  count: Long,
+  locale: Locale = Locale.getDefault(),
+): String {
+  val decimalFormat =
+    NumberFormat.getNumberInstance(locale).apply {
+      isGroupingUsed = false
+      minimumFractionDigits = 0
+      maximumFractionDigits = 1
+      roundingMode = RoundingMode.HALF_UP
+    }
+
+  fun decimal(value: Double): String = decimalFormat.format(value)
 
   fun millions(): String {
     val value = decimal(count / 1_000_000.0)
@@ -257,7 +277,7 @@ internal fun formatCompactTokenCount(count: Long): String {
     count >= 1_000_000L -> millions()
     count >= 1_000L -> {
       val thousands = decimal(count / 1_000.0)
-      if (thousands == "1000") millions() else nativeString("\${thousands}k", thousands)
+      if (count >= 999_950L) millions() else nativeString("\${thousands}k", thousands)
     }
     else -> count.toString()
   }

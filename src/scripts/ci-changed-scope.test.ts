@@ -264,7 +264,7 @@ describe("detectChangedScope", () => {
       "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
-      "scripts/lib/npm-publish-plan.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
       expect(detectChangedScope([helperPath])).toEqual({

@@ -3,6 +3,7 @@ title: Thread memory isolation
 scenario:
   id: thread-memory-isolation
   surface: session-memory
+  runtimePairLane: core
   coverage:
     primary:
       - session-memory.cross-client-history-thread-isolation

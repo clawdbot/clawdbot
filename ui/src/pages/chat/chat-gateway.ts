@@ -1,6 +1,9 @@
+import {
+  hasSessionProjectionAcceptedFinal,
+  reduceSessionProjectionRunEvent,
+} from "@openclaw/gateway-client/browser";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { parseChatSideResult, type ChatSideResult } from "../../lib/chat/side-result.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
@@ -13,6 +16,12 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+  setChatSessionProjection,
+} from "./history-merge.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import { retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
@@ -20,6 +29,7 @@ import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
   hasVisibleStreamParts,
+  streamReconciliationStartIndex,
   terminalMessageReplacesVisibleStream,
 } from "./stream-reconciliation.ts";
 import {
@@ -121,10 +131,20 @@ function normalizeAbortedAssistantMessage(message: unknown): Record<string, unkn
 }
 
 function normalizeFinalAssistantMessage(message: unknown): Record<string, unknown> | null {
-  return normalizeAssistantMessage(message, {
+  const normalized = normalizeAssistantMessage(message, {
     roleRequirement: "optional",
     allowTextField: true,
   });
+  if (!normalized) {
+    return null;
+  }
+  const assistant =
+    typeof normalized.role === "string" ? normalized : { ...normalized, role: "assistant" };
+  // Older final envelopes carry their visible reply in `text`. Canonicalize
+  // before reducing so replay identity includes the delivered content.
+  return !Object.hasOwn(assistant, "content") && typeof assistant.text === "string"
+    ? { ...assistant, content: [{ type: "text", text: assistant.text }] }
+    : assistant;
 }
 
 function stripChatErrorMarker(text: string): string {
@@ -181,10 +201,16 @@ function appendCachedChatMessage(
   appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+function handleChatEvent(
+  state: ChatState,
+  payload?: ChatEventPayload,
+  opts?: { keyedStreamStartIndex?: number },
+) {
   if (!payload) {
     return null;
   }
+  const normalizedFinalMessage =
+    payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
@@ -198,7 +224,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   );
   if (!sessionMatches && !activeRunMatches) {
     if (payload.state === "final") {
-      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      const finalMessage = normalizedFinalMessage;
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
         const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
           ? (payload.agentId ?? resolveUiDefaultAgentId(state))
@@ -207,6 +233,65 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
     return null;
+  }
+  const scope = readChatSessionProjectionScope(state);
+  const publishVisibleFinal = (
+    message: Record<string, unknown>,
+    visibleMessages: unknown[],
+    runId: string | null | undefined,
+  ): void => {
+    const event = payload as ChatEventPayload & { messageId?: unknown; messageSeq?: unknown };
+    reduceChatSessionProjection(
+      state,
+      {
+        type: "messagePersisted",
+        message,
+        envelope: {
+          ...(runId ? { runId } : {}),
+          ...(event.messageId === undefined ? {} : { messageId: event.messageId }),
+          ...(event.messageSeq === undefined ? {} : { messageSeq: event.messageSeq }),
+        },
+      },
+      { scope, messages: visibleMessages.slice(0, -1) },
+    );
+  };
+  const projectedRun =
+    payload.runId && payload.state !== "status"
+      ? reduceSessionProjectionRunEvent(
+          getChatSessionProjection(state, state.chatMessages, scope),
+          normalizedFinalMessage ? { ...payload, message: normalizedFinalMessage } : payload,
+          scope,
+        )
+      : null;
+  if (projectedRun) {
+    setChatSessionProjection(state, projectedRun.projection);
+  }
+  const previousTerminalRun = projectedRun?.previousRun;
+  if (previousTerminalRun && previousTerminalRun.status !== "streaming") {
+    if (payload.state === "delta") {
+      return null;
+    }
+    if (payload.state === "error") {
+      if (
+        payload.errorMessage?.trim() &&
+        projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage
+      ) {
+        // A completed transcript is immutable; retain provider guidance without
+        // adopting its old run or interrupting a newer in-flight response.
+        setChatRunError(state, resolveGatewayErrorText(payload, null));
+      }
+      return "error";
+    }
+    const incomingFinal = normalizedFinalMessage;
+    if (
+      payload.state === "aborted" ||
+      (payload.state === "final" &&
+        (!incomingFinal ||
+          shouldHideAssistantChatMessage(incomingFinal) ||
+          hasSessionProjectionAcceptedFinal(previousTerminalRun, incomingFinal)))
+    ) {
+      return payload.state;
+    }
   }
   if (
     !state.chatRunId &&
@@ -224,9 +309,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   // See https://github.com/openclaw/openclaw/issues/1909
   if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
-      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      const finalMessage = normalizedFinalMessage;
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-        state.chatMessages = [...state.chatMessages, finalMessage];
+        publishVisibleFinal(finalMessage, [...state.chatMessages, finalMessage], payload.runId);
         return null;
       }
       return "final";
@@ -235,6 +320,13 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
 
   const terminalRunId = payload.runId ?? state.chatRunId;
+  const materializeVisibleStream = (
+    materializeOpts: Parameters<typeof materializeVisibleAssistantStreamMessages>[2] = {},
+  ) =>
+    materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+      ...materializeOpts,
+      keyedStartIndex: opts?.keyedStreamStartIndex,
+    });
   const reconcileTerminalRun = (
     outcome: "done" | "interrupted",
     sessionStatus: "done" | "failed" | "killed",
@@ -276,7 +368,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatStream = next;
     }
   } else if (payload.state === "final") {
-    const finalMessage = normalizeFinalAssistantMessage(payload.message);
+    const finalMessage = normalizedFinalMessage;
     if (authoritativeTerminalMatches) {
       // History already owns this run's terminal message. Discard the live
       // projection; reconcileTerminalRun below clears its remaining stream.
@@ -288,17 +380,17 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           isHiddenStreamText: isHiddenAssistantStreamText,
         })
       ) {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-          includeCurrent: false,
-        });
+        state.chatMessages = materializeVisibleStream({ includeCurrent: false });
         clearToolStreamSegments(state);
       }
-      state.chatMessages = appendTerminalAssistantMessage(
-        state.chatMessages,
-        rememberLiveTerminalRun(finalMessage, terminalRunId),
+      const liveFinal = rememberLiveTerminalRun(finalMessage, terminalRunId);
+      publishVisibleFinal(
+        finalMessage,
+        appendTerminalAssistantMessage(state.chatMessages, liveFinal),
+        terminalRunId,
       );
     } else {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+      state.chatMessages = materializeVisibleStream();
     }
     if (payload.yielded === true && payload.stopReason === "end_turn") {
       reconcileChatRunLifecycle(
@@ -318,13 +410,13 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+      state.chatMessages = materializeVisibleStream({
         replacementMessages: [normalizedMessage],
         includeCurrent: false,
       });
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, normalizedMessage);
     } else {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+      state.chatMessages = materializeVisibleStream();
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
@@ -351,11 +443,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
               isHiddenStreamText: isHiddenAssistantStreamText,
             })
           ) {
-            state.chatMessages = materializeVisibleAssistantStreamMessages(
-              state.chatMessages,
-              state,
-              { includeCurrent: false },
-            );
+            state.chatMessages = materializeVisibleStream({ includeCurrent: false });
             clearToolStreamSegments(state);
           }
           state.chatMessages = appendTerminalAssistantMessage(
@@ -363,18 +451,12 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
             visiblePayloadMessage,
           );
         } else {
-          state.chatMessages = materializeVisibleAssistantStreamMessages(
-            state.chatMessages,
-            state,
-            { includeCurrent: true },
-          );
+          state.chatMessages = materializeVisibleStream({ includeCurrent: true });
           clearToolStreamSegments(state);
           state.chatMessages = [...state.chatMessages, visiblePayloadMessage];
         }
       } else {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-          includeCurrent: true,
-        });
+        state.chatMessages = materializeVisibleStream({ includeCurrent: true });
       }
     }
     reconcileTerminalRun("interrupted", "failed");
@@ -387,107 +469,31 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
-  // A BTW run that fails before seeding context terminates with a plain chat
-  // event and never emits chat.side_result. Convert the failure into an error
-  // side-result card and swallow the event: detached BTW runs must not reach
-  // normal chat handling, where an idle pane would adopt them into the
-  // transcript. Successful runs clear pending via the side_result handler
-  // before their terminal chat event arrives.
-  if (
-    isTerminalChatState(payload?.state) &&
-    typeof payload?.runId === "string" &&
-    state.chatSideResultPending?.runId === payload.runId
-  ) {
-    appendChatSideChatTurn(state, {
-      kind: "btw",
-      runId: payload.runId,
-      sessionKey: payload.sessionKey ?? state.sessionKey,
-      question: state.chatSideResultPending.question,
-      text: extractBtwFailureText(payload) ?? "The side question ended without a result.",
-      isError: true,
-      ts: Date.now(),
-    });
-    state.chatSideResultPending = null;
-    return null;
-  }
-  if (
-    isTerminalChatState(payload?.state) &&
-    typeof payload?.runId === "string" &&
-    state.chatSideResultTerminalRuns?.has(payload.runId) === true
-  ) {
-    state.chatSideResultTerminalRuns.delete(payload.runId);
-    return null;
-  }
   const activeRunIdBeforeEvent = state.chatRunId;
+  let terminalKeyedStreamStartIndex: number | undefined;
   if (
     isTerminalChatState(payload?.state) &&
     payload !== undefined &&
-    (chatEventSessionMatches(state, payload) || payload.runId === activeRunIdBeforeEvent) &&
+    // Unkeyed events must also carry a real run id: with no active run,
+    // `undefined === undefined` would let sessionless internal-run terminals
+    // (e.g. companion answers) materialize into the open main thread.
+    (chatEventSessionMatches(state, payload) ||
+      (typeof payload.runId === "string" && payload.runId === activeRunIdBeforeEvent)) &&
     !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
   ) {
+    // The active stream belongs to the user boundary that preceded any steer
+    // chip retired below. Preserve that boundary through terminal materialization.
+    const localOnlySteerBoundary = streamReconciliationStartIndex(state.chatMessages);
     // A steered chip can be the only local copy while transcript persistence lags.
     // Materialize it before the terminal assistant so user/assistant order stays stable.
-    retireSteeredChipsForTerminalRun(state, payload?.runId);
+    const firstPersistedSteerIndex = retireSteeredChipsForTerminalRun(state, payload?.runId);
+    terminalKeyedStreamStartIndex =
+      firstPersistedSteerIndex === undefined
+        ? localOnlySteerBoundary
+        : streamReconciliationStartIndex(state.chatMessages, firstPersistedSteerIndex);
   }
-  const result = handleChatEvent(state, payload);
+  const result = handleChatEvent(state, payload, {
+    keyedStreamStartIndex: terminalKeyedStreamStartIndex,
+  });
   return result;
-}
-
-export function handleChatSideResultGatewayEvent(state: ChatState, payload: unknown): boolean {
-  const sideResult = parseChatSideResult(payload);
-  if (!sideResult) {
-    return false;
-  }
-  if (!chatScopedEventSessionMatches(state, sideResult.sessionKey, sideResult.agentId)) {
-    return false;
-  }
-  // Runs retired before display (superseded by a newer question or dismissed)
-  // enter chatSideResultTerminalRuns via retirePendingChatSideQuestion before
-  // their side_result can arrive; live runs only enter the set below. A
-  // retired run's late result must not replace the current card, and its
-  // entry stays so the trailing terminal chat event is still swallowed.
-  if (state.chatSideResultTerminalRuns?.has(sideResult.runId)) {
-    return true;
-  }
-  // A same-session result from another run (e.g. a split pane) must not
-  // replace this pane's live pending card — displaying it would also let the
-  // dismiss button retire the hidden pending run. Record it so its trailing
-  // terminal chat event is still swallowed here.
-  const pending = state.chatSideResultPending;
-  if (pending?.runId && pending.runId !== sideResult.runId) {
-    state.chatSideResultTerminalRuns?.add(sideResult.runId);
-    return true;
-  }
-  // Follow-up commands embed prior-turn context; the server echoes that whole
-  // blob as the question. The correlated pending record holds the user's
-  // typed question, so prefer it for display.
-  const question = pending?.runId === sideResult.runId ? pending.question : sideResult.question;
-  appendChatSideChatTurn(state, { ...sideResult, question });
-  state.chatSideResultPending = null;
-  state.chatSideResultTerminalRuns?.add(sideResult.runId);
-  return true;
-}
-
-/** An arriving answer appends a turn and reopens a panel hidden via X/Escape. */
-function appendChatSideChatTurn(state: ChatState, turn: ChatSideResult) {
-  state.chatSideChatTurns = [...(state.chatSideChatTurns ?? []), turn];
-  state.chatSideChatHidden = false;
-}
-
-function extractBtwFailureText(payload: ChatEventPayload): string | null {
-  if (typeof payload.errorMessage === "string" && payload.errorMessage.trim()) {
-    return payload.errorMessage;
-  }
-  const message = payload.message as { content?: unknown } | undefined;
-  const blocks = Array.isArray(message?.content) ? message.content : [];
-  const text = blocks
-    .map((block) =>
-      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
-        ? (block as { text?: unknown }).text
-        : null,
-    )
-    .filter((entry): entry is string => typeof entry === "string")
-    .join("\n")
-    .trim();
-  return text || null;
 }

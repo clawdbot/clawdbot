@@ -23,7 +23,7 @@ import {
   preparePersistedUserTurnMessageForTranscriptWrite,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 
 const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 const CONVERSATION_TURN_REPLY_CUSTOM_TYPE = "openclaw.conversation-turn-reply";
@@ -61,7 +61,7 @@ function normalizeTimestamp(value: unknown): number | undefined {
 
 async function capturePendingConversationTurnReplyUnsafe(params: {
   cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
+  ctx: FinalizedRuntimeMsgContext;
 }): Promise<boolean> {
   // Only channel owners can attest ingress admission. Raw/plugin-constructed
   // contexts without this proof must follow ordinary dispatch and its guards.
@@ -74,10 +74,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     normalizeOptionalString(params.ctx.MessageSid) ??
     normalizeOptionalString(params.ctx.MessageSidFirst) ??
     normalizeOptionalString(params.ctx.MessageSidLast);
-  const replyText =
-    normalizeOptionalString(params.ctx.BodyForAgent) ??
-    normalizeOptionalString(params.ctx.RawBody) ??
-    normalizeOptionalString(params.ctx.Body);
+  const replyText = normalizeOptionalString(params.ctx.agentText);
   if (!sessionKey || !messageId || !replyText) {
     return false;
   }
@@ -251,7 +248,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
 /** Consumes a correlated channel reply before it can start a second local agent turn. */
 export async function capturePendingConversationTurnReply(params: {
   cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
+  ctx: FinalizedRuntimeMsgContext;
 }): Promise<boolean> {
   try {
     return await capturePendingConversationTurnReplyUnsafe(params);

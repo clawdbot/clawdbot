@@ -1,5 +1,5 @@
 // Google provider module implements model/runtime integration.
-import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
@@ -297,7 +297,11 @@ function extractGoogleSpeechPcm(payload: GoogleGenerateSpeechResponse): Buffer {
       if (!data) {
         continue;
       }
-      return Buffer.from(data, "base64");
+      const canonicalAudio = canonicalizeBase64(data);
+      if (!canonicalAudio) {
+        throw new Error("Google TTS response returned malformed base64 audio data");
+      }
+      return Buffer.from(canonicalAudio, "base64");
     }
   }
   throw new Error("Google TTS response missing audio data");

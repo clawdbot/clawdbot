@@ -3,7 +3,7 @@ title: Codex plugin cold install
 scenario:
   id: codex-plugin-cold-install
   surface: runtime
-  runtimeParityTier: standard
+  runtimePairLane: core
   runtimeParityUsage:
     expectation: not-applicable
     reason: Packaged CLI/plugin-lifecycle proof only; no assistant turn runs.

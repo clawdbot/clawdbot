@@ -363,6 +363,9 @@ export function reconcileSessionChanged(
   if (rowFields.archivedAt === null) {
     delete row.archivedAt;
   }
+  if (rowFields.archivedBy === null) {
+    delete row.archivedBy;
+  }
   if (rowFields.pinnedAt === null) {
     delete row.pinnedAt;
   }
@@ -378,8 +381,8 @@ export function reconcileSessionChanged(
   if (rowFields.displayName === null) {
     delete row.displayName;
   }
-  if (rowFields.createdBy === null) {
-    delete row.createdBy;
+  if (rowFields.createdActor === null) {
+    delete row.createdActor;
   }
   if (rowFields.thinkingLevel === null) {
     delete row.thinkingLevel;
@@ -400,9 +403,10 @@ export function reconcileSessionChanged(
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
   const timestamped = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
   const ownershipChanged =
-    Object.hasOwn(rowFields, "createdBy") &&
-    (existing?.createdBy?.id !== row.createdBy?.id ||
-      existing?.createdBy?.label !== row.createdBy?.label);
+    Object.hasOwn(rowFields, "createdActor") &&
+    (existing?.createdActor?.type !== row.createdActor?.type ||
+      existing?.createdActor?.id !== row.createdActor?.id ||
+      existing?.createdActor?.label !== row.createdActor?.label);
   // The facet covers unloaded pages, so an ownership event invalidates it until
   // the session capability's canonical list refresh supplies a complete replacement.
   const reconciledResult = ownershipChanged ? { ...timestamped, creators: undefined } : timestamped;

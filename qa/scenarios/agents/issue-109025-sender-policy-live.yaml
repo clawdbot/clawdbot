@@ -3,7 +3,7 @@ title: Issue 109025 sender-scoped subagent tool inheritance live probe
 scenario:
   id: issue-109025-sender-policy-live
   surface: subagents
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.delegated-tool-access
@@ -39,6 +39,7 @@ scenario:
     retryCount: 0
     summary: Exercise exact sender policy through a real inbound channel turn and native subagent spawn.
     config:
+      requiredProviderMode: live-frontier
       childLabel: issue-109025-child
       parentProofFile: issue-109025-parent-proof.txt
       secretFile: issue-109025-secret.txt
@@ -113,7 +114,7 @@ flow:
             - lambda:
                 async: true
                 expr: "readRawQaSessionStore(env).then((store) => { const match = Object.entries(store).find(([, entry]) => entry?.label === config.childLabel && typeof entry?.spawnedBy === 'string'); return match ? { key: match[0], entry: match[1] } : undefined; })"
-            - 60000
+            - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         - call: readSessionTranscriptSummary
           saveAs: childTranscript

@@ -50,13 +50,21 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     input.setActiveSessionSystemPrompt("");
   }
 
-  const orphanRepair = preserveExactPrompt
-    ? undefined
-    : resolveOrphanRepairPlan({
-        sessionManager,
-        prompt: attempt.prompt,
-        trigger: attempt.trigger,
-      });
+  const detachedCurrentUser =
+    !preserveExactPrompt &&
+    detachPrePersistedCurrentUserTurn({
+      activeSession,
+      preparedUserTurnMessage: input.preparedUserTurnMessage,
+      userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
+    });
+  const orphanRepair =
+    preserveExactPrompt || detachedCurrentUser
+      ? undefined
+      : resolveOrphanRepairPlan({
+          sessionManager,
+          prompt: attempt.prompt,
+          trigger: attempt.trigger,
+        });
   if (orphanRepair?.removeLeaf) {
     if (orphanRepair.messageEntry.parentId) {
       sessionManager.branch(orphanRepair.messageEntry.parentId);
@@ -70,13 +78,6 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     attempt.onUserMessagePersistenceInvalidated?.();
     activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
   }
-
-  detachPrePersistedCurrentUserTurn({
-    activeSession,
-    preparedUserTurnMessage: input.preparedUserTurnMessage,
-    suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
-    userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
-  });
 
   // This is the single timestamping source for user messages sent to the LLM.
   // Raw probes retain exact prompt bytes.

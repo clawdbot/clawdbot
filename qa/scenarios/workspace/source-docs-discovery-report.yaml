@@ -3,6 +3,7 @@ title: Source and docs discovery report
 scenario:
   id: source-docs-discovery-report
   surface: discovery
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.tool-fs-read

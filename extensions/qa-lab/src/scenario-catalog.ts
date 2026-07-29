@@ -67,13 +67,6 @@ const qaScenarioChannelSchema = z
     message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
   });
 
-const qaScenarioProfileSchema = z
-  .string()
-  .trim()
-  .regex(/^[a-z0-9]+(?:[.:/-][a-z0-9]+)*$/, {
-    message: "scenario execution profiles must use lowercase namespaced tokens",
-  });
-
 const qaScenarioTransportPolicySchema = z.object({
   requireGroupMention: z.literal(true).optional(),
   senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -85,7 +78,13 @@ const qaFlowScenarioExecutionSchema = z
     kind: z.literal("flow").default("flow"),
     summary: z.string().trim().min(1).optional(),
     channel: qaScenarioChannelSchema.optional(),
-    profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
+    channels: z
+      .array(qaScenarioChannelSchema)
+      .min(1)
+      .refine((channels) => new Set(channels).size === channels.length, {
+        message: "scenario execution channel ids must be unique",
+      })
+      .optional(),
     suiteIsolation: z.literal("isolated").optional(),
     isolationReason: z.string().trim().min(1).optional(),
     transportPolicy: qaScenarioTransportPolicySchema.optional(),
@@ -96,7 +95,6 @@ const qaFlowScenarioExecutionSchema = z
 const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
-  profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
   path: qaScenarioRepoRefSchema,
   config: qaScenarioConfigSchema.optional(),
 });
@@ -169,8 +167,8 @@ const qaScenarioGatewayRuntimeSchema = z.object({
   preserveDebugArtifacts: z.boolean().optional(),
 });
 
-export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;
-const qaRuntimeParityTierSchema = z.enum(QA_RUNTIME_PARITY_TIERS);
+export const QA_RUNTIME_PAIR_LANES = ["core", "extended", "soak"] as const;
+export const qaRuntimePairLaneSchema = z.enum(QA_RUNTIME_PAIR_LANES);
 const qaRuntimeParityUsageSchema = z.discriminatedUnion("expectation", [
   z.object({
     expectation: z.literal("assistant-message-required"),
@@ -289,7 +287,7 @@ const qaSeedScenarioBodySchema = z.object({
   id: z.string().trim().min(1),
   surface: z.string().trim().min(1),
   category: z.string().trim().min(1).optional(),
-  runtimeParityTier: qaRuntimeParityTierSchema.optional(),
+  runtimePairLane: qaRuntimePairLaneSchema.optional(),
   runtimeParityUsage: qaRuntimeParityUsageSchema.optional(),
   coverage: qaScenarioCoverageSchema.optional(),
   surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -318,11 +316,11 @@ const qaScenarioFileSchema = z
     flow: z.union([qaFlowSchema, qaScenarioModuleFlow.moduleSchema]).optional(),
   })
   .superRefine((file, ctx) => {
-    if (file.scenario.runtimeParityUsage && !file.scenario.runtimeParityTier) {
+    if (file.scenario.runtimeParityUsage && !file.scenario.runtimePairLane) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["scenario", "runtimeParityUsage"],
-        message: "runtimeParityUsage requires runtimeParityTier",
+        message: "runtimeParityUsage requires runtimePairLane",
       });
     }
   });
@@ -344,7 +342,7 @@ const qaScenarioPackFileSchema = z.object({
 
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
-export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
+export type QaRuntimePairLane = z.infer<typeof qaRuntimePairLaneSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;
@@ -362,8 +360,6 @@ export type QaBootstrapScenarioCatalog = {
   kickoffTask: string;
   scenarios: QaSeedScenarioWithSource[];
 };
-
-export { QA_SCENARIO_PACKS } from "./scenario-packs.js";
 
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.yaml";
 const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
@@ -457,6 +453,20 @@ export function readQaScenarioPack(): QaScenarioPack {
         parsedScenario.execution ?? {},
         relativePath,
       );
+      const requiredChannelDriver = qaScenarioModuleFlow.resolveRequiredChannelDriver(
+        parsedScenarioFile.flow,
+      );
+      const configuredChannelDriver =
+        execution.kind === "flow" ? execution.config?.requiredChannelDriver : undefined;
+      if (
+        requiredChannelDriver &&
+        configuredChannelDriver !== undefined &&
+        configuredChannelDriver !== requiredChannelDriver
+      ) {
+        throw new Error(
+          `${relativePath}: live transport module requires channelDriver=${requiredChannelDriver}`,
+        );
+      }
       const flow = qaScenarioModuleFlow.resolveFlow(
         parsedScenarioFile.flow,
         parsedScenarioFile.title,
@@ -467,6 +477,14 @@ export function readQaScenarioPack(): QaScenarioPack {
         sourcePath: relativePath,
         execution: {
           ...execution,
+          ...(requiredChannelDriver && execution.kind === "flow"
+            ? {
+                config: {
+                  ...execution.config,
+                  requiredChannelDriver,
+                },
+              }
+            : {}),
           ...(flow ? { flow } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
@@ -547,21 +565,6 @@ export function readQaScenarioById(id: string): QaSeedScenarioWithSource {
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
   return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
-}
-
-export function listQaScenariosForExecutionProfile(profile: string): QaSeedScenarioWithSource[] {
-  const normalized = qaScenarioProfileSchema.parse(profile);
-  const scenarios = readQaScenarioPack()
-    .scenarios.filter((scenario) => scenario.execution.profiles?.[normalized] !== undefined)
-    .toSorted((left, right) => {
-      const orderDelta =
-        left.execution.profiles![normalized]! - right.execution.profiles![normalized]!;
-      return orderDelta || left.sourcePath.localeCompare(right.sourcePath);
-    });
-  if (scenarios.length === 0) {
-    throw new Error(`unknown QA scenario execution profile: ${normalized}`);
-  }
-  return scenarios;
 }
 
 export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {

@@ -1,6 +1,8 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
+import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -22,6 +24,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   commandName: string;
   logScope: string;
   logPrefix: string;
+  audioFormat?: MeetingRealtimeAudioFormat;
 }): MeetingRealtimeAudioTransport {
   let stopped = false;
   let inputStarted = false;
@@ -29,6 +32,9 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   let lastInputError: string | undefined;
   let fatalSignaled = false;
   let fatalHandler: (() => void) | undefined;
+  const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
+    audioFormat: params.audioFormat ?? "pcm16-24khz",
+  });
   const signalFatal = () => {
     if (!fatalSignaled) {
       fatalSignaled = true;
@@ -64,7 +70,9 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
             const result = asRecord(asRecord(raw).payload ?? raw);
             const base64 = readString(result.base64);
             if (base64) {
-              onAudio(decodeMeetingAudioBase64(base64, "pullAudio"));
+              const audio = decodeMeetingAudioBase64(base64, "pullAudio");
+              outputLoopbackVerifier.recordInput(audio);
+              onAudio(audio);
             }
             consecutiveInputErrors = 0;
             lastInputError = undefined;
@@ -96,6 +104,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
         }
       })();
     },
+    beginOutput: () => outputLoopbackVerifier.beginOutput(),
     stop: async () => {
       if (stopped) {
         return;
@@ -115,6 +124,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       }
     },
     writeOutput: async (audio) => {
+      outputLoopbackVerifier.recordOutput(audio);
       await params.runtime.nodes.invoke({
         nodeId: params.nodeId,
         command: params.commandName,
@@ -127,6 +137,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       });
     },
     clearOutput: async () => {
+      outputLoopbackVerifier.cancelOutput();
       await params.runtime.nodes.invoke({
         nodeId: params.nodeId,
         command: params.commandName,
@@ -137,7 +148,11 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
     dispose: async () => {
       await transport.stop();
     },
-    getHealth: () => ({ consecutiveInputErrors, lastInputError }),
+    getHealth: () => ({
+      consecutiveInputErrors,
+      lastInputError,
+      ...outputLoopbackVerifier.getHealth(),
+    }),
   };
 
   return transport;

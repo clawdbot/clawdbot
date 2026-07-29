@@ -33,6 +33,9 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.Buffer
+import java.net.URI
+import java.util.Base64
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -52,6 +55,37 @@ data class GatewayClientInfo(
   val deviceFamily: String?,
   val modelIdentifier: String?,
 )
+
+data class GatewayLoadedImage(
+  val bytes: ByteArray,
+  val mimeType: String,
+)
+
+enum class GatewayMediaKind(
+  val wireValue: String,
+  val maximumBufferedBytes: Long,
+) {
+  Image("image", 12L * 1024L * 1024L),
+  Audio("audio", 16L * 1024L * 1024L),
+  Video("video", 0L),
+}
+
+sealed interface GatewayLoadedMedia {
+  data class Buffered(
+    val bytes: ByteArray,
+    val mimeType: String,
+    val headers: Map<String, String>,
+    val client: OkHttpClient,
+  ) : GatewayLoadedMedia
+
+  /** A short-lived gateway capability resolved with the exact socket's HTTP transport policy. */
+  data class Streaming(
+    val url: String,
+    val headers: Map<String, String>,
+    val client: OkHttpClient,
+    val mimeType: String?,
+  ) : GatewayLoadedMedia
+}
 
 /**
  * Role, scopes, commands, and permission snapshot sent with the connect frame.
@@ -616,6 +650,75 @@ class GatewaySession(
     throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
   }
 
+  suspend fun loadImageArtifact(
+    expectedEndpointStableId: String?,
+    sessionKey: String,
+    agentId: String?,
+    artifactId: String,
+  ): GatewayLoadedImage? {
+    val loaded =
+      loadMediaArtifact(
+        expectedEndpointStableId = expectedEndpointStableId,
+        sessionKey = sessionKey,
+        agentId = agentId,
+        artifactId = artifactId,
+        kind = GatewayMediaKind.Image,
+      ) as? GatewayLoadedMedia.Buffered ?: return null
+    return GatewayLoadedImage(bytes = loaded.bytes, mimeType = loaded.mimeType)
+  }
+
+  suspend fun loadMediaArtifact(
+    expectedEndpointStableId: String?,
+    sessionKey: String,
+    agentId: String?,
+    artifactId: String,
+    kind: GatewayMediaKind,
+  ): GatewayLoadedMedia? {
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    val params =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(sessionKey))
+        agentId?.trim()?.takeIf(String::isNotEmpty)?.let { put("agentId", JsonPrimitive(it)) }
+        put("artifactId", JsonPrimitive(artifactId))
+      }
+    val response = conn.request(GatewayMethod.ArtifactsDownload.rawValue, params, timeoutMs = 15_000)
+    if (!response.ok) {
+      throw GatewayRequestRejected(response.error ?: ErrorShape("UNAVAILABLE", "artifact download failed"))
+    }
+    val payload = response.payloadJson?.let(::parseJsonOrNull).asObjectOrNull() ?: return null
+    val artifact = payload["artifact"].asObjectOrNull()
+    // Older gateways returned only the managed-image URL. Audio/video shipped with the typed
+    // artifact envelope, so keep the narrow image fallback without weakening their type gate.
+    if (artifact == null && kind != GatewayMediaKind.Image) return null
+    if (artifact != null && artifact["type"].asStringOrNull()?.trim()?.lowercase(Locale.ROOT) != kind.wireValue) return null
+    val mimeType =
+      artifact
+        ?.get("mimeType")
+        .asStringOrNull()
+        ?.trim()
+        ?.lowercase(Locale.ROOT)
+    if (mimeType != null && !mimeType.startsWith("${kind.wireValue}/")) return null
+    val loaded =
+      payload["data"].asStringOrNull()?.let { encoded ->
+        if (kind == GatewayMediaKind.Video) return@let null
+        val maximumEncodedLength = ((kind.maximumBufferedBytes + 2L) / 3L) * 4L
+        if (encoded.length.toLong() > maximumEncodedLength) return@let null
+        val bytes = runCatching { Base64.getDecoder().decode(encoded) }.getOrNull() ?: return@let null
+        if (bytes.size.toLong() > kind.maximumBufferedBytes) return@let null
+        val resolvedMimeType = mimeType ?: return@let null
+        conn.bufferedMedia(bytes = bytes, mimeType = resolvedMimeType)
+      } ?: payload["url"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)?.let { ticketedPath ->
+        if (kind == GatewayMediaKind.Video) {
+          conn.resolveTicketedMediaStream(ticketedPath, mimeType)
+        } else {
+          conn.loadTicketedMedia(ticketedPath, kind)
+        }
+      } ?: return null
+    return synchronized(lifecycleLock) {
+      loaded.takeIf { currentConnection === conn && conn.isReady() }
+    }
+  }
+
   internal suspend fun requestForEndpoint(
     expectedEndpointStableId: String,
     method: String,
@@ -734,6 +837,11 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
+  private data class TicketedMediaRequest(
+    val url: String,
+    val headers: Map<String, String>,
+  )
+
   private data class ConnectedGateway(
     val pluginSurfaceUrls: Map<String, String>,
     val mainSessionKey: String?,
@@ -829,6 +937,87 @@ class GatewaySession(
         if (connectRequestId == id) connectRequestId = null
       }
     }
+
+    fun resolveTicketedMediaStream(
+      ticketedPath: String,
+      mimeType: String?,
+    ): GatewayLoadedMedia.Streaming? {
+      val request = resolveTicketedMediaRequest(ticketedPath) ?: return null
+      return GatewayLoadedMedia.Streaming(
+        url = request.url,
+        headers = request.headers + ("Accept" to "video/*"),
+        client = client,
+        mimeType = mimeType,
+      )
+    }
+
+    fun bufferedMedia(
+      bytes: ByteArray,
+      mimeType: String,
+    ): GatewayLoadedMedia.Buffered =
+      GatewayLoadedMedia.Buffered(
+        bytes = bytes,
+        mimeType = mimeType,
+        headers = mediaTransportHeaders(),
+        client = client,
+      )
+
+    suspend fun loadTicketedMedia(
+      ticketedPath: String,
+      kind: GatewayMediaKind,
+    ): GatewayLoadedMedia.Buffered? =
+      withContext(Dispatchers.IO) {
+        if (kind == GatewayMediaKind.Video) return@withContext null
+        val resolved = resolveTicketedMediaRequest(ticketedPath) ?: return@withContext null
+        val request = Request.Builder().url(resolved.url).header("Accept", "${kind.wireValue}/*")
+        for ((name, value) in resolved.headers) {
+          request.header(name, value)
+        }
+        val call = client.newCall(request.build())
+        call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        call.execute().use { response ->
+          if (!response.isSuccessful) return@withContext null
+          val body = response.body
+          val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@withContext null
+          if (!mimeType.startsWith("${kind.wireValue}/")) return@withContext null
+          val maximumBytes = kind.maximumBufferedBytes
+          val declaredLength = body.contentLength()
+          if (declaredLength > maximumBytes) return@withContext null
+          val buffer = Buffer()
+          val source = body.source()
+          var total = 0L
+          while (true) {
+            val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
+            if (read == -1L) break
+            total += read
+            if (total > maximumBytes) return@withContext null
+          }
+          bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
+        }
+      }
+
+    private fun resolveTicketedMediaRequest(ticketedPath: String): TicketedMediaRequest? {
+      val uri = runCatching { URI(ticketedPath) }.getOrNull() ?: return null
+      val rawPath = uri.rawPath ?: return null
+      val rawQuery = uri.rawQuery ?: return null
+      if (uri.isAbsolute || uri.rawAuthority != null || uri.rawFragment != null) return null
+      val hasMediaTicket =
+        rawQuery
+          .split('&')
+          .any { field -> field.substringBefore('=') == "mediaTicket" && field.substringAfter('=', "").isNotEmpty() }
+      if (!rawPath.startsWith("/api/chat/media/outgoing/") || !hasMediaTicket) return null
+      val scheme = if (tlsConfig != null) "https" else "http"
+      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$ticketedPath"
+      val headers = mediaTransportHeaders()
+      return TicketedMediaRequest(url = url, headers = headers)
+    }
+
+    private fun mediaTransportHeaders(): Map<String, String> =
+      if (tlsConfig == null) {
+        emptyMap()
+      } else {
+        GatewayCustomHeaders.sanitized(customHeadersProvider?.invoke(endpoint.stableId).orEmpty())
+      }
 
     @OptIn(DelicateCoroutinesApi::class)
     suspend fun sendRequestFrame(

@@ -1,11 +1,7 @@
 // Gateway RPC handlers for plugin approval requests and decisions.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -18,6 +14,7 @@ import type {
 } from "../../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
@@ -25,12 +22,12 @@ import {
   handleApprovalResolve,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
-  isApprovalRecordVisibleToClient,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
-import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type PluginApprovalIosPushDelivery = {
   handleRequested?: (
@@ -53,23 +50,21 @@ export function createPluginApprovalHandlers(
       respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
-      if (!validatePluginApprovalRequestParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid plugin.approval.request params: ${formatValidationErrors(
-              validatePluginApprovalRequestParams.errors,
-            )}`,
-          ),
-        );
+      if (
+        !assertValidParams(
+          params,
+          validatePluginApprovalRequestParams,
+          "plugin.approval.request",
+          respond,
+        )
+      ) {
         return;
       }
       const p = params as {
         pluginId?: string | null;
         title: string;
         description: string;
+        detail?: string | null;
         severity?: string | null;
         toolName?: string | null;
         toolCallId?: string | null;
@@ -94,6 +89,7 @@ export function createPluginApprovalHandlers(
         pluginId: p.pluginId ?? null,
         title: p.title,
         description: p.description,
+        detail: normalizeTrimmedString(p.detail),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: p.toolName ?? null,
         toolCallId: p.toolCallId ?? null,
@@ -135,6 +131,8 @@ export function createPluginApprovalHandlers(
       }
 
       const requestEvent = buildRequestedApprovalEvent(record);
+      const forwardRequest = opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder);
+      const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
 
       await handlePendingApprovalRequest({
         manager,
@@ -147,53 +145,20 @@ export function createPluginApprovalHandlers(
         requestEvent,
         twoPhase,
         approvalKind: "plugin",
-        deliverRequest: () => {
-          const deliveryTasks: Array<Promise<boolean>> = [];
-          if (opts?.forwarder?.handlePluginApprovalRequested) {
-            deliveryTasks.push(
-              opts.forwarder.handlePluginApprovalRequested(requestEvent).catch((err: unknown) => {
-                context.logGateway?.error?.(
-                  `plugin approvals: forward request failed: ${String(err)}`,
-                );
-                return false;
-              }),
-            );
-          }
-          if (opts?.iosPushDelivery?.handleRequested) {
-            deliveryTasks.push(
-              opts.iosPushDelivery
-                .handleRequested(requestEvent, {
-                  isTargetVisible: (target) =>
-                    isApprovalRecordVisibleToClient({
-                      record,
-                      client: {
-                        connect: {
-                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
-                          device: { id: target.deviceId },
-                          scopes: [...target.scopes],
-                        },
-                      } as GatewayClient,
-                    }),
-                })
-                .catch((err: unknown) => {
-                  context.logGateway?.error?.(
-                    `plugin approvals: iOS push request failed: ${String(err)}`,
-                  );
-                  return false;
-                }),
-            );
-          }
-          if (deliveryTasks.length === 0) {
-            return false;
-          }
-          return (async () => {
-            let delivered = false;
-            for (const task of deliveryTasks) {
-              delivered = (await task) || delivered;
-            }
-            return delivered;
-          })();
-        },
+        deliverRequest: () =>
+          runApprovalRequestDeliveries({
+            context,
+            record,
+            forward: forwardRequest
+              ? [() => forwardRequest(requestEvent), "plugin approvals: forward request failed"]
+              : undefined,
+            iosPush: iosPushRequest
+              ? [
+                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
+                  "plugin approvals: iOS push request failed",
+                ]
+              : undefined,
+          }),
         afterDecision: async (decision) => {
           if (decision === null) {
             await opts?.iosPushDelivery?.handleExpired?.(requestEvent);

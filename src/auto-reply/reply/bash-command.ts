@@ -110,7 +110,7 @@ function resolveRawCommandBody(params: {
   agentId?: string;
   isGroup: boolean;
 }) {
-  const source = params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body ?? "";
+  const source = params.ctx.commandText ?? "";
   const stripped = stripStructuralPrefixes(source);
   return params.isGroup
     ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)

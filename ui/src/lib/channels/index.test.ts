@@ -52,7 +52,7 @@ describe("channels controller WhatsApp wait", () => {
       return Promise.resolve(createChannelsSnapshot("fresh"));
     });
     const client = { request };
-    let snapshot = { client, connected: true };
+    let snapshot = { client, phase: "connected" };
     const listeners = new Set<(next: typeof snapshot) => void>();
     const gateway = {
       get snapshot() {
@@ -67,11 +67,11 @@ describe("channels controller WhatsApp wait", () => {
 
     const stale = channels.waitWhatsApp();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    snapshot = { client, connected: false };
+    snapshot = { client, phase: "reconnecting" };
     for (const listener of listeners) {
       listener(snapshot);
     }
-    snapshot = { client, connected: true };
+    snapshot = { client, phase: "connected" };
     for (const listener of listeners) {
       listener(snapshot);
     }
@@ -112,7 +112,7 @@ describe("channels controller WhatsApp wait", () => {
     const client = { request };
     let snapshot = {
       client,
-      connected: true,
+      phase: "connected",
       hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
     };
     const listeners = new Set<(next: typeof snapshot) => void>();
@@ -159,7 +159,7 @@ describe("channels controller WhatsApp wait", () => {
     const client = { request };
     let snapshot = {
       client,
-      connected: true,
+      phase: "connected",
       hello: { auth: { role: "operator", scopes: ["operator.admin", "operator.pairing"] } },
     };
     const listeners = new Set<(next: typeof snapshot) => void>();
@@ -207,7 +207,7 @@ describe("channels controller WhatsApp wait", () => {
     const request = vi.fn(() => pending.promise);
     const client = { request };
     const gateway = {
-      snapshot: { client, connected: true },
+      snapshot: { client, phase: "connected" },
       subscribe: () => () => undefined,
     };
     const channels = createChannelCapability(gateway as never);
@@ -239,7 +239,7 @@ describe("channels controller WhatsApp logout", () => {
         : createChannelsSnapshot("refreshed"),
     );
     const channels = createChannelCapability({
-      snapshot: { client: { request }, connected: true },
+      snapshot: { client: { request }, phase: "connected" },
       subscribe: () => () => undefined,
     } as never);
     channels.state.whatsappLoginMessage = "Scan this QR.";
@@ -269,7 +269,7 @@ describe("channels controller WhatsApp logout", () => {
         : createChannelsSnapshot("refreshed"),
     );
     const channels = createChannelCapability({
-      snapshot: { client: { request }, connected: true },
+      snapshot: { client: { request }, phase: "connected" },
       subscribe: () => () => undefined,
     } as never);
     channels.state.whatsappLoginMessage = "Scan this QR.";
@@ -293,7 +293,7 @@ describe("channels controller WhatsApp logout", () => {
       return createChannelsSnapshot("refreshed");
     });
     const channels = createChannelCapability({
-      snapshot: { client: { request }, connected: true },
+      snapshot: { client: { request }, phase: "connected" },
       subscribe: () => () => undefined,
     } as never);
     channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
@@ -360,7 +360,7 @@ describe("channels controller DM pairing", () => {
       return {};
     });
     const channels = createChannelCapability({
-      snapshot: { client: { request }, connected: true },
+      snapshot: { client: { request }, phase: "connected" },
       subscribe: () => () => undefined,
     } as never);
 
@@ -407,7 +407,7 @@ describe("channels controller DM pairing", () => {
       return approvalResult.promise;
     });
     const channels = createChannelCapability({
-      snapshot: { client: { request }, connected: true },
+      snapshot: { client: { request }, phase: "connected" },
       subscribe: () => () => undefined,
     } as never);
     await channels.refreshPairing();
@@ -453,7 +453,7 @@ describe("channels controller DM pairing", () => {
       };
     });
     const channels = createChannelCapability({
-      snapshot: { client: { request }, connected: true },
+      snapshot: { client: { request }, phase: "connected" },
       subscribe: () => () => undefined,
     } as never);
 
@@ -481,7 +481,7 @@ describe("channels controller DM pairing", () => {
     const client = { request: vi.fn() };
     let snapshot = {
       client,
-      connected: true,
+      phase: "connected",
       hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
     };
     const listeners = new Set<(next: typeof snapshot) => void>();
@@ -506,7 +506,7 @@ describe("channels controller DM pairing", () => {
     expect(channels.state.pairingSnapshot).toBeNull();
 
     channels.state.pairingSnapshot = pendingPairing;
-    snapshot = { ...snapshot, connected: false };
+    snapshot = { ...snapshot, phase: "reconnecting" };
     for (const listener of listeners) {
       listener(snapshot);
     }
@@ -530,7 +530,7 @@ describe("channels controller DM pairing", () => {
     const client = { request };
     let snapshot = {
       client,
-      connected: true,
+      phase: "connected",
       hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
     };
     const listeners = new Set<(next: typeof snapshot) => void>();
@@ -580,7 +580,7 @@ describe("channels controller DM pairing", () => {
       throw new Error("gateway unavailable");
     });
     const channels = createChannelCapability({
-      snapshot: { client: { request }, connected: true },
+      snapshot: { client: { request }, phase: "connected" },
       subscribe: () => () => undefined,
     } as never);
     channels.state.pairingSnapshot = emptyPairing;
@@ -600,7 +600,7 @@ describe("channel refresh sequencing", () => {
     const client = { request };
     let snapshot = {
       client,
-      connected: true,
+      phase: "connected",
       hello: { auth: { role: "operator", scopes: ["operator.read"] } },
     };
     const listeners = new Set<(next: typeof snapshot) => void>();
@@ -640,7 +640,7 @@ describe("channel refresh sequencing", () => {
       (params as { probe?: boolean } | undefined)?.probe ? slowProbe.promise : fastRuntime.promise,
     );
     const channels = createChannelCapability({
-      snapshot: { client: { request }, connected: true },
+      snapshot: { client: { request }, phase: "connected" },
       subscribe: () => () => undefined,
     } as never);
 
@@ -665,7 +665,7 @@ describe("channel refresh sequencing", () => {
       const pending = createDeferred<ChannelsStatusSnapshot | null>();
       const request = vi.fn(() => pending.promise);
       const channels = createChannelCapability({
-        snapshot: { client: { request }, connected: true },
+        snapshot: { client: { request }, phase: "connected" },
         subscribe: () => () => undefined,
       } as never);
       const previous = createChannelsSnapshot("previous");

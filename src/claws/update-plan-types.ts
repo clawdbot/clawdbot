@@ -11,6 +11,7 @@ export type ClawUpdateAction = {
   blocked: boolean;
   reason: string;
   currentDigest?: string;
+  currentPresent?: boolean;
   desiredDigest?: string;
 };
 

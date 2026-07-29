@@ -20,7 +20,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-type MockChild = ChildProcessWithoutNullStreams & { stdout: PassThrough; stderr: PassThrough };
+type MockChild = ChildProcessWithoutNullStreams & {
+  nodeChildProcess: ChildProcessWithoutNullStreams;
+  stdout: PassThrough;
+  stderr: PassThrough;
+};
 
 function createChild(): MockChild {
   let killed = false;
@@ -34,6 +38,7 @@ function createChild(): MockChild {
     killed = true;
     return true;
   });
+  child.nodeChildProcess = child;
   return child;
 }
 

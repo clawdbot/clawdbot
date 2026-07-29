@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 function mobileUiTool(modelHasVision?: boolean) {
-  return createOpenClawTools({ modelHasVision }).find((tool) => tool.name === "mobile_ui");
+  return createOpenClawTools({
+    config: { agents: { entries: { main: { default: true } } } },
+    modelHasVision,
+  }).find((tool) => tool.name === "mobile_ui");
 }
 
 describe("mobile UI tool registration", () => {

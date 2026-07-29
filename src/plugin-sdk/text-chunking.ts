@@ -9,6 +9,8 @@ export {
 } from "../../packages/markdown-core/src/chunk-text.js";
 /** Quote-aware HTML tag tokens for exact post-render projections. */
 export { tokenizeHtmlTags } from "../../packages/markdown-core/src/html-tags.js";
+/** Static outbound formatting capabilities declared by a channel plugin. */
+export { FormatCapabilityProfile } from "../../packages/markdown-core/src/format-capabilities.js";
 
 /**
  * Splits outbound channel text into chunks no longer than the requested limit.
@@ -49,6 +51,11 @@ export {
   renderMarkdownIRChunksWithinLimit,
   type RenderMarkdownIRChunksWithinLimitOptions,
 } from "../../packages/markdown-core/src/render-aware-chunking.js";
+/** Attributed Markdown rendering hooks for native channel formatting. */
+export {
+  renderMarkdownWithAttributedRanges,
+  type AttributedRenderOptions,
+} from "../../packages/markdown-core/src/render-attributed.js";
 /** Marker-based Markdown rendering hooks for channel-specific formatting. */
 export {
   renderMarkdownWithMarkers,

@@ -10,7 +10,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,
-  resetCoreHealthChecksForTest,
   type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
@@ -144,7 +143,6 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   beforeAll(async () => {
     clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
     const cfg: OpenClawConfig = {
@@ -166,7 +164,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       calls: [...mocks.loadModelCatalog.mock.calls],
     };
     clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
   });
 
   beforeEach(() => {
@@ -339,7 +336,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       mode: "doctor",
       runtime,
       cfg: {
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
         tools: { profile: "messaging" },
       },
     });
@@ -365,7 +362,10 @@ describe("CORE_HEALTH_CHECKS", () => {
       check.detect({
         mode: "doctor",
         runtime,
-        cfg: { tools: { profile: "messaging" } },
+        cfg: {
+          skills: { workshop: { autonomous: { mode: "off" } } },
+          tools: { profile: "messaging" },
+        },
       }),
     ).resolves.toEqual([]);
   });
@@ -1073,7 +1073,7 @@ describe("core/doctor/bootstrap-size", () => {
         checkId: "core/doctor/bootstrap-size",
         severity: "warning",
         message: expect.stringContaining("AGENTS.md"),
-        fixHint: expect.stringContaining("agents.list[].bootstrapMaxChars"),
+        fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
       }),
     );
   });

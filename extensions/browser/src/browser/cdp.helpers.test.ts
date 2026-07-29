@@ -134,6 +134,18 @@ describe("cdp helpers", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("preserves broad private authority permission through exact-host scoping", async () => {
+    const policy = scopeCdpPolicyToConfiguredEndpoint("http://127.0.0.1:9222", {
+      allowPrivateNetwork: true,
+    });
+    await expect(
+      assertCdpEndpointAllowed("ws://127.0.0.1:9333/devtools/browser/local", policy, {
+        source: "discovered",
+        configuredUrl: "http://127.0.0.1:9222",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("blocks a discovered endpoint on another port in strict SSRF mode", async () => {
     const policy = scopeCdpPolicyToConfiguredEndpoint("http://127.0.0.1:9222", {});
     await expect(

@@ -21,6 +21,7 @@ import type {
   CliBackendPlugin,
   CliBackendNativeToolMode,
   CliBackendSideQuestionToolMode,
+  CliBackendToolAvailabilityEnforcement,
   PluginTextTransforms,
 } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
@@ -56,7 +57,7 @@ export type ResolvedCliBackend = {
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
-  resolveRuntimeToolAvailability?: CliBackendPlugin["resolveRuntimeToolAvailability"];
+  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
@@ -95,7 +96,7 @@ type FallbackCliBackendPolicy = {
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
-  resolveRuntimeToolAvailability?: CliBackendPlugin["resolveRuntimeToolAvailability"];
+  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
@@ -111,6 +112,27 @@ function normalizeBundleMcpMode(
     return undefined;
   }
   return mode ?? "claude-config-file";
+}
+
+function resolveToolAvailabilityEnforcement(
+  backend: Pick<
+    CliBackendPlugin,
+    "nativeToolMode" | "resolveExecutionArgs" | "toolAvailabilityEnforcement"
+  > & { builtWithOpenClawVersion?: string },
+): CliBackendToolAvailabilityEnforcement | undefined {
+  if (backend.toolAvailabilityEnforcement) {
+    return backend.toolAvailabilityEnforcement;
+  }
+  // v2026.7.2-beta.1 through .3 made selectable + resolveExecutionArgs the
+  // public enforcement contract. Require matching package build provenance so
+  // a new no-op hook cannot be mistaken for that shipped SDK path.
+  const builtWith = backend.builtWithOpenClawVersion?.replace(/^v/u, "");
+  const isShippedBetaContract = /^2026\.7\.2-beta\.[123]$/u.test(builtWith ?? "");
+  return isShippedBetaContract &&
+    backend.nativeToolMode === "selectable" &&
+    backend.resolveExecutionArgs
+    ? "execution-args"
+    : undefined;
 }
 
 function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
@@ -140,7 +162,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
-    resolveRuntimeToolAvailability: entry.backend.resolveRuntimeToolAvailability,
+    toolAvailabilityEnforcement: entry.backend.toolAvailabilityEnforcement,
     nativeToolMode: entry.backend.nativeToolMode,
     sideQuestionToolMode: entry.backend.sideQuestionToolMode,
     runtimeArtifact: entry.backend.runtimeArtifact,
@@ -381,7 +403,7 @@ export function resolveCliBackendConfig(
       ownsNativeCompaction: registered.ownsNativeCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
-      resolveRuntimeToolAvailability: registered.resolveRuntimeToolAvailability,
+      toolAvailabilityEnforcement: resolveToolAvailabilityEnforcement(registered),
       nativeToolMode: registered.nativeToolMode,
       sideQuestionToolMode: registered.sideQuestionToolMode,
       runtimeArtifact: registered.runtimeArtifact,
@@ -414,7 +436,7 @@ export function resolveCliBackendConfig(
     ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
     prepareExecution: fallbackPolicy.prepareExecution,
     resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
-    resolveRuntimeToolAvailability: fallbackPolicy.resolveRuntimeToolAvailability,
+    toolAvailabilityEnforcement: fallbackPolicy.toolAvailabilityEnforcement,
     nativeToolMode: fallbackPolicy.nativeToolMode,
     sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
     runtimeArtifact: fallbackPolicy.runtimeArtifact,

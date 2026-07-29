@@ -4,7 +4,6 @@ scenario:
   id: hosted-image-generation-providers-live
   surface: hosted-providers
   category: hosted-providers.hosted-media-providers
-  runtimeParityTier: live-only
   coverage:
     primary:
       - hosted-providers.image-generation-providers

@@ -9,6 +9,7 @@ import {
   readMeetingTranscriptWithBrowser,
   recoverMeetingBrowserTab,
   resolveLocalMeetingBrowserRequest,
+  MeetingPlatformAdapter,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
   type MeetingRealtimeAudioEngineHandle,
@@ -16,6 +17,7 @@ import {
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveTranscriptsConfig } from "openclaw/plugin-sdk/transcripts";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import {
   GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
@@ -26,10 +28,7 @@ import {
   resolveChromeNode,
   type BrowserTab,
 } from "./chrome-browser-proxy.js";
-import {
-  GOOGLE_MEET_PLATFORM_ADAPTER,
-  isGoogleMeetTalkBackMode,
-} from "./google-meet-platform-adapter.js";
+import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./google-meet-platform-constants.js";
 import type {
   GoogleMeetBrowserTab,
@@ -47,6 +46,12 @@ type ChromeNodeRealtimeAudioBridgeHandle = MeetingRealtimeAudioEngineHandle & {
   nodeId: string;
   bridgeId: string;
 };
+
+function shouldCaptureCaptions(mode: GoogleMeetMode, fullConfig?: OpenClawConfig): boolean {
+  return (
+    mode === "transcribe" || !fullConfig || resolveTranscriptsConfig(fullConfig.transcripts).enabled
+  );
+}
 
 export async function assertBlackHole2chAvailable(params: {
   runtime: PluginRuntime;
@@ -97,7 +102,7 @@ export async function launchChromeMeet(params: {
   tab?: GoogleMeetBrowserTab;
 }> {
   const checkRealtimeAudioPrerequisites = async () => {
-    if (!isGoogleMeetTalkBackMode(params.mode)) {
+    if (!MeetingPlatformAdapter.isTalkBackMode(params.mode)) {
       return;
     }
     await assertBlackHole2chAvailable({
@@ -123,7 +128,7 @@ export async function launchChromeMeet(params: {
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle)
     | undefined
   > => {
-    if (!isGoogleMeetTalkBackMode(params.mode)) {
+    if (!MeetingPlatformAdapter.isTalkBackMode(params.mode)) {
       return undefined;
     }
     if (params.config.chrome.audioBridgeCommand) {
@@ -151,6 +156,7 @@ export async function launchChromeMeet(params: {
     const transport = createLocalMeetingRealtimeAudioTransport({
       inputCommand: params.config.chrome.audioInputCommand,
       outputCommand: params.config.chrome.audioOutputCommand,
+      audioFormat: params.config.chrome.audioFormat,
       bargeInInputCommand: params.config.chrome.bargeInInputCommand,
       bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
       bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
@@ -209,16 +215,17 @@ export async function launchChromeMeet(params: {
     callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
     config: params.config.chrome,
     session: {
+      captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
       meetingSessionId: params.meetingSessionId,
       mode: params.mode,
       url: params.url,
     },
   });
   const shouldStartRealtimeBridge =
-    isGoogleMeetTalkBackMode(params.mode) &&
+    MeetingPlatformAdapter.isTalkBackMode(params.mode) &&
     result.browser?.inCall === true &&
     result.browser.micMuted === false &&
-    result.browser.manualActionRequired !== true;
+    result.browser.manualAction === undefined;
   const audioBridge = shouldStartRealtimeBridge ? await startRealtimeAudioBridge() : undefined;
   return { ...result, audioBridge };
 }
@@ -353,6 +360,7 @@ async function openMeetWithBrowserProxy(params: {
   runtime: PluginRuntime;
   nodeId: string;
   config: GoogleMeetConfig;
+  captureCaptions: boolean;
   mode: GoogleMeetMode;
   meetingSessionId: string;
   url: string;
@@ -370,6 +378,7 @@ async function openMeetWithBrowserProxy(params: {
       }),
     config: params.config.chrome,
     session: {
+      captureCaptions: params.captureCaptions,
       mode: params.mode,
       meetingSessionId: params.meetingSessionId,
       url: params.url,
@@ -380,6 +389,7 @@ async function openMeetWithBrowserProxy(params: {
 export async function recoverCurrentMeetTab(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
+  fullConfig?: OpenClawConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
   trackedMeetingUrl?: string;
@@ -399,6 +409,7 @@ export async function recoverCurrentMeetTab(params: {
     ...(await recoverMeetingBrowserTab({
       adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
       callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+      captureCaptions: shouldCaptureCaptions(params.mode ?? "bidi", params.fullConfig),
       config: params.config.chrome,
       locationLabel: "in local Chrome",
       mode: params.mode ?? "bidi",
@@ -413,6 +424,7 @@ export async function recoverCurrentMeetTab(params: {
 export async function recoverCurrentMeetTabOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
+  fullConfig?: OpenClawConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
   trackedMeetingUrl?: string;
@@ -445,6 +457,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
           body: request.body,
           timeoutMs: request.timeoutMs,
         }),
+      captureCaptions: shouldCaptureCaptions(params.mode ?? "bidi", params.fullConfig),
       config: params.config.chrome,
       locationLabel: "on the selected Chrome node",
       mode: params.mode ?? "bidi",
@@ -500,6 +513,7 @@ export async function launchChromeMeetOnNode(params: {
     runtime: params.runtime,
     nodeId,
     config: params.config,
+    captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
     mode: params.mode,
     meetingSessionId: params.meetingSessionId,
     url: params.url,
@@ -508,10 +522,10 @@ export async function launchChromeMeetOnNode(params: {
   // Browser-managed joins require explicit unmuted health before node audio starts.
   if (
     params.config.chrome.launch &&
-    isGoogleMeetTalkBackMode(params.mode) &&
+    MeetingPlatformAdapter.isTalkBackMode(params.mode) &&
     (browserControl.browser?.inCall !== true ||
       browserControl.browser.micMuted !== false ||
-      browserControl.browser.manualActionRequired === true)
+      browserControl.browser.manualAction)
   ) {
     return {
       nodeId,
@@ -546,6 +560,7 @@ export async function launchChromeMeetOnNode(params: {
       runtime: params.runtime,
       nodeId,
       bridgeId: result.bridgeId,
+      audioFormat: params.config.chrome.audioFormat,
       logger: params.logger,
       commandName: GOOGLE_MEET_NODE_COMMAND,
       logScope: GOOGLE_MEET_PLATFORM_ADAPTER.logScope,

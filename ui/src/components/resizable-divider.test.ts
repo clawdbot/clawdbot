@@ -2,6 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
@@ -131,6 +132,23 @@ describe("resizable-divider", () => {
     await divider.updateComplete;
 
     expect(divider.getAttribute("aria-valuenow")).toBe("65");
+  });
+
+  it("localizes the fallback separator label", async () => {
+    i18n.registerTranslation("pt-BR", {
+      common: {
+        resizeSplitView: "Redimensionar visualização dividida",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      render(html`<resizable-divider></resizable-divider>`, container);
+      const divider = container.querySelector<ResizableDivider>("resizable-divider");
+      await divider?.updateComplete;
+      expect(divider?.getAttribute("aria-label")).toBe("Redimensionar visualização dividida");
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 
   it("resizes with keyboard arrows, Home, and End", async () => {

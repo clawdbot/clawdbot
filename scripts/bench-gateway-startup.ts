@@ -99,6 +99,7 @@ type CliOptions = {
   cases: GatewayBenchCase[];
   cpuProfDir?: string;
   entry: string;
+  heapProfDir?: string;
   json: boolean;
   output?: string;
   runs: number;
@@ -115,6 +116,7 @@ const VALUE_FLAGS = new Set([
   "--case",
   "--cpu-prof-dir",
   "--entry",
+  "--heap-prof-dir",
   "--output",
   "--runs",
   "--timeout-ms",
@@ -337,6 +339,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     cases: resolveCases(parseRepeatableFlag(argv, "--case")),
     cpuProfDir: parseFlagValue(argv, "--cpu-prof-dir"),
     entry: resolveEntry(parseFlagValue(argv, "--entry")),
+    heapProfDir: parseFlagValue(argv, "--heap-prof-dir"),
     json: hasFlag(argv, "--json"),
     output: resolveOutputPath(parseFlagValue(argv, "--output")),
     runs: parsePositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs"),
@@ -363,6 +366,7 @@ Options:
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
+  --heap-prof-dir <dir> Write one V8 heap profile per run
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
@@ -806,6 +810,7 @@ async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
   cpuProfDir?: string;
   entry: string;
+  heapProfDir?: string;
   sampleIndex: number;
   timeoutMs: number;
 }): Promise<GatewaySample> {
@@ -835,6 +840,7 @@ async function runGatewaySample(options: {
           `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
         ]
       : []),
+    ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
     options.entry,
     "gateway",
     "run",
@@ -947,6 +953,7 @@ async function runCase(options: {
   benchCase: GatewayBenchCase;
   cpuProfDir?: string;
   entry: string;
+  heapProfDir?: string;
   runs: number;
   timeoutMs: number;
   warmup: number;
@@ -958,6 +965,7 @@ async function runCase(options: {
       benchCase: options.benchCase,
       cpuProfDir: options.cpuProfDir,
       entry: options.entry,
+      heapProfDir: options.heapProfDir,
       sampleIndex: index + 1,
       timeoutMs: options.timeoutMs,
     });
@@ -1013,6 +1021,9 @@ async function main() {
   if (options.cpuProfDir) {
     mkdirSync(options.cpuProfDir, { recursive: true });
   }
+  if (options.heapProfDir) {
+    mkdirSync(options.heapProfDir, { recursive: true });
+  }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(
@@ -1020,6 +1031,7 @@ async function main() {
         benchCase,
         cpuProfDir: options.cpuProfDir,
         entry: options.entry,
+        heapProfDir: options.heapProfDir,
         runs: options.runs,
         timeoutMs: options.timeoutMs,
         warmup: options.warmup,

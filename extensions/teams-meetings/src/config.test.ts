@@ -1,9 +1,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  resolveTeamsMeetingsConfig,
-  resolveTeamsMeetingsGatewayOperationTimeoutMs,
-} from "./config.js";
+import { teamsMeetingsConfig } from "./config.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const resolveTeamsMeetingsGatewayOperationTimeoutMs =
+  teamsMeetingsConfig.resolveGatewayOperationTimeoutMs;
 
 describe("Microsoft Teams meetings config", () => {
   it("allows the live Teams web client enough time to reach prejoin and in-call UI", () => {

@@ -12,6 +12,7 @@ import {
   saveCronQuarantineFile,
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
+import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
@@ -72,10 +73,6 @@ function formatRunLogMigrationNote(importedFiles: number): string {
   return importedFiles > 0
     ? ` Imported ${pluralize(importedFiles, "legacy cron run log")} into SQLite.`
     : "";
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {

@@ -1,6 +1,7 @@
 /**
  * Public SDK subpath for shared browser-meeting audio transports and realtime engines.
  */
+
 export {
   startMeetingRealtimeEngine,
   type MeetingAgentConsultParams,
@@ -73,8 +74,8 @@ export type {
   MeetingBrowserStatusScriptParams,
   MeetingManualAction,
   MeetingManualActionCategory,
-  MeetingPlatformAdapter,
 } from "../meeting-bot/platform-adapter.js";
+export { MeetingPlatformAdapter } from "../meeting-bot/platform-adapter.js";
 export { createMeetingRealtimeEngineBindings } from "../meeting-bot/agent-consult.js";
 export {
   createMeetingVoiceCallGateway,

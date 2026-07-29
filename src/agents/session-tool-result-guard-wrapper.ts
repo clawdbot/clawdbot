@@ -20,7 +20,9 @@ import {
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import type { SessionManager } from "./sessions/index.js";
@@ -50,7 +52,9 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    trigger?: EmbeddedRunTrigger;
     preparedUserTurnMessage?: PersistedUserTurnMessage;
+    preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
@@ -119,6 +123,14 @@ export function guardSessionManager(
       message = redacted;
       changed = true;
     }
+    const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: opts?.trigger === "memory",
+      message,
+    });
+    if (projectedMessage !== message) {
+      message = projectedMessage;
+      changed = true;
+    }
     if (message.role !== "user" && queuedUserTurnTranscriptRecorder) {
       queuedUserTurnTranscriptRecorder.markBlocked();
       queuedUserTurnTranscriptRecorder = undefined;
@@ -164,17 +176,21 @@ export function guardSessionManager(
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
+      const recorder =
+        runtimeContext?.recorder ??
+        (prepared !== undefined && prepared === pendingPreparedUserTurnMessage
+          ? opts?.preparedUserTurnTranscriptRecorder
+          : undefined);
       if (message.role === "user") {
-        opts?.onUserMessagePreparingForPersistence?.(message, runtimeContext?.recorder, prepared);
+        opts?.onUserMessagePreparingForPersistence?.(message, recorder, prepared);
       }
       const merged = mergePreparedUserTurnMessageForRuntime({
         runtimeMessage: withProvenance,
         ...(prepared ? { preparedMessage: prepared } : {}),
       });
       if (merged !== withProvenance) {
-        if (runtimeContext) {
-          queuedUserTurnTranscriptRecorder = runtimeContext.recorder;
-        } else {
+        queuedUserTurnTranscriptRecorder = recorder;
+        if (!runtimeContext) {
           pendingPreparedUserTurnMessage = undefined;
         }
       }
@@ -195,8 +211,6 @@ export function guardSessionManager(
       typeof opts?.contextWindowTokens === "number"
         ? resolveLiveToolResultMaxChars({
             contextWindowTokens: opts.contextWindowTokens,
-            cfg: opts.config,
-            agentId: opts.agentId,
           })
         : undefined,
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,

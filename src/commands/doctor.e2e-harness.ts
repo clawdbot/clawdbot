@@ -225,6 +225,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePaths: [],
       hasLegacy: false,
     },
+    execApprovals: {
+      sourcePath: "/tmp/state/exec-approvals.json",
+      hasLegacy: false,
+    },
     sessions: {
       legacyDir: "/tmp/state/sessions",
       legacyStorePath: "/tmp/state/sessions/sessions.json",
@@ -262,6 +266,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       preview: [],
     },
+    worktrees: { hasLegacy: false },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
       flowRunsPath: "/tmp/state/flows/registry.sqlite",

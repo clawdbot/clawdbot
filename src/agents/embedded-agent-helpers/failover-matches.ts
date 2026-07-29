@@ -17,8 +17,13 @@ const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   "not allowed for this organization",
 ] as const satisfies readonly ErrorPattern[];
 
+// Providers use both "invalid API key" and "API key is/not valid" word order.
+// Keep them in one matcher so every result/exception classifier agrees on auth failover.
+const INVALID_API_KEY_RE =
+  /(?:invalid[_ ]?api[_ ]?key(?![a-z0-9])|api[_ ]?key(?:[_ ]?(?:is[_ ]?)?(?:invalid(?![a-z0-9])|not[_ ]?valid(?![a-z0-9]))))/i;
+
 const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
-  /invalid[_ ]?api[_ ]?key/,
+  INVALID_API_KEY_RE,
   /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
   "permission_error",
 ] as const satisfies readonly ErrorPattern[];

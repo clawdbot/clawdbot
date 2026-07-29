@@ -75,9 +75,13 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
     RawBody: "<media:audio>",
     CommandBody: "<media:audio>",
     GroupChannel: "ops",
-    MediaPath: "/tmp/voice.ogg",
-    MediaUrl: "https://example.test/voice.ogg",
-    MediaType: "audio/ogg",
+    media: [
+      {
+        path: "/tmp/voice.ogg",
+        url: "https://example.test/voice.ogg",
+        contentType: "audio/ogg",
+      },
+    ],
     ...overrides,
   });
 }
@@ -340,8 +344,7 @@ describe("getReplyFromConfig message hooks", () => {
         BodyForCommands: "<media:file>",
         RawBody: "<media:file>",
         CommandBody: "<media:file>",
-        MediaType: undefined,
-        MediaTypes: undefined,
+        media: [{ path: "/tmp/voice.ogg", url: "https://example.test/voice.ogg" }],
       }),
       undefined,
       buildConfiguredAudioCfg(),
@@ -417,12 +420,7 @@ describe("getReplyFromConfig message hooks", () => {
         CommandBody: body,
         BodyForCommands: body,
         SessionKey: sessionKey,
-        MediaPath: undefined,
-        MediaUrl: undefined,
-        MediaPaths: undefined,
-        MediaUrls: undefined,
-        MediaTypes: undefined,
-        MediaType: undefined,
+        media: undefined,
       }),
       undefined,
       withFastReplyConfig({}),
@@ -449,12 +447,7 @@ describe("getReplyFromConfig message hooks", () => {
           CommandBody: body,
           BodyForCommands: body,
           SessionKey: sessionKey,
-          MediaPath: undefined,
-          MediaUrl: undefined,
-          MediaPaths: undefined,
-          MediaUrls: undefined,
-          MediaTypes: undefined,
-          MediaType: undefined,
+          media: undefined,
         }),
         undefined,
         withFastReplyConfig({}),
@@ -544,12 +537,7 @@ describe("getReplyFromConfig message hooks", () => {
           SessionKey: "agent:main:webchat:direct:user",
           From: "webchat:user",
           To: "webchat:local",
-          MediaPath: "/tmp/1.png",
-          MediaPaths: ["/tmp/1.png"],
-          MediaType: "image/png",
-          MediaTypes: ["image/png"],
-          MediaStaged: true,
-          MediaUrl: undefined,
+          media: [{ path: "/tmp/1.png", contentType: "image/png", workspaceDir: "/tmp" }],
         }),
         undefined,
         withFastReplyConfig({
@@ -595,33 +583,88 @@ describe("getReplyFromConfig message hooks", () => {
     expect(stageSandboxMediaMock).not.toHaveBeenCalled();
   });
 
-  it("stages remote iMessage media before media understanding", async () => {
+  it("adopts SDK-staged legacy paths without staging them again", async () => {
+    const stagedPath = "/tmp/sdk-staged-photo.jpg";
+    const { finalizeInboundContext } =
+      await vi.importActual<typeof import("./inbound-context.js")>("./inbound-context.js");
+    mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      const { ctx } = args[0] as { ctx: MsgContext };
+      expect(ctx.media).toEqual([
+        expect.objectContaining({ path: stagedPath, url: stagedPath, contentType: "image/jpeg" }),
+      ]);
+    });
+
+    await getReplyFromConfig(
+      finalizeInboundContext(
+        buildCtx({
+          media: [{ path: "/remote/photo.jpg", contentType: "image/jpeg" }],
+          MediaPath: stagedPath,
+          MediaUrl: stagedPath,
+          MediaType: "image/jpeg",
+          MediaPaths: [stagedPath],
+          MediaUrls: [stagedPath],
+          MediaTypes: ["image/jpeg"],
+          MediaStaged: true,
+        }),
+      ),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(stageSandboxMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("stages remaining facts when an SDK staged projection is only partial", async () => {
+    const stagedPath = "/tmp/sdk-staged-photo.jpg";
+    const remainingPath = "/remote/remaining.pdf";
+    const { finalizeInboundContext } =
+      await vi.importActual<typeof import("./inbound-context.js")>("./inbound-context.js");
+
+    await getReplyFromConfig(
+      finalizeInboundContext(
+        buildCtx({
+          media: [
+            { path: "/remote/photo.jpg", contentType: "image/jpeg", messageId: "photo" },
+            { path: remainingPath, contentType: "application/pdf", messageId: "document" },
+          ],
+          MediaPath: stagedPath,
+          MediaStaged: true,
+          MediaRemoteHost: "user@gateway-host",
+        }),
+      ),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(stageSandboxMediaMock).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(stageSandboxMediaMock).mock.calls[0]?.[0].ctx.media).toEqual([
+      expect.objectContaining({ path: stagedPath, messageId: "photo" }),
+      expect.objectContaining({ path: remainingPath, messageId: "document" }),
+    ]);
+  });
+
+  it("stages remaining remote iMessage media in a mixed staged context", async () => {
     const order: string[] = [];
+    const alreadyStagedPath = "/tmp/already-staged.jpg";
     const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const stagedPath = "/tmp/openclaw-remote-cache/photo.jpg";
     vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
       order.push("stage");
-      params.ctx.MediaPath = stagedPath;
-      params.ctx.MediaPaths = [stagedPath];
-      params.ctx.MediaUrl = stagedPath;
-      params.ctx.MediaUrls = [stagedPath];
-      params.sessionCtx.MediaPath = stagedPath;
-      params.sessionCtx.MediaPaths = [stagedPath];
-      params.sessionCtx.MediaUrl = stagedPath;
-      params.sessionCtx.MediaUrls = [stagedPath];
-      const stagedFact = { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" };
-      params.ctx.media = [stagedFact];
-      params.sessionCtx.media = [stagedFact];
-      return { staged: new Map([[0, stagedPath]]) };
+      const stagedFacts = [
+        { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+        { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+      ];
+      params.ctx.media = stagedFacts;
+      params.sessionCtx.media = stagedFacts;
+      return { staged: new Map([[1, stagedPath]]) };
     });
     mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
       order.push("understand");
       const { ctx } = args[0] as { ctx: MsgContext };
-      expect(ctx.MediaPath).toBe(stagedPath);
-      expect(ctx.MediaPaths).toEqual([stagedPath]);
-      expect(ctx.MediaUrl).toBe(stagedPath);
-      expect(ctx.MediaUrls).toEqual([stagedPath]);
-      expect(ctx.MediaStaged).toBe(true);
+      expect(ctx.media).toEqual([
+        { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+        { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+      ]);
     });
 
     await getReplyFromConfig(
@@ -639,12 +682,14 @@ describe("getReplyFromConfig message hooks", () => {
         SessionKey: "agent:main:imessage:direct:user",
         From: "imessage:user",
         To: "imessage:chat:abc",
-        MediaPath: remotePath,
-        MediaPaths: [remotePath],
-        MediaUrl: remotePath,
-        MediaUrls: [remotePath],
-        MediaType: "image/jpeg",
-        MediaTypes: ["image/jpeg"],
+        media: [
+          {
+            path: alreadyStagedPath,
+            contentType: "image/jpeg",
+            workspaceDir: "/tmp",
+          },
+          { path: remotePath, url: remotePath, contentType: "image/jpeg" },
+        ],
         MediaRemoteHost: "user@gateway-host",
       }),
       undefined,
@@ -709,11 +754,7 @@ describe("getReplyFromConfig message hooks", () => {
         RawBody: "hello there",
         CommandBody: "hello there",
         BodyForCommands: "hello there",
-        MediaPath: undefined,
-        MediaUrl: undefined,
-        MediaPaths: undefined,
-        MediaUrls: undefined,
-        MediaTypes: undefined,
+        media: undefined,
         Sticker: undefined,
         StickerMediaIncluded: undefined,
       }),
@@ -735,12 +776,7 @@ describe("getReplyFromConfig message hooks", () => {
         RawBody: "[Sticker] Cached description",
         CommandBody: "[Sticker] Cached description",
         BodyForCommands: "[Sticker] Cached description",
-        MediaPath: stickerPath,
-        MediaUrl: stickerPath,
-        MediaPaths: [stickerPath],
-        MediaUrls: [stickerPath],
-        MediaType: "image/webp",
-        MediaTypes: ["image/webp"],
+        media: [{ path: stickerPath, url: stickerPath, contentType: "image/webp" }],
         Sticker: { cachedDescription: "Cached description" },
         StickerMediaIncluded: true,
         SkipStickerMediaUnderstanding: true,
@@ -760,12 +796,18 @@ describe("getReplyFromConfig message hooks", () => {
         RawBody: "[Sticker] Cached description",
         CommandBody: "[Sticker] Cached description",
         BodyForCommands: "[Sticker] Cached description",
-        MediaPath: "/tmp/cached-sticker.webp",
-        MediaUrl: "/tmp/cached-sticker.webp",
-        MediaPaths: ["/tmp/cached-sticker.webp", "/tmp/replied-audio.ogg"],
-        MediaUrls: ["/tmp/cached-sticker.webp", "/tmp/replied-audio.ogg"],
-        MediaType: "image/webp",
-        MediaTypes: ["image/webp", "audio/ogg"],
+        media: [
+          {
+            path: "/tmp/cached-sticker.webp",
+            url: "/tmp/cached-sticker.webp",
+            contentType: "image/webp",
+          },
+          {
+            path: "/tmp/replied-audio.ogg",
+            url: "/tmp/replied-audio.ogg",
+            contentType: "audio/ogg",
+          },
+        ],
         Sticker: { cachedDescription: "Cached description" },
         StickerMediaIncluded: true,
         SkipStickerMediaUnderstanding: true,
@@ -813,12 +855,7 @@ describe("getReplyFromConfig message hooks", () => {
         RawBody: "read https://example.test/page",
         CommandBody: "read https://example.test/page",
         BodyForCommands: "read https://example.test/page",
-        MediaPath: undefined,
-        MediaUrl: undefined,
-        MediaPaths: undefined,
-        MediaUrls: undefined,
-        MediaTypes: undefined,
-        MediaType: undefined,
+        media: undefined,
         Sticker: undefined,
         StickerMediaIncluded: undefined,
       }),

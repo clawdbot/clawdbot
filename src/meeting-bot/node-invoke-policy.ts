@@ -10,6 +10,7 @@ export type MeetingBrowserNodeStartConfig = {
   joinTimeoutMs: number;
   audioInputCommand?: string[];
   audioOutputCommand?: string[];
+  bargeInInputCommand?: string[];
   audioBridgeCommand?: string[];
   audioBridgeHealthCommand?: string[];
 };
@@ -20,6 +21,7 @@ export type MeetingBrowserNodePolicyOptions = {
   deniedCode: string;
   supportedModes: ReadonlySet<string>;
   normalizeUrl(input: unknown): string;
+  useConfiguredSetupCommands?: boolean;
   start: MeetingBrowserNodeStartConfig;
 };
 
@@ -230,6 +232,20 @@ export function createMeetingBrowserNodeInvokePolicy(
       }
       const params = asRecord(ctx.params);
       const action = readString(params.action);
+      if (action === "setup" && options.useConfiguredSetupCommands) {
+        const setupParams: Record<string, unknown> = { action };
+        for (const key of [
+          "audioInputCommand",
+          "audioOutputCommand",
+          "bargeInInputCommand",
+        ] as const) {
+          const command = copyCommand(options.start[key]);
+          if (command) {
+            setupParams[key] = command;
+          }
+        }
+        return await ctx.invokeNode({ params: setupParams });
+      }
       const decision =
         action === "start"
           ? buildStartParams(params, options)

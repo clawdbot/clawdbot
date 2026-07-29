@@ -3,11 +3,38 @@
  * preserved secret fields. Setup and doctor flows use this boundary to update
  * model catalogs without discarding existing credentials.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
-import { normalizeProviderMapKeys } from "./models-config.providers.keys.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+export function normalizeProviderMapKeys<T>(
+  providers: Record<string, T> | null | undefined,
+): Record<string, T> {
+  const normalized: Record<string, T> = {};
+  const canonicalKeys = new Set<string>();
+  for (const [key, value] of Object.entries(providers ?? {})) {
+    const providerKey = normalizeProviderId(key);
+    if (!providerKey) {
+      continue;
+    }
+    if (key === providerKey) {
+      canonicalKeys.add(providerKey);
+      // A prior alias inserted this key at the alias's position. Reinsert it so
+      // canonical spelling also controls deterministic provider order.
+      delete normalized[providerKey];
+      normalized[providerKey] = value;
+      continue;
+    }
+    // Exact canonical spelling wins over aliases regardless of object order.
+    // Without one, the later variant wins, matching existing trim-collision behavior.
+    if (!canonicalKeys.has(providerKey)) {
+      normalized[providerKey] = value;
+    }
+  }
+  return normalized;
+}
 
 /** Existing provider config shape that may carry persisted secret/base URL fields. */
 export type ExistingProviderConfig = ProviderConfig & {

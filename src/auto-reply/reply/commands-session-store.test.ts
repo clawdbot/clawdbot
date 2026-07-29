@@ -85,6 +85,7 @@ describe("commands session store persistence", () => {
       const otherEntry: SessionEntry = {
         sessionId: "other-session",
         updatedAt: 2,
+        delivery: { kind: "none" },
       };
       const seedEntry = { ...entry };
       await persistSessionEntry({
@@ -137,6 +138,7 @@ describe("commands session store persistence", () => {
       const otherEntry: SessionEntry = {
         sessionId: "other-session",
         updatedAt: 2,
+        delivery: { kind: "none" },
       };
       const concurrentUpdatedAt = 300;
       const concurrentEntry = {
@@ -205,6 +207,7 @@ describe("commands session store persistence", () => {
       const rotatedEntry: SessionEntry = {
         sessionId: "session-2",
         updatedAt: 3,
+        delivery: { kind: "none" },
         queueMode: "interrupt",
       };
       await replaceSessionEntry({ storePath, sessionKey }, rotatedEntry);
@@ -276,6 +279,7 @@ describe("commands session store persistence", () => {
       const concurrentEntry: SessionEntry = {
         ...initialEntry,
         updatedAt: 2,
+        delivery: { kind: "none" },
         groupActivationNeedsSystemIntro: false,
       };
       await replaceSessionEntry({ storePath, sessionKey }, concurrentEntry);
@@ -348,6 +352,7 @@ describe("commands session store persistence", () => {
       const otherEntry: SessionEntry = {
         sessionId: "other-session",
         updatedAt: 3,
+        delivery: { kind: "none" },
       };
       await replaceSessionEntry({ storePath, sessionKey }, persistedEntry);
       await replaceSessionEntry({ storePath, sessionKey: otherKey }, otherEntry);
