@@ -485,16 +485,13 @@ actor PortGuardian {
     }
 
     private static func readFullCommand(pid: Int32) -> String? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-p", "\(pid)", "-o", "command="]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()
         do {
-            let data = try proc.runAndReadToEnd(from: pipe)
-            guard !data.isEmpty else { return nil }
-            return String(data: data, encoding: .utf8)?
+            let result = try BoundedProcess.run(
+                path: "/bin/ps",
+                arguments: ["-p", "\(pid)", "-o", "command="],
+                timeout: 2)
+            guard result.terminationStatus == 0, !result.output.isEmpty else { return nil }
+            return String(data: result.output, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             return nil

@@ -141,17 +141,12 @@ enum RuntimeLocator {
 
     private static func readVersion(of binary: String, pathEnv: String) -> String? {
         let start = Date()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["--version"]
-        process.environment = ["PATH": pathEnv]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
         do {
-            let data = try process.runAndReadToEnd(from: pipe)
+            let result = try BoundedProcess.run(
+                path: binary,
+                arguments: ["--version"],
+                environment: ["PATH": pathEnv],
+                timeout: 2)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(
@@ -166,7 +161,8 @@ enum RuntimeLocator {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return String(data: result.output, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             self.logger.error(

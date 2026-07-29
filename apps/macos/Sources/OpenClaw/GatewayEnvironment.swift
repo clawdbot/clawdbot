@@ -286,16 +286,12 @@ enum GatewayEnvironment {
 
     private static func readGatewayVersion(binary: String) -> String? {
         let start = Date()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["--version"]
-        process.environment = ["PATH": CommandResolver.preferredPaths().joined(separator: ":")]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
         do {
-            let data = try process.runAndReadToEnd(from: pipe)
+            let result = try BoundedProcess.run(
+                path: binary,
+                arguments: ["--version"],
+                environment: ["PATH": CommandResolver.preferredPaths().joined(separator: ":")],
+                timeout: 2)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(
@@ -310,7 +306,7 @@ enum GatewayEnvironment {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            let raw = String(data: data, encoding: .utf8)
+            let raw = String(data: result.output, encoding: .utf8)
             guard let normalized = self.normalizeGatewayVersionOutput(raw),
                   Semver.parse(normalized) != nil
             else { return nil }
