@@ -153,6 +153,8 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   // and compaction proceeds.
   before_compaction: 30_000,
   after_compaction: 30_000,
+  skill_changed: 30_000,
+  skill_proposal_changed: 30_000,
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   before_agent_run: 15_000,
@@ -1527,6 +1529,7 @@ export function createHookRunner(
       hooks.map(async (hook): Promise<PluginHookSkillProposalEvaluationOutcome> => {
         const pluginVersion = getPluginPackageVersion(hook.pluginId);
         const attribution = {
+          evaluatorId: hook.registrationId ?? hook.pluginId,
           pluginId: hook.pluginId,
           ...(pluginVersion ? { pluginVersion } : {}),
         };

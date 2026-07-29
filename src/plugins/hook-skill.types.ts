@@ -3,6 +3,7 @@ export type PluginHookSkillProposalKind = "create" | "update";
 export type PluginHookSkillBundleFile = {
   path: string;
   content: string;
+  encoding: "utf8" | "base64";
   sha256: string;
   sizeBytes: number;
 };
@@ -48,11 +49,12 @@ export type PluginHookSkillProposalEvaluateResult = {
   evaluatorVersion?: string;
   /** Bounded evaluator mode label such as `static`, `llm`, or `baseline-comparison`. */
   mode?: string;
-  block?: boolean;
-  blockReason?: string;
+  decision?: "pass" | "revise" | "block";
+  decisionReason?: string;
 };
 
 type PluginHookSkillProposalEvaluationAttribution = {
+  evaluatorId: string;
   pluginId: string;
   pluginVersion?: string;
 };
@@ -99,6 +101,8 @@ export type PluginHookSkillChangedEvent = {
 };
 
 export type PluginHookSkillProposalChangedEvent = {
+  eventId: string;
+  sequence: number;
   action:
     | "created"
     | "revised"
@@ -108,6 +112,7 @@ export type PluginHookSkillProposalChangedEvent = {
     | "quarantined"
     | "stale";
   occurredAt: string;
+  correlationId?: string;
   proposal: {
     id: string;
     kind: PluginHookSkillProposalKind;

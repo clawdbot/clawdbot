@@ -1401,6 +1401,7 @@ export type PluginHookHandlerMap = {
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
   pluginId: string;
+  registrationId?: string;
   hookName: K;
   handler: PluginHookHandlerMap[K];
   priority?: number;

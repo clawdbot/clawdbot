@@ -30,6 +30,7 @@ const evaluationEvent: PluginHookSkillProposalEvaluateEvent = {
     skillMd: {
       path: "SKILL.md",
       content: "---\nname: demo-skill\n---\n",
+      encoding: "utf8",
       sha256: "sha256:candidate",
       sizeBytes: 30,
     },
@@ -40,6 +41,7 @@ const evaluationEvent: PluginHookSkillProposalEvaluateEvent = {
     skillMd: {
       path: "SKILL.md",
       content: "---\nname: demo-skill\n---\nold\n",
+      encoding: "utf8",
       sha256: "sha256:baseline",
       sizeBytes: 34,
     },
@@ -55,8 +57,8 @@ describe("skill lifecycle hooks", () => {
       summary: "candidate regressed",
       metrics: { score: 0.4 },
       evaluatorVersion: "rules-3",
-      block: true,
-      blockReason: "score below baseline",
+      decision: "block" as const,
+      decisionReason: "score below baseline",
     }));
     const low = vi.fn(() => undefined);
     const registry = createMockPluginRegistry([
@@ -70,6 +72,7 @@ describe("skill lifecycle hooks", () => {
         hookName: "skill_proposal_evaluate",
         pluginId: "high",
         priority: 100,
+        registrationId: "regression-score",
         handler: high,
       },
     ]);
@@ -84,6 +87,7 @@ describe("skill lifecycle hooks", () => {
 
     expect(outcomes).toEqual([
       {
+        evaluatorId: "regression-score",
         pluginId: "high",
         pluginVersion: "2.1.0",
         status: "completed",
@@ -91,11 +95,12 @@ describe("skill lifecycle hooks", () => {
           summary: "candidate regressed",
           metrics: { score: 0.4 },
           evaluatorVersion: "rules-3",
-          block: true,
-          blockReason: "score below baseline",
+          decision: "block",
+          decisionReason: "score below baseline",
         },
       },
       {
+        evaluatorId: "low",
         pluginId: "low",
         status: "skipped",
       },
@@ -145,8 +150,18 @@ describe("skill lifecycle hooks", () => {
     releaseHigh?.();
 
     await expect(evaluation).resolves.toEqual([
-      { pluginId: "high", status: "completed", result: { summary: "high" } },
-      { pluginId: "low", status: "completed", result: { summary: "low" } },
+      {
+        evaluatorId: "high",
+        pluginId: "high",
+        status: "completed",
+        result: { summary: "high" },
+      },
+      {
+        evaluatorId: "low",
+        pluginId: "low",
+        status: "completed",
+        result: { summary: "low" },
+      },
     ]);
   });
 
@@ -177,11 +192,13 @@ describe("skill lifecycle hooks", () => {
 
     expect(outcomes).toEqual([
       {
+        evaluatorId: "throws",
         pluginId: "throws",
         status: "error",
         error: "scanner unavailable",
       },
       {
+        evaluatorId: "hangs",
         pluginId: "hangs",
         status: "error",
         error: "timed out after 1ms",
