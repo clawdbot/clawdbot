@@ -544,7 +544,7 @@ describe("OpenClaw shell route session commits", () => {
     shell.updateRouteState({});
     expect(shell.custodianMinimizeRequestId).toBe(0);
 
-    shell.updateRouteState({ routeId: "config" });
+    shell.updateRouteState({ routeId: "appearance" });
     expect(shell.custodianMinimizeRequestId).toBe(1);
   });
 });

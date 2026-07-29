@@ -171,7 +171,9 @@ Set `diagnostics.otel.captureContent` to `true` only when your collector and
 retention policy are approved for prompt, response, tool, and tool-definition
 text. This enables bounded, redacted input messages, output messages, tool
 inputs, tool outputs, tool definitions, and OTLP log bodies. System prompts
-remain excluded.
+remain excluded. Provider-internal `thinking` and `redacted_thinking` payloads
+are also excluded: compatibility attributes retain only a redacted structural
+marker, while GenAI message attributes omit those parts.
 
 `toolInputs`/`toolOutputs` content is captured for the built-in agent
 runtime's tool executions (`openclaw.content.tool_input` and
@@ -291,10 +293,10 @@ CLI boundary:
   Claude CLI stdout or stderr output. It is not network TTFB.
 
 With `captureContent` enabled, the span exports the effective prompt OpenClaw
-sends to Claude Code and visible assistant text/reasoning/tool-call identity
+sends to Claude Code and visible assistant text/tool-call identity
 through `gen_ai.input.messages` and `gen_ai.output.messages`. Tool arguments,
-opaque thinking signatures, tool results, and system prompts are omitted from
-the Claude assistant envelope. OpenClaw does not
+internal thinking, opaque thinking signatures, tool results, and system prompts
+are omitted from the Claude assistant envelope. OpenClaw does not
 claim access to Claude Code's private system prompt, hidden resumed or
 compacted request payload, native internal tool schemas, raw Anthropic HTTP
 request, internal retries, upstream request id, or true network TTFB. Because

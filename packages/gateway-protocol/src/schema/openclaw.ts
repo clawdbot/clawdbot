@@ -213,9 +213,15 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        /** Canonical provider identity for clients with bundled brand artwork. */
+        brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
         detail: Type.String(),
         reason: NonEmptyString,
+        authOptionId: Type.Optional(NonEmptyString),
+        manualProviderId: Type.Optional(NonEmptyString),
+        icon: Type.Optional(SetupInferenceHttpsUrl),
+        website: Type.Optional(SetupInferenceHttpsUrl),
       }),
     ),
   ),

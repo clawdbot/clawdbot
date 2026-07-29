@@ -23,6 +23,7 @@ import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcr
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   buildCodexOpenClawPromptContext,
   buildCodexSystemPromptReport,
@@ -59,6 +60,7 @@ import {
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexServerNotification,
+  type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 
@@ -490,8 +492,8 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     if (method === "thread/start") {
       return threadStartResult();
     }
-    if (method === "app/list") {
-      throw new Error("app/list should not run when runtime toolsAllow is empty.");
+    if (method === "app/installed" || method === "app/read") {
+      throw new Error("App inventory should not run when runtime toolsAllow is empty.");
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -633,30 +635,25 @@ type GoogleCalendarCacheKeyInput = {
   agentDir: string;
 };
 
-function googleCalendarAppListResult(isEnabled: boolean) {
+function googleCalendarAppInfo(isEnabled: boolean): v2.AppInfo {
   return {
-    data: [
-      {
-        id: "google-calendar-app",
-        name: "Google Calendar",
-        description: null,
-        logoUrl: null,
-        logoUrlDark: null,
-        distributionChannel: null,
-        branding: null,
-        appMetadata: null,
-        labels: null,
-        installUrl: null,
-        isAccessible: true,
-        isEnabled,
-        pluginDisplayNames: [],
-      },
-    ],
-    nextCursor: null,
+    id: "google-calendar-app",
+    name: "Google Calendar",
+    description: null,
+    logoUrl: null,
+    logoUrlDark: null,
+    distributionChannel: null,
+    branding: null,
+    appMetadata: null,
+    labels: null,
+    installUrl: null,
+    isAccessible: true,
+    isEnabled,
+    pluginDisplayNames: [],
   };
 }
 
-const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
+const GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT = {
   marketplaces: [
     {
       name: "openai-curated",
@@ -678,8 +675,12 @@ const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
     },
   ],
   marketplaceLoadErrors: [],
+} satisfies v2.PluginInstalledResponse;
+
+const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
+  ...GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT,
   featuredPluginIds: [],
-} as const;
+} satisfies v2.PluginListResponse;
 
 const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
   plugin: {
@@ -704,17 +705,33 @@ const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
         name: "Google Calendar",
         description: null,
         installUrl: null,
-        needsAuth: false,
+        category: null,
       },
     ],
     mcpServers: ["google-calendar"],
   },
 } as const;
 
-function createGoogleCalendarRequest(appList?: () => unknown) {
-  return vi.fn(async (method: string) => {
-    if (method === "app/list" && appList) {
-      return appList();
+function createGoogleCalendarRequest(
+  appInventory?: (method: "app/installed" | "app/read") => unknown,
+) {
+  let threadAppEnabled = false;
+  return vi.fn(async (method: string, params?: unknown) => {
+    if (method === "config/read") {
+      expect((params as { includeLayers?: boolean } | undefined)?.includeLayers).toBe(true);
+      return { config: {}, layers: [] };
+    }
+    if (
+      method === "app/installed" &&
+      typeof (params as { threadId?: unknown } | undefined)?.threadId === "string"
+    ) {
+      return codexAppInventoryResponse("app/installed", [googleCalendarAppInfo(threadAppEnabled)]);
+    }
+    if ((method === "app/installed" || method === "app/read") && appInventory) {
+      return appInventory(method);
+    }
+    if (method === "plugin/installed") {
+      return GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT;
     }
     if (method === "plugin/list") {
       return GOOGLE_CALENDAR_PLUGIN_LIST_RESULT;
@@ -723,6 +740,9 @@ function createGoogleCalendarRequest(appList?: () => unknown) {
       return GOOGLE_CALENDAR_PLUGIN_READ_RESULT;
     }
     if (method === "thread/start") {
+      const config = (params as { config?: { apps?: Record<string, { enabled?: boolean }> } })
+        ?.config;
+      threadAppEnabled = config?.apps?.["google-calendar-app"]?.enabled === true;
       return threadStartResult("thread-1");
     }
     if (method === "turn/start") {
@@ -736,7 +756,8 @@ async function primeGoogleCalendarAppInventory(key: string, isEnabled: boolean):
   defaultCodexAppInventoryCache.clear();
   await defaultCodexAppInventoryCache.refreshNow({
     key,
-    request: async () => googleCalendarAppListResult(isEnabled),
+    request: async (method, params) =>
+      codexAppInventoryResponse(method, [googleCalendarAppInfo(isEnabled)], params),
   });
 }
 
@@ -1922,12 +1943,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const result = await run;
     expect(readAttemptTerminal(result).promptError).toBeNull();
-    expect(result.lastToolError).toMatchObject({
-      toolName: "bash",
-      error: expect.stringContaining("without a matching tool.result"),
-      mutatingAction: true,
-    });
-    expect(result.lastToolError?.actionFingerprint).toContain("pnpm test extensions/codex");
+    expect(result.lastToolError).toBeUndefined();
     expect(result.assistantTexts).toEqual(["Recovered with final answer after orphan tool call."]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
@@ -2229,7 +2245,8 @@ describe("runCodexAppServerAttempt", () => {
       open_world_enabled: false,
     });
     expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/list");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -2257,7 +2274,8 @@ describe("runCodexAppServerAttempt", () => {
       destructive_enabled: false,
       open_world_enabled: false,
     });
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/list");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
   });
   it("retires the shared Codex app-server client after one-shot cleanup turns", async () => {
     const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
@@ -4099,7 +4117,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
-  it("surfaces Codex-native image generation saved paths as reply media", async () => {
+  it("materializes Codex-native image generation into Gateway-owned reply media", async () => {
     const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
     const harness = createAppServerHarness(async (method) => {
       if (method === "thread/start") {
@@ -4128,8 +4146,10 @@ describe("runCodexAppServerAttempt", () => {
     const result = await runCodexAppServerAttempt(createRunParams());
     expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result.assistantTexts).toEqual([]);
-    expect(result.toolMediaUrls).toEqual([savedPath]);
-    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(Buffer.from("foo"));
   });
   it("does not complete on unscoped turn/completed notifications", async () => {
     const harness = createStartedThreadHarness();
@@ -4222,8 +4242,8 @@ describe("runCodexAppServerAttempt", () => {
         _meta: null,
       });
     const request = vi.fn(async (method: string) => {
-      if (method === "plugin/list") {
-        return {
+      if (method === "plugin/installed" || method === "plugin/list") {
+        const installed = {
           marketplaces: [
             {
               name: "openai-bundled",
@@ -4243,8 +4263,10 @@ describe("runCodexAppServerAttempt", () => {
             },
           ],
           marketplaceLoadErrors: [],
-          featuredPluginIds: [],
-        };
+        } satisfies v2.PluginInstalledResponse;
+        return method === "plugin/installed"
+          ? installed
+          : ({ ...installed, featuredPluginIds: [] } satisfies v2.PluginListResponse);
       }
       if (method === "plugin/read") {
         return {
@@ -4433,8 +4455,8 @@ describe("runCodexAppServerAttempt", () => {
           accountId: "account-work",
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => {
-        throw new Error("app/list should use the account-keyed cache entry");
+      appInventory: () => {
+        throw new Error("App discovery should use the account-keyed cache entry");
       },
       configure: (params: EmbeddedRunAttemptParams) => {
         params.authProfileId = "openai:work";
@@ -4453,10 +4475,11 @@ describe("runCodexAppServerAttempt", () => {
           },
         };
       },
-      expectsAppList: false,
+      expectsAppInventory: false,
+      expectedAppEnabled: true,
     },
     {
-      name: "sends a thread/start app enable override when app/list cached the app as disabled",
+      name: "provisionally enables a cached disabled plugin app after thread attestation",
       cachedEnabled: false,
       cacheKey: ({ appServer, agentDir }: GoogleCalendarCacheKeyInput) =>
         buildCodexPluginAppCacheKey({
@@ -4464,10 +4487,10 @@ describe("runCodexAppServerAttempt", () => {
           agentDir,
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => {
-        throw new Error("app/list should use the cached inventory entry");
-      },
-      expectsAppList: false,
+      appInventory: (method: "app/installed" | "app/read") =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(false)]),
+      expectsAppInventory: false,
+      expectedAppEnabled: true,
     },
     {
       name: "keys plugin app inventory by inherited API key fallback credentials",
@@ -4482,39 +4505,74 @@ describe("runCodexAppServerAttempt", () => {
           }),
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => googleCalendarAppListResult(true),
+      appInventory: (method: "app/installed" | "app/read") =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(true)]),
       configure: () => {
         vi.stubEnv("CODEX_API_KEY", "new-codex-env-key");
         vi.stubEnv("OPENAI_API_KEY", "");
       },
-      expectsAppList: true,
+      expectsAppInventory: true,
+      expectedAppEnabled: true,
     },
-  ])("$name", async ({ cachedEnabled, cacheKey, appList, configure, expectsAppList }) => {
-    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
-    const pluginConfig = GOOGLE_CALENDAR_PLUGIN_CONFIG;
-    const appServer = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: readCodexPluginConfig(pluginConfig),
-    });
-    await primeGoogleCalendarAppInventory(cacheKey({ appServer, agentDir }), cachedEnabled);
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
-      createGoogleCalendarRequest(appList),
-    );
-    const params = createParams(sessionFile, workspaceDir);
-    params.agentDir = agentDir;
-    configure?.(params);
-    const run = runCodexAppServerAttempt(params, { pluginConfig });
-    await completeStartedRun(run, waitForMethod, completeTurn);
-    const threadStart = requests.find((entry) => entry.method === "thread/start");
-    const threadStartParams = threadStart?.params as
-      | { config?: { apps?: Record<string, { enabled?: boolean }> } }
-      | undefined;
-    expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(true);
-    if (expectsAppList) {
-      expect(requests.map((entry) => entry.method)).toContain("app/list");
-    } else {
-      expect(requests.map((entry) => entry.method)).not.toContain("app/list");
-    }
-  });
+  ])(
+    "$name",
+    async ({
+      cachedEnabled,
+      cacheKey,
+      appInventory,
+      configure,
+      expectsAppInventory,
+      expectedAppEnabled,
+    }) => {
+      const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+      const pluginConfig = GOOGLE_CALENDAR_PLUGIN_CONFIG;
+      const appServer = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: readCodexPluginConfig(pluginConfig),
+      });
+      await primeGoogleCalendarAppInventory(cacheKey({ appServer, agentDir }), cachedEnabled);
+      const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
+        createGoogleCalendarRequest(appInventory),
+      );
+      const params = createParams(sessionFile, workspaceDir);
+      params.agentDir = agentDir;
+      configure?.(params);
+      const run = runCodexAppServerAttempt(params, { pluginConfig });
+      await completeStartedRun(run, waitForMethod, completeTurn);
+      const threadStart = requests.find((entry) => entry.method === "thread/start");
+      const threadStartParams = threadStart?.params as
+        | { config?: { apps?: Record<string, { enabled?: boolean }> } }
+        | undefined;
+      expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(
+        expectedAppEnabled,
+      );
+      const globalAppInventoryRequests = requests.filter(
+        (entry) =>
+          entry.method === "app/installed" &&
+          typeof (entry.params as { threadId?: unknown } | undefined)?.threadId !== "string",
+      );
+      if (expectsAppInventory) {
+        expect(globalAppInventoryRequests).not.toHaveLength(0);
+        expect(requests.map((entry) => entry.method)).toContain("app/read");
+      } else {
+        expect(globalAppInventoryRequests).toHaveLength(0);
+        expect(requests.map((entry) => entry.method)).not.toContain("app/read");
+      }
+      if (!cachedEnabled) {
+        expect(
+          requests.filter(
+            (entry) =>
+              entry.method === "app/installed" &&
+              typeof (entry.params as { threadId?: unknown } | undefined)?.threadId === "string",
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            method: "app/installed",
+            params: { threadId: "thread-1", forceRefresh: false },
+          }),
+        ]);
+      }
+    },
+  );
 
   it("times out app-server startup before thread setup can hang forever", async () => {
     setCodexAppServerClientFactoryForTest(() => new Promise<never>(() => {}));
@@ -5244,6 +5302,90 @@ describe("runCodexAppServerAttempt", () => {
       threadId: "thread-existing",
       connectionScope: "supervision",
     });
+  });
+
+  it("starts sequential ephemeral generations that share a stable session key", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const sessionKey = "agent:main:ephemeral-helper";
+    const storePath = path.join(tempDir, "ephemeral-sessions.json");
+    let generation = 0;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        generation += 1;
+        return threadStartResult(`thread-ephemeral-${generation}`);
+      }
+      if (method === "turn/start") {
+        return turnStartResult(`turn-ephemeral-${generation}`);
+      }
+      return undefined;
+    });
+
+    for (const [index, sessionId] of ["session-ephemeral-1", "session-ephemeral-2"].entries()) {
+      const params = createParams(sessionFile, workspaceDir);
+      params.sessionId = sessionId;
+      params.sessionKey = sessionKey;
+      params.sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
+      params.config = { ...params.config, session: { store: storePath } };
+
+      const run = runCodexAppServerAttempt(params);
+      let startupError: unknown;
+      void run.catch((error: unknown) => {
+        startupError = error;
+      });
+      const expectedGeneration = index + 1;
+      await vi.waitFor(() => {
+        if (startupError) {
+          throw startupError instanceof Error
+            ? startupError
+            : new Error("Codex attempt failed.", { cause: startupError });
+        }
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
+          expectedGeneration,
+        );
+      }, fastWait);
+      const threadId = `thread-ephemeral-${expectedGeneration}`;
+      const turnId = `turn-ephemeral-${expectedGeneration}`;
+      await harness.completeTurn({ threadId, turnId });
+      await expect(run).resolves.toBeDefined();
+    }
+    expect(harness.requests.filter((request) => request.method === "thread/start")).toHaveLength(2);
+  });
+
+  it("rejects a run whose physical generation mismatches its durable session row", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const sessionKey = "agent:main:durable-generation";
+    const durableSessionId = "session-durable-current";
+    const storePath = path.join(tempDir, "durable-sessions.json");
+    registerCodexTestSessionIdentity(sessionFile, durableSessionId, sessionKey);
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-durable-current",
+      cwd: workspaceDir,
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId: durableSessionId, updatedAt: Date.now() },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionId = "session-durable-stale";
+    params.sessionKey = sessionKey;
+    params.sessionTarget = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey,
+      storePath,
+    };
+    params.config = { ...params.config, session: { store: storePath } };
+    const clientFactory = vi.fn(async () => {
+      throw new Error("client must not start");
+    });
+
+    await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toMatchObject({
+      name: "AgentHarnessSessionSupersededError",
+      message: "Codex session generation is no longer current: session-durable-stale",
+    });
+    expect(clientFactory).not.toHaveBeenCalled();
   });
 
   it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {

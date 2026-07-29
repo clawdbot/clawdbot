@@ -1318,6 +1318,15 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
+  it.each(["openai-codex", "codex-cli"])(
+    "rejects retired manual auth provider %s",
+    async (provider) => {
+      await expect(modelsAuthLoginCommand({ provider }, createRuntime())).rejects.toThrow(
+        `"${provider}" is a legacy provider ID; use --provider openai.`,
+      );
+    },
+  );
+
   it("does not persist a cancelled manual token entry", async () => {
     const runtime = createRuntime();
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((

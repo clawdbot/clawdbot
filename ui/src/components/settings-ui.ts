@@ -6,6 +6,7 @@ import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
@@ -140,7 +141,7 @@ export function renderSettingsToggle(props: {
     <wa-switch
       class="settings-toggle"
       size="s"
-      .checked=${props.checked}
+      .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
       @change=${(event: Event) => {
         props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
@@ -155,6 +156,7 @@ export function renderSettingsToggle(props: {
  * row is clickable and the checkbox gets its accessible name from the title. */
 export function renderSettingsToggleRow(props: {
   title: unknown;
+  ariaLabel?: unknown;
   description?: unknown;
   checked: boolean;
   onChange: (checked: boolean) => void;
@@ -198,7 +200,7 @@ export function renderSettingsToggleRow(props: {
         <wa-switch
           class="settings-toggle"
           size="s"
-          .checked=${props.checked}
+          .checked=${live(props.checked)}
           ?disabled=${props.disabled ?? false}
           @click=${notifySwitchActivation}
           @keydown=${notifySwitchActivation}
@@ -206,7 +208,7 @@ export function renderSettingsToggleRow(props: {
             props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
           }}
         >
-          <span class="settings-control__sr-label">${props.title}</span>
+          <span class="settings-control__sr-label">${props.ariaLabel ?? props.title}</span>
         </wa-switch>
       </div>
     </div>

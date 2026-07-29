@@ -1282,6 +1282,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw agent
   - H2: agent exec
+  - H3: Code Mode model matrix
   - H3: agent exec options
   - H2: Options
   - H2: Examples
@@ -5416,6 +5417,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Media codecs
   - H3: Quick Chat
   - H3: Canvas
   - H2: CLI and SSH alternative
@@ -5858,7 +5860,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Marketplace choices
   - H2: Bundled macOS marketplace
   - H3: Shared plugin cache
-  - H2: Remote catalog limit
+  - H2: Remote marketplaces
   - H2: Configuration reference
   - H2: What OpenClaw checks
   - H2: macOS permissions
@@ -5891,6 +5893,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supervision and safe continuation
   - H2: Visible replies and heartbeats
   - H2: Hook boundaries
+  - H2: Experimental sandbox process streaming
   - H2: V1 support contract
   - H2: Native permissions and MCP elicitations
   - H2: Queue steering
@@ -6059,6 +6062,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Hook catalog
+  - H3: Skill lifecycle and evaluation
   - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
@@ -6708,6 +6712,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/fireworks
 - Headings:
   - H1: Fireworks plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/fish-audio.md
+
+- Route: /plugins/reference/fish-audio
+- Headings:
+  - H1: Fish Audio plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -8225,6 +8238,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Built-in catalog
   - H2: Custom Fireworks model ids
   - H2: Related
+
+## providers/fish-audio.md
+
+- Route: /providers/fish-audio
+- Headings:
+  - H2: Hosted S2.1
+  - H3: Hosted models
+  - H3: Expressive speech
+  - H3: Voice selection and cloning
+  - H2: Local S2 Pro on macOS
+  - H3: Local reference voice
+  - H2: Troubleshooting
 
 ## providers/github-copilot.md
 
@@ -10486,19 +10511,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /tools/self-learning
 - Headings:
-  - H2: Enable self-learning
-  - H2: Review past sessions manually
-  - H2: What OpenClaw can learn
-  - H2: When experience review runs
+  - H2: Capture paths
+  - H3: Deterministic correction capture
+  - H3: Experience review
+  - H2: Mode policy
+  - H2: Why auto is safe to default
   - H2: Runtime support
-  - H2: What the reviewer receives
-  - H2: Proposal safety
-  - H2: Review learned proposals
-  - H2: Configuration
+  - H2: Cost and privacy
+  - H2: Review and revert learning
+  - H2: Configuration reference
   - H2: Troubleshooting
-  - H3: No proposal appears after a long turn
-  - H3: Doctor reports that the Workshop tool is hidden
-  - H3: Too many low-value proposals appear
+  - H3: No capture appears
+  - H3: Doctor reports that Workshop is hidden
+  - H3: A proposal remains pending in auto mode
+  - H3: Too many low-value captures appear
   - H2: Related
 
 ## tools/show-widget.md
@@ -10523,6 +10549,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Chat
   - H3: Learn from recent work
   - H2: CLI
+  - H2: Plugin evaluation and lifecycle hooks
   - H2: Proposal content
   - H2: Support files
   - H2: Agent tool

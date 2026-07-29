@@ -324,6 +324,56 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     );
   });
 
+  it("serves a byte range from the validated managed image", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "token" },
+      headers: { range: "bytes=9-13" },
+    });
+
+    expect(result.statusCode).toBe(206);
+    expect(result.headers["accept-ranges"]).toBe("bytes");
+    expect(result.headers["content-range"]).toBe("bytes 9-13/14");
+    expect(result.headers["content-length"]).toBe("5");
+    expect(result.headers.etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+    expect(result.body.toString("utf8")).toBe("image");
+  });
+
+  it("advertises byte ranges without a body for HEAD", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      method: "HEAD",
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["accept-ranges"]).toBe("bytes");
+    expect(result.headers["content-length"]).toBe("14");
+    expect(result.headers.etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+    expect(result.body).toHaveLength(0);
+  });
+
+  it("serves an empty managed image without a body", async () => {
+    const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir);
+    await fs.writeFile(originalPath, Buffer.alloc(0));
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-length"]).toBe("0");
+    expect(result.body).toHaveLength(0);
+  });
+
   it("serves an exact transcript image through a short-lived artifact ticket", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
     const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;

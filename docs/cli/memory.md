@@ -79,14 +79,13 @@ openclaw memory promote [--agent <id>] [--limit <n>] [--min-score <n>] \
 | `--limit <n>`              |              | Max candidates to return/apply.                                   |
 | `--min-score <n>`          | `0.75`       | Minimum weighted promotion score.                                 |
 | `--min-recall-count <n>`   | `3`          | Minimum recall count required.                                    |
-| `--min-unique-queries <n>` | `2`          | Minimum distinct query count required.                            |
+| `--min-unique-queries <n>` | `3`          | Minimum distinct query count required.                            |
 | `--apply`                  | preview only | Append selected candidates to `MEMORY.md` and mark them promoted. |
 | `--include-promoted`       |              | Include candidates already promoted in previous cycles.           |
 | `--json`                   |              | Print JSON.                                                       |
 
-These CLI defaults differ from the scheduled dreaming sweep's deep-phase
-thresholds (see [Dreaming](#dreaming) below); pass explicit flags to match
-sweep behavior for a one-off manual run.
+The CLI and scheduled dreaming sweep share the deep-phase defaults below.
+Explicit CLI flags override them for a one-off manual run.
 
 Ranking signals: recall frequency, retrieval relevance, query diversity,
 temporal recency, cross-day consolidation, and derived concept richness, drawn
@@ -191,7 +190,7 @@ material), **REM** (reflect and surface themes), **deep** (promote durable
 facts into `MEMORY.md`). Only deep writes to `MEMORY.md`.
 
 - Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`
-  (default `false`); `memory-core` auto-manages the sweep cron job, no manual
+  (default `true`); `memory-core` auto-manages the sweep cron job, no manual
   `openclaw cron add` required.
 - Toggle from chat with `/dreaming on|off`; inspect with `/dreaming status`
   (or `/dreaming`/`/dreaming help`). `on`/`off` requires channel owner status
@@ -202,9 +201,8 @@ facts into `MEMORY.md`). Only deep writes to `MEMORY.md`.
   standalone report to `memory/dreaming/<phase>/YYYY-MM-DD.md`; set `mode:
 "inline"` to fold reports into the daily memory file instead, or `"both"`
   for both.
-- Scheduled and manual `memory promote` runs share the same deep-phase
-  ranking signals; only the default thresholds differ (see table above vs.
-  scheduled defaults below).
+- Scheduled and manual `memory promote` runs share the same deep-phase ranking
+  signals and default thresholds; explicit CLI flags remain one-run overrides.
 - Scheduled runs fan out across every configured agent's memory workspace.
 
 Scheduled defaults (`plugins.entries.memory-core.config.dreaming`):
@@ -212,7 +210,7 @@ Scheduled defaults (`plugins.entries.memory-core.config.dreaming`):
 | Key                                    | Default     |
 | -------------------------------------- | ----------- |
 | `frequency`                            | `0 3 * * *` |
-| `phases.deep.minScore`                 | `0.8`       |
+| `phases.deep.minScore`                 | `0.75`      |
 | `phases.deep.minRecallCount`           | `3`         |
 | `phases.deep.minUniqueQueries`         | `3`         |
 | `phases.deep.recencyHalfLifeDays`      | `14`        |

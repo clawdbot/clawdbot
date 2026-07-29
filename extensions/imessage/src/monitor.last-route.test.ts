@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -55,30 +56,40 @@ const debouncerControl = vi.hoisted(() => ({
   },
 }));
 const createChannelInboundDebouncerMock = vi.hoisted(() =>
-  vi.fn((opts: { onFlush: (entries: unknown[]) => Promise<void> }) => ({
-    debouncer: {
-      enqueue: async (entry: unknown) => {
-        if (!debouncerControl.holdEntries) {
-          await opts.onFlush([entry]);
-          return;
-        }
-        debouncerControl.entries.push(entry);
-        debouncerControl.flush = async () => {
-          const entries = debouncerControl.entries.splice(0);
-          await opts.onFlush(entries);
-        };
-        // Flush each collected entry as its own single-entry bucket, modeling
-        // the real non-debounced path (shouldDebounceTextInbound is mocked to
-        // false here) where every row dispatches individually.
-        debouncerControl.flushEach = async () => {
-          const entries = debouncerControl.entries.splice(0);
-          for (const queued of entries) {
-            await opts.onFlush([queued]);
+  vi.fn(
+    (opts: {
+      onFlush: (
+        entries: unknown[],
+        createFlush: typeof createTestInboundDebounceFlush,
+      ) => { completion: Promise<void> };
+    }) => ({
+      debouncer: {
+        enqueue: async (entry: unknown) => {
+          if (!debouncerControl.holdEntries) {
+            await opts.onFlush([entry], createTestInboundDebounceFlush).completion;
+            return;
           }
-        };
+          debouncerControl.entries.push(entry);
+          debouncerControl.flush = async () => {
+            const entries = debouncerControl.entries.splice(0);
+            await opts.onFlush(entries, createTestInboundDebounceFlush).completion;
+          };
+          // Flush each collected entry as its own single-entry bucket, modeling
+          // the real non-debounced path (shouldDebounceTextInbound is mocked to
+          // false here) where every row dispatches individually.
+          debouncerControl.flushEach = async () => {
+            const entries = debouncerControl.entries.splice(0);
+            for (const queued of entries) {
+              await opts.onFlush([queued], createTestInboundDebounceFlush).completion;
+            }
+          };
+        },
+        flushKey: async () => {},
+        cancelKey: () => false,
+        drain: async () => {},
       },
-    },
-  })),
+    }),
+  ),
 );
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({

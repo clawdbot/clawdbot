@@ -39,3 +39,15 @@ export function resolveEffectiveAgentSkillsLimits(
   const { maxSkillsPromptChars } = agentEntry.skillsLimits ?? {};
   return typeof maxSkillsPromptChars === "number" ? { maxSkillsPromptChars } : undefined;
 }
+
+/** Applies a session's sparse skill overlay after agent/default allowlist resolution. */
+export function isSessionSkillEnabled(
+  skillName: string,
+  baseFilter: readonly string[] | undefined,
+  overrides: Readonly<Record<string, boolean>> | undefined,
+): boolean {
+  const override =
+    overrides && Object.hasOwn(overrides, skillName) ? overrides[skillName] : undefined;
+  const baseAllows = baseFilter === undefined || baseFilter.includes(skillName);
+  return override === true || (baseAllows && override !== false);
+}

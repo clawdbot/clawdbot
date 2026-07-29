@@ -245,24 +245,31 @@ describe("Code Mode catalog and model-visible surface", () => {
       execTool.description.lastIndexOf(nodesGuidance),
     );
 
+    expect(parameters.properties?.code?.description).toContain("no Python, shell");
     expect(parameters.properties?.code?.description).toContain(
-      "`tools.search` takes a query string, not an object",
-    );
-    expect(parameters.properties?.command?.description).toContain("Not a shell command");
-    expect(parameters.properties?.code?.description).toContain(
-      "Select exact ids from `ALL_TOOLS` or `tools.search`",
+      "a trailing expression is discarded and yields `null`",
     );
     expect(parameters.properties?.code?.description).toContain(
-      "never put dependent calls in Promise.all",
+      'tools.callValue("openclaw:core:read", { path: "notes.txt" })',
+    );
+    expect(parameters.properties?.code?.description).toContain("Use `callValue`, not `call`");
+    expect(parameters.properties?.code?.description).toContain("return file.content");
+    expect(parameters.properties?.code?.description).toContain(
+      "return it first, then parse it in a later exec",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "exact ids from `ALL_TOOLS` or `tools.search(query)`",
     );
     expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
-    expect(parameters.properties?.code?.description).toContain("Node built-in modules are not");
+    expect(parameters.properties?.code?.description).toContain("`require`, `import`");
     expect(parameters.properties?.restartSafe?.description).toContain(
       "Leave unset for ordinary calls",
     );
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
+    expect(parameters).toMatchObject({ required: ["code"] });
+    expect(parameters.properties).not.toHaveProperty("command");
   });
 
   it("keeps code-mode exec guidance compact without advertising unavailable namespaces", () => {
@@ -285,7 +292,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description.length).toBeLessThan(2_400);
     expect(execTool.description).toContain("parallelize independent work only");
     expect(codeDescription).toEqual(expect.any(String));
-    expect(String(codeDescription).length).toBeLessThan(320);
+    expect(String(codeDescription).length).toBeLessThan(620);
     expect(codeDescription).not.toContain("MCP namespace globals");
     expect(codeDescription).not.toContain("`API` virtual declaration files");
   });

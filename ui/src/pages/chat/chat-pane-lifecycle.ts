@@ -18,6 +18,7 @@ import {
 } from "../../components/browser/browser-annotation.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChatPaneObserverRunId } from "../../lib/observer-digest.ts";
+import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
@@ -494,6 +495,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
         this.applyGatewaySnapshot(snapshot);
       }),
     );
+    const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
+    chatState.addCleanup(
+      sessionPullRequests.subscribe(() => {
+        void this.refreshSessionPullRequests();
+      }),
+    );
+    chatState.addCleanup(() => sessionPullRequests.unwatch(this));
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;

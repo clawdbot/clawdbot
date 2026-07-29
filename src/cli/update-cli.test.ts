@@ -1072,18 +1072,43 @@ describe("update-cli", () => {
     );
   };
 
-  const setupInstalledPackageAtNodeModules = async (nodeModules: string, version = "2026.4.21") => {
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    const entryPath = path.join(pkgRoot, "dist", "index.js");
-    mockPackageInstallStatus(pkgRoot);
-    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+  const writeOpenClawPackageFixture = async (
+    root: string,
+    version: string,
+    options: { entrySource?: string; sidecars?: boolean; inventory?: boolean } = {},
+  ) => {
+    const entryPath = path.join(root, "dist", "index.js");
+    await fs.mkdir(options.entrySource === undefined ? root : path.dirname(entryPath), {
+      recursive: true,
+    });
     await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
+      path.join(root, "package.json"),
       JSON.stringify({ name: "openclaw", version }),
       "utf-8",
     );
-    await fs.writeFile(entryPath, "export {};\n", "utf-8");
-    await writePackageDistInventory(pkgRoot);
+    if (options.entrySource !== undefined) {
+      await fs.writeFile(entryPath, options.entrySource, "utf-8");
+    }
+    if (options.sidecars) {
+      for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
+        const absolutePath = path.join(root, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+      }
+    }
+    if (options.inventory) {
+      await writePackageDistInventory(root);
+    }
+    return entryPath;
+  };
+
+  const setupInstalledPackageAtNodeModules = async (nodeModules: string, version = "2026.4.21") => {
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    mockPackageInstallStatus(pkgRoot);
+    const entryPath = await writeOpenClawPackageFixture(pkgRoot, version, {
+      entrySource: "export {};\n",
+      inventory: true,
+    });
     return { nodeModules, pkgRoot, entryPath };
   };
 
@@ -1102,6 +1127,28 @@ describe("update-cli", () => {
     });
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+  };
+
+  const mockStoppedManagedGitGateway = () => {
+    mockRunningManagedGateway([
+      "node",
+      path.join(process.cwd(), "dist", "index.js"),
+      "gateway",
+      "run",
+    ]);
+    serviceLoaded.mockResolvedValue(false);
+    serviceLoaded.mockResolvedValueOnce(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", pid: null, state: "stopped" });
+    serviceReadRuntime.mockResolvedValueOnce({ status: "running", pid: 4242, state: "running" });
+  };
+
+  const expectFailedManagedGitRestart = (message: string) => {
+    const logs = getLogOutput();
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runRestartScript).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(logs).toContain(message);
+    expect(logs).not.toContain("Gateway: restarted and verified.");
   };
 
   const mockGatewayProbe = (version: string, connId: string) => {
@@ -3798,18 +3845,10 @@ describe("update-cli", () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(tempDir);
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.3.23" }),
-      "utf-8",
-    );
-    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
-      const absolutePath = path.join(pkgRoot, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-    }
-    await writePackageDistInventory(pkgRoot);
+    await writeOpenClawPackageFixture(pkgRoot, "2026.3.23", {
+      sidecars: true,
+      inventory: true,
+    });
     readPackageVersion.mockResolvedValue("2026.3.23");
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
@@ -3852,14 +3891,10 @@ describe("update-cli", () => {
           throw new Error("missing stage prefix");
         }
         const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-        await fs.mkdir(path.join(stageRoot, "dist"), { recursive: true });
-        await fs.writeFile(
-          path.join(stageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
-          "utf-8",
-        );
-        await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "export {};\n", "utf-8");
-        await writePackageDistInventory(stageRoot);
+        await writeOpenClawPackageFixture(stageRoot, "2026.4.25", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
         await fs.writeFile(
           path.join(stageRoot, "dist", "stale-runtime.js"),
           "export {};\n",
@@ -4379,26 +4414,7 @@ describe("update-cli", () => {
   });
 
   it("fails managed git restart when the gateway responds but the service stays stopped", async () => {
-    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
-      environment: {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-    });
-    serviceLoaded.mockResolvedValue(false);
-    serviceLoaded.mockResolvedValueOnce(true);
-    serviceReadRuntime.mockResolvedValue({
-      status: "stopped",
-      pid: null,
-      state: "stopped",
-    });
-    serviceReadRuntime.mockResolvedValueOnce({
-      status: "running",
-      pid: 4242,
-      state: "running",
-    });
+    mockStoppedManagedGitGateway();
     restartHealthTestControl.snapshot = {
       runtime: { status: "stopped", pid: null, state: "stopped" },
       portUsage: {
@@ -4417,48 +4433,19 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true });
 
-    const logs = getLogOutput();
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(runRestartScript).toHaveBeenCalledTimes(1);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(logs).toContain(
+    expectFailedManagedGitRestart(
       "Gateway responded, but the managed service did not report running after restart.",
     );
-    expect(logs).not.toContain("Gateway: restarted and verified.");
   });
 
   it("fails managed git restart when the stopped service cannot be restarted", async () => {
-    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
-      environment: {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-    });
-    serviceLoaded.mockResolvedValue(false);
-    serviceLoaded.mockResolvedValueOnce(true);
-    serviceReadRuntime.mockResolvedValue({
-      status: "stopped",
-      pid: null,
-      state: "stopped",
-    });
-    serviceReadRuntime.mockResolvedValueOnce({
-      status: "running",
-      pid: 4242,
-      state: "running",
-    });
+    mockStoppedManagedGitGateway();
     runRestartScript.mockRejectedValueOnce(new Error("restart unavailable"));
     mockGitUpdateAfterMutation();
 
     await updateCommand({ yes: true });
 
-    const logs = getLogOutput();
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(runRestartScript).toHaveBeenCalledTimes(1);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(logs).toContain("Gateway: restart failed: Error: restart unavailable");
-    expect(logs).not.toContain("Gateway: restarted and verified.");
+    expectFailedManagedGitRestart("Gateway: restart failed: Error: restart unavailable");
   });
 
   it("stops a managed gateway rooted at the git checkout when switching package installs to dev", async () => {
@@ -4648,12 +4635,10 @@ describe("update-cli", () => {
       tag: "latest",
       version: "2026.4.23",
     });
-    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
-      const absolutePath = path.join(pkgRoot, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-    }
-    await writePackageDistInventory(pkgRoot);
+    await writeOpenClawPackageFixture(pkgRoot, "2026.4.23", {
+      sidecars: true,
+      inventory: true,
+    });
     mockFileBackedPathExists();
     mockNpmGlobalRoot(nodeModules);
 
@@ -4679,18 +4664,10 @@ describe("update-cli", () => {
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(pkgRoot);
     mockCurrentProcessFreshDoctor();
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "9999.0.0" }),
-      "utf-8",
-    );
-    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
-      const absolutePath = path.join(pkgRoot, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-    }
-    await writePackageDistInventory(pkgRoot);
+    await writeOpenClawPackageFixture(pkgRoot, "9999.0.0", {
+      sidecars: true,
+      inventory: true,
+    });
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
@@ -5041,15 +5018,10 @@ describe("update-cli", () => {
         const stageRoot = stagePrefix
           ? path.join(stagePrefix, "lib", "node_modules", "openclaw")
           : serviceRoot;
-        const stageEntryPoint = path.join(stageRoot, "dist", "index.js");
-        await fs.mkdir(path.dirname(stageEntryPoint), { recursive: true });
-        await fs.writeFile(
-          path.join(stageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.5.20" }),
-          "utf-8",
-        );
-        await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
-        await writePackageDistInventory(stageRoot);
+        await writeOpenClawPackageFixture(stageRoot, "2026.5.20", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
       }
       return commandResult();
     });
@@ -5148,15 +5120,10 @@ describe("update-cli", () => {
         const stageRoot = stagePrefix
           ? path.join(stagePrefix, "lib", "node_modules", "openclaw")
           : root;
-        const stageEntryPoint = path.join(stageRoot, "dist", "index.js");
-        await fs.mkdir(path.dirname(stageEntryPoint), { recursive: true });
-        await fs.writeFile(
-          path.join(stageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.7.1" }),
-          "utf-8",
-        );
-        await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
-        await writePackageDistInventory(stageRoot);
+        await writeOpenClawPackageFixture(stageRoot, "2026.7.1", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
       }
       return commandResult();
     });
@@ -5219,15 +5186,10 @@ describe("update-cli", () => {
         const stageRoot = stagePrefix
           ? path.join(stagePrefix, "lib", "node_modules", "openclaw")
           : root;
-        const stageEntryPoint = path.join(stageRoot, "dist", "index.js");
-        await fs.mkdir(path.dirname(stageEntryPoint), { recursive: true });
-        await fs.writeFile(
-          path.join(stageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.5.20" }),
-          "utf-8",
-        );
-        await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
-        await writePackageDistInventory(stageRoot);
+        await writeOpenClawPackageFixture(stageRoot, "2026.5.20", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
       }
       return commandResult();
     });

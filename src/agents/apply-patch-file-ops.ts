@@ -2,6 +2,10 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
+import {
+  type MemoryWriteProvenanceObserver,
+  withMemoryWriteProvenance,
+} from "./memory-write-provenance.js";
 import { toRelativeSandboxPath } from "./path-policy.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { decodeUtf8File } from "./utf8-file.js";
@@ -16,6 +20,7 @@ export type ApplyPatchFileOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  memoryWriteProvenance?: MemoryWriteProvenanceObserver;
 };
 
 type PatchCreateOutcome = "created" | "exists";
@@ -45,98 +50,145 @@ export async function createPatchTarget(params: {
 export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOps {
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
-    return {
-      readFile: async (filePath) => {
-        const buf = await bridge.readFile({ filePath, cwd: root });
-        return decodeUtf8File(buf, filePath);
+    return withPatchMemoryWriteProvenance({
+      observer: options.memoryWriteProvenance,
+      operations: {
+        readFile: async (filePath) => {
+          const buf = await bridge.readFile({ filePath, cwd: root });
+          return decodeUtf8File(buf, filePath);
+        },
+        writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
+        createFileExclusive: (filePath, content) => {
+          if (!bridge.createFileExclusive) {
+            throw new Error(
+              "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
+            );
+          }
+          return bridge.createFileExclusive({ filePath, cwd: root, data: content });
+        },
+        remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
+        mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
       },
-      writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
-      createFileExclusive: (filePath, content) => {
-        if (!bridge.createFileExclusive) {
-          throw new Error(
-            "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
-          );
-        }
-        return bridge.createFileExclusive({ filePath, cwd: root, data: content });
-      },
-      remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
-      mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
-    };
+    });
   }
 
   if (options.workspaceOnly === false) {
-    return {
-      readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
+    return withPatchMemoryWriteProvenance({
+      observer: options.memoryWriteProvenance,
+      operations: {
+        readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
+        writeFile: async (filePath, content) => {
+          await fs.writeFile(filePath, content, "utf8");
+        },
+        createFileExclusive: async (filePath, content) => {
+          try {
+            await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+            return "created";
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+              return "exists";
+            }
+            throw error;
+          }
+        },
+        remove: (filePath) => fs.rm(filePath),
+        mkdirp: async (dir) => {
+          await fs.mkdir(dir, { recursive: true });
+        },
+      },
+    });
+  }
+
+  const rootPromise = fsRoot(options.cwd);
+  return withPatchMemoryWriteProvenance({
+    observer: options.memoryWriteProvenance,
+    operations: {
+      readFile: async (filePath) => {
+        const opened = await openRootFile({
+          absolutePath: filePath,
+          rootPath: options.cwd,
+          boundaryLabel: "workspace root",
+        });
+        assertBoundaryRead(opened, filePath);
+        try {
+          return decodeUtf8File(syncFs.readFileSync(opened.fd), filePath);
+        } finally {
+          syncFs.closeSync(opened.fd);
+        }
+      },
       writeFile: async (filePath, content) => {
-        await fs.writeFile(filePath, content, "utf8");
+        const relative = toRelativeSandboxPath(options.cwd, filePath);
+        await (await rootPromise).write(relative, content, { encoding: "utf8" });
       },
       createFileExclusive: async (filePath, content) => {
+        const relative = toRelativeSandboxPath(options.cwd, filePath);
         try {
-          await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+          await (await rootPromise).create(relative, content, { encoding: "utf8" });
           return "created";
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          // fs-safe opens an existing destination before its O_EXCL commit. A final
+          // symlink is rejected during that probe, but for create semantics it is
+          // still an occupied destination and must fail closed.
+          if (
+            error instanceof FsSafeError &&
+            (error.code === "already-exists" || error.code === "symlink")
+          ) {
             return "exists";
           }
           throw error;
         }
       },
-      remove: (filePath) => fs.rm(filePath),
-      mkdirp: async (dir) => {
-        await fs.mkdir(dir, { recursive: true });
+      remove: async (filePath) => {
+        const relative = toRelativeSandboxPath(options.cwd, filePath);
+        await (await rootPromise).remove(relative);
       },
-    };
-  }
+      mkdirp: async (dir) => {
+        const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
+        const root = await rootPromise;
+        if (relative === "" || relative === ".") {
+          await root.ensureRoot();
+          return;
+        }
+        await root.mkdir(relative);
+      },
+    },
+  });
+}
 
-  const rootPromise = fsRoot(options.cwd);
+const PATCH_CREATE_EXISTS = Symbol("patch-create-exists");
+
+function withPatchMemoryWriteProvenance(params: {
+  operations: PatchFileOps;
+  observer: MemoryWriteProvenanceObserver | undefined;
+}): PatchFileOps {
+  const operations = withMemoryWriteProvenance(params.operations, params.observer);
+  if (!params.observer) {
+    return operations;
+  }
   return {
-    readFile: async (filePath) => {
-      const opened = await openRootFile({
-        absolutePath: filePath,
-        rootPath: options.cwd,
-        boundaryLabel: "workspace root",
-      });
-      assertBoundaryRead(opened, filePath);
-      try {
-        return decodeUtf8File(syncFs.readFileSync(opened.fd), filePath);
-      } finally {
-        syncFs.closeSync(opened.fd);
-      }
-    },
-    writeFile: async (filePath, content) => {
-      const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await (await rootPromise).write(relative, content, { encoding: "utf8" });
-    },
+    ...operations,
     createFileExclusive: async (filePath, content) => {
-      const relative = toRelativeSandboxPath(options.cwd, filePath);
+      if (!params.observer?.classifies(filePath)) {
+        return params.operations.createFileExclusive(filePath, content);
+      }
       try {
-        await (await rootPromise).create(relative, content, { encoding: "utf8" });
+        await params.observer.write({
+          absolutePath: filePath,
+          contentBefore: "",
+          contentAfter: content,
+          commit: async () => {
+            if ((await params.operations.createFileExclusive(filePath, content)) === "exists") {
+              throw PATCH_CREATE_EXISTS;
+            }
+          },
+        });
         return "created";
       } catch (error) {
-        // fs-safe opens an existing destination before its O_EXCL commit. A final
-        // symlink is rejected during that probe, but for create semantics it is
-        // still an occupied destination and must fail closed.
-        if (
-          error instanceof FsSafeError &&
-          (error.code === "already-exists" || error.code === "symlink")
-        ) {
+        if (error === PATCH_CREATE_EXISTS) {
           return "exists";
         }
         throw error;
       }
-    },
-    remove: async (filePath) => {
-      const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await (await rootPromise).remove(relative);
-    },
-    mkdirp: async (dir) => {
-      const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
-      const root = await rootPromise;
-      if (relative === "" || relative === ".") {
-        await root.ensureRoot();
-        return;
-      }
-      await root.mkdir(relative);
     },
   };
 }

@@ -970,44 +970,48 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     disposeStartupCronRetry();
   });
 
-  api.on("before_agent_reply", async (event, ctx) => {
-    try {
-      if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
+  api.on(
+    "before_agent_reply",
+    async (event, ctx) => {
+      try {
+        if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
+          return undefined;
+        }
+        const currentConfig = resolveCurrentConfig();
+        const hasManagedDreamingToken = includesSystemEventToken(
+          event.cleanedBody,
+          DREAMING_SYSTEM_EVENT_TEXT,
+        );
+        const isManagedHeartbeatTrigger =
+          ctx.trigger === "heartbeat" && hasPendingManagedDreamingCronEvent(ctx.sessionKey);
+        const isManagedCronTrigger = ctx.trigger === "cron";
+        const shouldHandleManagedDreaming =
+          hasManagedDreamingToken && (isManagedHeartbeatTrigger || isManagedCronTrigger);
+        if (!shouldHandleManagedDreaming && !hasCronManagementContext()) {
+          return undefined;
+        }
+        const config = await reconcileManagedDreamingCron({
+          reason: "runtime",
+        });
+        if (!shouldHandleManagedDreaming) {
+          return undefined;
+        }
+        return await runShortTermDreamingPromotionIfTriggered({
+          cleanedBody: event.cleanedBody,
+          trigger: ctx.trigger,
+          agentId: ctx.agentId,
+          workspaceDir: ctx.workspaceDir,
+          cfg: currentConfig,
+          config,
+          logger: api.logger,
+          subagent: config.enabled ? api.runtime?.subagent : undefined,
+        });
+      } catch (err) {
+        api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
         return undefined;
       }
-      const currentConfig = resolveCurrentConfig();
-      const hasManagedDreamingToken = includesSystemEventToken(
-        event.cleanedBody,
-        DREAMING_SYSTEM_EVENT_TEXT,
-      );
-      const isManagedHeartbeatTrigger =
-        ctx.trigger === "heartbeat" && hasPendingManagedDreamingCronEvent(ctx.sessionKey);
-      const isManagedCronTrigger = ctx.trigger === "cron";
-      const shouldHandleManagedDreaming =
-        hasManagedDreamingToken && (isManagedHeartbeatTrigger || isManagedCronTrigger);
-      if (!shouldHandleManagedDreaming && !hasCronManagementContext()) {
-        return undefined;
-      }
-      const config = await reconcileManagedDreamingCron({
-        reason: "runtime",
-      });
-      if (!shouldHandleManagedDreaming) {
-        return undefined;
-      }
-      return await runShortTermDreamingPromotionIfTriggered({
-        cleanedBody: event.cleanedBody,
-        trigger: ctx.trigger,
-        agentId: ctx.agentId,
-        workspaceDir: ctx.workspaceDir,
-        cfg: currentConfig,
-        config,
-        logger: api.logger,
-        subagent: config.enabled ? api.runtime?.subagent : undefined,
-      });
-    } catch (err) {
-      api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
-      return undefined;
-    }
-  });
+    },
+    { eligibleTriggers: ["heartbeat", "cron"] },
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

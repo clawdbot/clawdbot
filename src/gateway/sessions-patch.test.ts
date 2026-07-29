@@ -660,6 +660,56 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBe("auto");
   });
 
+  test("sets, replaces, clears, and normalizes tool overrides", async () => {
+    const store = mainStoreEntry({});
+    const set = expectPatchOk(
+      await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          toolOverrides: {
+            mcpServers: { zeta: false, alpha: true },
+            mcpToolsDeny: { zeta: [], alpha: ["write", "read", "write"] },
+            skills: {},
+            webSearch: true,
+          },
+        },
+      }),
+    );
+    expect(set.toolOverrides).toEqual({
+      mcpServers: { alpha: true, zeta: false },
+      mcpToolsDeny: { alpha: ["read", "write"] },
+    });
+
+    const replaced = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { skills: { release: false } } },
+      }),
+    );
+    expect(replaced.toolOverrides).toEqual({ skills: { release: false } });
+
+    const normalizedEmpty = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { mcpToolsDeny: { docs: [] } } },
+      }),
+    );
+    expect(normalizedEmpty.toolOverrides).toBeUndefined();
+
+    store[MAIN_SESSION_KEY] = {
+      ...normalizedEmpty,
+      toolOverrides: { webSearch: false },
+    };
+    const cleared = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: null },
+      }),
+    );
+    expect(cleared.toolOverrides).toBeUndefined();
+  });
+
   test("persists verboseLevel=full", async () => {
     const entry = expectPatchOk(
       await runPatch({

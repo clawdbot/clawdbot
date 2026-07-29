@@ -53,6 +53,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;
+    maxBytes?: number;
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
@@ -65,6 +66,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
         allowFinalSymlinkForUnlink: false,
       });
       const root = await fsRoot(target.mountHostRoot);
+      if (params.maxBytes !== undefined) {
+        return (
+          await root.read(path.relative(target.mountHostRoot, hostPath), {
+            hardlinks: "reject",
+            maxBytes: params.maxBytes,
+          })
+        ).buffer;
+      }
       opened = await root.open(path.relative(target.mountHostRoot, hostPath), {
         hardlinks: "reject",
       });

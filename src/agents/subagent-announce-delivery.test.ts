@@ -829,120 +829,50 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     );
   });
 
-  it("waits through compaction and re-steers the active requester (86566)", async () => {
+  it.each([
+    {
+      name: "waits through compaction and re-steers the active requester (86566)",
+      outcomes: ["compacting", true],
+      announceTimeoutMs: undefined,
+      retryWindowMs: 120_000,
+    },
+    {
+      name: "keeps retrying compaction past the backoff schedule until the delivery timeout (86566)",
+      outcomes: ["compacting", "compacting", "compacting", "compacting", "compacting", true],
+      announceTimeoutMs: undefined,
+      retryWindowMs: undefined,
+    },
+    {
+      name: "passes the remaining delivery window into compaction retries (86566)",
+      outcomes: ["compacting", true],
+      announceTimeoutMs: 500,
+      retryWindowMs: 500,
+    },
+  ] as const)("$name", async ({ outcomes, announceTimeoutMs, retryWindowMs }) => {
     const previousTestFast = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
     try {
-      // First steer attempt observes a compacting run; once compaction ends the
-      // same wake succeeds, so completion must stay on the steering path instead
-      // of falling back to the direct requester-agent handoff.
-      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
-        "compacting",
-        true,
-      ]);
+      // Compaction remains retryable beyond the backoff schedule, but each
+      // attempt must receive only the remaining delivery-timeout window.
+      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([...outcomes]);
       const callGateway = await deliverSteeredAnnouncement({
+        ...(announceTimeoutMs === undefined ? {} : { announceTimeoutMs }),
         queueEmbeddedAgentMessageWithOutcome,
-        requesterOrigin: {
-          channel: "slack",
-          to: "channel:C123",
-          accountId: "acct-1",
-        },
+        requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
       });
 
       expect(callGateway).not.toHaveBeenCalled();
-      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
-      const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
-      expectRecordFields(retryOptions, {
-        steeringMode: "all",
-        debounceMs: 500,
-        waitForTranscriptCommit: true,
-      });
-      expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
-      expect(retryOptions.deliveryTimeoutMs).toBeLessThan(120_000);
-    } finally {
-      if (previousTestFast === undefined) {
-        delete process.env.OPENCLAW_TEST_FAST;
-      } else {
-        process.env.OPENCLAW_TEST_FAST = previousTestFast;
+      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(outcomes.length);
+      if (retryWindowMs !== undefined) {
+        const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
+        expectRecordFields(retryOptions, {
+          steeringMode: "all",
+          debounceMs: 500,
+          waitForTranscriptCommit: true,
+        });
+        expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
+        expect(retryOptions.deliveryTimeoutMs).toBeLessThan(retryWindowMs);
       }
-    }
-  });
-
-  it("keeps retrying compaction past the backoff schedule until the delivery timeout (86566)", async () => {
-    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
-    process.env.OPENCLAW_TEST_FAST = "1";
-    try {
-      // The backoff schedule has four entries, but a compaction that only
-      // finishes after the schedule is exhausted should still be retried while
-      // the run stays within the delivery timeout (120s here). Five compacting
-      // outcomes (more than the schedule length) precede the queued success, so
-      // the wake must keep retrying past the schedule instead of falling back.
-      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
-        "compacting",
-        "compacting",
-        "compacting",
-        "compacting",
-        "compacting",
-        true,
-      ]);
-      const callGateway = await deliverSteeredAnnouncement({
-        queueEmbeddedAgentMessageWithOutcome,
-        requesterOrigin: {
-          channel: "slack",
-          to: "channel:C123",
-          accountId: "acct-1",
-        },
-      });
-
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(6);
-    } finally {
-      if (previousTestFast === undefined) {
-        delete process.env.OPENCLAW_TEST_FAST;
-      } else {
-        process.env.OPENCLAW_TEST_FAST = previousTestFast;
-      }
-    }
-  });
-
-  it("passes the remaining delivery window into compaction retries (86566)", async () => {
-    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
-    process.env.OPENCLAW_TEST_FAST = "1";
-    try {
-      const queueEmbeddedAgentMessageWithOutcome = vi
-        .fn<QueueEmbeddedAgentMessageWithOutcome>()
-        .mockImplementationOnce((sessionId: string) => ({
-          queued: false,
-          sessionId,
-          reason: "compacting",
-          gatewayHealth: "live",
-        }))
-        .mockImplementationOnce((sessionId: string) => ({
-          queued: true,
-          sessionId,
-          target: "embedded_run",
-          gatewayHealth: "live",
-        }));
-      const callGateway = await deliverSteeredAnnouncement({
-        announceTimeoutMs: 500,
-        queueEmbeddedAgentMessageWithOutcome,
-        requesterOrigin: {
-          channel: "slack",
-          to: "channel:C123",
-          accountId: "acct-1",
-        },
-      });
-
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
-      const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
-      expectRecordFields(retryOptions, {
-        steeringMode: "all",
-        debounceMs: 500,
-        waitForTranscriptCommit: true,
-      });
-      expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
-      expect(retryOptions.deliveryTimeoutMs).toBeLessThan(500);
     } finally {
       if (previousTestFast === undefined) {
         delete process.env.OPENCLAW_TEST_FAST;
@@ -988,147 +918,81 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     expectRecordFields(result, { path: "none" });
   });
 
-  it("does not report delivery when active requester steering is rejected", async () => {
-    const queueEmbeddedAgentMessageWithOutcome = vi.fn(async (sessionId: string) => ({
-      queued: false as const,
-      sessionId,
-      reason: "runtime_rejected" as const,
-      gatewayHealth: "live" as const,
+  it.each([
+    {
+      name: "does not report delivery when active requester steering is rejected",
+      reason: "runtime_rejected",
       errorMessage: "cannot steer a compact turn",
-    }));
-    const callGateway = createGatewayMock();
-    testing.setDepsForTest({
-      callGateway,
-      getRequesterSessionActivity: () => ({
-        sessionId: "paperclip-session",
-        isActive: true,
-      }),
-      queueEmbeddedAgentMessageWithOutcome,
-      getRuntimeConfig: () =>
-        ({
-          messages: {
-            queue: {
-              mode: "steer",
-            },
-          },
-        }) as never,
-    });
-
-    const result = await deliverSubagentAnnouncement({
-      requesterSessionKey: "agent:eng:paperclip:issue:123",
-      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
-      triggerMessage: "child done",
-      steerMessage: "child done",
-      requesterIsSubagent: false,
-      expectsCompletionMessage: false,
+      activityEnds: false,
+      fallsBack: false,
       directIdempotencyKey: "announce-rejected-steer",
-    });
-
-    expectRecordFields(result, {
-      delivered: false,
-      path: "none",
-      phases: [{ phase: "steer-primary", delivered: false, path: "none", error: undefined }],
-    });
-    expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it("falls through to direct delivery when requester ends during awaited steering failure", async () => {
-    const queueEmbeddedAgentMessageWithOutcome = vi.fn(async (sessionId: string) => ({
-      queued: false as const,
-      sessionId,
-      reason: "runtime_rejected" as const,
-      gatewayHealth: "live" as const,
+    },
+    {
+      name: "falls through to direct delivery when requester ends during awaited steering failure",
+      reason: "runtime_rejected",
       errorMessage: "active session ended before queued steering message was committed",
-    }));
-    const callGateway = createPayloadGatewayMock({ text: "child completion output" });
-    let activityChecks = 0;
-    testing.setDepsForTest({
-      callGateway,
-      getRequesterSessionActivity: () => ({
-        sessionId: "paperclip-session",
-        isActive: activityChecks++ === 0,
-      }),
-      queueEmbeddedAgentMessageWithOutcome,
-      getRuntimeConfig: () =>
-        ({
-          messages: {
-            queue: {
-              mode: "steer",
-            },
-          },
-        }) as never,
-    });
-
-    const result = await deliverSubagentAnnouncement({
-      requesterSessionKey: "agent:eng:paperclip:issue:123",
-      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
-      triggerMessage: "child done",
-      steerMessage: "child done",
-      requesterOrigin: slackThreadOrigin,
-      requesterIsSubagent: false,
-      expectsCompletionMessage: false,
+      activityEnds: true,
+      fallsBack: true,
       directIdempotencyKey: "announce-recheck-after-steer-failure",
-    });
-
-    expectRecordFields(result, {
-      delivered: true,
-      path: "direct",
-      phases: [
-        { phase: "steer-primary", delivered: false, path: "none", error: undefined },
-        { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
-      ],
-    });
-    expect(callGateway).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls through to direct delivery when steering is refused for a stale run", async () => {
-    // An evidence-dead requester still registers as "active", but it will not
-    // drain its steer queue; dropping here would discard the handoff.
-    const queueEmbeddedAgentMessageWithOutcome = vi.fn(async (sessionId: string) => ({
-      queued: false as const,
-      sessionId,
-      reason: "stale_run" as const,
-      gatewayHealth: "live" as const,
-    }));
-    const callGateway = createPayloadGatewayMock({ text: "child completion output" });
-    testing.setDepsForTest({
-      callGateway,
-      getRequesterSessionActivity: () => ({
-        sessionId: "paperclip-session",
-        isActive: true,
-      }),
-      queueEmbeddedAgentMessageWithOutcome,
-      getRuntimeConfig: () =>
-        ({
-          messages: {
-            queue: {
-              mode: "steer",
-            },
-          },
-        }) as never,
-    });
-
-    const result = await deliverSubagentAnnouncement({
-      requesterSessionKey: "agent:eng:paperclip:issue:123",
-      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
-      triggerMessage: "child done",
-      steerMessage: "child done",
-      requesterOrigin: slackThreadOrigin,
-      requesterIsSubagent: false,
-      expectsCompletionMessage: false,
+    },
+    {
+      name: "falls through to direct delivery when steering is refused for a stale run",
+      reason: "stale_run",
+      errorMessage: undefined,
+      activityEnds: false,
+      fallsBack: true,
       directIdempotencyKey: "announce-stale-run-direct-fallback",
-    });
+    },
+  ] as const)(
+    "$name",
+    async ({ reason, errorMessage, activityEnds, fallsBack, directIdempotencyKey }) => {
+      // An active-but-stale requester cannot drain its queue and must still
+      // receive the direct handoff; a live rejection must not fake delivery.
+      const queueEmbeddedAgentMessageWithOutcome = vi.fn(async (sessionId: string) => ({
+        queued: false as const,
+        sessionId,
+        reason,
+        gatewayHealth: "live" as const,
+        ...(errorMessage === undefined ? {} : { errorMessage }),
+      }));
+      const callGateway = fallsBack
+        ? createPayloadGatewayMock({ text: "child completion output" })
+        : createGatewayMock();
+      let activityChecks = 0;
+      testing.setDepsForTest({
+        callGateway,
+        getRequesterSessionActivity: () => ({
+          sessionId: "paperclip-session",
+          isActive: !activityEnds || activityChecks++ === 0,
+        }),
+        queueEmbeddedAgentMessageWithOutcome,
+        getRuntimeConfig: () => ({ messages: { queue: { mode: "steer" } } }) as never,
+      });
 
-    expectRecordFields(result, {
-      delivered: true,
-      path: "direct",
-      phases: [
-        { phase: "steer-primary", delivered: false, path: "none", error: undefined },
-        { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
-      ],
-    });
-    expect(callGateway).toHaveBeenCalledTimes(1);
-  });
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:eng:paperclip:issue:123",
+        targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+        triggerMessage: "child done",
+        steerMessage: "child done",
+        ...(fallsBack ? { requesterOrigin: slackThreadOrigin } : {}),
+        requesterIsSubagent: false,
+        expectsCompletionMessage: false,
+        directIdempotencyKey,
+      });
+
+      expectRecordFields(result, {
+        delivered: fallsBack,
+        path: fallsBack ? "direct" : "none",
+        phases: [
+          { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+          ...(fallsBack
+            ? [{ phase: "direct-primary", delivered: true, path: "direct", error: undefined }]
+            : []),
+        ],
+      });
+      expect(callGateway).toHaveBeenCalledTimes(fallsBack ? 1 : 0);
+    },
+  );
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {

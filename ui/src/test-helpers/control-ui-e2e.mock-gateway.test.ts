@@ -74,7 +74,11 @@ describe("mock gateway stateful config", () => {
       baseHash: "fixture-hash",
     });
     // Acks carry the persisted hash, mirroring the real gateway contract.
-    expect(set).toEqual({ ok: true, hash: "mock-config-hash-1" });
+    expect(set).toEqual({
+      ok: true,
+      hash: "mock-config-hash-1",
+      config: { logging: { level: "debug" } },
+    });
 
     const reloaded = await request("get-2", "config.get", {});
     expect(reloaded).toMatchObject({
@@ -89,12 +93,30 @@ describe("mock gateway stateful config", () => {
       raw: nextRaw,
       baseHash: "mock-config-hash-1",
     });
-    expect(applied).toEqual({ ok: true, hash: "mock-config-hash-2" });
+    expect(applied).toEqual({
+      ok: true,
+      hash: "mock-config-hash-2",
+      config: { logging: { level: "debug" } },
+    });
     expect(await request("get-3", "config.get", {})).toMatchObject({
       hash: "mock-config-hash-2",
       configRevisionHash: "mock-config-hash-2",
       appliedConfigHash: "mock-config-hash-2",
     });
+
+    const json5Raw = '{\n  // Keep this comment.\n  logging: { level: "warn", },\n}\n';
+    const json5Ack = await request("set-json5", "config.set", {
+      raw: json5Raw,
+      baseHash: "mock-config-hash-2",
+    });
+    expect(json5Ack).toEqual({
+      ok: true,
+      hash: "mock-config-hash-3",
+      config: { logging: { level: "warn" } },
+    });
+    const json5Reloaded = await request("get-json5", "config.get", {});
+    expect(json5Reloaded).toMatchObject({ raw: json5Raw, hash: "mock-config-hash-3" });
+    expect(json5Reloaded.config).toEqual({ logging: { level: "warn" } });
 
     socket.close();
   });

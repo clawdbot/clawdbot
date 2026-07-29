@@ -10,7 +10,11 @@ import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.j
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
+import type {
+  CliSessionBinding,
+  SessionEntry,
+  SessionToolOverrides,
+} from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -70,6 +74,7 @@ export type RunCliAgentParams = {
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
   config?: OpenClawConfig;
+  toolOverrides?: SessionToolOverrides;
   prompt: string;
   transcriptPrompt?: string;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
