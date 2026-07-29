@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 @testable import OpenClawChatUI
 
 private final class ComposerParityTransport: @unchecked Sendable, OpenClawChatTransport {
@@ -80,6 +81,28 @@ struct ChatReplyQuoteTests {
 
 @MainActor
 struct ChatComposerStateTests {
+    @Test func `tagless movie metadata stages as video`() async throws {
+        let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: .movie)
+        #expect(metadata.fileExtension == "mov")
+        #expect(metadata.mimeType == "video/quicktime")
+
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tagless-movie-\(UUID().uuidString)")
+            .appendingPathExtension(metadata.fileExtension)
+        try Data("tagless-movie".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+
+        await vm.addVideoAttachment(
+            url: fileURL,
+            fileName: "video.\(metadata.fileExtension)",
+            mimeType: metadata.mimeType)
+
+        let attachment = try #require(vm.attachments.first)
+        #expect(attachment.fileName.hasSuffix(".mov"))
+        #expect(attachment.mimeType.hasPrefix("video/"))
+    }
+
     @Test func `late send does not consume newer reply selection for same message`() {
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let messageID = UUID()
