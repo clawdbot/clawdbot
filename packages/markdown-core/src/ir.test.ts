@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { sliceMarkdownIR, markdownToIR } from "./ir.js";
+import { chunkTextRanges } from "./chunk-text.js";
+import { markdownToIR, sliceMarkdownIR } from "./ir.js";
 
 // U+1F600 (😀) = 😀 in UTF-16.
 const EMOJI = "\u{1F600}";
@@ -10,6 +11,8 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
   it("expands start boundary backward when it lands on a low surrogate", () => {
     // "a😀b" — UTF-16: [a] [\uD83D] [\uDE00] [b], indices 0-3
     const ir = markdownToIR(`a${EMOJI}b`);
+    expect(ir.text[1]).toBe(LEAD_HIGH);
+    expect(ir.text[2]).toBe(LEAD_LOW);
     // from=2 points at \uDE00 (LS); should expand to from=1 to include 😀
     const sliced = sliceMarkdownIR(ir, 2, 4);
     expect(sliced.text).toBe(`${EMOJI}b`);
@@ -75,6 +78,87 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
     const sliced = sliceMarkdownIR(ir, 2, ir.text.length);
     expect(sliced.text).toContain(EMOJI);
     expect(sliced.links.length).toBeGreaterThan(0);
+  });
+
+  it("keeps nested link and style spans aligned with the expanded start", () => {
+    const href = "https://example.com";
+    const ir = markdownToIR(`a[**${EMOJI}b**](${href})`);
+    const sliced = sliceMarkdownIR(ir, 2, ir.text.length);
+
+    expect(sliced.text).toBe(`${EMOJI}b`);
+    expect(sliced.text.isWellFormed()).toBe(true);
+    expect(sliced.links).toEqual([{ start: 0, end: 3, href }]);
+    expect(sliced.styles).toEqual([expect.objectContaining({ start: 0, end: 3, style: "bold" })]);
+  });
+
+  it("keeps transcript annotations and links aligned with the expanded end", () => {
+    const cat = "\u{1F431}";
+    const href = "https://example.com";
+    const ir = markdownToIR(`user[Thu 2026-07-02] **A${EMOJI}B** [C${cat}D](${href})`, {
+      assistantTranscriptRoleHeaders: true,
+    });
+    const catStart = ir.text.indexOf(cat);
+    const sliced = sliceMarkdownIR(ir, 0, catStart + 1);
+
+    expect(catStart).toBeGreaterThan(0);
+    expect(sliced.text).toBe(ir.text.slice(0, catStart + cat.length));
+    expect(sliced.text.isWellFormed()).toBe(true);
+    expect(sliced.annotations).toEqual(ir.annotations);
+    expect(sliced.styles).toEqual(ir.styles);
+    expect(sliced.links).toEqual([
+      expect.objectContaining({
+        start: ir.links[0]?.start,
+        end: sliced.text.length,
+        href,
+      }),
+    ]);
+  });
+
+  it("preserves nested list markers when the final item ends inside a surrogate pair", () => {
+    const cat = "\u{1F431}";
+    const ir = markdownToIR(`- **A${EMOJI}B**\n  - [x] **C${cat}D**`);
+    const catStart = ir.text.indexOf(cat);
+    const sliced = sliceMarkdownIR(ir, 0, catStart + 1);
+
+    expect(catStart).toBeGreaterThan(0);
+    expect(sliced.text).toBe(ir.text.slice(0, catStart + cat.length));
+    expect(sliced.text.isWellFormed()).toBe(true);
+    expect(sliced.listItems).toHaveLength(ir.listItems?.length ?? 0);
+    expect(sliced.listItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "bullet", depth: 0 }),
+        expect.objectContaining({ kind: "bullet", depth: 1 }),
+      ]),
+    );
+    expect(sliced.styles).toEqual(
+      expect.arrayContaining([expect.objectContaining({ style: "bold", end: sliced.text.length })]),
+    );
+
+    const blocks = Reflect.get(ir, "blocks") as Array<{ start: number; end: number }>;
+    const slicedBlocks = Reflect.get(sliced, "blocks") as
+      | Array<{ start: number; end: number }>
+      | undefined;
+    if (blocks?.length) {
+      expect(slicedBlocks).toBeDefined();
+      expect(
+        slicedBlocks?.every((block) => block.start >= 0 && block.end <= sliced.text.length),
+      ).toBe(true);
+    }
+  });
+
+  it("rejoins the existing surrogate-safe transport chunks without duplicating emoji", () => {
+    const ir = markdownToIR(`a${EMOJI}b\u{1F431}c`);
+
+    for (const mode of ["hard", "preferred"] as const) {
+      for (const limit of [1, 2, 3, 4]) {
+        const chunks = chunkTextRanges(ir.text, { limit, mode }).map(({ start, end }) =>
+          sliceMarkdownIR(ir, start, end),
+        );
+
+        expect(chunks.every((chunk) => chunk.text.isWellFormed())).toBe(true);
+        expect(chunks.map((chunk) => chunk.text).join("")).toBe(ir.text);
+      }
+    }
   });
 
   it("preserves normalized empty slice with mixed positive/negative indices", () => {
