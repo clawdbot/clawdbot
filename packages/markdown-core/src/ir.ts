@@ -1447,38 +1447,41 @@ function sliceListMarker(
   return sliceEnd > sliceStart ? { start: sliceStart - start, end: sliceEnd - start } : undefined;
 }
 
-export function sliceMarkdownIR(
-  ir: MarkdownIR,
-  startOffset: number,
-  endOffset: number,
-): MarkdownIR {
+export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
   const textLength = ir.text.length;
-  let start =
-    startOffset < 0 ? Math.max(textLength + startOffset, 0) : Math.min(startOffset, textLength);
-  let end = endOffset < 0 ? Math.max(textLength + endOffset, 0) : Math.min(endOffset, textLength);
+  let normalizedStart = start < 0 ? Math.max(textLength + start, 0) : Math.min(start, textLength);
+  let normalizedEnd = end < 0 ? Math.max(textLength + end, 0) : Math.min(end, textLength);
 
-  if (start < end) {
+  if (normalizedStart < normalizedEnd) {
     // Normalize once so text, formatting, links, and structural metadata share
     // the same complete-code-point boundaries.
-    const safeStart = avoidTrailingHighSurrogateBreak(ir.text, 0, start);
-    if (safeStart !== start) {
-      start = safeStart < start ? safeStart : start - 1;
+    const safeStart = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedStart);
+    if (safeStart !== normalizedStart) {
+      normalizedStart = safeStart < normalizedStart ? safeStart : normalizedStart - 1;
     }
 
-    const safeEnd = avoidTrailingHighSurrogateBreak(ir.text, 0, end);
-    if (safeEnd !== end) {
-      end = safeEnd > end ? safeEnd : end + 1;
+    const safeEnd = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedEnd);
+    if (safeEnd !== normalizedEnd) {
+      normalizedEnd = safeEnd > normalizedEnd ? safeEnd : normalizedEnd + 1;
     }
   }
 
   const metadataIR = ir as MarkdownIRWithMetadata;
-  const annotations = sliceAnnotationSpans(ir.annotations ?? [], start, end);
+  const annotations = sliceAnnotationSpans(ir.annotations ?? [], normalizedStart, normalizedEnd);
   const listItems = ((ir.listItems ?? []) as MarkdownListItemWithMetadata[]).flatMap((item) => {
-    const listMarker = item.listMarker ? sliceListMarker(item.listMarker, start, end) : undefined;
-    const taskMarker = item.taskMarker ? sliceListMarker(item.taskMarker, start, end) : undefined;
+    const listMarker = item.listMarker
+      ? sliceListMarker(item.listMarker, normalizedStart, normalizedEnd)
+      : undefined;
+    const taskMarker = item.taskMarker
+      ? sliceListMarker(item.taskMarker, normalizedStart, normalizedEnd)
+      : undefined;
     const content =
       item.contentStart !== undefined && item.contentEnd !== undefined
-        ? sliceListMarker({ start: item.contentStart, end: item.contentEnd }, start, end)
+        ? sliceListMarker(
+            { start: item.contentStart, end: item.contentEnd },
+            normalizedStart,
+            normalizedEnd,
+          )
         : undefined;
     return listMarker || taskMarker
       ? [
@@ -1491,8 +1494,12 @@ export function sliceMarkdownIR(
               ...(item.listId !== undefined ? { listId: item.listId } : {}),
               ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
               ...(item.depth !== undefined ? { depth: item.depth } : {}),
-              ...(item.start !== undefined ? { start: Math.max(item.start, start) - start } : {}),
-              ...(item.end !== undefined ? { end: Math.min(item.end, end) - start } : {}),
+              ...(item.start !== undefined
+                ? { start: Math.max(item.start, normalizedStart) - normalizedStart }
+                : {}),
+              ...(item.end !== undefined
+                ? { end: Math.min(item.end, normalizedEnd) - normalizedStart }
+                : {}),
             },
             {
               ...(content ? { contentStart: content.start, contentEnd: content.end } : {}),
@@ -1510,18 +1517,20 @@ export function sliceMarkdownIR(
   const blocks = (metadataIR.blocks ?? []).flatMap((block) => {
     if (block.start === block.end) {
       const containsPoint =
-        start === end ? block.start === start : block.start >= start && block.start < end;
+        normalizedStart === normalizedEnd
+          ? block.start === normalizedStart
+          : block.start >= normalizedStart && block.start < normalizedEnd;
       return containsPoint
-        ? [{ ...block, start: block.start - start, end: block.end - start }]
+        ? [{ ...block, start: block.start - normalizedStart, end: block.end - normalizedStart }]
         : [];
     }
-    const sliced = sliceListMarker(block, start, end);
+    const sliced = sliceListMarker(block, normalizedStart, normalizedEnd);
     return sliced ? [{ ...block, ...sliced }] : [];
   });
   const sliced: MarkdownIR = {
-    text: ir.text.slice(start, end),
-    styles: sliceStyleSpans(ir.styles, start, end),
-    links: sliceLinkSpans(ir.links, start, end),
+    text: ir.text.slice(normalizedStart, normalizedEnd),
+    styles: sliceStyleSpans(ir.styles, normalizedStart, normalizedEnd),
+    links: sliceLinkSpans(ir.links, normalizedStart, normalizedEnd),
     ...(annotations.length > 0 ? { annotations } : {}),
     ...(listItems.length > 0 ? { listItems } : {}),
   };
