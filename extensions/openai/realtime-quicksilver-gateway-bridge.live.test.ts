@@ -45,6 +45,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       let ready!: () => void;
       let audioObserved!: (source: string) => void;
       let fail!: (error: Error) => void;
+      const eventTypes: string[] = [];
       const readyResult = new Promise<void>((resolve) => {
         ready = resolve;
       });
@@ -52,7 +53,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
         audioObserved = resolve;
       });
       const failureResult = new Promise<never>((_resolve, reject) => {
-        fail = reject;
+        fail = (error) => reject(new Error(`${error.message}; events=${eventTypes.join(",")}`));
       });
       const bridge = new OpenAIQuicksilverGatewayBridge({
         providerConfig: {},
@@ -67,6 +68,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
           }
         },
         onClearAudio: () => undefined,
+        onEvent: (event) => eventTypes.push(event.type),
         onReady: ready,
         onError: fail,
         runAgentConsult: async () => ({ text: "The live transport check is complete." }),

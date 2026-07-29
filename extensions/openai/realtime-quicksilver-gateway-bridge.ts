@@ -326,6 +326,10 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       }
       return;
     }
+    if (event.kind === "audio") {
+      // The negotiated RTP track owns audio delivery; sideband audio would duplicate it.
+      return;
+    }
     this.startDelegation(event.id, event.prompt);
   }
 
