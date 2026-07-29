@@ -30,6 +30,7 @@ import {
   resolveSystemAgentGreeting,
 } from "../../system-agent/greeting.js";
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
+import { shouldAlwaysApproveDelegatedSystemAgentOperations } from "../../system-agent/approval-policy.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
@@ -565,10 +566,15 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           }
           // The gateway surface must never install/restart its own daemon; the
           // engine's setup path honors this via surface: "gateway".
+          const delegated = params.delegation !== undefined;
           const engine = new SystemAgentChatEngine({
             surface: "gateway",
             verifiedInference: inference.binding,
-            operatorApprovalOnly: params.delegation !== undefined,
+            operatorApprovalOnly: delegated,
+            yes: shouldAlwaysApproveDelegatedSystemAgentOperations({
+              config: context.getRuntimeConfig(),
+              delegated,
+            }),
           });
           // `reset: true` keeps the durable logbook but deliberately starts
           // model context clean; only ordinary fresh sessions receive its tail.
