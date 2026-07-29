@@ -204,6 +204,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           } else {
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
+            // Ordinary restarts begin a fresh recovery record; cold pending
+            // snapshots still mark their continuation as already consumed.
             record.pendingRestartContinuationConsumed = continuingPendingRestart;
             restartRecords.set(key, record);
           }

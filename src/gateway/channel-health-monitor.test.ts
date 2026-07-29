@@ -48,6 +48,7 @@ function snapshotWith(
 }
 
 const DEFAULT_CHECK_INTERVAL_MS = 5_000;
+const ONE_HOUR_MS = 60 * 60_000;
 
 function createSnapshotManager(
   accounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>>,
@@ -645,6 +646,53 @@ describe("channel-health-monitor", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("allows each new restart record one pending recovery continuation", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      cooldownCycles: 1,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+
+    account.running = true;
+    account.connected = true;
+    account.restartPending = false;
+    account.reconnectAttempts = undefined;
+    account.lastStartAt = Date.now();
+    vi.setSystemTime(Date.now() + ONE_HOUR_MS + 1);
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+
+    account.running = true;
+    account.connected = false;
+    account.restartPending = false;
+    account.reconnectAttempts = undefined;
+    account.lastStartAt = Date.now() - 300_000;
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(3);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(4);
     monitor.stop();
   });
 
