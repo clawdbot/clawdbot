@@ -52,7 +52,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Webhook durable acceptance markers:** mark successfully admitted Zalo, Google Chat, SMS, Feishu, Nextcloud Talk, and Synology Chat requests so upstream retries stop only after the owning ingress path has accepted the event. (#115586) Thanks @edenfunf.
 - **macOS and Control UI keyboard navigation:** let Tab traverse links and controls inside embedded Dashboard, browser, and Canvas web views, and keep shortcuts working on non-Latin keyboard layouts without firing during IME composition.
 - **Control UI session diffs:** hide unchanged checkout modifications and untracked files that already existed when a thread started, so the diff panel attributes only files touched by that session. Fixes #115628.
 - **Code Mode small-model repair:** give malformed pre-dispatch `exec` calls one bounded correction turn, expose typed failure-phase and bridge-dispatch evidence, and stop retries after nested tools begin. Fixes #115311.
