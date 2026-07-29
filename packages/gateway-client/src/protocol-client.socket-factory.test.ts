@@ -145,6 +145,27 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("does not schedule a retry over a socket restarted by an error callback", async () => {
+    vi.useFakeTimers();
+    const { client, createSocket } = createSocketFactoryHarness({
+      initialFailures: 1,
+      onConnectError: () => client.start(),
+      retryFactoryError: () => true,
+    });
+
+    client.start();
+
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    expect(client.connected).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    expect(client.connected).toBe(true);
+
+    client.stop();
+  });
+
   it("keeps socket factory failures terminal unless a transport explicitly opts in", async () => {
     vi.useFakeTimers();
     const { client, createSocket, onConnectError } = createSocketFactoryHarness({

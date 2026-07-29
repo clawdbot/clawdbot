@@ -382,8 +382,13 @@ export class GatewayProtocolClient<TPlan> {
       if (this.opts.rethrowSocketFactoryError?.(normalized)) {
         throw normalized;
       }
-      // Construction has no close event; only the transport owner can classify retry safety.
-      if (this.opts.shouldRetrySocketFactoryError?.(normalized) && !this.stopped) {
+      // Callbacks can stop or restart synchronously; never schedule over their replacement socket.
+      if (
+        this.opts.shouldRetrySocketFactoryError?.(normalized) &&
+        !this.stopped &&
+        !this.socket &&
+        !this.reconnectSignal
+      ) {
         this.scheduleReconnect();
       }
       return;
