@@ -100,14 +100,15 @@ describe("before_prompt_build reentrancy", () => {
       releaseDetached = resolve;
     });
     let detachedDispatch: Promise<unknown> | undefined;
-    const promptBuild = vi.fn(async (event: { prompt: string }) => {
-      if (event.prompt === "outer") {
+    const promptBuild = vi.fn(async (event: unknown) => {
+      const prompt = (event as { prompt: string }).prompt;
+      if (prompt === "outer") {
         detachedDispatch = (async () => {
           await detachedGate;
           return await runner.runBeforePromptBuild(promptEvent("detached"), TEST_PLUGIN_AGENT_CTX);
         })();
       }
-      return { prependContext: event.prompt };
+      return { prependContext: prompt };
     });
     const runner = createHookRunner(
       createMockPluginRegistry([
