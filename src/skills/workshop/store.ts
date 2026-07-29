@@ -27,11 +27,7 @@ import {
   MAX_PROPOSAL_SUPPORT_FILES,
   PROPOSAL_DRAFT_FILE,
 } from "./store-record.js";
-import {
-  appendSkillProposalEvent,
-  listStoredSkillProposalEvents,
-  type NewSkillProposalEvent,
-} from "./store-sqlite-event.js";
+import { appendSkillProposalEvent, type NewSkillProposalEvent } from "./store-sqlite-event.js";
 import {
   insertProposal,
   parseSkillProposalRow,
@@ -58,9 +54,6 @@ import {
   type SkillProposalSupportFile,
   type SkillProposalSupportFileInput,
   type SkillProposalEvent,
-  type SkillProposalEvaluation,
-  type SkillProposalEventsListInput,
-  type SkillProposalEventsListResult,
 } from "./types.js";
 
 const WORKSHOP_REL_DIR = "skill-workshop";
@@ -377,55 +370,6 @@ export async function updateSkillProposalRecord(params: {
   );
 }
 
-export function recordSkillProposalEvaluation(params: {
-  proposalId: string;
-  expectedProposedVersion: string;
-  expectedRevisionHash: string;
-  evaluation: SkillProposalEvaluation;
-  event: NewSkillProposalEvent;
-  store?: SkillWorkshopStoreOptions;
-}): { record: SkillProposalRecord; event: SkillProposalEvent } {
-  assertProposalId(params.proposalId);
-  ensureSkillWorkshopSchema(params.store);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-      const current = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("skill_workshop_proposals")
-          .selectAll()
-          .where("proposal_id", "=", params.proposalId),
-      );
-      const record = current ? parseSkillProposalRow(current) : null;
-      if (!current || !record) {
-        throw new Error(`Skill proposal not found: ${params.proposalId}`);
-      }
-      if (
-        record.status !== "pending" ||
-        record.proposedVersion !== params.expectedProposedVersion ||
-        hashSkillProposalRevision(record) !== params.expectedRevisionHash
-      ) {
-        throw new Error(
-          "Skill proposal changed while evaluation was running; discard the stale evaluation and retry.",
-        );
-      }
-      const next: SkillProposalRecord = {
-        ...record,
-        updatedAt: params.evaluation.completedAt,
-        evaluation: params.evaluation,
-      };
-      updateProposal(db, current, next);
-      return {
-        record: next,
-        event: appendSkillProposalEvent(db, params.event),
-      };
-    },
-    databaseOptions(params.store),
-    { operationLabel: "skill-workshop.proposal.evaluate" },
-  );
-}
-
 export async function withSkillProposalTargetLock<T>(
   record: SkillProposalRecord,
   fn: () => Promise<T>,
@@ -598,13 +542,6 @@ async function reconcileInterruptedApply(
     databaseOptions(options),
     { operationLabel: "skill-workshop.apply.reconcile" },
   );
-}
-
-export function readSkillProposalEvents(
-  input: SkillProposalEventsListInput,
-  options: SkillWorkshopStoreOptions = {},
-): SkillProposalEventsListResult {
-  return listStoredSkillProposalEvents(input, options);
 }
 
 export async function readProposalSupportFiles(

@@ -18,12 +18,11 @@ import {
   readSkillProposalTargetTreeSha256,
 } from "./proposal-bundle.js";
 import { readRequiredProposal } from "./service-query.js";
+import { readSkillProposalEvents, recordSkillProposalEvaluation } from "./store-evaluation.js";
 import { assertSkillProposalEvaluationWithinLimit } from "./store-record.js";
 import {
   hashSkillProposalContent,
   readProposalSupportFiles,
-  readSkillProposalEvents,
-  recordSkillProposalEvaluation,
   withSkillProposalTargetLock,
 } from "./store.js";
 import type {
