@@ -28,7 +28,10 @@ working.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
 - Migration supports only `openai-curated` plugins that it observed as
-  source-installed in the source Codex home.
+  source-installed in the source Codex home. Codex serves the same catalog to
+  API-key and Bedrock accounts under the `openai-api-curated` wire name;
+  OpenClaw treats both names as the one curated catalog, so configured
+  `openai-curated` plugins resolve from either.
 - Manually configured `workspace-directory` plugins must already appear
   installed and enabled under their exact marketplace-qualified identity in
   `plugin/installed`. Their owned apps must be accessible and callable for the

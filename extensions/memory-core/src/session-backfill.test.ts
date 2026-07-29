@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -83,6 +84,19 @@ async function createIsolatedWorkspace(prefix: string): Promise<string> {
   return workspaceDir;
 }
 
+function hashStagedContent(
+  entries: Awaited<ReturnType<typeof readShortTermRecallEntries>>,
+): string {
+  const content = entries
+    .map((entry) => ({
+      claimHash: entry.claimHash,
+      provenance: entry.provenance,
+      snippet: entry.snippet,
+    }))
+    .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return createHash("sha256").update(JSON.stringify(content)).digest("hex");
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
@@ -90,8 +104,8 @@ afterEach(() => {
 });
 
 describe("runSessionBackfill", () => {
-  it("keeps the CLI export on the canonical shared executor", () => {
-    expect(runSessionBackfill).toBe(executeSessionBackfill);
+  it("keeps CLI draining separate from the single-batch executor", () => {
+    expect(runSessionBackfill).not.toBe(executeSessionBackfill);
   });
 
   it("keeps REM preview mode mutually exclusive with apply", async () => {
@@ -190,6 +204,38 @@ describe("runSessionBackfill", () => {
     expect(exhausted.continuation).toEqual({ advanced: false, hasMore: false });
   });
 
+  it("drains at least three internal batches in one CLI executor invocation", async () => {
+    const workspaceDir = await createIsolatedWorkspace("cli-drain-");
+    await seedCanonicalTranscript(
+      "cli-drain",
+      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
+        role: "user" as const,
+        content: `CLI drain note for ${day}`,
+        timestamp: `${day}T12:00:00.000Z`,
+        owner: true,
+      })),
+    );
+
+    const applied = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      limitDays: 1,
+      timezone: "UTC",
+    });
+    const preview = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      limitDays: 1,
+      timezone: "UTC",
+    });
+
+    expect(applied.batchCount).toBe(3);
+    expect(applied.batches?.map((batch) => batch.candidates)).toEqual([1, 1, 1]);
+    expect(applied.candidateCount).toBe(3);
+    expect(preview.candidateCount).toBe(0);
+  });
+
   it("does not advance the cursor past messages excluded by a date range", async () => {
     const workspaceDir = await createIsolatedWorkspace("range-cursor-");
     await seedCanonicalTranscript("range-cursor", [
@@ -247,8 +293,9 @@ describe("runSessionBackfill", () => {
         timezone: "UTC",
       });
 
-    expect((await run()).candidateCount).toBe(80);
-    expect((await run()).candidateCount).toBe(20);
+    const drained = await run();
+    expect(drained.candidateCount).toBe(100);
+    expect(drained.batchCount).toBe(2);
     expect((await run()).candidateCount).toBe(0);
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams.match(/openclaw:dreaming:backfill-entry/g)).toHaveLength(2);
@@ -461,6 +508,7 @@ describe("runSessionBackfill", () => {
       timezone: "UTC",
     });
     const afterFirst = await readShortTermRecallEntries({ workspaceDir });
+    const firstContentHash = hashStagedContent(afterFirst);
 
     // Count-level proof stays stable across the sibling claim-key implementation.
     expect(first.stagedEntries).toBe(1);
@@ -494,15 +542,15 @@ describe("runSessionBackfill", () => {
     expect(await fs.readFile(dreamsPath, "utf-8")).not.toContain(
       "openclaw:dreaming:backfill-entry",
     );
-    expect(
-      (
-        await runSessionBackfill({
-          agentId: "main",
-          workspaceDir,
-          apply: true,
-          timezone: "UTC",
-        })
-      ).candidateCount,
-    ).toBe(0);
+    const reapplied = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
+      timezone: "UTC",
+    });
+    const afterReapply = await readShortTermRecallEntries({ workspaceDir });
+    expect(reapplied.candidateCount).toBe(2);
+    expect(hashStagedContent(afterReapply)).toBe(firstContentHash);
   });
 });

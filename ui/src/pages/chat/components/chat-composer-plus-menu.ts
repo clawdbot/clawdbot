@@ -1,5 +1,6 @@
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
+import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
 import { pathForPluginsHubTab, pathForRoute } from "../../../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
@@ -10,7 +11,9 @@ import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import {
   nextBooleanToolOverrides,
+  nextMcpToolsDenyOverrides,
   nextWebSearchToolOverrides,
+  readOwnEntry,
   resolveToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import { clickComposerInput, type ChatAttachmentControlsProps } from "./chat-attachments.ts";
@@ -40,6 +43,10 @@ export type ChatComposerPlusMenuProps = {
   skillsLoading: boolean;
   skillsError: boolean;
   mcpServers: readonly McpServerSummary[];
+  toolsEffectiveResult: ToolsEffectiveResult | null;
+  toolsEffectiveLoading: boolean;
+  toolsEffectiveError: boolean;
+  toolAccessMutationBlockedReason: string | null;
   webSearchBaseEnabled: boolean;
   mutationBlockedReason: string | null;
   canAdmin: boolean;
@@ -51,6 +58,7 @@ export type ChatComposerPlusMenuProps = {
   onPatchToolOverrides: (next: SessionToolOverrides | null) => void;
   onNavigate: (routeId: MenuRoute, options?: ApplicationNavigationOptions) => void;
   onAddServer?: () => void;
+  onEnsureToolAccess?: (serverName: string) => void;
   onOpenToolAccess?: (serverName: string) => void;
 };
 
@@ -80,7 +88,10 @@ function renderBackRow() {
 
 function renderRootView(props: ChatComposerPlusMenuProps) {
   const connectorCount = props.mcpServers.filter((server) =>
-    resolveToolOverrideState(server.enabled, props.toolOverrides?.mcpServers?.[server.name]),
+    resolveToolOverrideState(
+      server.enabled,
+      readOwnEntry(props.toolOverrides?.mcpServers, server.name),
+    ),
   ).length;
   const hasSkillOverrides = Object.keys(props.toolOverrides?.skills ?? {}).length > 0;
   const enabledSkillCount = props.skills?.filter((skill) => skill.enabled).length ?? 0;
@@ -225,7 +236,7 @@ function renderConnectorView(props: ChatComposerPlusMenuProps) {
           ${t("chat.composer.menu.noConnectors")}
         </div>`
       : props.mcpServers.map((server, index) => {
-          const override = props.toolOverrides?.mcpServers?.[server.name];
+          const override = readOwnEntry(props.toolOverrides?.mcpServers, server.name);
           const enabled = resolveToolOverrideState(server.enabled, override);
           return html`
             <wa-dropdown-item
@@ -261,7 +272,7 @@ function renderConnectorView(props: ChatComposerPlusMenuProps) {
                   value=${`tools:${index}`}
                 >
                   <span slot="icon" aria-hidden="true">${icons.wrench}</span>
-                  <span>${t("chat.composer.menu.toolAccess")}</span>
+                  <span>${t("chat.composer.menu.toolAccess.label")}</span>
                 </wa-dropdown-item>`
               : nothing}
           `;
@@ -295,6 +306,94 @@ function renderConnectorView(props: ChatComposerPlusMenuProps) {
   `;
 }
 
+function toolsForServer(
+  result: ToolsEffectiveResult | null,
+  serverName: string,
+): ToolsEffectiveEntry[] {
+  return (result?.groups ?? [])
+    .flatMap((group) => group.tools)
+    .filter(
+      (tool): tool is ToolsEffectiveEntry & { mcpToolName: string } =>
+        tool.source === "mcp" && tool.mcpServer === serverName && Boolean(tool.mcpToolName),
+    );
+}
+
+function isToolDenied(props: ChatComposerPlusMenuProps, tool: ToolsEffectiveEntry): boolean {
+  const serverName = tool.mcpServer;
+  const rawToolName = tool.mcpToolName;
+  if (!serverName || !rawToolName) {
+    return false;
+  }
+  if (props.toolOverrides != null) {
+    return (
+      readOwnEntry(props.toolOverrides.mcpToolsDeny, serverName)?.includes(rawToolName) ?? false
+    );
+  }
+  return tool.deniedBySession === true;
+}
+
+function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: string) {
+  const tools = toolsForServer(props.toolsEffectiveResult, serverName);
+  const enabledCount = tools.filter((tool) => !isToolDenied(props, tool)).length;
+  const summary = t(
+    tools.length === 1
+      ? "chat.composer.menu.toolAccess.summaryOne"
+      : "chat.composer.menu.toolAccess.summary",
+    { enabled: String(enabledCount), total: String(tools.length) },
+  );
+  const rows = props.toolsEffectiveLoading
+    ? html`<div class="agent-chat__capability-menu-state" role="status">
+        ${t("chat.composer.menu.toolAccess.loading")}
+      </div>`
+    : props.toolsEffectiveError
+      ? html`<div class="agent-chat__capability-menu-state" role="alert">
+          ${t("chat.composer.menu.toolAccess.loadFailed")}
+        </div>`
+      : tools.length === 0
+        ? html`<div class="agent-chat__capability-menu-state">
+            ${t("chat.composer.menu.toolAccess.noTools")}
+          </div>`
+        : tools.map((tool, index) => {
+            const rawToolName = tool.mcpToolName;
+            const label = tool.label?.trim();
+            const denied = isToolDenied(props, tool);
+            return html`
+              <wa-dropdown-item
+                class="agent-chat__capability-menu-item agent-chat__capability-menu-toggle"
+                value=${`mcp-tool:${index}`}
+                ?disabled=${props.toolAccessMutationBlockedReason !== null}
+                title=${props.toolAccessMutationBlockedReason ?? ""}
+              >
+                <span class="agent-chat__capability-menu-label">
+                  <span>${rawToolName}</span>
+                  ${label && label !== rawToolName
+                    ? html`<span class="agent-chat__capability-menu-note">${label}</span>`
+                    : nothing}
+                </span>
+                <wa-switch
+                  slot="details"
+                  class="agent-chat__capability-menu-switch"
+                  size="s"
+                  tabindex="-1"
+                  .checked=${!denied}
+                  ?disabled=${props.toolAccessMutationBlockedReason !== null}
+                  aria-label=${rawToolName}
+                ></wa-switch>
+              </wa-dropdown-item>
+            `;
+          });
+  return html`
+    ${renderBackRow()}
+    <div class="agent-chat__capability-menu-state">
+      <span class="agent-chat__capability-menu-label">
+        <strong translate="no">${serverName}</strong>
+        <span class="agent-chat__capability-menu-note">${summary}</span>
+      </span>
+    </div>
+    ${rows}
+  `;
+}
+
 function handleMenuSelection(
   event: CustomEvent<{ item: { value?: string } }>,
   props: ChatComposerPlusMenuProps,
@@ -313,7 +412,7 @@ function handleMenuSelection(
   }
   if (value === "back") {
     event.preventDefault();
-    changeView("root");
+    changeView(props.view.startsWith("tools:") ? "connectors" : "root");
     return;
   }
   if (value === "open-skills" || value === "open-connectors") {
@@ -357,7 +456,7 @@ function handleMenuSelection(
     if (server && !props.mutationBlockedReason) {
       const enabled = resolveToolOverrideState(
         server.enabled,
-        props.toolOverrides?.mcpServers?.[server.name],
+        readOwnEntry(props.toolOverrides?.mcpServers, server.name),
       );
       props.onPatchToolOverrides(
         nextBooleanToolOverrides(
@@ -372,9 +471,32 @@ function handleMenuSelection(
     return;
   }
   if (value.startsWith("tools:")) {
+    event.preventDefault();
     const server = props.mcpServers[Number(value.slice("tools:".length))];
     if (server) {
       props.onOpenToolAccess?.(server.name);
+      changeView(`tools:${server.name}`);
+    }
+    return;
+  }
+  if (value.startsWith("mcp-tool:") && props.view.startsWith("tools:")) {
+    event.preventDefault();
+    if (props.toolAccessMutationBlockedReason) {
+      return;
+    }
+    const serverName = props.view.slice("tools:".length);
+    const tool = toolsForServer(props.toolsEffectiveResult, serverName)[
+      Number(value.slice("mcp-tool:".length))
+    ];
+    if (tool?.mcpToolName) {
+      props.onPatchToolOverrides(
+        nextMcpToolsDenyOverrides(
+          props.toolOverrides,
+          serverName,
+          tool.mcpToolName,
+          !isToolDenied(props, tool),
+        ),
+      );
     }
     return;
   }
@@ -395,12 +517,17 @@ function handleMenuSelection(
 
 export function renderChatComposerPlusMenu(props: ChatComposerPlusMenuProps) {
   const view = props.showCapabilities ? props.view : "root";
+  if (view.startsWith("tools:")) {
+    props.onEnsureToolAccess?.(view.slice("tools:".length));
+  }
   const content =
     view === "skills"
       ? renderSkillView(props)
       : view === "connectors"
         ? renderConnectorView(props)
-        : renderRootView(props);
+        : view.startsWith("tools:")
+          ? renderToolAccessView(props, view.slice("tools:".length))
+          : renderRootView(props);
   return html`
     <wa-dropdown
       class="agent-chat__attach-menu agent-chat__capability-menu"

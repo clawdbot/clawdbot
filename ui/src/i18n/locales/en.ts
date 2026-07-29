@@ -2135,7 +2135,7 @@ export const en: TranslationMap = {
       rollbackConfirmDescription:
         "Remove diary entries and staged memories created by session backfill for this agent.",
       rollbackWarning:
-        "Tracked session cursors stay in place, so removed entries will not be staged again.",
+        "Session backfill cursors are rewound, so the same candidates can be staged again.",
       rollbackComplete: "Session backfill rolled back",
       rollbackCounts: "{diary} diary entries and {staged} staged entries removed",
       unavailable: "Session backfill is unavailable on this Gateway.",
@@ -5015,7 +5015,14 @@ export const en: TranslationMap = {
         scopeSessionHint:
           "The server is saved globally disabled and enabled only for this session.",
         scopeEverywhereHint: "The server is saved and enabled for every session.",
-        toolAccess: "Tool access",
+        toolAccess: {
+          label: "Tool access",
+          loading: "Loading tools…",
+          loadFailed: "Couldn’t load tools.",
+          noTools: "No tools available for this connector.",
+          summary: "{enabled} of {total} tools on",
+          summaryOne: "{enabled} of {total} tool on",
+        },
         enabledCount: "{count} on",
         loadingSkills: "Loading skills…",
         skillsLoadFailed: "Couldn’t load skills.",

@@ -99,6 +99,16 @@ type PendingExperienceReview = {
   timer?: ExperienceReviewTimer;
 };
 
+function isAuthProfileMigrationRequiredError(
+  error: unknown,
+): error is { code: "AUTH_PROFILE_MIGRATION_REQUIRED" } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "AUTH_PROFILE_MIGRATION_REQUIRED"
+  );
+}
+
 function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
   // Only harnesses that report both the resolved model and actual host-side
   // Workshop availability may schedule. Other runtimes fail closed here.
@@ -254,14 +264,22 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
               return;
             }
-            pendingBySession.delete(sessionKey);
             await deps.runReview(candidate);
+            if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
+              pendingBySession.delete(sessionKey);
+            }
           } finally {
             reviewInFlight = false;
           }
         })
         .catch((error: unknown) => {
           log.warn(`skill experience review failed: ${String(error)}`);
+          if (isAuthProfileMigrationRequiredError(error)) {
+            if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
+              pendingBySession.delete(sessionKey);
+            }
+            return;
+          }
           if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
             arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
           }

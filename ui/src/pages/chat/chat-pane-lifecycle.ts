@@ -17,6 +17,7 @@ import {
   type BrowserAnnotationDraft,
 } from "../../components/browser/browser-annotation.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { resolveChatPaneObserverRunId } from "../../lib/observer-digest.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -319,7 +320,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       event.shiftKey &&
       event.metaKey &&
       !event.ctrlKey &&
-      event.key.toLowerCase() === "b"
+      resolveAsciiShortcutKey(event) === "b"
     ) {
       const state = this.state;
       if (!state) {

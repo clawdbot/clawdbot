@@ -34,6 +34,7 @@ const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const resolveOpenClawWrapperPathMock = vi.hoisted(() => vi.fn());
 const formatGatewayServiceStartRepairIssuesMock = vi.hoisted(() => vi.fn());
 const defaultRuntimeLogMock = vi.hoisted(() => vi.fn());
+const assertGatewayServiceMutationAllowedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: buildGatewayInstallPlanMock,
@@ -64,6 +65,10 @@ vi.mock("../../daemon/service.js", () => ({
   formatGatewayServiceStartRepairIssues: formatGatewayServiceStartRepairIssuesMock,
 }));
 
+vi.mock("../../infra/gateway-supervision.js", () => ({
+  assertGatewayServiceMutationAllowed: assertGatewayServiceMutationAllowedMock,
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: defaultRuntimeLogMock },
 }));
@@ -87,6 +92,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     resolveOpenClawWrapperPathMock.mockReset();
     formatGatewayServiceStartRepairIssuesMock.mockReset();
     defaultRuntimeLogMock.mockClear();
+    assertGatewayServiceMutationAllowedMock.mockReset();
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
       tokenRefConfigured: false,

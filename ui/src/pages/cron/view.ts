@@ -447,7 +447,7 @@ function renderListTabs(props: CronProps) {
       { value: "activity", label: t("cron.list.activityTab"), testId: "cron-list-tab-activity" },
     ],
     ariaLabel: t("cron.list.viewLabel"),
-    tabs: { idPrefix: "cron-list-tab-", panelId: "cron-list-panel" },
+    tabs: { id: "cron-list", panelId: "cron-list-panel" },
     onChange: props.onListTabChange,
   });
 }
@@ -972,7 +972,7 @@ function renderDetailTabs(props: CronProps) {
       { value: "history", label: t("cron.detail.historyTitle"), testId: "cron-detail-tab-history" },
     ],
     ariaLabel: t("cron.detail.tabsLabel"),
-    tabs: { idPrefix: "cron-detail-tab-", panelId: "cron-detail-panel" },
+    tabs: { id: "cron-detail", panelId: "cron-detail-panel", variant: "sub" },
     onChange: props.onDetailTabChange,
   });
 }

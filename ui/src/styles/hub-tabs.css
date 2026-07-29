@@ -13,6 +13,10 @@ wa-tab-group.hub-tabs::part(tabs) {
   gap: var(--space-2);
 }
 
+wa-tab-group.hub-tabs--sub::part(tabs) {
+  gap: var(--space-1);
+}
+
 wa-tab.hub-tab {
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
@@ -26,6 +30,33 @@ wa-tab.hub-tab::part(base) {
   gap: 6px;
   font: inherit;
   color: inherit;
+}
+
+.hub-tabs--sub wa-tab.hub-tab {
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+}
+
+.hub-tabs--sub wa-tab.hub-tab::part(base) {
+  padding: 3px var(--space-2) var(--space-1);
+}
+
+.hub-tab__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+wa-tab.hub-tab[active] .hub-tab__badge {
+  background: var(--accent-subtle);
+  color: var(--accent);
 }
 
 wa-tab.hub-tab:hover {

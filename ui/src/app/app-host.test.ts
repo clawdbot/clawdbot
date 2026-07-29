@@ -844,7 +844,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
     shell.commandPaletteElement = element;
     Object.defineProperty(shell, "updateComplete", {
-      configurable: true,
       get: () => Promise.resolve(true),
     });
     Object.defineProperty(shell, "commandPalette", {
@@ -855,7 +854,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
           : undefined,
     });
     const event = new KeyboardEvent("keydown", {
-      key: "k",
+      key: "л",
+      code: "KeyK",
       ctrlKey: true,
       cancelable: true,
     });

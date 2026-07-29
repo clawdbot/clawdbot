@@ -1090,6 +1090,60 @@ async function runNonStreamingChatSend(params: {
   return chatCall?.[1] as Record<string, any> | undefined;
 }
 
+async function expectUnpersistedAgentRunFinal(params: {
+  transcriptPrefix: string;
+  idempotencyKey: string;
+  payload: (typeof mockState.dispatchedReplies)[number]["payload"];
+  staleAudio?: boolean;
+}) {
+  const transcriptDir = await createTranscriptFixture(params.transcriptPrefix);
+  const staleAudioPath = path.join(transcriptDir, "stale.mp3");
+  mockState.config = { agents: { defaults: { workspace: transcriptDir } } };
+  mockState.triggerAgentRunStart = true;
+  mockState.dispatchedReplies = [
+    {
+      kind: "final",
+      payload: {
+        ...params.payload,
+        ...(params.staleAudio
+          ? {
+              mediaUrl: staleAudioPath,
+              mediaUrls: [staleAudioPath],
+              trustedLocalMedia: true,
+            }
+          : {}),
+      },
+    },
+  ];
+  const { send } = createChatRequestFixture();
+  await send({ idempotencyKey: params.idempotencyKey, expectBroadcast: false, waitFor: "dedupe" });
+
+  // Agent-run delivery is a live projection; message_end alone owns persisted assistant turns.
+  expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
+  expect(
+    readTranscriptJsonLines(mockState.transcriptPath).filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    ),
+  ).toStrictEqual([]);
+}
+
+async function expectImageOnlyFinal(params: {
+  transcriptPrefix: string;
+  idempotencyKey: string;
+  finalPayload: NonNullable<typeof mockState.finalPayload>;
+}) {
+  await createTranscriptFixture(params.transcriptPrefix);
+  mockState.finalPayload = params.finalPayload;
+  const { send } = createChatRequestFixture();
+  const payload = await send({ idempotencyKey: params.idempotencyKey });
+  const content = getMessageContent(payload);
+  expect(getMessage(payload)?.role).toBe("assistant");
+  expect(content[0]).toEqual({ type: "text", text: "Image reply" });
+  expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
+}
+
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
     mockState.config = {};
@@ -2111,85 +2165,22 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {
-    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
-    const staleAudioPath = path.join(transcriptDir, "stale.mp3");
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
-          mediaUrl: staleAudioPath,
-          mediaUrls: [staleAudioPath],
-          trustedLocalMedia: true,
-        },
-      },
-    ];
-    const { send } = createChatRequestFixture();
-
-    await send({
+    await expectUnpersistedAgentRunFinal({
+      transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
-      expectBroadcast: false,
-      waitFor: "dedupe",
+      payload: {
+        text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+      },
+      staleAudio: true,
     });
-
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    // Agent-run delivery is a live projection; message_end owns persisted
-    // assistant transcript entries, including stale media/text final payloads.
-    expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
-    const assistantEntries = transcriptLines.filter(
-      (entry) =>
-        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-        (entry as { role?: string }).role === "assistant",
-    );
-    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("does not mirror normal agent-run final text from live delivery", async () => {
-    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-text-only-");
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: "It's 11:52 AM EDT.",
-        },
-      },
-    ];
-    const { send } = createChatRequestFixture();
-
-    await send({
+    await expectUnpersistedAgentRunFinal({
+      transcriptPrefix: "openclaw-chat-send-agent-text-only-",
       idempotencyKey: "idem-agent-text-only",
-      expectBroadcast: false,
-      waitFor: "dedupe",
+      payload: { text: "It's 11:52 AM EDT." },
     });
-
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    // Normal agent-run final text must not be mirrored into JSONL by WebChat;
-    // The agent runtime persists the model-visible assistant turn from message_end.
-    expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
-    const assistantEntries = transcriptLines.filter(
-      (entry) =>
-        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-        (entry as { role?: string }).role === "assistant",
-    );
-    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("broadcasts agent-run internal-ui source replies without duplicating transcript", async () => {
@@ -4819,54 +4810,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("preserves media-only final replies in the final broadcast message", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-only-final-");
-    mockState.finalPayload = { mediaUrl: "data:image/png;base64,cG5n" };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-only-final-",
       idempotencyKey: "idem-media-only-final",
+      finalPayload: { mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
   });
 
   it("strips NO_REPLY from transcript text when final replies only carry media", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-only-silent-final-");
-    mockState.finalPayload = {
-      text: "NO_REPLY",
-      mediaUrl: "data:image/png;base64,cG5n",
-    };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-only-silent-final-",
       idempotencyKey: "idem-media-only-silent-final",
+      finalPayload: { text: "NO_REPLY", mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
   });
 
   it("preserves reply tags in transcript updates for media replies while stripping them from the broadcast", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-reply-tags-");
-    mockState.finalPayload = {
-      replyToCurrent: true,
-      mediaUrl: "data:image/png;base64,cG5n",
-    };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-reply-tags-",
       idempotencyKey: "idem-media-reply-tags",
+      finalPayload: { replyToCurrent: true, mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&

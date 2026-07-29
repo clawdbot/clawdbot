@@ -87,6 +87,11 @@ const mocks = await vi.hoisted(async () => {
 
 const { runtimeLogs } = mocks;
 
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: () => true };
+});
+
 vi.mock("./daemon-cli/probe.js", () => ({
   probeGatewayStatus: (opts: unknown) => probeGatewayStatus(opts),
 }));

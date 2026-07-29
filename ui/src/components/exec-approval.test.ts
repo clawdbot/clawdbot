@@ -162,7 +162,7 @@ describe("openclaw-exec-approval", () => {
 
     modal.dispatchEvent(chord("Enter"));
     modal.dispatchEvent(chord("Enter", { shiftKey: true }));
-    modal.dispatchEvent(chord("d", { metaKey: false, ctrlKey: true }));
+    modal.dispatchEvent(chord("в", { code: "KeyD", metaKey: false, ctrlKey: true }));
 
     expect(onDecision.mock.calls).toEqual([
       ["approval-1", "allow-once"],

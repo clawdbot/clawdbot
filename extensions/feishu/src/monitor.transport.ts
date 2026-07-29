@@ -5,7 +5,6 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
-import { isFeishuIngressEnvelopeDurable } from "./feishu-ingress.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import {
   applyBasicWebhookRequestGuards,
@@ -43,8 +42,6 @@ type MonitorTransportParams = {
   statusSink?: FeishuStatusSink;
 };
 
-const FEISHU_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
-const FEISHU_WEBHOOK_ACCEPTED_VALUE = "durable";
 const FEISHU_WS_RECONNECT_INITIAL_DELAY_MS = 1_000;
 const FEISHU_WS_RECONNECT_MAX_DELAY_MS = 30_000;
 const FEISHU_WS_LOG_ERROR_MAX_LENGTH = 500;
@@ -438,16 +435,10 @@ export async function monitorWebhook({
           return;
         }
 
-        const envelope = buildFeishuWebhookEnvelope(req, payload);
-        const value = await eventDispatcher.invoke(envelope, {
+        const value = await eventDispatcher.invoke(buildFeishuWebhookEnvelope(req, payload), {
           needCheck: false,
         });
         if (!res.headersSent) {
-          if (isFeishuIngressEnvelopeDurable(envelope, encryptKey)) {
-            // Only durably admitted envelopes claim the marker (#104407);
-            // challenges and non-durable event types ack without it.
-            res.setHeader(FEISHU_WEBHOOK_ACCEPTED_HEADER, FEISHU_WEBHOOK_ACCEPTED_VALUE);
-          }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json; charset=utf-8");
           res.end(JSON.stringify(value));

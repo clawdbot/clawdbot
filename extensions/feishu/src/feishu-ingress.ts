@@ -122,23 +122,6 @@ function decryptEnvelope(
   }
 }
 
-/** Mirrors invoke's admission predicate so the webhook transport can mark durable acks. */
-export function isFeishuIngressEnvelopeDurable(
-  data: unknown,
-  encryptKey: string | undefined,
-): boolean {
-  let rawEnvelope: string | undefined;
-  try {
-    rawEnvelope = JSON.stringify(data);
-  } catch {
-    return false;
-  }
-  if (typeof rawEnvelope !== "string") {
-    return false;
-  }
-  return inspectFeishuIngressEnvelope(rawEnvelope, encryptKey, true) !== null;
-}
-
 function inspectFeishuIngressEnvelope(
   rawEnvelope: string,
   encryptKey: string | undefined,
