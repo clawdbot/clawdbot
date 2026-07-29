@@ -485,8 +485,8 @@ describe("OpenClaw shell route session commits", () => {
         agents: {
           state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
         },
-        agentSelection: { state: { selectedId: null } },
-        gateway: { snapshot },
+        agentSelection: { set: vi.fn(), state: { selectedId: null } },
+        gateway: { setSessionKey: vi.fn(), snapshot },
         sessions: { state: { result: null } },
         replace,
       } as unknown as ApplicationContext,

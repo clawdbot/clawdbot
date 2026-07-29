@@ -64,15 +64,19 @@ import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
+  findUiSessionRow,
   resolveSessionPreferredFaceForKey,
+  resolveSessionNavigationAgentId,
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import {
+  buildAgentMainSessionKey,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
+  uiSessionEventMatches,
 } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -681,6 +685,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       .watch(
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
+        (sessions) => this.recoverDeletedActiveSession(sessions.state),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -860,6 +865,13 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
+    if (event.event === "sessions.changed") {
+      const context = this.context;
+      if (context) {
+        this.recoverDeletedActiveSession(context.sessions.state);
+      }
+      return;
+    }
     if (event.event === "session.observer") {
       const context = this.context;
       if (context) {
@@ -1033,7 +1045,86 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     const face = this.routeState.routeId === "dashboard" ? "dashboard" : "chat";
-    context.replace(face, this.chatNavigationOptions(face));
+    const sessionWasDeleted = (context.sessions.state.deletedSessions ?? []).some(
+      ({ key, agentId }) =>
+        uiSessionEventMatches(
+          {
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+            sessionKey,
+          },
+          key,
+          agentId,
+        ),
+    );
+    // Session lists are filtered and windowed. Only a failed route for this
+    // active key, or an authoritative deletion, proves it needs replacement.
+    const activeSessionRow = findUiSessionRow(context, sessionKey);
+    const attemptedPathname = this.routeState.location?.pathname;
+    const activeRouteFailed =
+      !attemptedPathname ||
+      attemptedPathname === sessionNavigationTarget({ context, face, sessionKey }).options.pathname;
+    const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    const knownAgents = context.agents.state.agentsList?.agents;
+    // A parseable retired agent is not a navigable owner; never turn its
+    // deleted session into another permanently unresolvable chat route.
+    const replacementAgentId =
+      parsedAgentId &&
+      (!knownAgents || knownAgents.some((agent) => normalizeAgentId(agent.id) === parsedAgentId))
+        ? parsedAgentId
+        : resolveSessionNavigationAgentId(context);
+    const replacementSessionKey =
+      !sessionWasDeleted && (activeSessionRow?.key || !activeRouteFailed)
+        ? sessionKey
+        : buildAgentMainSessionKey({
+            agentId: replacementAgentId,
+            mainKey: resolveUiConfiguredMainKey({
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            }),
+          });
+    // Gateway rejects deletion of a live main session. If an orphaned event
+    // still names that fallback, replacing the same route would retry forever.
+    if (sessionWasDeleted && replacementSessionKey === sessionKey) {
+      return;
+    }
+    if (replacementSessionKey !== sessionKey) {
+      // Commit the replacement to both selection owners before navigating;
+      // otherwise a stale Gateway snapshot restores the deleted key and loops.
+      this.activeSessionKey = replacementSessionKey;
+      selectApplicationSession({
+        selection: context.agentSelection,
+        gateway: context.gateway,
+        sessionKey: replacementSessionKey,
+      });
+    }
+    context.replace(
+      face,
+      sessionNavigationTarget({ context, face, sessionKey: replacementSessionKey }).options,
+    );
+  }
+
+  private recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
+    const context = this.context;
+    const routeId = this.routeState.routeId;
+    const sessionKey = this.activeSessionKey.trim();
+    if (!context || !routeId || !isSessionRouteId(routeId) || !sessionKey) {
+      return;
+    }
+    const selectedSessionDeleted = sessionState.deletedSessions.some(({ key, agentId }) =>
+      uiSessionEventMatches(
+        {
+          agentsList: context.agents.state.agentsList,
+          hello: context.gateway.snapshot.hello,
+          sessionKey,
+        },
+        key,
+        agentId,
+      ),
+    );
+    if (selectedSessionDeleted) {
+      this.replaceChatWithCurrentSession();
+    }
   }
 
   private isSettingsTakeover(): boolean {
@@ -1725,8 +1816,27 @@ class OpenClawShell extends OpenClawLightDomElement {
         }
       }
       if (!pendingDiffers) {
-        persistRoute(committedRouteId, committedPathname, committedSearch);
         const committedSessionKey = routeState.committedSessionKey;
+        const committedSessionDeleted =
+          committedSessionKey !== undefined &&
+          (routeContext.sessions?.state.deletedSessions ?? []).some(({ key, agentId }) =>
+            uiSessionEventMatches(
+              {
+                agentsList: routeContext.agents.state.agentsList,
+                hello: routeContext.gateway.snapshot.hello,
+                sessionKey: committedSessionKey,
+              },
+              key,
+              agentId,
+            ),
+          );
+        if (committedSessionDeleted) {
+          // An older route can commit after deletion recovery has started.
+          // Never let it persist or reselect the session we just retired.
+          this.replaceChatWithCurrentSession();
+          return;
+        }
+        persistRoute(committedRouteId, committedPathname, committedSearch);
         if (committedSessionKey) {
           this.activeSessionKey = committedSessionKey;
           selectApplicationSession({

@@ -662,10 +662,12 @@ describe("memory index", () => {
       const db = Reflect.get(manager, "db") as DatabaseSync;
       const rows = db
         .prepare(
-          `SELECT chunk.path, chunk.start_line AS startLine, chunk.text, chunk.importance,
-                  chunk.triggers, chunk.project_key AS projectKey,
+          `SELECT chunk.path, chunk.start_line AS startLine, chunk.text, metadata.importance,
+                  metadata.triggers, metadata.project_key AS projectKey,
                   provenance.origin_class AS originClass
            FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
            JOIN memory_index_chunk_provenance AS provenance
              ON provenance.chunk_id = chunk.id
            WHERE chunk.source = 'memory'
@@ -765,9 +767,12 @@ describe("memory index", () => {
       expect(
         db
           .prepare(
-            `SELECT project_key AS projectKey
-             FROM memory_index_chunks
-             WHERE path = 'MEMORY.md' AND triggers = 'kraken deploy ritual'`,
+            `SELECT metadata.project_key AS projectKey
+             FROM memory_index_chunks AS chunk
+             JOIN memory_index_chunk_recall_metadata AS metadata
+               ON metadata.chunk_id = chunk.id
+             WHERE chunk.path = 'MEMORY.md'
+               AND metadata.triggers = 'kraken deploy ritual'`,
           )
           .get(),
       ).toEqual({ projectKey });
@@ -821,8 +826,12 @@ describe("memory index", () => {
       expect(
         db
           .prepare(
-            `SELECT triggers, project_key AS projectKey
-             FROM memory_index_chunks WHERE path = 'MEMORY.md' ORDER BY start_line`,
+            `SELECT metadata.triggers, metadata.project_key AS projectKey
+             FROM memory_index_chunks AS chunk
+             LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+               ON metadata.chunk_id = chunk.id
+             WHERE chunk.path = 'MEMORY.md'
+             ORDER BY chunk.start_line`,
           )
           .all(),
       ).toEqual([
@@ -870,10 +879,13 @@ describe("memory index", () => {
       const db = Reflect.get(manager, "db") as DatabaseSync;
       const rows = db
         .prepare(
-          `SELECT text, importance, triggers, project_key AS projectKey
-           FROM memory_index_chunks
-           WHERE path = 'MEMORY.md' AND source = 'memory'
-           ORDER BY start_line, id`,
+          `SELECT chunk.text, metadata.importance, metadata.triggers,
+                  metadata.project_key AS projectKey
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+           ORDER BY chunk.start_line, chunk.id`,
         )
         .all() as Array<{
         text: string;
@@ -931,6 +943,11 @@ describe("memory index", () => {
         curatedContent,
         Date.now(),
       );
+      db.prepare(
+        `INSERT INTO memory_index_chunk_provenance (
+           chunk_id, origin_class, session_kind, observed_at
+         ) VALUES ('legacy-curated-chunk', 'agent', 'unknown', ?)`,
+      ).run(Date.now());
       db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
         JSON.stringify(legacyMeta),
       );
@@ -939,10 +956,12 @@ describe("memory index", () => {
 
       const rows = db
         .prepare(
-          `SELECT text, triggers, project_key AS projectKey
-           FROM memory_index_chunks
-           WHERE path = 'MEMORY.md' AND source = 'memory'
-           ORDER BY start_line`,
+          `SELECT chunk.text, metadata.triggers, metadata.project_key AS projectKey
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+           ORDER BY chunk.start_line`,
         )
         .all();
       expect(rows).toMatchObject([

@@ -1,6 +1,7 @@
 // Feishu tests cover monitor.webhook e2e plugin behavior.
 import crypto from "node:crypto";
 import type { Server } from "node:http";
+import * as Lark from "@larksuiteoapi/node-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
@@ -507,6 +508,85 @@ describe("Feishu webhook signed-request e2e", () => {
       expect(response.status).toBe(500);
       expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("filters prototype-bearing keys without changing the Lark webhook envelope", async () => {
+    const accountId = "prototype-guard";
+    const path = "/hook-e2e-prototype-guard";
+    const port = await getFreePort();
+    const encryptKey = "encrypt_key";
+    const account = {
+      accountId,
+      encryptKey,
+      verificationToken: "verify_token",
+      config: {
+        enabled: true,
+        connectionMode: "webhook",
+        webhookHost: "127.0.0.1",
+        webhookPort: port,
+        webhookPath: path,
+      },
+    } as ResolvedFeishuAccount;
+    const handler = vi.fn(async () => ({ accepted: true }));
+    const dispatcher = new Lark.EventDispatcher({
+      encryptKey,
+      verificationToken: account.verificationToken,
+    });
+    dispatcher.register({ "test.prototype_guard": handler });
+
+    let observedEnvelope: Record<string, unknown> | undefined;
+    const invoke = dispatcher.invoke.bind(dispatcher);
+    const eventDispatcher = {
+      invoke: async (data: Record<string, unknown>, params?: { needCheck?: boolean }) => {
+        observedEnvelope = data;
+        return await invoke(data, params);
+      },
+    } as Lark.EventDispatcher;
+    const abortController = new AbortController();
+    const monitorPromise = monitorWebhook({
+      account,
+      accountId,
+      abortSignal: abortController.signal,
+      eventDispatcher,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+    const url = `http://127.0.0.1:${port}${path}`;
+    await waitUntilServerReady(url);
+
+    const rawBody =
+      '{"schema":"2.0","header":{"event_type":"test.prototype_guard"},"event":{"safe":"kept"},"headers":{"x-envelope-marker":"forged"},"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}';
+    const headers = {
+      ...signFeishuPayload({ encryptKey, rawBody }),
+      "x-envelope-marker": "preserved",
+    };
+
+    try {
+      const response = await fetch(url, { method: "POST", headers, body: rawBody });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ accepted: true });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(observedEnvelope).toBeDefined();
+      if (!observedEnvelope) {
+        throw new Error("expected Lark webhook envelope");
+      }
+      const envelopePrototype = Object.getPrototypeOf(observedEnvelope) as Record<string, unknown>;
+      expect(Object.hasOwn(observedEnvelope, "headers")).toBe(false);
+      expect(Object.hasOwn(envelopePrototype, "headers")).toBe(true);
+      expect(
+        (observedEnvelope.headers as Record<string, string | string[] | undefined>)[
+          "x-envelope-marker"
+        ],
+      ).toBe("preserved");
+      expect(observedEnvelope.event).toEqual({ safe: "kept" });
+      expect(observedEnvelope.polluted).toBeUndefined();
+      expect(Object.hasOwn(observedEnvelope, "__proto__")).toBe(false);
+      expect(Object.hasOwn(observedEnvelope, "constructor")).toBe(false);
+      expect(Object.hasOwn(observedEnvelope, "prototype")).toBe(false);
     } finally {
       abortController.abort();
       await monitorPromise;

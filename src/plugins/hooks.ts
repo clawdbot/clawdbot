@@ -101,6 +101,11 @@ import type {
   PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
+import {
+  createPluginToolMatcherScope,
+  pluginToolMatcherCoversTool,
+  type PluginToolMatcherScope,
+} from "./tool-hook-matcher.js";
 
 // Re-export types for consumers
 
@@ -241,6 +246,7 @@ function getHooksForName<K extends PluginHookName>(
   registry: HookRunnerRegistry,
   hookName: K,
   ctx?: unknown,
+  toolName?: string,
 ): PluginHookRegistration<K>[] {
   return (registry.typedHooks as PluginHookRegistration<K>[])
     .filter((hook) => {
@@ -259,7 +265,17 @@ function getHooksForName<K extends PluginHookName>(
         hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
       );
     })
+    .filter((hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName))
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+export function getToolHookMatcherScope(
+  registry: HookRunnerRegistry,
+  hookName: "before_tool_call" | "after_tool_call",
+): PluginToolMatcherScope | undefined {
+  return createPluginToolMatcherScope(
+    getHooksForName(registry, hookName).map((registration) => registration.matcher),
+  );
 }
 
 function getHooksForNameAndPlugin<K extends PluginHookName>(
@@ -590,8 +606,9 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     optionsValue: VoidHookRunOptions = {},
+    matcherToolName?: string,
   ): Promise<void> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return;
     }
@@ -626,8 +643,9 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     policy: ModifyingHookPolicy<K, TResult> = {},
+    matcherToolName?: string,
   ): Promise<TResult | undefined> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return undefined;
     }
@@ -1283,6 +1301,7 @@ export function createHookRunner(
         shouldStop: (result) => result.block === true,
         terminalLabel: "block=true",
       },
+      event.toolName,
     );
   }
 
@@ -1294,7 +1313,7 @@ export function createHookRunner(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+    return runVoidHook("after_tool_call", event, ctx, {}, event.toolName);
   }
 
   /**

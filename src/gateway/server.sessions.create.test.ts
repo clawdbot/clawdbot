@@ -127,6 +127,50 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   );
 });
 
+test("keyed sessions remain recoverable across overlapping create and delete waves", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:concurrent-lifecycle-waves";
+
+  for (let wave = 0; wave < 6; wave += 1) {
+    const operations = await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        index % 3 === 0
+          ? directSessionReq<{ deleted: boolean }>("sessions.delete", {
+              key,
+              deleteTranscript: false,
+            })
+          : directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+              agentId: "main",
+              key,
+            }),
+      ),
+    );
+
+    expect(
+      operations.every((result) => result.ok),
+      `lifecycle wave ${wave}`,
+    ).toBe(true);
+
+    const recovered = await directSessionReq<{ key: string; sessionId: string }>(
+      "sessions.create",
+      { agentId: "main", key },
+    );
+    expect(recovered.ok, `creation after lifecycle wave ${wave}`).toBe(true);
+    expect(recovered.payload?.key).toBe(key);
+    expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
+      recovered.payload?.sessionId,
+    );
+
+    const deleted = await directSessionReq<{ deleted: boolean }>("sessions.delete", {
+      key,
+      deleteTranscript: false,
+    });
+    expect(deleted.ok, `deletion after lifecycle wave ${wave}`).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+  }
+});
+
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
   const { storePath } = await createSessionStoreDir();
   try {

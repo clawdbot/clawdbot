@@ -5,12 +5,15 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./openclaw-runtime-
 type MemoryRecallMetadataDatabase = {
   memory_index_chunks: {
     id: string;
-    importance: number | null;
     path: string;
     source: string;
     start_line: number;
     end_line: number;
     text: string;
+  };
+  memory_index_chunk_recall_metadata: {
+    chunk_id: string;
+    importance: number | null;
     triggers: string | null;
     project_key: string | null;
   };
@@ -24,9 +27,15 @@ export function readMemoryRecallMetadata(db: DatabaseSync, ids: readonly string[
     >();
   }
   const query = getNodeSqliteKysely<MemoryRecallMetadataDatabase>(db)
-    .selectFrom("memory_index_chunks")
-    .select(["id", "importance", "triggers", "project_key"])
-    .where("id", "in", [...ids]);
+    .selectFrom("memory_index_chunks as chunk")
+    .leftJoin("memory_index_chunk_recall_metadata as metadata", "metadata.chunk_id", "chunk.id")
+    .select([
+      "chunk.id as id",
+      "metadata.importance as importance",
+      "metadata.triggers as triggers",
+      "metadata.project_key as project_key",
+    ])
+    .where("chunk.id", "in", [...ids]);
   return new Map(executeSqliteQuerySync(db, query).rows.map((row) => [row.id, row]));
 }
 
@@ -126,47 +135,48 @@ function readCuratedCandidateBatch(params: {
   requireTriggers: boolean;
 }) {
   let query = getNodeSqliteKysely<MemoryRecallMetadataDatabase>(params.db)
-    .selectFrom("memory_index_chunks")
+    .selectFrom("memory_index_chunks as chunk")
+    .leftJoin("memory_index_chunk_recall_metadata as metadata", "metadata.chunk_id", "chunk.id")
     .select([
-      "id",
-      "path",
-      "source",
-      "start_line",
-      "end_line",
-      "text",
-      "importance",
-      "triggers",
-      "project_key",
+      "chunk.id as id",
+      "chunk.path as path",
+      "chunk.source as source",
+      "chunk.start_line as start_line",
+      "chunk.end_line as end_line",
+      "chunk.text as text",
+      "metadata.importance as importance",
+      "metadata.triggers as triggers",
+      "metadata.project_key as project_key",
     ])
-    .where("source", "=", "memory")
-    .where("path", "in", ["MEMORY.md", "USER.md"]);
+    .where("chunk.source", "=", "memory")
+    .where("chunk.path", "in", ["MEMORY.md", "USER.md"]);
   if (params.requireProject) {
-    query = query.where("project_key", "is not", null);
+    query = query.where("metadata.project_key", "is not", null);
   }
   if (params.requireTriggers) {
-    query = query.where("triggers", "is not", null);
+    query = query.where("metadata.triggers", "is not", null);
   }
   if (params.cursor) {
     const cursor = params.cursor;
     query = query.where((eb) => {
-      const importance = eb.fn.coalesce("importance", eb.val(0));
+      const importance = eb.fn.coalesce("metadata.importance", eb.val(0));
       const cursorImportance = cursor.importance ?? 0;
       return eb.or([
         eb(importance, "<", cursorImportance),
         eb.and([
           eb(importance, "=", cursorImportance),
           eb.or([
-            eb("path", ">", cursor.path),
-            eb.and([eb("path", "=", cursor.path), eb("id", ">", cursor.id)]),
+            eb("chunk.path", ">", cursor.path),
+            eb.and([eb("chunk.path", "=", cursor.path), eb("chunk.id", ">", cursor.id)]),
           ]),
         ]),
       ]);
     });
   }
   query = query
-    .orderBy((eb) => eb.fn.coalesce("importance", eb.val(0)), "desc")
-    .orderBy("path")
-    .orderBy("id")
+    .orderBy((eb) => eb.fn.coalesce("metadata.importance", eb.val(0)), "desc")
+    .orderBy("chunk.path")
+    .orderBy("chunk.id")
     .limit(params.limit);
   return executeSqliteQuerySync(params.db, query).rows;
 }

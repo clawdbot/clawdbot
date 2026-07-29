@@ -3714,6 +3714,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Multiple gateways (same host)
   - H2: Remote access
   - H2: Supervision and service lifecycle
+  - H3: Existing system LaunchDaemons
   - H2: Dev profile quick path
   - H2: Protocol quick reference (operator view)
   - H2: Operational checks

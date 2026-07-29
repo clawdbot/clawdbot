@@ -23,8 +23,12 @@ import {
   assertLegacyMemoryRowsCopied,
   ensureLegacyMemoryMigrationIndexes,
 } from "./memory-schema-migration.js";
-import { ensureMemoryRecallMetadataColumns } from "./memory-schema-recall.js";
-export { ensureMemoryRecallMetadataColumns } from "./memory-schema-recall.js";
+import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
+export {
+  ensureMemoryRecallMetadataSchema,
+  hasLegacyMemoryRecallMetadataColumns,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+} from "./memory-schema-recall.js";
 import * as provenanceSchema from "./memory-schema-provenance.js";
 import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
 
@@ -605,7 +609,7 @@ export function ensureMemoryIndexSchema(params: {
       includeEmbeddingCache: params.cacheEnabled,
     }),
   );
-  ensureMemoryRecallMetadataColumns(params.db);
+  ensureMemoryRecallMetadataSchema(params.db);
   params.db.exec(`
     INSERT OR IGNORE INTO ${MEMORY_INDEX_STATE_TABLE} (id, revision) VALUES (1, 0);
   `);

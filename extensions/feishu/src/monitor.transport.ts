@@ -57,11 +57,26 @@ function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+const BLOCKED_FEISHU_WEBHOOK_PAYLOAD_KEYS = new Set([
+  "__proto__",
+  "prototype",
+  "constructor",
+  "headers",
+]);
+
 function buildFeishuWebhookEnvelope(
   req: http.IncomingMessage,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
-  return Object.assign(Object.create({ headers: req.headers }), payload) as Record<string, unknown>;
+  // Lark's adapter exposes trusted request headers through this prototype.
+  // Preserve that SDK envelope while preventing payload keys from shadowing it.
+  const envelope = Object.create({ headers: req.headers }) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(payload)) {
+    if (!BLOCKED_FEISHU_WEBHOOK_PAYLOAD_KEYS.has(key)) {
+      envelope[key] = value;
+    }
+  }
+  return envelope;
 }
 
 function parseFeishuWebhookPayload(rawBody: string): Record<string, unknown> | null {

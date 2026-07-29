@@ -81,6 +81,7 @@ export type NativeHookRelayRegistration = {
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
+  toolMatcherForEvent: (event: NativeHookRelayEvent) => readonly string[] | undefined;
   commandForEvent: (
     event: NativeHookRelayEvent,
     options?: NativeHookRelayCommandForEventOptions,
