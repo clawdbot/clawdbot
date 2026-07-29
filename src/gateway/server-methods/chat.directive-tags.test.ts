@@ -998,6 +998,26 @@ function createSlashCommandMediaReply(
   return { kind, payload: { mediaUrls, trustedLocalMedia: true, ...payload } };
 }
 
+function managedAudioBlocks(content: Array<Record<string, unknown>>) {
+  return content.filter((block) => block.type === "audio");
+}
+
+function expectManagedAudioBlock(
+  block: Record<string, unknown> | undefined,
+  fileName: string,
+  isVoiceNote?: boolean,
+) {
+  expect(block).toEqual(
+    expect.objectContaining({
+      type: "audio",
+      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+      fileName,
+      mimeType: "audio/mpeg",
+      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
+    }),
+  );
+}
+
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
   respond: ReturnType<typeof vi.fn>;
@@ -1804,7 +1824,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "attachment");
+      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "audio");
       const message = assistantUpdate?.message as Record<string, any> | undefined;
       const content = Array.isArray(message?.content)
         ? (message.content as Array<Record<string, any>>)
@@ -1812,15 +1832,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.role).toBe("assistant");
       expect(message?.idempotencyKey).toBe("idem-agent-audio:assistant-media");
       expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-      expect(content[1]).toEqual({
-        type: "attachment",
-        attachment: {
-          url: fs.realpathSync(audioPath),
-          kind: "audio",
-          label: "reply.mp3",
+      expect(content[1]).toEqual(
+        expect.objectContaining({
+          type: "audio",
+          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+          fileName: "reply.mp3",
           mimeType: "audio/mpeg",
-        },
-      });
+        }),
+      );
+      expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     });
   });
 
@@ -2076,16 +2096,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(message?.role).toBe("assistant");
     expect(message?.idempotencyKey).toBe("idem-agent-tts:assistant-media");
     expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: {
-        url: fs.realpathSync(audioPath),
-        kind: "audio",
-        label: "tts.mp3",
+    expect(content[1]).toEqual(
+      expect.objectContaining({
+        type: "audio",
+        artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+        fileName: "tts.mp3",
         mimeType: "audio/mpeg",
-        isVoiceNote: true,
-      },
-    });
+      }),
+    );
+    expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
@@ -3108,16 +3127,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const content = getMessageContent(payload);
     expect(getMessage(payload)?.role).toBe("assistant");
     expect(content[0]).toEqual({ type: "text", text: "Command result with TTS." });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: {
-        url: fs.realpathSync(audioPath),
-        kind: "audio",
-        label: "tts.mp3",
-        mimeType: "audio/mpeg",
-        isVoiceNote: true,
-      },
-    });
+    expectManagedAudioBlock(content[1], "tts.mp3", true);
+    expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     const assistantUpdates = findAssistantTranscriptUpdates();
     expect(assistantUpdates).toHaveLength(1);
     expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
@@ -3200,13 +3211,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const content = getMessageContent(payload);
     expect(content[0]).toEqual({ type: "text", text: "Trajectory exports can include prompts." });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: expect.objectContaining({
-        kind: "audio",
-        label: "tts.mp3",
-      }),
-    });
+    expectManagedAudioBlock(content[1], "tts.mp3", true);
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&
@@ -3379,14 +3384,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .filter(Boolean)
           .join("\n");
         expect(text.match(/Trajectory exports/gu)).toHaveLength(1);
-        expect(content[1]).toEqual({
-          type: "attachment",
-          attachment: expect.objectContaining({
-            isVoiceNote: true,
-            kind: "audio",
-            label: "tts.mp3",
-          }),
-        });
+        expectManagedAudioBlock(content[1], "tts.mp3", true);
       },
     },
     {
@@ -3403,14 +3401,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ],
       verify: (content) => {
         expect(content).toHaveLength(2);
-        expect(content[1]).toEqual({
-          type: "attachment",
-          attachment: expect.objectContaining({
-            isVoiceNote: true,
-            kind: "audio",
-            label: "voice.mp3",
-          }),
-        });
+        expectManagedAudioBlock(content[1], "voice.mp3", true);
       },
     },
     {
@@ -3425,11 +3416,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [audio], { audioAsVoice: false }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(1);
-        expect(attachments[0]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "voice.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "voice.mp3", true);
       },
     },
     {
@@ -3450,7 +3439,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .join("\n");
         expect(text).toContain("preview");
         expect(text).toContain("done");
-        expect(content.filter((block) => block.type === "attachment")).toHaveLength(1);
+        expect(managedAudioBlocks(content)).toHaveLength(1);
         const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
           (update) =>
             typeof update.message === "object" &&
@@ -3473,15 +3462,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(2);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "block.mp3" }));
-        expect(
-          (attachments[0]?.attachment as { isVoiceNote?: unknown } | undefined)?.isVoiceNote,
-        ).not.toBe(true);
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "final.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "block.mp3");
+        expect(attachments[0]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[1], "final.mp3", true);
       },
     },
     {
@@ -3502,12 +3487,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .filter(Boolean)
           .join("\n");
         expect(text.match(/shared caption/gu)).toHaveLength(2);
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(2);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "first.mp3" }));
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "second.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "first.mp3");
+        expectManagedAudioBlock(attachments[1], "second.mp3", true);
       },
     },
     {
@@ -3527,16 +3510,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           type: "text",
           text: expect.stringContaining("Trajectory exports can include prompts."),
         });
-        expect(content.slice(1)).toEqual([
-          {
-            type: "attachment",
-            attachment: expect.objectContaining({ kind: "audio", label: "block.mp3" }),
-          },
-          {
-            type: "attachment",
-            attachment: expect.objectContaining({ kind: "audio", label: "final.mp3" }),
-          },
-        ]);
+        const attachments = managedAudioBlocks(content);
+        expect(attachments).toHaveLength(2);
+        expectManagedAudioBlock(attachments[0], "block.mp3", true);
+        expectManagedAudioBlock(attachments[1], "final.mp3", true);
       },
     },
     {
@@ -3550,17 +3527,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [first], { audioAsVoice: true }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(3);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "first.mp3" }));
-        expect(attachments[0]?.attachment?.isVoiceNote).not.toBe(true);
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ label: "second.mp3" }),
-        );
-        expect(attachments[1]?.attachment?.isVoiceNote).not.toBe(true);
-        expect(attachments[2]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "first.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "first.mp3");
+        expect(attachments[0]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[1], "second.mp3");
+        expect(attachments[1]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[2], "first.mp3", true);
       },
     },
     {
@@ -3592,19 +3565,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [second, first], { audioAsVoice: true }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
-        expect(attachments.map((block) => block.attachment?.label)).toEqual([
+        const attachments = managedAudioBlocks(content);
+        expect(attachments.map((block) => block.fileName)).toEqual([
           "first.mp3",
           "second.mp3",
           "second.mp3",
           "first.mp3",
         ]);
-        expect(
-          attachments.slice(0, 2).every((block) => block.attachment?.isVoiceNote !== true),
-        ).toBe(true);
-        expect(attachments.slice(2).every((block) => block.attachment?.isVoiceNote === true)).toBe(
-          true,
-        );
+        expect(attachments.slice(0, 2).every((block) => block.isVoiceNote !== true)).toBe(true);
+        expect(attachments.slice(2).every((block) => block.isVoiceNote === true)).toBe(true);
       },
     },
   ] satisfies SlashCommandMediaCase[])("$name", async ({ id, files, replies, verify }) => {

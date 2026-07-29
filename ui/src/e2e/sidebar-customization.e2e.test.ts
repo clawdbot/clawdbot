@@ -10,6 +10,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -220,6 +221,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       await page.reload();
       await expect.poll(() => roundedWidth(shellNav)).toBe(358);
+      // Persisted shell width is restored before the reloaded chat route commits.
+      await waitForControlUiRoute(page, { pathnamePrefix: "/chat", routeId: "chat" });
       await page.setViewportSize({ height: 900, width: 1300 });
       await expect.poll(() => roundedWidth(shellNav)).toBe(358);
       await sidebarResizer.focus();

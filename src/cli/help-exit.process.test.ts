@@ -459,6 +459,9 @@ describe("JSON console style process output", () => {
         await runCliProcess({
           args: ["openclaw-json-console-missing-command", modifier],
           config: loggingConfig,
+          // The fake command cannot belong to a bundled plugin. Avoid cold plugin
+          // discovery so this subprocess measures structured validation, not fleet load.
+          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
         });
       } catch (error) {
         failure = error as CliProcessFailure;

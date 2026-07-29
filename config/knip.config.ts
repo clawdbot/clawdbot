@@ -361,6 +361,9 @@ const config = {
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Focused media tests consume these explicit seams; production uses the helpers in-module.
+    "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
+    "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],
