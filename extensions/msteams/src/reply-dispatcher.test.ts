@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
 const sendMSTeamsMessagesMock = vi.hoisted(() => vi.fn(async () => []));
 
@@ -15,6 +16,11 @@ vi.mock("../runtime-api.js", () => ({
 
 vi.mock("./runtime.js", () => ({
   getMSTeamsRuntime: getMSTeamsRuntimeMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
+  getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
 vi.mock("./messenger.js", () => ({
@@ -68,6 +74,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    getGlobalHookRunnerMock.mockReturnValue(undefined);
     lastStreamMock = undefined;
 
     typingCallbacks = {
@@ -212,6 +219,13 @@ describe("createMSTeamsReplyDispatcher", () => {
       throw new Error("createDispatcher must be called first");
     }
     lastCreatedDispatcher.replyOptions.onPartialReply?.({ text });
+  }
+
+  function registerHooks(...hooks: string[]): void {
+    const registered = new Set(hooks);
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => registered.has(hookName)),
+    });
   }
 
   it("sends an informative status update once work expands in personal chats", async () => {
@@ -388,6 +402,53 @@ describe("createMSTeamsReplyDispatcher", () => {
     // TeamsHttpStream.update). The SDK's HttpStream accumulates the text
     // and flushes the closing activity at stream.close().
     expect(getStreamMock().emit).toHaveBeenCalledWith("partial response");
+  });
+
+  it("preserves partial and progress streams for observer-only hooks", async () => {
+    registerHooks("message_sent");
+
+    const partialDispatcher = createDispatcher("personal");
+    partialDispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
+    expect(getStreamMock().emit).toHaveBeenCalledWith("partial response");
+
+    vi.useFakeTimers();
+    const progressDispatcher = createDispatcher("personal", {
+      streaming: { mode: "progress" },
+    });
+    await progressDispatcher.replyOptions.onToolStart?.({ name: "exec" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(getStreamMock().update).toHaveBeenCalled();
+  });
+
+  it.each(
+    [
+      { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
+      { label: "message_sending", hooks: ["message_sending"] },
+      {
+        label: "both modifying hooks",
+        hooks: ["reply_payload_sending", "message_sending"],
+      },
+    ].flatMap(({ label, hooks }) =>
+      (["partial", "progress"] as const).map((mode) => ({ label, hooks, mode })),
+    ),
+  )("suppresses $mode provider streams when $label is registered", async ({ hooks, mode }) => {
+    registerHooks(...hooks);
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "final" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["final-id"] as never);
+
+    const dispatcher = createDispatcher("personal", { streaming: { mode } });
+    dispatcher.replyOptions.onPartialReply?.({ text: "original partial" });
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
+    await dispatcher.delivery.deliver({ text: "authoritative final" }, { kind: "final" });
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    const stream = getStreamMock();
+    expect(dispatcher.replyOptions.onPartialReply).toBeUndefined();
+    expect(dispatcher.replyOptions.onToolStart).toBeUndefined();
+    expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBeUndefined();
+    expect(stream.emit).not.toHaveBeenCalled();
+    expect(stream.update).not.toHaveBeenCalled();
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to normal Teams delivery when native stream close returns no final activity", async () => {

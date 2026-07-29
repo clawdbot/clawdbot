@@ -1,65 +1,27 @@
+import { html, nothing } from "lit";
+import { findInlineApproval } from "../../app/approval-presentation.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import { t } from "../../i18n/index.ts";
+import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import {
-  activeChatRunStartupStatus,
-  buildAgentMainSessionKey,
-  cancelQuestionPrompt,
-  chatPullRequestId,
-  clearChatHistory,
-  configureToolTitleFetcher,
-  createBackgroundTasksProps,
-  createPullRequestBranch,
-  createSessionWorkspaceProps,
-  dismissChatError,
-  dismissRealtimeTalkError,
-  findInlineApproval,
-  hasAbortableSessionRun,
-  hasOperatorAdminAccess,
-  hasOperatorWriteAccess,
-  hasSessionPresenceViewers,
-  html,
-  isGatewayMethodAdvertised,
-  nothing,
-  openSessionWorkspaceFile,
-  parseCatalogSessionKey,
-  pickFreshestObserverDigest,
-  projectSessionObserverDigest,
-  readPresenceEntries,
-  refreshChatCommands,
-  refreshPageChat,
-  renderBoardSessionSurface,
-  renderChat,
-  renderChatControls,
-  resolveActiveRunOutputTokens,
-  resolveChatProjectionRunId,
-  resolveAssistantAttachmentAuthToken,
-  resolveChatArtifactDownload,
-  resolveChatAgentId,
-  resolveChatAvatarUrl,
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
-  resolveCurrentSelfUser,
+} from "../../lib/chat/follow-up-mode.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  pickFreshestObserverDigest,
+  projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
-  revealSessionWorkspaceFile,
-  scopedAgentParamsForSession,
-  selectedChatSessionRow,
-  submitQuestionPrompt,
-  switchChatFastMode,
-  switchChatModel,
-  switchChatThinkingLevel,
-  t,
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  activatePanel,
-  closeSlot,
-  detachPanelToColumn,
-  isSidebarRegionCollapsed,
-  mergePanelIntoColumn,
-  sidebarPrimaryWidth,
-  workspaceResultConflictFromPlacement,
-  type BoardViewCallbacks,
-  type ChatProps,
-  type SidebarSide,
-  type SidebarSlotId,
-} from "./chat-pane-deps.ts";
-import { ChatPaneHeaderRender } from "./chat-pane-header-render.ts";
+} from "../../lib/observer-digest.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import { renderBoardSessionSurface } from "./board-session-surface.ts";
+import { clearChatHistory } from "./chat-history.ts";
+import { ChatPaneHeader } from "./chat-pane-header.ts";
 import {
   SESSION_RAIL_DOCK_MIN_WIDTH,
   WORKSPACE_RAIL_MAX_WIDTH,
@@ -71,9 +33,47 @@ import {
   resolveSidebarLayoutForBoard,
   restoreHiddenSidebarChat,
 } from "./chat-pane-sidebar-layout.ts";
+import {
+  dismissChatError,
+  resolveAssistantAttachmentAuthToken,
+  resolveChatArtifactDownload,
+} from "./chat-pane-state.ts";
+import { dismissRealtimeTalkError } from "./chat-realtime.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import {
+  resolveChatAgentId,
+  resolveChatAvatarUrl,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
+import { renderChat, type ChatProps } from "./chat-view.ts";
+import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import { renderChatControls } from "./components/chat-controls.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
+import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
+import {
+  createSessionWorkspaceProps,
+  openSessionWorkspaceFile,
+  revealSessionWorkspaceFile,
+} from "./components/chat-session-workspace.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  detachPanelToColumn,
+  isSidebarRegionCollapsed,
+  mergePanelIntoColumn,
+  sidebarPrimaryWidth,
+  type SidebarSide,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
+import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
+import { configureToolTitleFetcher } from "./tool-titles.ts";
+import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-export class ChatPaneRender extends ChatPaneHeaderRender {
+export class ChatPane extends ChatPaneHeader {
   override render() {
     const state = this.state;
     if (!state) {

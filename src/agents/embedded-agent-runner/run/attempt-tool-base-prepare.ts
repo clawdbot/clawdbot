@@ -4,10 +4,8 @@ import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
-import { getActiveAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
-import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "../../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
   isLocalModelLeanEnabled,
@@ -17,13 +15,12 @@ import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
-import { resolveAgentToolSearchRuntimeConfig } from "../../tool-search-runtime-config.js";
 import {
   createToolSearchCatalogRef,
-  resolveToolSearchConfig,
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
+import { resolveAgentToolSurfacePlan } from "../../tool-surface-plan.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
 import type { CronCreatorToolAllowlistEntry } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
@@ -70,7 +67,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
     },
   );
   const toolsEnabled = supportsModelTools(attempt.model);
-  const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
     disableTools: attempt.disableTools,
@@ -78,31 +74,23 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolsEnabled,
     toolsAllow: toolsAllowWithForcedRuntimeTools,
   });
-  const codeModeConfig = resolveCodeModeConfig(attempt.config, params.sessionAgentId);
-  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+  const {
+    codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    toolSearchConfig,
+    toolSearchControlsEnabled: toolSearchControlsEnabledForRun,
+    toolSearchRuntimeConfig,
+  } = resolveAgentToolSurfacePlan({
     config: attempt.config,
     agentId: params.sessionAgentId,
     sessionKey: params.sandboxSessionKey,
     forceDirectMessageTool,
+    model: attempt.model,
+    toolsEnabled,
+    disableTools: attempt.disableTools,
+    isRawModelRun,
+    skillWorkshopProposalOnly: attempt.skillWorkshopProposalOnly,
+    toolsAllow: attempt.toolsAllow,
   });
-  const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
-  const codeModeControlsEnabledForRun =
-    toolsEnabled &&
-    !ringZeroToolRun &&
-    attempt.disableTools !== true &&
-    !isRawModelRun &&
-    attempt.skillWorkshopProposalOnly !== true &&
-    attempt.toolsAllow?.length !== 0 &&
-    isCodeModeEngagedForModel(codeModeConfig, attempt.model);
-  const toolSearchControlsEnabledForRun =
-    toolsEnabled &&
-    !ringZeroToolRun &&
-    attempt.disableTools !== true &&
-    !isRawModelRun &&
-    attempt.skillWorkshopProposalOnly !== true &&
-    attempt.toolsAllow?.length !== 0 &&
-    !codeModeControlsEnabledForRun &&
-    toolSearchConfig.enabled;
   const effectiveToolsAllow =
     toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
       ? [...new Set([...toolsAllowWithForcedRuntimeTools, ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES])]

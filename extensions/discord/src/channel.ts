@@ -199,6 +199,12 @@ const discordMessageActions = {
     resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
     discordMessageActionsImpl.describeMessageTool?.(ctx) ??
     null,
+  requiresTrustedRequesterSender: (
+    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["requiresTrustedRequesterSender"]>>[0],
+  ) =>
+    resolveRuntimeDiscordMessageActions()?.requiresTrustedRequesterSender?.(ctx) ??
+    discordMessageActionsImpl.requiresTrustedRequesterSender?.(ctx) ??
+    false,
   extractToolSend: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["extractToolSend"]>>[0],
   ) =>

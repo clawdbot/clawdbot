@@ -690,6 +690,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Targets for outbound delivery
   - H2: DM channel retry
   - H2: Preview streaming
+  - H2: Read channel history (message tool)
   - H2: Reactions (message tool)
   - H2: Interactive buttons (message tool)
   - H3: Direct API integration (external scripts)
@@ -918,6 +919,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Token model
   - H2: Actions and gates
   - H2: Access control and routing
+  - H3: Group DMs (MPDMs) and bots
   - H2: Threading, sessions, and reply tags
   - H2: Ack reactions
   - H3: Emoji (ackReaction)
@@ -1876,7 +1878,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Operations and approval
   - H3: Change history
-  - H3: Switching to masked channel setup
+  - H3: Switching to a masked terminal wizard
   - H2: Setup bootstrap
   - H2: AI conversation
   - H3: CLI harness trust model
@@ -2303,6 +2305,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Common issues
   - H2: Related pages
 
+## concepts/agent-bindings.md
+
+- Route: /concepts/agent-bindings
+- Headings:
+  - H2: When to use a binding
+  - H2: Route an account to an agent
+  - H2: Match a specific conversation
+  - H2: Match fields and precedence
+  - H2: Common mistakes
+  - H3: Omitting accountId to mean every account
+  - H3: Binding to an unknown agent
+  - H3: Treating bindings as access control
+  - H2: Related
+
 ## concepts/agent-loop.md
 
 - Route: /concepts/agent-loop
@@ -2612,6 +2628,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Recall: two lanes
   - H3: Lane 1: always on, zero model calls
   - H3: Lane 2: escalation
+  - H2: Project-scoped memory
   - H2: The user model
   - H2: Standing intents: prospective memory
   - H2: The security model
@@ -2925,7 +2942,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Profile-backed qa run
   - H2: Operator flow
   - H3: Observability smokes
-  - H3: Matrix smoke lanes
+  - H3: Matrix live lane
   - H3: Discord Mantis scenarios
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
@@ -3648,6 +3665,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick checks
   - H2: Deep diagnostics
   - H2: Health monitor config
+  - H2: Inbound ingress health
   - H2: Uptime monitoring
   - H3: Monitoring service setup examples
   - H2: When something fails
@@ -3850,6 +3868,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Signals exported
   - H2: Configuration reference
   - H3: Environment variables
+  - H2: Continue an upstream WebSocket trace
   - H2: Privacy and content capture
   - H2: Sampling and flushing
   - H3: Model-call observation units
@@ -5053,6 +5072,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: The computer.act node command
   - H2: Authorization
   - H2: Safety
+  - H2: macOS permission troubleshooting
   - H2: Relationship to other desktop-control paths
 
 ## nodes/images.md
@@ -5525,6 +5545,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Requirements for stable permissions
   - H2: Accessibility grants for Node and CLI runtimes
+  - H2: Separate Computer Control grants
   - H2: Recovery checklist when prompts disappear
   - H2: Files and folders permissions (Desktop/Documents/Downloads)
   - H2: Related
@@ -9967,6 +9988,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Automatic per-model activation
   - H3: The compat.codeMode catalog flag
   - H3: Shipped preferred models
+  - H3: Models shipped by more than one provider
   - H3: Choosing when to enable
   - H2: Activation
   - H2: Model-visible tools
@@ -10281,6 +10303,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Logs and expected behavior
   - H2: Related
 
+## tools/mcp.md
+
+- Route: /tools/mcp
+- Headings:
+  - H2: Add a server from Settings
+  - H2: Add a server from the CLI
+  - H2: Configure a server directly
+  - H2: Troubleshooting
+  - H3: The server appears in Settings but exposes no tools
+  - H3: A stdio server does not start
+  - H3: An HTTP server needs authorization
+  - H3: Changes do not reach an active agent
+  - H2: Related
+
 ## tools/media-overview.md
 
 - Route: /tools/media-overview
@@ -10454,6 +10490,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Review past sessions manually
   - H2: What OpenClaw can learn
   - H2: When experience review runs
+  - H2: Runtime support
   - H2: What the reviewer receives
   - H2: Proposal safety
   - H2: Review learned proposals
@@ -10705,6 +10742,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Supported providers
   - H2: Configuration
+  - H3: Local Speech Swift and speech-core
   - H3: Per-agent voice overrides
   - H2: Personas
   - H3: Minimal persona
@@ -10909,6 +10947,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: The Lobsterdex
   - H2: Field notes
   - H2: Privacy
+
+## web/notifications.md
+
+- Route: /web/notifications
+- Headings:
+  - H2: Which surface you get
+  - H2: Enable browser notifications
+  - H2: Enable notifications in the macOS app
+  - H2: Troubleshooting
+  - H3: Enable is unavailable
+  - H3: Browser permission is blocked
+  - H3: Service worker is not ready
+  - H3: Web Push asks for a Doctor migration
+  - H2: Related
 
 ## web/tui.md
 

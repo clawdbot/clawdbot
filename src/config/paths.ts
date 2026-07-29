@@ -93,6 +93,33 @@ export function resolveStateDir(
   return newDir;
 }
 
+function normalizeStateDirForComparison(stateDir: string): string {
+  const resolved = path.resolve(stateDir);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    // Missing paths have no filesystem identity yet; exact resolution is the safe fallback.
+    return resolved;
+  }
+}
+
+/** Whether the process uses the default home-scoped state directory. */
+export function isDefaultStateDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): boolean {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (!override) {
+    // Preserve the default install path, including automatic legacy-state discovery.
+    return true;
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  return (
+    normalizeStateDirForComparison(resolveStateDir(env, effectiveHomedir)) ===
+    normalizeStateDirForComparison(newStateDir(effectiveHomedir))
+  );
+}
+
 export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, envHomedir(env));
   const openclawOverride = env.OPENCLAW_STATE_DIR?.trim();

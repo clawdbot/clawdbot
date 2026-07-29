@@ -473,6 +473,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     since: "2026.7",
     controlPlaneWrite: true,
   },
+  { name: "memory.search", scope: "operator.read", since: "2026.7" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

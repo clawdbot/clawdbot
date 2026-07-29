@@ -512,6 +512,25 @@ describe("state migrations", () => {
     detectionCase = { ...detected, stateDir, env };
   });
 
+  it("keeps automatic migration read-only when the shared schema is current", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const writer = new DatabaseSync(databasePath);
+    writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
+    try {
+      await expect(
+        autoMigrateLegacyState({ cfg: createConfig(), env, homedir: () => root }),
+      ).resolves.toMatchObject({ changes: [], warnings: [] });
+    } finally {
+      writer.exec("ROLLBACK;");
+      writer.close();
+    }
+  });
+
   it("uses the requested environment for plugin migration refresh and writes", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, "custom-state");

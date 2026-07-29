@@ -310,6 +310,30 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 Everything else, including all Ollama-served local models, stays unflagged and
 keeps normal tool exposure under `"auto"`.
 
+### Models shipped by more than one provider
+
+Several vendors are reachable through more than one provider id: a subscription
+endpoint next to an API endpoint, or a gateway that resells another vendor's
+model. Because `"auto"` resolves the tier from whichever catalog served the run,
+two catalogs describing the same upstream model must not disagree by accident.
+
+Every catalog row for a shared model therefore states its tier explicitly once
+any sibling row states one. Rows are matched on the vendor's own name for the
+weights, so a catalog that republishes a model under a namespaced id or
+different casing is matched automatically: `novita/moonshotai/kimi-k3`,
+`nvidia/z-ai/glm-5.2`, and `together/deepseek-ai/DeepSeek-V4-Pro` all group with
+the first-party rows without anyone declaring anything. Only genuinely different
+names need the manifest's `upstreamModel` marker, as the `kimi` catalog uses for
+`moonshot/kimi-k3`.
+
+Reseller and aggregator catalogs such as `baseten`, `deepinfra`,
+`github-copilot`, `gmi`, `novita`, `nvidia`, `ollama-cloud`, `opencode`,
+`opencode-go`, `qianfan`, `together`, `venice`, and `volcengine-plan` currently
+declare `"capable"` for the models first-party catalogs flag `"preferred"`: the
+preferred tier came from evaluations on the first-party endpoints, and those
+runs have not been repeated per reseller. Promoting one of those rows is a
+deliberate, evidence-backed change rather than an oversight.
+
 For OpenAI models, the flag matters only when the run resolves to the OpenClaw
 embedded agent runtime. Default OpenAI routing uses the Codex-style harness
 surface, where OpenClaw code mode does not apply; the catalog flag never

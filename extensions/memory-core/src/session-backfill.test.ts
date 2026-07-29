@@ -7,10 +7,13 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeBackfillDiaryEntries } from "./dreaming-narrative.js";
-import { runSessionBackfill } from "./session-backfill.js";
+import {
+  executeSessionBackfill,
+  executeSessionBackfillBatch,
+  runSessionBackfill,
+} from "./session-backfill.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
@@ -52,8 +55,7 @@ async function seedCanonicalTranscript(
     ...messages.map((message) => Date.parse(message.timestamp)),
   );
   await fs.mkdir(sessionsDir, { recursive: true });
-  const sessionFile = formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
-  const entry = { sessionFile, sessionId, updatedAt };
+  const entry = { sessionId, updatedAt };
   await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
   for (const message of messages) {
     await appendSessionTranscriptMessageByIdentity({
@@ -88,6 +90,10 @@ afterEach(() => {
 });
 
 describe("runSessionBackfill", () => {
+  it("keeps the CLI export on the canonical shared executor", () => {
+    expect(runSessionBackfill).toBe(executeSessionBackfill);
+  });
+
   it("keeps REM preview mode mutually exclusive with apply", async () => {
     const workspaceDir = await createIsolatedWorkspace("rem-apply-");
 
@@ -150,6 +156,38 @@ describe("runSessionBackfill", () => {
     });
 
     expect(result.days.map((day) => day.day)).toEqual(["2026-01-01", "2026-01-02"]);
+  });
+
+  it("reports authoritative continuation across bounded apply batches", async () => {
+    const workspaceDir = await createIsolatedWorkspace("continuation-");
+    await seedCanonicalTranscript(
+      "continuation",
+      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
+        role: "user" as const,
+        content: `Continuation note for ${day}`,
+        timestamp: `${day}T12:00:00.000Z`,
+        owner: true,
+      })),
+    );
+    const run = () =>
+      executeSessionBackfillBatch({
+        agentId: "main",
+        workspaceDir,
+        apply: true,
+        limitDays: 2,
+        timezone: "UTC",
+      });
+
+    const first = await run();
+    const second = await run();
+    const exhausted = await run();
+
+    expect(first.result.days.map((day) => day.day)).toEqual(["2026-01-01", "2026-01-02"]);
+    expect(first.continuation).toEqual({ advanced: true, hasMore: true });
+    expect(second.result.days.map((day) => day.day)).toEqual(["2026-01-03"]);
+    expect(second.continuation).toEqual({ advanced: true, hasMore: false });
+    expect(exhausted.result.candidateCount).toBe(0);
+    expect(exhausted.continuation).toEqual({ advanced: false, hasMore: false });
   });
 
   it("does not advance the cursor past messages excluded by a date range", async () => {

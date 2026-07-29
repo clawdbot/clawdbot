@@ -1,16 +1,36 @@
 /* @vitest-environment jsdom */
 
+import { ContextProvider } from "@lit/context";
 import { describe, expect, it, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationNavigationOptions,
+} from "../../app/context.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 import "./memory-page.ts";
 
 type MemoryPageElement = HTMLElement & {
   configObject: Record<string, unknown>;
-  tab: string | null;
-  updateComplete: Promise<unknown>;
+  routeData: ConfigRouteData | null;
+  updateComplete: Promise<boolean>;
+  requestUpdate: () => void;
 };
+
+function memoryRoute(url: string): ConfigRouteData {
+  const parsed = new URL(url, "https://control.test");
+  return configRouteData({
+    pathname: parsed.pathname,
+    search: parsed.search,
+    hash: parsed.hash,
+  });
+}
+
+function memoryTabRoute(tab: "overview" | "memories" | "dreams" | "settings") {
+  return memoryRoute(`/settings/memory${tab === "overview" ? "" : `/${tab}`}`);
+}
 
 function engine(id: string, enabled: boolean): PluginCatalogItem {
   return {
@@ -33,44 +53,104 @@ function createPage(params: {
   catalog?: readonly PluginCatalogItem[];
   patchForm?: (path: Array<string | number>, value: unknown) => void;
   setEnabled?: () => Promise<unknown>;
-  navigate?: (routeId: string, options?: { search?: string }) => void;
+  navigate?: (routeId: string, options?: ApplicationNavigationOptions) => void;
+  replace?: (routeId: string, options?: ApplicationNavigationOptions) => void;
+  routeData?: ConfigRouteData;
+  basePath?: string;
+  agents?: Array<{ id: string; name?: string }>;
+  memoryStatus?: (agentId: string) => Promise<unknown>;
+  lookupSchemaPath?: (call: number) => Promise<unknown>;
 }) {
   let listCalls = 0;
-  const request = vi.fn((method: string) => {
+  let schemaLookups = 0;
+  const request = vi.fn((method: string, payload?: { agentId?: string }) => {
     if (method === "plugins.list") {
       const call = listCalls++;
       return params.listCatalog
         ? params.listCatalog(call)
         : Promise.resolve({ plugins: params.catalog ?? [] });
     }
+    if (method === "doctor.memory.status") {
+      return params.memoryStatus
+        ? params.memoryStatus(payload?.agentId ?? "main")
+        : Promise.resolve({
+            agentId: payload?.agentId ?? "main",
+            provider: "none",
+            embedding: { ok: false, checked: false },
+          });
+    }
     return params.setEnabled ? params.setEnabled() : Promise.resolve({});
   });
-  const listeners = new Set<() => void>();
+  const gatewayListeners = new Set<() => void>();
+  const runtimeListeners = new Set<() => void>();
   const gateway = {
     snapshot: { client: { request }, phase: "connected" },
     subscribe: (notify: () => void) => {
-      listeners.add(notify);
-      return () => listeners.delete(notify);
+      gatewayListeners.add(notify);
+      return () => gatewayListeners.delete(notify);
     },
   };
   const element = document.createElement("openclaw-memory-settings") as MemoryPageElement;
   element.configObject = params.configObject;
-  (element as unknown as { context: ApplicationContext }).context = {
+  element.routeData = params.routeData ?? memoryTabRoute("settings");
+  const runtimeConfig = {
+    state: {
+      client: {},
+      connected: true,
+      configSaving: false,
+      configApplying: false,
+      configForm: params.configObject,
+      configSnapshot: null,
+    },
+    subscribe: (notify: () => void) => {
+      runtimeListeners.add(notify);
+      return () => runtimeListeners.delete(notify);
+    },
+    lookupSchemaPath: vi.fn(() =>
+      params.lookupSchemaPath
+        ? params.lookupSchemaPath(schemaLookups++)
+        : Promise.resolve({ type: "object" }),
+    ),
+    patchForm: params.patchForm ?? vi.fn(),
+    removeFormValue: vi.fn(),
+    refresh: () => Promise.resolve(),
+    ensureLoaded: () => Promise.resolve(),
+  };
+  const context = {
+    basePath: params.basePath ?? "",
     gateway,
-    runtimeConfig: {
-      state: { configSaving: false, configApplying: false },
-      patchForm: params.patchForm ?? vi.fn(),
-      refresh: () => Promise.resolve(),
+    runtimeConfig,
+    agents: {
+      state: {
+        agentsList: {
+          defaultId: params.agents?.[0]?.id ?? "main",
+          agents: params.agents ?? [{ id: "main" }],
+        },
+        agentsLoading: false,
+      },
+      subscribe: () => () => undefined,
+      ensureList: () => Promise.resolve(),
     },
     navigate: params.navigate ?? vi.fn(),
+    replace: params.replace ?? vi.fn(),
   } as unknown as ApplicationContext;
+  (element as unknown as { context: ApplicationContext }).context = context;
+  const contextProvider = new ContextProvider(element, {
+    context: applicationContext,
+    initialValue: context,
+  });
+  contextProvider.setValue(context);
   const setPhase = (phase: string) => {
     gateway.snapshot = { ...gateway.snapshot, phase };
-    for (const notify of listeners) {
+    runtimeConfig.state = { ...runtimeConfig.state, connected: phase === "connected" };
+    for (const notify of gatewayListeners) {
+      notify();
+    }
+    for (const notify of runtimeListeners) {
       notify();
     }
   };
-  return { element, request, setPhase };
+  return { element, request, setPhase, lookupSchemaPath: runtimeConfig.lookupSchemaPath };
 }
 
 function deferred<T>() {
@@ -89,21 +169,36 @@ function addonStatus(element: HTMLElement, label: string): string | null {
 }
 
 /** Which tab body is actually mounted, rather than what the tab strip claims. */
-function visibleTab(element: HTMLElement): "overview" | "search" | "dreaming" | null {
+function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | "settings" | null {
   const panel = element.querySelector('[role="tabpanel"]');
   if (!panel) {
     return null;
   }
   if (panel.querySelector("openclaw-memory-dreaming")) {
-    return "dreaming";
+    return "dreams";
   }
-  return panel.querySelector(".settings-page__intro") ? "search" : "overview";
+  if (panel.querySelector("openclaw-memory-memories")) {
+    return "memories";
+  }
+  return panel.querySelector(".memory-overview") ? "overview" : "settings";
 }
 
 function selectTab(element: HTMLElement, tab: string) {
-  element
-    .querySelector("wa-tab-group")
-    ?.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: tab }, bubbles: true }));
+  const target = element.querySelector(`#memory-tab-${tab}`);
+  target?.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+  );
+  target?.dispatchEvent(new MouseEvent("click", { detail: 0, bubbles: true }));
+  dispatchTabShow(element, tab);
+}
+
+function dispatchTabShow(element: HTMLElement, tab: string) {
+  element.querySelector("wa-tab-group")?.dispatchEvent(
+    new CustomEvent("wa-tab-show", {
+      detail: { name: tab },
+      bubbles: true,
+    }),
+  );
 }
 
 function activeEngine(element: HTMLElement): string | null {
@@ -305,26 +400,34 @@ describe("MemorySettingsPage catalog state", () => {
 });
 
 describe("MemorySettingsPage tab routing", () => {
-  it("honors every ?tab= arrival, including a repeat after a manual tab change", async () => {
+  it("renders every canonical tab path and honors browser history restoration", async () => {
     const navigate = vi.fn();
     const { element } = createPage({ configObject: {}, catalog: [], navigate });
-    element.tab = "search";
+    element.routeData = memoryTabRoute("settings");
     document.body.append(element);
     try {
       await element.updateComplete;
-      expect(visibleTab(element)).toBe("search");
+      expect(visibleTab(element)).toBe("settings");
 
       // A manual click rewrites the URL rather than shadowing it with local state.
       selectTab(element, "overview");
-      expect(navigate).toHaveBeenCalledWith("memory", undefined);
-      element.tab = null;
+      expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory" });
+      element.routeData = memoryTabRoute("overview");
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
 
-      // Same intent as the first arrival: an adopt-once page would ignore this.
-      element.tab = "search";
+      // The router feeding an older history entry back must restore that tab.
+      element.routeData = memoryTabRoute("settings");
       await element.updateComplete;
-      expect(visibleTab(element)).toBe("search");
+      expect(visibleTab(element)).toBe("settings");
+
+      element.routeData = memoryTabRoute("memories");
+      await element.updateComplete;
+      expect(visibleTab(element)).toBe("memories");
+
+      element.routeData = memoryTabRoute("dreams");
+      await element.updateComplete;
+      expect(visibleTab(element)).toBe("dreams");
     } finally {
       element.remove();
     }
@@ -333,16 +436,210 @@ describe("MemorySettingsPage tab routing", () => {
   it("writes the chosen tab into the URL so history restores it", async () => {
     const navigate = vi.fn();
     const { element } = createPage({ configObject: {}, catalog: [], navigate });
+    element.routeData = memoryTabRoute("overview");
     document.body.append(element);
     try {
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
 
-      selectTab(element, "dreaming");
-      expect(navigate).toHaveBeenCalledWith("memory", { search: "?tab=dreaming" });
+      selectTab(element, "dreams");
+      expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory/dreams" });
       // Nothing moves until the router feeds the new tab back in.
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
+
+      selectTab(element, "memories");
+      expect(navigate).toHaveBeenCalledWith("memory", {
+        pathname: "/settings/memory/memories",
+      });
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("handles Space directly so the browser cannot synthesize a second navigation", async () => {
+    const navigate = vi.fn();
+    const { element } = createPage({ configObject: {}, catalog: [], navigate });
+    element.routeData = memoryTabRoute("overview");
+    document.body.append(element);
+    try {
+      await element.updateComplete;
+      const space = new KeyboardEvent("keydown", {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      });
+      element.querySelector("#memory-tab-dreams")?.dispatchEvent(space);
+
+      expect(space.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledOnce();
+      expect(navigate).toHaveBeenCalledWith("memory", {
+        pathname: "/settings/memory/dreams",
+      });
+    } finally {
+      element.remove();
+    }
+  });
+
+  it.each([
+    ["/settings/memory", null],
+    ["/settings/memory/memories", null],
+    ["/settings/memory/dreams", null],
+    ["/settings/memory/settings", null],
+    ["/settings/memory?tab=memories", "/settings/memory/memories"],
+    ["/settings/memory?tab=dreams", "/settings/memory/dreams"],
+    ["/settings/memory?tab=settings", "/settings/memory/settings"],
+    ["/settings/memory?tab=dreaming", "/settings/memory/dreams"],
+    ["/settings/memory?tab=search", "/settings/memory/settings"],
+    ["/settings/memory?tab=overview", "/settings/memory"],
+    ["/settings/memory?section=memory", "/settings/memory/settings"],
+    ["/settings/memory#memory-backend", "/settings/memory/settings#memory-backend"],
+    ["/settings/memory#config-section-memory", "/settings/memory/settings#config-section-memory"],
+    [
+      "/settings/memory#config-section-memory-search",
+      "/settings/memory/settings#config-section-memory-search",
+    ],
+  ] as const)(
+    "performs at most one replace for %s and never oscillates back to a query tab",
+    async (sourceUrl, expectedUrl) => {
+      const replace = vi.fn();
+      const navigate = vi.fn();
+      const { element } = createPage({
+        configObject: {},
+        catalog: [],
+        replace,
+        navigate,
+        routeData: memoryRoute(sourceUrl),
+      });
+      document.body.append(element);
+      try {
+        await element.updateComplete;
+        for (let cycle = 0; cycle < 3; cycle += 1) {
+          element.routeData = { ...element.routeData } as ConfigRouteData;
+          await element.updateComplete;
+        }
+        dispatchTabShow(element, "overview");
+        dispatchTabShow(element, "dreams");
+
+        expect(replace).toHaveBeenCalledTimes(expectedUrl ? 1 : 0);
+        expect(navigate).not.toHaveBeenCalled();
+        if (!expectedUrl) {
+          return;
+        }
+        const canonical = memoryRoute(expectedUrl);
+        expect(replace).toHaveBeenCalledWith("memory", {
+          pathname: canonical.pathname,
+          search: canonical.search,
+          hash: canonical.hash,
+        });
+
+        element.routeData = canonical;
+        await element.updateComplete;
+        for (let cycle = 0; cycle < 3; cycle += 1) {
+          element.routeData = { ...element.routeData } as ConfigRouteData;
+          await element.updateComplete;
+        }
+        expect(replace).toHaveBeenCalledOnce();
+      } finally {
+        element.remove();
+      }
+    },
+  );
+
+  it("loads Overview status once per activation, agent change, and reconnect", async () => {
+    const memoryStatus = vi.fn((agentId: string) =>
+      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
+    );
+    const { element, request, setPhase } = createPage({
+      configObject: {},
+      agents: [{ id: "main" }, { id: "research" }],
+      memoryStatus,
+    });
+    element.routeData = memoryTabRoute("overview");
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
+      await element.updateComplete;
+      expect(
+        request.mock.calls.filter(([method]) => method === "doctor.memory.status"),
+      ).toHaveLength(1);
+
+      const select = element.querySelector("openclaw-agent-select") as HTMLElement & {
+        onSelect?: (value: string) => void;
+      };
+      select.onSelect?.("research");
+      await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("research"));
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(3));
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("reloads status when one pinned engine replaces another", async () => {
+    const memoryStatus = vi.fn((agentId: string) =>
+      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
+    );
+    const { element } = createPage({
+      configObject: { plugins: { slots: { memory: "engine-a" } } },
+      catalog: [engine("engine-a", true), engine("engine-b", true)],
+      memoryStatus,
+    });
+    element.routeData = memoryTabRoute("overview");
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
+
+      element.configObject = { plugins: { slots: { memory: "engine-b" } } };
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
+      expect(element.textContent).toContain("engine-b");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("shows the offline state when Overview is activated after disconnecting elsewhere", async () => {
+    const { element, setPhase } = createPage({ configObject: {} });
+    document.body.append(element);
+    try {
+      await element.updateComplete;
+      setPhase("disconnected");
+      element.routeData = memoryTabRoute("overview");
+      await waitForFast(() =>
+        expect(element.textContent).toContain(
+          "The gateway is offline, so memory status is unavailable.",
+        ),
+      );
+    } finally {
+      element.remove();
+    }
+  });
+});
+
+describe("MemorySettingsPage dreaming support", () => {
+  it("re-probes after reconnect and drops the abandoned capability result", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const { element, lookupSchemaPath, setPhase } = createPage({
+      configObject: {},
+      lookupSchemaPath: (call) => (call === 0 ? first.promise : second.promise),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(1));
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
+
+      first.resolve({ type: "object", additionalProperties: false, properties: {} });
+      await first.promise;
+      await element.updateComplete;
+      expect(element.textContent).not.toContain("Not available for this engine");
+
+      second.resolve({ type: "object" });
     } finally {
       element.remove();
     }

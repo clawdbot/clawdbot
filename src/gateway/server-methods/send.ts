@@ -211,6 +211,7 @@ function resolveTrustedMessageActionToolContext(params: {
       requesterAccountId: string | undefined;
       requesterSenderId: string | undefined;
       sessionId: string | undefined;
+      sourceReplySessionKey: string | undefined;
       sourceReplyFinal: boolean | undefined;
       sourceReplyToolCallId: string | undefined;
     }
@@ -226,6 +227,7 @@ function resolveTrustedMessageActionToolContext(params: {
       requesterAccountId: undefined,
       requesterSenderId: undefined,
       sessionId: undefined,
+      sourceReplySessionKey: undefined,
       sourceReplyFinal: undefined,
       sourceReplyToolCallId: undefined,
     };
@@ -245,12 +247,19 @@ function resolveTrustedMessageActionToolContext(params: {
   const requestAgentId = normalizeOptionalString(params.request.agentId);
   const sessionAgentId = parseAgentSessionKey(requestSessionKey)?.agentId;
   const requestSessionId = normalizeOptionalString(params.request.sessionId);
+  const sourceReplySessionKey =
+    normalizeSessionKeyPreservingOpaquePeerIds(messageActionContext.sourceReplySessionKey) ||
+    undefined;
+  const sourceReplySessionAgentId = parseAgentSessionKey(sourceReplySessionKey)?.agentId;
   if (
     !requestSessionKey ||
     requestSessionKey !== identitySessionKey ||
     (requestAgentId && normalizeAgentId(requestAgentId) !== identityAgentId) ||
     (sessionAgentId && normalizeAgentId(sessionAgentId) !== identityAgentId) ||
-    (messageActionContext.sessionId && requestSessionId !== messageActionContext.sessionId)
+    (messageActionContext.sessionId && requestSessionId !== messageActionContext.sessionId) ||
+    (sourceReplySessionKey &&
+      (!sourceReplySessionAgentId ||
+        normalizeAgentId(sourceReplySessionAgentId) !== identityAgentId))
   ) {
     return {
       ok: false,
@@ -266,6 +275,7 @@ function resolveTrustedMessageActionToolContext(params: {
     requesterAccountId: messageActionContext.requesterAccountId,
     requesterSenderId: messageActionContext.requesterSenderId,
     sessionId: messageActionContext.sessionId,
+    sourceReplySessionKey,
     sourceReplyFinal: messageActionContext.sourceReplyFinal,
     sourceReplyToolCallId: messageActionContext.sourceReplyToolCallId,
   };
@@ -959,7 +969,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             accountId,
             currentAccountId: trustedContext.requesterAccountId,
-            sessionKey,
+            sessionKey: trustedContext.sourceReplySessionKey ?? sessionKey,
             sessionId: trustedContext.sessionId,
             agentId,
             toolContext: trustedContext.toolContext,

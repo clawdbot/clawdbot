@@ -79,6 +79,10 @@ type ModelSnapshotEntry = {
   modelApi?: string | null;
   modelId?: string;
 };
+type ModelSnapshotState = {
+  lastSnapshot: ModelSnapshotEntry | null;
+  latestSwitchTimestamp: number | null;
+};
 type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 type ProviderReplayHookParams = {
@@ -626,23 +630,31 @@ function createProviderReplaySessionState(
   };
 }
 
-function readLastModelSnapshot(sessionManager: SessionManager): ModelSnapshotEntry | null {
+function readModelSnapshotState(sessionManager: SessionManager): ModelSnapshotState {
+  let lastSnapshot: ModelSnapshotEntry | null = null;
+  let latestSwitchTimestamp: number | null = null;
   try {
-    const entries = sessionManager.getEntries();
-    for (let i = entries.length - 1; i >= 0; i -= 1) {
-      const entry = entries[i] as CustomEntryLike;
+    for (const rawEntry of sessionManager.getBranch()) {
+      const entry = rawEntry as CustomEntryLike;
       if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) {
         continue;
       }
       const data = entry?.data as ModelSnapshotEntry | undefined;
       if (data && typeof data === "object") {
-        return data;
+        if (
+          lastSnapshot &&
+          !isSameModelSnapshot(lastSnapshot, data) &&
+          Number.isFinite(data.timestamp)
+        ) {
+          latestSwitchTimestamp = data.timestamp;
+        }
+        lastSnapshot = data;
       }
     }
   } catch {
-    return null;
+    return { lastSnapshot: null, latestSwitchTimestamp: null };
   }
-  return null;
+  return { lastSnapshot, latestSwitchTimestamp };
 }
 
 function appendModelSnapshot(sessionManager: SessionManager, data: ModelSnapshotEntry): void {
@@ -777,15 +789,23 @@ export async function sanitizeSessionHistory(params: {
     params.modelApi === "openai-chatgpt-responses" ||
     params.modelApi === "azure-openai-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
-  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
-  const modelChanged = priorSnapshot
-    ? !isSameModelSnapshot(priorSnapshot, {
-        timestamp: 0,
+  const snapshotState = hasSnapshot
+    ? readModelSnapshotState(params.sessionManager)
+    : { lastSnapshot: null, latestSwitchTimestamp: null };
+  const priorSnapshot = snapshotState.lastSnapshot;
+  const currentSnapshot: ModelSnapshotEntry | null = hasSnapshot
+    ? {
+        timestamp: Date.now(),
         provider: params.provider,
         modelApi: params.modelApi,
         modelId: params.modelId,
-      })
-    : false;
+      }
+    : null;
+  const modelChanged =
+    priorSnapshot && currentSnapshot ? !isSameModelSnapshot(priorSnapshot, currentSnapshot) : false;
+  const latestModelSwitchTimestamp = modelChanged
+    ? currentSnapshot?.timestamp
+    : snapshotState.latestSwitchTimestamp;
   const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
     normalizedAssistantReplay,
@@ -810,7 +830,7 @@ export async function sanitizeSessionHistory(params: {
   // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
   // bound to the original prefix; after compaction the prefix changes and Anthropic
   // rejects them. Timestamp comparison with the latest compaction summary identifies
-  // the affected messages regardless of path (standard or truncateAfterCompaction).
+  // the affected messages regardless of which compaction path produced them.
   const compactionStaleStripped =
     signedThinkingProvider || policy.preserveSignatures
       ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
@@ -851,8 +871,10 @@ export async function sanitizeSessionHistory(params: {
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
         normalizeOpenAIResponsesToolCallIds(
+          // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
+          // invalidated by a switch, every later replay must keep dropping them.
           downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
-            dropReplayableReasoning: modelChanged,
+            dropReplayableReasoningBefore: latestModelSwitchTimestamp ?? undefined,
           }),
         ),
       )
@@ -907,13 +929,8 @@ export async function sanitizeSessionHistory(params: {
     ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
     : responsesProviderRepaired;
 
-  if (hasSnapshot && (!priorSnapshot || modelChanged)) {
-    appendModelSnapshot(params.sessionManager, {
-      timestamp: Date.now(),
-      provider: params.provider,
-      modelApi: params.modelApi,
-      modelId: params.modelId,
-    });
+  if (currentSnapshot && (!priorSnapshot || modelChanged)) {
+    appendModelSnapshot(params.sessionManager, currentSnapshot);
   }
 
   if (!policy.applyGoogleTurnOrdering) {

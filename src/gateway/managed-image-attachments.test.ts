@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
@@ -779,35 +780,52 @@ describe("createManagedOutgoingImageBlocks", () => {
     ).rejects.toThrow("Invalid image data URL");
   });
 
-  it("rewrites local image sources into managed display blocks without leaking the source path", async () => {
-    const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+  it.each([
+    { name: "local paths", sourceForPath: (sourcePath: string) => sourcePath },
+    {
+      name: "file URLs",
+      sourceForPath: (sourcePath: string) => {
+        const sourceUrl = pathToFileURL(sourcePath);
+        sourceUrl.searchParams.set("sig", "secret");
+        sourceUrl.hash = "preview";
+        return sourceUrl.href;
+      },
+    },
+  ])(
+    "rewrites $name into managed display blocks without leaking the source path",
+    async ({ sourceForPath }) => {
+      const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const blocks = await createManagedOutgoingImageBlocks({
-        stateDir,
-        sessionKey: "agent:main:main",
-        mediaUrls: [sourcePath],
-        localRoots: [path.join(stateDir, "workspace")],
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const blocks = await createManagedOutgoingImageBlocks({
+          stateDir,
+          sessionKey: "agent:main:main",
+          mediaUrls: [sourceForPath(sourcePath)],
+          localRoots: [path.join(stateDir, "workspace")],
+        });
+
+        expect(blocks).toHaveLength(1);
+        const block = requireBlock(blocks);
+        expect(block.type).toBe("image");
+        expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
+        expect(block.openUrl).toContain("/full");
+        expect(block.url).toBe(block.openUrl);
+        expect(block.alt).toBe("dot.png");
+        expect(JSON.stringify(block)).not.toContain(sourcePath);
+        expect(JSON.stringify(block)).not.toContain("sig=secret");
+        expect(JSON.stringify(block)).not.toContain("preview");
+
+        const attachmentId = requireAttachmentIdFromUrl(block.url);
+        const record = readManagedImageRecord(attachmentId, stateDir);
+        const originalPath = requireManagedOriginalPath(stateDir, attachmentId);
+        expect(record?.original.filename).toMatch(/\.png$/);
+        expect(originalPath).not.toBe(sourcePath);
+        expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
       });
-
-      expect(blocks).toHaveLength(1);
-      const block = requireBlock(blocks);
-      expect(block.type).toBe("image");
-      expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
-      expect(block.openUrl).toContain("/full");
-      expect(block.url).toBe(block.openUrl);
-      expect(JSON.stringify(block)).not.toContain(sourcePath);
-
-      const attachmentId = requireAttachmentIdFromUrl(block.url);
-      const record = readManagedImageRecord(attachmentId, stateDir);
-      const originalPath = requireManagedOriginalPath(stateDir, attachmentId);
-      expect(record?.original.filename).toMatch(/\.png$/);
-      expect(originalPath).not.toBe(sourcePath);
-      expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
-    });
-  });
+    },
+  );
 
   it("ingests external image URLs into managed storage instead of hotlinking them", async () => {
     const imageBuffer = Buffer.from(TINY_PNG_BASE64, "base64");

@@ -9,6 +9,15 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
 import { setFalFetchGuardForTesting } from "./test-support.js";
 
+function mockFalImageProviderRuntime() {
+  vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+    apiKey: "fal-test-key",
+    source: "env",
+    mode: "api-key",
+  });
+  setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+}
+
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
   if (!request) {
@@ -74,12 +83,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("generates image buffers from the fal sync API", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     const releaseRequest = vi.fn(async () => {});
     const releaseDownload = vi.fn(async () => {});
     fetchWithSsrFGuardMock
@@ -216,12 +220,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("releases a timed-out generated image download", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     const releaseDownload = vi.fn(async () => {});
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
@@ -257,12 +256,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects generated image downloads that exceed the configured media cap", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -296,12 +290,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("wraps wrong-shape successful fal image responses", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(
         JSON.stringify({ images: { url: "https://example.test/image.png" } }),
@@ -325,12 +314,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -382,12 +366,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("routes GPT Image 2 edits through /edit with image_urls", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -439,12 +418,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("allows GPT Image 2 edits up to 10 reference images", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -495,12 +469,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects GPT Image 2 edits above 10 reference images", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -519,12 +488,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("routes Nano Banana 2 text generation with native resolution", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -570,12 +534,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("does not synthesize Nano Banana 2 aspect ratio from resolution alone", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -622,12 +581,7 @@ describe("fal image-generation provider", () => {
     { model: "fal-ai/nano-banana", resolution: undefined },
     { model: "fal-ai/nano-banana-2", resolution: "2K" as const },
   ])("routes $model edits through /edit with model geometry", async ({ model, resolution }) => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -692,12 +646,7 @@ describe("fal image-generation provider", () => {
       error: "fal Nano Banana 2 supports at most 14 reference images",
     },
   ])("rejects $model edits above its reference limit", async ({ model, inputCount, error }) => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -716,12 +665,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Krea-only aspect ratios for Nano Banana 2", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -737,12 +681,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("routes Nano Banana 2 Lite edits through /edit with image_urls", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -794,12 +733,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Krea-only aspect ratios for Nano Banana 2 Lite", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -817,12 +751,7 @@ describe("fal image-generation provider", () => {
   it.each(["1K", "2K", "4K"] as const)(
     "rejects %s resolution overrides for Nano Banana 2 Lite",
     async (resolution) => {
-      vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-        apiKey: "fal-test-key",
-        source: "env",
-        mode: "api-key",
-      });
-      setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockFalImageProviderRuntime();
 
       const provider = buildFalImageGenerationProvider();
       await expect(
@@ -841,12 +770,7 @@ describe("fal image-generation provider", () => {
   );
 
   it("rejects Nano Banana 2 Lite edits above 14 reference images", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -891,12 +815,7 @@ describe("fal image-generation provider", () => {
       },
     },
   ])("keeps $label text-to-image on its base endpoint", async (testCase) => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -936,12 +855,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("routes Grok Imagine edits through /edit with lowercase resolution", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -989,12 +903,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects 4K resolution for Grok Imagine edits", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -1012,12 +921,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Nano Banana ratios for Grok Imagine", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -1033,12 +937,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Grok Imagine edits above 3 reference images", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -1057,12 +956,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("preserves an explicit Grok Imagine /quality/edit model path", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -1106,12 +1000,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("preserves exact custom Fal edit endpoints", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -1155,12 +1044,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("maps aspect ratio for text generation without forcing a square default", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -1204,12 +1088,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("combines resolution and aspect ratio for text generation", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -1254,12 +1133,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("uses Krea 2 native aspect-ratio and creativity payload schema", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -1308,12 +1182,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("passes reference images to Krea 2 as style references without edit suffix", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -1364,12 +1233,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("maps Krea 2 size hints to the closest native aspect ratio", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -1521,12 +1385,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("blocks private-network image download URLs through the SSRF guard", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     const blocked = new Error("Blocked: resolves to private/internal/special-use IP address");
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
@@ -1560,12 +1419,7 @@ describe("fal image-generation provider", () => {
   });
 
   it("does not auto-whitelist trusted private relay hosts from a configured baseUrl", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockFalImageProviderRuntime();
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(

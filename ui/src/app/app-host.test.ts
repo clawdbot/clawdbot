@@ -180,6 +180,15 @@ type ShellChromeEventState = {
   disconnectedCallback: () => void;
 };
 
+type ShellNavDrawerCloseState = HTMLElement &
+  ShellChromeEventState & {
+    desktopNavigationExpanded: boolean;
+    navDrawerTrigger: HTMLElement | null;
+    closeNavDrawer: (options?: { restoreFocus?: boolean }) => void;
+    handleWindowResize: () => void;
+    toggleNavigationSurface: () => void;
+  };
+
 function createDragEvent(type: "dragover" | "drop", types: string[]) {
   const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
   const dataTransfer = { dropEffect: "copy", types };
@@ -741,6 +750,65 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       acceptedDropTarget.remove();
       nativeFileInput.remove();
     }
+  });
+
+  it("suppresses modal focus restoration when the navigation drawer closes without restoring focus", () => {
+    const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
+    const modal = document.createElement("openclaw-modal-dialog");
+    const setReturnFocusTarget = vi.fn();
+    modal.className = "drawer nav-drawer";
+    Object.defineProperty(modal, "setReturnFocusTarget", { value: setReturnFocusTarget });
+    shell.append(modal);
+    shell.navDrawerOpen = true;
+    shell.navDrawerTrigger = document.createElement("button");
+
+    shell.closeNavDrawer();
+
+    expect(setReturnFocusTarget).toHaveBeenCalledExactlyOnceWith(null);
+    expect(shell.navDrawerOpen).toBe(false);
+    expect(shell.navDrawerTrigger).toBeNull();
+  });
+
+  it("closes an open navigation drawer before moving its sidebar into desktop layout", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
+    const updateNavigation = vi.fn();
+    shell.runtime = {
+      context: {
+        navigation: {
+          snapshot: { navCollapsed: true },
+          update: updateNavigation,
+        },
+      } as unknown as ApplicationContext,
+    };
+    const sidebar = document.createElement("openclaw-app-sidebar");
+    const dismissTransientMenus = vi.fn(() => true);
+    Object.defineProperty(sidebar, "dismissTransientMenus", { value: dismissTransientMenus });
+    const modal = document.createElement("openclaw-modal-dialog");
+    const setReturnFocusTarget = vi.fn();
+    modal.className = "drawer nav-drawer";
+    Object.defineProperty(modal, "setReturnFocusTarget", { value: setReturnFocusTarget });
+    shell.append(sidebar, modal);
+    const trigger = document.body.appendChild(document.createElement("button"));
+    const restoreTriggerFocus = vi.spyOn(trigger, "focus");
+    const closeNavDrawer = vi.spyOn(shell, "closeNavDrawer");
+    shell.navDrawerOpen = true;
+    shell.navDrawerTrigger = trigger;
+
+    shell.handleWindowResize();
+
+    expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
+    expect(dismissTransientMenus).toHaveBeenCalledOnce();
+    expect(setReturnFocusTarget).toHaveBeenCalledExactlyOnceWith(null);
+    expect(restoreTriggerFocus).not.toHaveBeenCalled();
+    expect(shell.navDrawerOpen).toBe(false);
+    expect(shell.navDrawerTrigger).toBeNull();
+    expect(updateNavigation).not.toHaveBeenCalled();
+    expect(shell.desktopNavigationExpanded).toBe(true);
+    shell.toggleNavigationSurface();
+    expect(updateNavigation).toHaveBeenCalledExactlyOnceWith({ navCollapsed: true });
+    expect(shell.desktopNavigationExpanded).toBe(false);
+    trigger.remove();
   });
 
   it("handles merged header drawer and palette requests", () => {

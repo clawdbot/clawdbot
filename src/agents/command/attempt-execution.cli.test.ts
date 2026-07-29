@@ -553,6 +553,37 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
+  it("clears a fork-marked Claude CLI session after terminal failover", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-expired";
+    const cliSessionId = "expired-fork-source";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-fork-expired", cliSessionId);
+    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("fork source expired", {
+        reason: "session_expired",
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "fork from an expired source",
+        runId: "run-cli-fork-expired",
+      }),
+    ).rejects.toMatchObject({ name: "FailoverError", reason: "session_expired" });
+
+    expect(firstRunCliAgentArg().forkCliSessionOnResume).toBe(true);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
   it("preserves a reused Claude CLI session after detached media starts", async () => {
     const sessionKey = "agent:main:cron:job:run:run-id";
     const cliSessionId = "media-continuation-session";

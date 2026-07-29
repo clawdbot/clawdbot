@@ -58,8 +58,8 @@ export async function requireCatalogEligibleThread(
   control: CodexSessionCatalogControl,
   threadId: string,
 ): Promise<CodexSessionCatalogSession> {
-  // Mutating actions use a fresh pinned control and authoritative thread/read. For passive callers,
-  // keep the three-second positive hit; only a miss needs to bypass the list memo.
+  // Mutating actions use a fresh pinned control and authoritative thread/read. Passive positive hits
+  // may use the cadence-safe page memo; only a miss must bypass it before rejecting a new thread.
   const cached = await findCatalogEligibleThread(control, threadId, false);
   if (cached) {
     return cached;

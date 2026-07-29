@@ -55,6 +55,7 @@ import {
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
 import type {
+  SkillProposalApplyResult,
   SkillProposalManifest,
   SkillProposalReadResult,
   SkillProposalSupportFileInput,
@@ -120,6 +121,7 @@ type ResolveSkillsWorkspaceOptions = {
 type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
+const GATEWAY_SKILLS_MUTATION_TIMEOUT_MS = 10_000;
 
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
@@ -279,7 +281,8 @@ function formatSkillProposalList(manifest: SkillProposalManifest): string {
   }
   return `${manifest.proposals
     .map(
-      (entry) => `${entry.id}  ${entry.status}  ${entry.kind}  ${entry.skillKey}  ${entry.title}`,
+      (entry) =>
+        `${entry.id}  ${entry.status}  ${entry.kind}  ${entry.skillKey}  ${entry.title}${entry.workspaceMismatch ? "  [previous workspace]" : ""}`,
     )
     .join("\n")}\n`;
 }
@@ -393,6 +396,50 @@ async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skil
     return unpinCuratedSkill(skill);
   }
   return restoreCuratedSkill(skill);
+}
+
+async function runSkillProposalApply(
+  resolved: ResolvedSkillsWorkspace,
+  proposalId: string,
+): Promise<SkillProposalApplyResult> {
+  const { callGateway, isGatewayTransportError } = await import("../gateway/call.js");
+  try {
+    // Decide offline fallback before dispatching the non-idempotent mutation.
+    // Once a Gateway answers, apply failures must never be replayed locally.
+    await callGateway({
+      config: resolved.config,
+      method: "health",
+      params: {},
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      requiredMethods: ["skills.proposals.apply"],
+    });
+  } catch (err) {
+    if (
+      resolved.config.gateway?.mode === "remote" ||
+      !isGatewayTransportError(err) ||
+      err.kind !== "closed" ||
+      err.code !== 1006
+    ) {
+      throw err;
+    }
+    return await applySkillProposal({
+      agentId: resolved.agentId,
+      workspaceDir: resolved.workspaceDir,
+      config: resolved.config,
+      proposalId,
+    });
+  }
+
+  return await callGateway<SkillProposalApplyResult>({
+    config: resolved.config,
+    method: "skills.proposals.apply",
+    params: { agentId: resolved.agentId, proposalId },
+    timeoutMs: GATEWAY_SKILLS_MUTATION_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  });
 }
 
 async function readSkillProposalInput(options: {
@@ -821,8 +868,8 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (opts: { json?: boolean; agent?: string }) => {
       try {
-        const { workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
-        const manifest = await listSkillProposals({ workspaceDir });
+        const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
+        const manifest = await listSkillProposals({ agentId, workspaceDir });
         if (opts.json) {
           defaultRuntime.writeJson(manifest);
           return;
@@ -841,8 +888,8 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (proposalId: string, opts: { json?: boolean; agent?: string }) => {
       try {
-        const { workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
-        const proposal = await inspectSkillProposal(proposalId, { workspaceDir });
+        const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
+        const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir });
         if (!proposal) {
           defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
           defaultRuntime.exit(1);
@@ -887,10 +934,14 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { config, workspaceDir, agentId } = resolveSkillsWorkspaceForCommand(
+            command.parent,
+            opts,
+          );
           const draft = await readSkillProposalInput(opts);
           const proposal = await proposeCreateSkill({
             workspaceDir,
+            agentId,
             config,
             name: opts.name,
             description: opts.description,
@@ -997,10 +1048,14 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { config, workspaceDir, agentId } = resolveSkillsWorkspaceForCommand(
+            command.parent,
+            opts,
+          );
           const draft = await readSkillProposalInput(opts);
           const proposal = await reviseSkillProposal({
             workspaceDir,
+            agentId,
             config,
             proposalId,
             content: draft.content,
@@ -1031,8 +1086,8 @@ export function registerSkillsCli(program: Command) {
     .action(
       async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
         try {
-          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
+          const resolved = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const applied = await runSkillProposalApply(resolved, proposalId);
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;
@@ -1060,8 +1115,9 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const record = await rejectSkillProposal({
+            agentId,
             workspaceDir,
             proposalId,
             reason: opts.reason,
@@ -1091,8 +1147,9 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const record = await quarantineSkillProposal({
+            agentId,
             workspaceDir,
             proposalId,
             reason: opts.reason,

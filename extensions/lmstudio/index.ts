@@ -13,6 +13,7 @@ import {
   CUSTOM_LOCAL_AUTH_MARKER,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
@@ -216,6 +217,7 @@ export default definePluginEntry({
           ?.find((model) => model.id === ctx.modelId),
       augmentModelCatalog: (ctx) => resolveLmstudioAugmentedCatalogEntries(ctx.config),
       wrapStreamFn: wrapLmstudioInferencePreload,
+      ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       wizard: {
         setup: {
           choiceId: PROVIDER_ID,

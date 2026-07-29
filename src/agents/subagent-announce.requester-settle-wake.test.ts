@@ -386,6 +386,32 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
+  it("wakes after a yielded requester's active child completes", async () => {
+    const child = makeSettledChild({
+      runId: "run-b",
+      delivery: { status: "delivered" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: ["run-b"],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: child }),
+    );
+
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect(deliveredCallArg().directIdempotencyKey).toBe(
+      `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
+    );
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
+  });
+
   it("wakes after a requester yields with one already-delivered completion", async () => {
     const child = makeSettledChild({
       runId: "run-b",

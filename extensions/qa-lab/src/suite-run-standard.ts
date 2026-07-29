@@ -20,7 +20,6 @@ import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   runQaScenarioWithFlakeRetry,
 } from "./suite-support.js";
@@ -133,13 +132,8 @@ export async function runQaFlowSuiteStandard(
       mutateConfig: gatewayConfigPatch
         ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
         : undefined,
+      // The gateway owns forced runtime, sandbox args, staged mock models, and provider keys.
       runtimeEnvPatch: mergeQaRuntimeEnvPatches(
-        buildQaRuntimeEnvPatch({
-          providerMode,
-          forcedRuntime: params?.forcedRuntime,
-          mockBaseUrl: activeMock?.baseUrl,
-          nativeAppServerArgs: process.env.OPENCLAW_CODEX_APP_SERVER_ARGS,
-        }),
         transport.createRuntimeEnvPatch?.(),
         buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
       ),

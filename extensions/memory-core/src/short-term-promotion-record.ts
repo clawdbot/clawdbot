@@ -20,6 +20,7 @@ import {
   isShortTermMemoryPath,
   isShortTermSessionCorpusPath,
   MAX_RECALL_DAYS,
+  mergeProjectKeyLists,
   mergeQueryHashes,
   mergeRecentDistinct,
   normalizeIsoDay,
@@ -252,6 +253,7 @@ export async function recordShortTermRecalls(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
       const provenance = mergeRecallProvenance(existing?.provenance, result.provenance, nowMs);
+      const projectKey = mergeProjectKeyLists(existing?.projectKey, result.projectKey);
 
       const unchangedRepeatedSignal =
         (Boolean(params.dedupeByQueryPerDay) || signalType === "daily") &&
@@ -290,6 +292,7 @@ export async function recordShortTermRecalls(params: {
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         provenance,
         claimHash,
+        ...(projectKey ? { projectKey } : {}),
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }
@@ -334,6 +337,7 @@ export async function recordGroundedShortTermCandidates(params: {
     query?: string;
     signalCount?: number;
     dayBucket?: string;
+    projectKey?: string;
   }>;
   dedupeByQueryPerDay?: boolean;
   dayBucket?: string;
@@ -373,6 +377,7 @@ export async function recordGroundedShortTermCandidates(params: {
         query: normalizeSnippet(item.query ?? query),
         signalCount: Math.max(1, Math.floor(item.signalCount ?? 1)),
         dayBucket: normalizeIsoDay(item.dayBucket ?? params.dayBucket ?? ""),
+        projectKey: mergeProjectKeyLists(item.projectKey),
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -429,6 +434,7 @@ export async function recordGroundedShortTermCandidates(params: {
         },
         nowMs,
       );
+      const projectKey = mergeProjectKeyLists(existing?.projectKey, item.projectKey);
 
       const unchangedRepeatedSignal =
         Boolean(params.dedupeByQueryPerDay) &&
@@ -457,6 +463,7 @@ export async function recordGroundedShortTermCandidates(params: {
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         provenance,
         claimHash,
+        ...(projectKey ? { projectKey } : {}),
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }

@@ -29,7 +29,6 @@ import {
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -60,9 +59,12 @@ import {
 import { runCliAgent } from "../cli-runner.js";
 import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
-import { getCliSessionBinding } from "../cli-session.js";
+import {
+  getCliSessionBinding,
+  resolveCliSessionClearReason,
+  shouldClearFailedCliSessionBinding,
+} from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
-import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
@@ -95,20 +97,6 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
-  if (readErrorName(err) === "AbortError") {
-    return true;
-  }
-  return err instanceof FailoverError;
-}
-
-function resolveClearedCliSessionReason(err: unknown): string {
-  if (err instanceof FailoverError) {
-    return err.reason;
-  }
-  return readErrorName(err) || "error";
-}
 
 function normalizeTranscriptMirrorText(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
@@ -908,14 +896,19 @@ export function runAgentAttempt(params: {
         const failedCliSessionId = failedCliSessionBinding?.sessionId;
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
-          failedCliSessionBinding?.forkNextResume !== true &&
-          shouldClearReusedCliSessionAfterError(err) &&
-          !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
+          shouldClearFailedCliSessionBinding({
+            error: err,
+            binding: failedCliSessionBinding,
+            hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+              params.sessionKey,
+              mediaTaskIdsBefore,
+            ),
+          }) &&
           failedCliSessionId &&
           mutableCliSessionStore
         ) {
           log.warn(
-            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
           );
 
           params.sessionEntry =

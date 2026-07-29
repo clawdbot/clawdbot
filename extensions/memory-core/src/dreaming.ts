@@ -935,7 +935,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   };
 
   const startRuntimeCronReconcileTimer = (): void => {
-    if (runtimeCronReconcileTimer) {
+    if (disposed || runtimeCronReconcileTimer) {
       return;
     }
     runtimeCronReconcileTimer = setInterval(() => {
@@ -956,12 +956,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         startupConfig: ctx.config,
         startupCron: () => resolveCronServiceFromGatewayContext(ctx),
       });
-      startRuntimeCronReconcileTimer();
-      scheduleStartupCronRetry();
     } catch (err) {
       api.logger.error(
         `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
       );
+    } finally {
+      startRuntimeCronReconcileTimer();
+      scheduleStartupCronRetry();
     }
   });
 

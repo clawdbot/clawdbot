@@ -1579,7 +1579,7 @@ describe("Claude session catalog", () => {
     }
   });
 
-  it("reuses the assembled scan within the TTL without per-file filesystem work", async () => {
+  it("serves an unchanged assembled scan without reparsing transcript files", async () => {
     const home = await createHome();
     const sessionIds = ["cached-session-a", "cached-session-b"];
     await writeProject({
@@ -1609,42 +1609,260 @@ describe("Claude session catalog", () => {
         value.endsWith("sessions-index.json") ||
         path.basename(value).startsWith("local_"));
     expect(realpathSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
-    expect(statSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
+    expect(
+      statSpy.mock.calls.some(
+        ([filePath]) => typeof filePath === "string" && filePath.endsWith(".jsonl"),
+      ),
+    ).toBe(true);
     expect(openSpy).not.toHaveBeenCalled();
     expect(readFileSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
   });
 
-  it("bounds append-only snapshot staleness to 15 seconds", async () => {
+  it("does not shorten cache validity for Desktop rows with no captured transcript", async () => {
+    const home = await createHome();
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { existing: [sdkCliMessage("existing", "Existing")] },
+    });
+    await writeDesktopMetadata(home, "missing", {
+      cliSessionId: "missing-desktop-transcript",
+      title: "Missing",
+    });
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const openSpy = vi.spyOn(fs, "open");
+    const first = await listLocalClaudeSessionPage({}, home);
+    openSpy.mockClear();
+
+    now += 15_001;
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual(first);
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("retries an unchanged tree after project-root canonicalization recovers", async () => {
+    const home = await createHome();
+    const projectRoot = path.join(home, ".claude", "projects");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { recovered: [sdkCliMessage("recovered", "Recovered")] },
+    });
+    const realpath = fs.realpath.bind(fs);
+    let failRoot = true;
+    vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+      if (failRoot && args[0] === projectRoot) {
+        failRoot = false;
+        throw new Error("transient realpath failure");
+      }
+      return await realpath(...args);
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: "recovered" })],
+    });
+  });
+
+  it("retries transient index safe-file failures during discovery", async () => {
+    const home = await createHome();
+    const sessionId = "safe-file-retry";
+    const transcriptPath = path.join(
+      home,
+      ".claude",
+      "projects",
+      "-workspace",
+      `${sessionId}.jsonl`,
+    );
+    await writeProject({
+      home,
+      entries: [{ sessionId, fullPath: transcriptPath }],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Recovered")] },
+    });
+    const realpath = fs.realpath.bind(fs);
+    let transcriptAttempts = 0;
+    vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+      if (args[0] === transcriptPath && transcriptAttempts++ === 0) {
+        throw new Error("transient transcript realpath failure");
+      }
+      return await realpath(...args);
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: sessionId })],
+    });
+    expect(transcriptAttempts).toBe(2);
+  });
+
+  it("expires a partial discovery scan on the short transient-I/O retry bound", async () => {
+    const home = await createHome();
+    const sessionId = "partial-scan-retry";
+    const transcriptPath = path.join(
+      home,
+      ".claude",
+      "projects",
+      "-workspace",
+      `${sessionId}.jsonl`,
+    );
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Recovered")] },
+    });
+    const open = fs.open.bind(fs);
+    let transcriptAttempts = 0;
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === transcriptPath && transcriptAttempts++ === 0) {
+        throw new Error("transient transcript open failure");
+      }
+      return await open(...args);
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    now += 15_001;
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: sessionId })],
+    });
+    expect(transcriptAttempts).toBe(2);
+  });
+
+  it("does not shorten cache validity for a permanently missing indexed transcript", async () => {
+    const home = await createHome();
+    const missingPath = path.join(
+      home,
+      ".claude",
+      "projects",
+      "-workspace",
+      "missing-indexed.jsonl",
+    );
+    await writeProject({
+      home,
+      entries: [{ sessionId: "missing-indexed", fullPath: missingPath }],
+      transcripts: {},
+    });
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const realpathSpy = vi.spyOn(fs, "realpath");
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    expect(realpathSpy.mock.calls.filter(([filePath]) => filePath === missingPath)).toHaveLength(1);
+    now += 15_001;
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    expect(realpathSpy.mock.calls.filter(([filePath]) => filePath === missingPath)).toHaveLength(1);
+  });
+
+  it("invalidates the assembled scan when an existing transcript is appended", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
     const sessionId = "append-staleness";
     const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const futureTranscriptPath = path.join(projectDir, "future-sibling.jsonl");
     await writeProject({
       home,
       entries: [],
-      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Initial")] },
+      transcripts: {
+        [sessionId]: [sdkCliMessage(sessionId, "Initial")],
+        "future-sibling": [sdkCliMessage("future-sibling", "Future")],
+      },
     });
     const baseNow = Date.now();
     const fixedDirectoryTime = new Date(baseNow - 10_000);
+    await fs.utimes(futureTranscriptPath, new Date(baseNow + 10_000), new Date(baseNow + 10_000));
     await fs.utimes(projectDir, fixedDirectoryTime, fixedDirectoryTime);
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(baseNow);
     const initial = await listLocalClaudeSessionPage({}, home);
-    const initialUpdatedAt = initial.sessions[0]?.updatedAt;
+    const initialUpdatedAt = initial.sessions.find(
+      (session) => session.threadId === sessionId,
+    )?.updatedAt;
 
     await fs.appendFile(transcriptPath, `${JSON.stringify({ type: "progress" })}\n`);
     const appendedAt = new Date(baseNow + 2_000);
     await fs.utimes(transcriptPath, appendedAt, appendedAt);
-    // Content writes do not portably change the parent directory mtime. Pin it so this test owns
-    // only the documented TTL path on every filesystem used by CI.
+    // Content writes do not portably change the parent directory mtime. Pin it so only the child
+    // mtime component of the tree stamp can invalidate this snapshot on every CI filesystem.
     await fs.utimes(projectDir, fixedDirectoryTime, fixedDirectoryTime);
 
-    nowSpy.mockReturnValue(baseNow + 14_999);
-    const staleWithinBound = await listLocalClaudeSessionPage({}, home);
-    expect(staleWithinBound.sessions[0]?.updatedAt).toBe(initialUpdatedAt);
+    const refreshed = await listLocalClaudeSessionPage({}, home);
+    expect(initialUpdatedAt).not.toBe(appendedAt.getTime());
+    expect(refreshed.sessions.find((session) => session.threadId === sessionId)?.updatedAt).toBe(
+      appendedAt.getTime(),
+    );
+  });
 
-    nowSpy.mockReturnValue(baseNow + 15_000);
-    const refreshedAtBound = await listLocalClaudeSessionPage({}, home);
-    expect(refreshedAtBound.sessions[0]?.updatedAt).toBe(appendedAt.getTime());
+  it("invalidates the assembled scan after same-size same-mtime atomic replacement", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const sessionId = "atomic-replacement";
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const fixedTime = new Date("2026-07-20T12:00:00.000Z");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Alpha")] },
+    });
+    await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    await fs.utimes(projectDir, fixedTime, fixedTime);
+    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Alpha");
+
+    const replacementPath = path.join(projectDir, "replacement.tmp");
+    await fs.writeFile(replacementPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
+    await fs.utimes(replacementPath, fixedTime, fixedTime);
+    await fs.rename(replacementPath, transcriptPath);
+    await fs.utimes(projectDir, fixedTime, fixedTime);
+
+    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Bravo");
+  });
+
+  it("keeps the metadata byte frontier in serial directory order under parallel stats", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "sessions-index.json"), '{"version":1,"entries":[]}');
+    const fileBytes = 1024 * 1024;
+    const chunkBytes = 16 * 1024;
+    const leadingFiller = Buffer.from(`${"x".repeat(chunkBytes - 1)}\n`.repeat(63));
+    for (let index = 0; index < 66; index += 1) {
+      const sessionId = `budget-${String(index).padStart(2, "0")}`;
+      const messageLine = Buffer.from(`${JSON.stringify(sdkCliMessage(sessionId, sessionId))}\n`);
+      const finalFillerBytes = fileBytes - leadingFiller.length - messageLine.length;
+      const finalFiller = Buffer.from(`${"x".repeat(finalFillerBytes - 1)}\n`);
+      await fs.writeFile(
+        path.join(projectDir, `${sessionId}.jsonl`),
+        Buffer.concat([leadingFiller, finalFiller, messageLine]),
+      );
+    }
+    const serialNames = (await fs.readdir(projectDir))
+      .filter((name) => name.endsWith(".jsonl"))
+      .map((name) => name.slice(0, -".jsonl".length));
+    const expected = serialNames.slice(0, 64).toSorted();
+    const realpath = fs.realpath.bind(fs);
+    let activeRealpaths = 0;
+    let maxConcurrentRealpaths = 0;
+    vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target !== "string" || !target.endsWith(".jsonl")) {
+        return await realpath(...args);
+      }
+      activeRealpaths += 1;
+      maxConcurrentRealpaths = Math.max(maxConcurrentRealpaths, activeRealpaths);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      try {
+        return await realpath(...args);
+      } finally {
+        activeRealpaths -= 1;
+      }
+    });
+
+    const cold = await listLocalClaudeSessionPage({ limit: 100 }, home);
+    expect(maxConcurrentRealpaths).toBeGreaterThan(1);
+    expect(cold.sessions.map((session) => session.threadId).toSorted()).toEqual(expected);
+
+    await fs.utimes(projectDir, new Date(), new Date(Date.now() + 2_000));
+    const warm = await listLocalClaudeSessionPage({ limit: 100 }, home);
+    expect(warm.sessions.map((session) => session.threadId).toSorted()).toEqual(expected);
   });
 
   it("invalidates the assembled scan on a project directory mtime change", async () => {
@@ -1854,10 +2072,11 @@ describe("Claude session catalog", () => {
       }
       return await readFile(...args);
     });
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
 
     expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([]);
-    const refreshTime = new Date(Date.now() + 2_000);
-    await fs.utimes(projectDir, refreshTime, refreshTime);
+    now += 15_001;
 
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
       sessions: [{ threadId: sessionId, name: "Recovered index" }],

@@ -260,6 +260,11 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["gateway", "health"], {
+      routeConfigGuard: "always",
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["plugins", "update"], {
       loadPlugins: "never",
       hideBanner: true,

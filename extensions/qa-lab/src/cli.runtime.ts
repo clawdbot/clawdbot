@@ -84,7 +84,6 @@ import {
   type QaRuntimePairLane,
 } from "./scenario-catalog.js";
 import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
-import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import {
   qaScorecardChannelDriverSchema,
@@ -99,7 +98,10 @@ import {
   runQaSuiteWithInfraRetry,
 } from "./suite-launch.runtime.js";
 import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
-import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
+import {
+  isQaSuiteReportOnlyOptionalScenario,
+  readQaSuiteFailedOrSkippedScenarioCountFromFile,
+} from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -144,13 +146,13 @@ export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
 };
 
 export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
+  expandScenarioChannels?: boolean;
   channelDriver?: string;
   channel?: string;
   runner?: string;
   thinking?: string;
   cliAuthMode?: string;
   parityPack?: string;
-  pack?: string;
   scenarioIds?: string[];
   enabledPluginIds?: string[];
   image?: string;
@@ -708,6 +710,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
       channelDriver: profileReport.channelDriver,
+      expandScenarioChannels: true,
     });
     evidencePath =
       suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
@@ -802,6 +805,31 @@ async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<
   }
 }
 
+function resolveQaReportOnlyOptionalScenarioNames(params: {
+  scenarioIds: readonly string[];
+  explicitScenarioSelection?: boolean;
+}): ReadonlySet<string> | undefined {
+  if (params.explicitScenarioSelection || params.scenarioIds.length > 0) {
+    return undefined;
+  }
+  return new Set(
+    readQaScenarioPack()
+      .scenarios.filter((scenario) => {
+        if (scenario.execution.kind !== "flow") {
+          return false;
+        }
+        const toolCoverage = scenario.execution.config?.toolCoverage;
+        return (
+          typeof toolCoverage === "object" &&
+          toolCoverage !== null &&
+          "required" in toolCoverage &&
+          toolCoverage.required === false
+        );
+      })
+      .map((scenario) => scenario.title),
+  );
+}
+
 export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
@@ -812,12 +840,9 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   const channelDriver = normalizeQaSuiteChannelDriver(opts.channelDriver);
-  const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
-    pack: opts.pack,
-    scenarioIds: resolveQaParityPackScenarioIds({
-      parityPack: opts.parityPack,
-      scenarioIds: opts.scenarioIds,
-    }),
+  const explicitScenarioIds = resolveQaParityPackScenarioIds({
+    parityPack: opts.parityPack,
+    scenarioIds: opts.scenarioIds,
   });
   const runtimePairLanes = parseQaRuntimePairLaneFilters(opts.runtimePairLane);
   const runtimePairLaneSelection = resolveQaRuntimePairLaneScenarioIds({
@@ -954,6 +979,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     if (!allowFailures) {
       const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
         result.summaryPath,
+        {
+          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+            scenarioIds,
+            explicitScenarioSelection: opts.explicitScenarioSelection,
+          }),
+        },
       );
       if (blockingScenarioCount > 0) {
         process.exitCode = 1;
@@ -979,6 +1010,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     evidenceMode: opts.evidenceMode,
     transportId,
     channelDriver,
+    ...(opts.expandScenarioChannels ? { expandScenarioChannels: true } : {}),
     ...(liveAdapterFactories
       ? {
           adapterFactories: liveAdapterFactories,
@@ -1016,8 +1048,20 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       process.stdout.write(`QA suite report: ${result.reportPath}\n`);
       process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
       process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      if (!allowFailures && result.scenarios.some((scenario) => scenario.status !== "pass")) {
-        process.exitCode = 1;
+      if (!allowFailures) {
+        const optionalScenarioNames = resolveQaReportOnlyOptionalScenarioNames({
+          scenarioIds,
+          explicitScenarioSelection: opts.explicitScenarioSelection,
+        });
+        if (
+          result.scenarios.some(
+            (scenario) =>
+              scenario.status !== "pass" &&
+              !isQaSuiteReportOnlyOptionalScenario(scenario, optionalScenarioNames),
+          )
+        ) {
+          process.exitCode = 1;
+        }
       }
       return result;
     }
@@ -1029,6 +1073,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
       const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
         result.summaryPath,
+        {
+          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+            scenarioIds,
+            explicitScenarioSelection: opts.explicitScenarioSelection,
+          }),
+        },
       );
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;

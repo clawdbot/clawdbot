@@ -73,7 +73,9 @@ export class SessionManagerCore {
     entries: FileEntry[],
   ): void {
     const partitioned = partitionSessionFileEntries(entries);
-    if (partitioned.fileEntries.length === 0) {
+    // Only a physically empty transcript may initialize lazily. Opaque persisted rows still need
+    // a canonical header, or runtime would silently replace malformed history with a fresh session.
+    if (partitioned.fileEntries.length === 0 && partitioned.opaqueEntries.length === 0) {
       this.persistenceTarget = target ? { ...target } : undefined;
       this.initializeSession({ id: target?.sessionId });
       this.persistenceHeaderPending = target !== undefined;

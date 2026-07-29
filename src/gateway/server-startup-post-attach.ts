@@ -13,6 +13,7 @@ import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -999,6 +1000,7 @@ export async function startGatewayPostAttachRuntime(
     };
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
+    pluginManifestRecords: readonly PluginManifestRecord[];
     ambientEnvTriggers?: AmbientEnvTriggerPolicy;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
@@ -1097,6 +1099,8 @@ export async function startGatewayPostAttachRuntime(
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
       activationSourceConfig: params.activationSourceConfig,
+      env: process.env,
+      manifestRecords: params.pluginManifestRecords,
       ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
       bindHost: params.bindHost,
       bindHosts: params.bindHosts,

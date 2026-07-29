@@ -123,6 +123,13 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "alt",
+      "path": "ui/src/components/login-gate.ts",
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/login-gate.ts",
       "text": "OPENCLAW_GATEWAY_TOKEN ("
@@ -518,27 +525,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Tab"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
-      "text": "Compacting context..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
-      "text": "Context compacted"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-view.ts",
-      "text": "Replying to"
     },
     {
       "count": 2,

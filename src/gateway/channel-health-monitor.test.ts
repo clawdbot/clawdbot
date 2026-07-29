@@ -365,6 +365,27 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
+  it("restarts a running channel with a live socket but dead ingress", async () => {
+    // A restart is the only way to re-prove ingress, so recovery from a transient
+    // queue-open failure must stay automatic. Without the ingress dimension this
+    // account evaluated as healthy and was never touched at all.
+    const manager = createSnapshotManager({
+      slack: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          ingressUnavailable: true,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
+    expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+    monitor.stop();
+  });
+
   it("restarts a stopped channel without terminalDisconnect", async () => {
     const manager = createSnapshotManager({
       whatsapp: {

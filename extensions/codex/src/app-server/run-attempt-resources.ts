@@ -53,7 +53,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
     trajectoryRecorder: hostTrajectoryRecorder,
-    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
     warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });

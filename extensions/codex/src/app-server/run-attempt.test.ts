@@ -6,8 +6,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
-import { installSessionManagerFileCompat } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -21,7 +20,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
@@ -107,7 +106,29 @@ import {
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
 
-installSessionManagerFileCompat();
+const agentHarnessRuntimeMocks = vi.hoisted(() => ({
+  forceModelToolsUnsupported: false,
+  skipRequesterScopedMcpMaterialization: false,
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    supportsModelTools: (...args: Parameters<typeof actual.supportsModelTools>) =>
+      agentHarnessRuntimeMocks.forceModelToolsUnsupported
+        ? false
+        : actual.supportsModelTools(...args),
+    materializeRequesterScopedMcpToolsForHarnessRun: async (
+      ...args: Parameters<typeof actual.materializeRequesterScopedMcpToolsForHarnessRun>
+    ) => {
+      if (agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization) {
+        return undefined;
+      }
+      return await actual.materializeRequesterScopedMcpToolsForHarnessRun(...args);
+    },
+  };
+});
 
 const testing = {
   buildDeveloperInstructions,
@@ -968,6 +989,11 @@ function installCleanupTrackingClient(turnStartError?: Error) {
 
 setupRunAttemptTestHooks();
 
+beforeEach(() => {
+  agentHarnessRuntimeMocks.forceModelToolsUnsupported = false;
+  agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = false;
+});
+
 describe("runCodexAppServerAttempt", () => {
   it("executes and reports the same materialized SecretRef credential", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
@@ -1603,7 +1629,6 @@ describe("runCodexAppServerAttempt", () => {
       type: string;
     }> = [];
     Object.assign(params, {
-      trajectorySessionFile: `sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`,
       trajectoryRecorder: {
         recordEvent: (type: string, data?: { prompt?: string; systemPrompt?: string }) => {
           trajectoryEvents.push({ type, data });
@@ -2387,7 +2412,7 @@ describe("runCodexAppServerAttempt", () => {
       ]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2440,7 +2465,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2480,7 +2505,7 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2538,7 +2563,7 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
     sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
     const harness = createStartedThreadHarness();
@@ -2580,7 +2605,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt - 2_000),
     );
@@ -2713,7 +2738,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
@@ -2757,7 +2782,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
       idempotencyKey: "client-run:user",
@@ -2804,7 +2829,7 @@ describe("runCodexAppServerAttempt", () => {
       ...originalBinding,
       historyCoveredThrough: new Date(originalBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await firstHarness.waitForMethod("turn/start");
@@ -2842,7 +2867,7 @@ describe("runCodexAppServerAttempt", () => {
       ...oldBinding,
       historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
     );
@@ -4642,7 +4667,6 @@ describe("runCodexAppServerAttempt", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },
@@ -4686,7 +4710,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.openFile(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "pre-binding native-owned context: keep the original plan",
@@ -4758,7 +4782,6 @@ describe("runCodexAppServerAttempt", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },
@@ -4941,6 +4964,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     } as EmbeddedRunAttemptParams;
+    setCodexTestModelSupportsTools(params, false);
     const run = runCodexAppServerAttempt(params, { pluginConfig: {} });
     await completeStartedRun(run, waitForMethod, completeTurn);
     const startRequest = requests.find((request) => request.method === "thread/start");
@@ -5135,6 +5159,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     const clientFactory = vi.fn(async () => harness.client);
     testing.setOpenClawCodingToolsFactoryForTests(() => []);
+    // This test owns review-policy projection, not requester-scoped MCP discovery.
+    agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
+    agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = true;
     const params = createParams(sessionFile, workspaceDir);
     params.provider = "anthropic";
     params.modelId = "claude-opus-4-6";

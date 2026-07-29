@@ -47,6 +47,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
   buildOpenClawToolFallbackText,
@@ -62,6 +63,10 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import {
+  buildWatchedSessionsPromptLines,
+  type PreparedWatchedSessionsPrompt,
+} from "./watched-sessions-prompt.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -812,6 +817,12 @@ export function buildAgentSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
   /** Immutable memory state prepared before synchronous prompt assembly. */
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
+  /** Watched same-agent group sessions prepared before synchronous prompt assembly. */
+  preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
+  /** Per-turn learned facts restricted to the currently active repository. */
+  projectMemoryBootstrap?: string[];
+  /** Prepared repository identities used to filter curated raw context fail-closed. */
+  activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -850,8 +861,8 @@ export function buildAgentSystemPrompt(params: {
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
-    sessions_list: "List other sessions/subagents; filters/last",
-    sessions_history: "Read other session/subagent history",
+    sessions_list: "List visible sessions; filters/last",
+    sessions_history: "Read visible session/subagent history",
     sessions_search: "Search past sessions; use sessionKey with sessions_history",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled
@@ -1051,16 +1062,19 @@ export function buildAgentSystemPrompt(params: {
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
-  const memorySection = buildMemorySection({
-    isMinimal,
-    includeMemorySection: params.includeMemorySection,
-    availableTools,
-    citationsMode: params.memoryCitationsMode,
-    agentId: params.runtimeInfo?.agentId,
-    agentSessionKey: params.runtimeInfo?.sessionKey,
-    sandboxed: params.sandboxInfo?.enabled === true,
-    prepared: params.preparedMemoryPrompt,
-  });
+  const memorySection = [
+    ...buildMemorySection({
+      isMinimal,
+      includeMemorySection: params.includeMemorySection,
+      availableTools,
+      citationsMode: params.memoryCitationsMode,
+      agentId: params.runtimeInfo?.agentId,
+      agentSessionKey: params.runtimeInfo?.sessionKey,
+      sandboxed: params.sandboxInfo?.enabled === true,
+      prepared: params.preparedMemoryPrompt,
+    }),
+    ...normalizeStringEntries(params.projectMemoryBootstrap),
+  ];
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
@@ -1076,7 +1090,12 @@ export function buildAgentSystemPrompt(params: {
       .join("\n");
   }
 
-  const contextFiles = prepareContextFilesForPrompt(params.contextFiles);
+  const contextFiles = prepareContextFilesForPrompt(
+    filterProjectScopedCuratedContextFiles({
+      contextFiles: params.contextFiles,
+      activeProjectKeys: params.activeProjectKeys,
+    }),
+  );
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -1176,6 +1195,12 @@ export function buildAgentSystemPrompt(params: {
             availableTools.has("sessions_yield")
               ? "Never loop-poll `subagents list`/`sessions_list`; wait with `sessions_yield`. Status only on-demand/intervention/debug/request."
               : "Never loop-poll `subagents list`/`sessions_list`; status only on-demand/intervention/debug/request.",
+          ]
+        : []),
+      ...(renderOpenClawToolWorkflowHints &&
+      (availableTools.has("sessions_search") || availableTools.has("sessions_list"))
+        ? [
+            "Asked about another chat/group/session not in context: check `sessions_list`/`sessions_search` before claiming no access.",
           ]
         : []),
       "",
@@ -1422,6 +1447,10 @@ export function buildAgentSystemPrompt(params: {
   if (providerDynamicSuffix) {
     lines.push(providerDynamicSuffix, "");
   }
+
+  // Watched sessions change rarely but per-session; keep them below the cache
+  // boundary so the shared stable prefix stays byte-identical across sessions.
+  lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
 
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 

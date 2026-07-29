@@ -12,7 +12,11 @@ function readMemoryChunkColumns(db: DatabaseSync): Set<string> {
 
 export function ensureMemoryRecallMetadataColumns(db: DatabaseSync): void {
   const initialColumns = readMemoryChunkColumns(db);
-  if (initialColumns.has("importance") && initialColumns.has("triggers")) {
+  if (
+    initialColumns.has("importance") &&
+    initialColumns.has("triggers") &&
+    initialColumns.has("project_key")
+  ) {
     return;
   }
   const ensure = () => {
@@ -27,6 +31,9 @@ export function ensureMemoryRecallMetadataColumns(db: DatabaseSync): void {
     }
     if (!columns.has("triggers")) {
       db.exec(`ALTER TABLE ${MEMORY_INDEX_CHUNKS_TABLE} ADD COLUMN triggers TEXT`);
+    }
+    if (!columns.has("project_key")) {
+      db.exec(`ALTER TABLE ${MEMORY_INDEX_CHUNKS_TABLE} ADD COLUMN project_key TEXT`);
     }
   };
   if (db.isTransaction) {

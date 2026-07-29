@@ -473,6 +473,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
+    );
+    runtime.exit(1);
+    return;
+  }
   if (
     normalizedOpts.secretInputMode &&
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
@@ -488,6 +495,13 @@ export async function setupWizardCommand(
   if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
     runtime.error(
       `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (normalizedOpts.resetScope && !normalizedOpts.reset) {
+    runtime.error(
+      `--reset-scope requires --reset. Re-run with ${formatCliCommand(`openclaw onboard --reset --reset-scope ${normalizedOpts.resetScope}`)}.`,
     );
     runtime.exit(1);
     return;
