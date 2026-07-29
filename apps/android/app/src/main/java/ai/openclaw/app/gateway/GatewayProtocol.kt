@@ -23,6 +23,7 @@ data class GatewayRequestFrame(
   val id: String,
   val method: String,
   val params: JsonElement? = null,
+  val traceparent: String? = null,
 )
 
 @Serializable
@@ -499,6 +500,7 @@ enum class GatewayMethod(
   SessionsCompanionAsk("sessions.companion.ask"),
   SessionsCompanionState("sessions.companion.state"),
   SessionsCompanionReset("sessions.companion.reset"),
+  MemorySearch("memory.search"),
 }
 
 enum class GatewayEvent(
@@ -535,6 +537,7 @@ enum class GatewayEvent(
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),
+  SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),

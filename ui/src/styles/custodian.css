@@ -1,11 +1,29 @@
 .custodian {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-  width: min(860px, 100%);
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
   height: 100%;
   min-height: 0;
-  margin: 0 auto;
   padding: 18px clamp(16px, 4vw, 36px) 22px;
+}
+
+.custodian__column {
+  width: min(100%, var(--chat-thread-max-width, 48rem));
+  min-width: 0;
+  margin-inline: auto;
+}
+
+.custodian-surface {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.custodian > openclaw-custodian-surface {
+  display: block;
+  height: 100%;
 }
 
 .custodian__header {
@@ -50,14 +68,12 @@
   display: grid;
   width: 38px;
   height: 38px;
+  flex: 0 0 38px;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
-  border-radius: 14px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: -0.04em;
+}
+
+.custodian__mark openclaw-mascot {
+  display: block;
 }
 
 .custodian__messages {
@@ -73,7 +89,7 @@
   align-items: center;
   align-self: flex-start;
   gap: 4px;
-  max-width: min(680px, 96%);
+  max-width: 96%;
   padding: 4px 5px 4px 12px;
   border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--border));
   border-radius: var(--radius-full);
@@ -135,6 +151,21 @@
   gap: 5px;
   width: fit-content;
   padding: 10px 0;
+}
+
+.custodian__mascot-avatar {
+  overflow: visible;
+  background: transparent;
+}
+
+.custodian__mascot-avatar openclaw-mascot {
+  display: block;
+}
+
+.custodian-surface > .agent-chat__composer-shell {
+  width: 100%;
+  max-width: none;
+  margin: 8px 0 0;
 }
 
 .custodian__thinking > span:not(.sr-only) {

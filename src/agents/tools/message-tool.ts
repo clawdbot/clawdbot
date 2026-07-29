@@ -1039,6 +1039,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  runSessionKey?: string;
   runId?: string;
   sessionId?: string;
   agentId?: string;
@@ -1755,6 +1756,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           gateway,
           toolContext,
           sessionKey: options?.agentSessionKey,
+          sourceReplySessionKey: options?.runSessionKey,
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,

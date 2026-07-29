@@ -1,10 +1,12 @@
 // Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   isCanonicalToolProviderPolicyKey,
   normalizeToolProviderPolicyKey,
 } from "../../../agents/provider-tool-policy.js";
+import { DEFAULT_SANDBOX_BROWSER_NETWORK } from "../../../agents/sandbox/browser-network.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
@@ -165,6 +167,27 @@ const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
     message:
       'agents.list[].sandbox.perSession is legacy; use agents.list[].sandbox.scope instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyAgentListSandboxPerSession(value),
+  },
+];
+
+const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "sandbox", "browser", "network"],
+    message:
+      'agents.defaults.sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the sidecar and restore the dedicated browser network.',
+    match: isUnsupportedSandboxBrowserNetwork,
+  },
+  {
+    path: ["agents", "entries"],
+    message:
+      'agents.entries.*.sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the affected sidecar and restore the dedicated browser network.',
+    match: hasAgentEntriesUnsupportedSandboxBrowserNetwork,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the affected sidecar and restore the dedicated browser network.',
+    match: hasAgentListUnsupportedSandboxBrowserNetwork,
   },
 ];
 
@@ -560,6 +583,142 @@ function migrateLegacySandboxPerSession(
     changes.push(`Removed ${pathLabel}.perSession (${pathLabel}.scope already set).`);
   }
   delete sandbox.perSession;
+}
+
+function getSandboxBrowserConfig(container: unknown): Record<string, unknown> | null {
+  return getRecord(getRecord(getRecord(container)?.sandbox)?.browser);
+}
+
+function isUnsupportedSandboxBrowserNetwork(value: unknown): boolean {
+  return normalizeOptionalLowercaseString(value) === "none";
+}
+
+function hasAgentEntriesUnsupportedSandboxBrowserNetwork(value: unknown): boolean {
+  const entries = getRecord(value);
+  return Boolean(
+    entries &&
+    Object.entries(entries).some(
+      ([agentId, agent]) =>
+        !isBlockedObjectKey(agentId) &&
+        isUnsupportedSandboxBrowserNetwork(getSandboxBrowserConfig(agent)?.network),
+    ),
+  );
+}
+
+function hasAgentListUnsupportedSandboxBrowserNetwork(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((agent) =>
+      isUnsupportedSandboxBrowserNetwork(getSandboxBrowserConfig(agent)?.network),
+    )
+  );
+}
+
+function migrateExplicitUnsupportedSandboxBrowserNetwork(
+  browser: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!isUnsupportedSandboxBrowserNetwork(browser.network)) {
+    return;
+  }
+  browser.enabled = false;
+  browser.network = DEFAULT_SANDBOX_BROWSER_NETWORK;
+  changes.push(
+    `Disabled ${pathLabel} and moved its unsupported network "none" → "${DEFAULT_SANDBOX_BROWSER_NETWORK}".`,
+  );
+}
+
+function migrateAgentBrowserInheritedFromUnsupportedDefault(params: {
+  agent: unknown;
+  pathLabel: string;
+  defaultBrowserEnabled: boolean;
+  changes: string[];
+}): void {
+  const browser = getSandboxBrowserConfig(params.agent);
+  if (!browser) {
+    return;
+  }
+  const hasExplicitNetwork = typeof browser.network === "string";
+  const network = normalizeOptionalLowercaseString(browser.network);
+  if (network === "none") {
+    migrateExplicitUnsupportedSandboxBrowserNetwork(browser, params.pathLabel, params.changes);
+    return;
+  }
+  if (!hasExplicitNetwork && browser.enabled === true) {
+    browser.enabled = false;
+    params.changes.push(
+      `Disabled ${params.pathLabel} because it inherited unsupported browser network "none".`,
+    );
+    return;
+  }
+  if (hasExplicitNetwork && browser.enabled === undefined && params.defaultBrowserEnabled) {
+    browser.enabled = true;
+    params.changes.push(
+      `Set ${params.pathLabel}.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.`,
+    );
+  }
+}
+
+function migrateUnsupportedSandboxBrowserNetworks(
+  raw: Record<string, unknown>,
+  changes: string[],
+): void {
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  const defaultBrowser = getSandboxBrowserConfig(defaults);
+  const defaultNetworkUnsupported = isUnsupportedSandboxBrowserNetwork(defaultBrowser?.network);
+  const defaultBrowserEnabled = defaultBrowser?.enabled === true;
+
+  const entries = getRecord(agents?.entries);
+  if (entries) {
+    for (const [agentId, agent] of Object.entries(entries)) {
+      if (isBlockedObjectKey(agentId)) {
+        continue;
+      }
+      const pathLabel = `agents.entries.${agentId}.sandbox.browser`;
+      if (defaultNetworkUnsupported) {
+        migrateAgentBrowserInheritedFromUnsupportedDefault({
+          agent,
+          pathLabel,
+          defaultBrowserEnabled,
+          changes,
+        });
+      } else {
+        const browser = getSandboxBrowserConfig(agent);
+        if (browser) {
+          migrateExplicitUnsupportedSandboxBrowserNetwork(browser, pathLabel, changes);
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(agents?.list)) {
+    for (const [index, agent] of agents.list.entries()) {
+      const pathLabel = `agents.list.${index}.sandbox.browser`;
+      if (defaultNetworkUnsupported) {
+        migrateAgentBrowserInheritedFromUnsupportedDefault({
+          agent,
+          pathLabel,
+          defaultBrowserEnabled,
+          changes,
+        });
+      } else {
+        const browser = getSandboxBrowserConfig(agent);
+        if (browser) {
+          migrateExplicitUnsupportedSandboxBrowserNetwork(browser, pathLabel, changes);
+        }
+      }
+    }
+  }
+
+  if (defaultBrowser) {
+    migrateExplicitUnsupportedSandboxBrowserNetwork(
+      defaultBrowser,
+      "agents.defaults.sandbox.browser",
+      changes,
+    );
+  }
 }
 
 function removeLegacyAgentRuntimePolicy(
@@ -1437,6 +1596,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         migrateLegacySandboxPerSession(sandbox, `agents.list.${index}.sandbox`, changes);
       }
     },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.sandbox.browser.network-none",
+    describe: "Disable sandbox browser sidecars that use unsupported network mode none",
+    legacyRules: UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES,
+    apply: migrateUnsupportedSandboxBrowserNetworks,
   }),
   defineLegacyConfigMigration({
     id: "memorySearch->memory.search",

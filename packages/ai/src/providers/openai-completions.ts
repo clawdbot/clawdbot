@@ -45,6 +45,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { formatProviderError } from "../utils/provider-error.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import {
@@ -392,6 +393,9 @@ export const streamOpenAICompletions: StreamFunction<
         if (!chunk || typeof chunk !== "object") {
           continue;
         }
+
+        // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
+        notifyLlmRequestActivity(options?.signal);
 
         // OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
         // and each chunk in a streamed completion carries the same id.

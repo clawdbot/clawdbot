@@ -34,43 +34,91 @@ function createPage(params: {
   patchForm?: (path: Array<string | number>, value: unknown) => void;
   setEnabled?: () => Promise<unknown>;
   navigate?: (routeId: string, options?: { search?: string }) => void;
+  agents?: Array<{ id: string; name?: string }>;
+  memoryStatus?: (agentId: string) => Promise<unknown>;
+  lookupSchemaPath?: (call: number) => Promise<unknown>;
 }) {
   let listCalls = 0;
-  const request = vi.fn((method: string) => {
+  let schemaLookups = 0;
+  const request = vi.fn((method: string, payload?: { agentId?: string }) => {
     if (method === "plugins.list") {
       const call = listCalls++;
       return params.listCatalog
         ? params.listCatalog(call)
         : Promise.resolve({ plugins: params.catalog ?? [] });
     }
+    if (method === "doctor.memory.status") {
+      return params.memoryStatus
+        ? params.memoryStatus(payload?.agentId ?? "main")
+        : Promise.resolve({
+            agentId: payload?.agentId ?? "main",
+            provider: "none",
+            embedding: { ok: false, checked: false },
+          });
+    }
     return params.setEnabled ? params.setEnabled() : Promise.resolve({});
   });
-  const listeners = new Set<() => void>();
+  const gatewayListeners = new Set<() => void>();
+  const runtimeListeners = new Set<() => void>();
   const gateway = {
     snapshot: { client: { request }, phase: "connected" },
     subscribe: (notify: () => void) => {
-      listeners.add(notify);
-      return () => listeners.delete(notify);
+      gatewayListeners.add(notify);
+      return () => gatewayListeners.delete(notify);
     },
   };
   const element = document.createElement("openclaw-memory-settings") as MemoryPageElement;
   element.configObject = params.configObject;
+  element.tab = "settings";
+  const runtimeConfig = {
+    state: {
+      client: {},
+      connected: true,
+      configSaving: false,
+      configApplying: false,
+      configForm: params.configObject,
+      configSnapshot: null,
+    },
+    subscribe: (notify: () => void) => {
+      runtimeListeners.add(notify);
+      return () => runtimeListeners.delete(notify);
+    },
+    lookupSchemaPath: vi.fn(() =>
+      params.lookupSchemaPath
+        ? params.lookupSchemaPath(schemaLookups++)
+        : Promise.resolve({ type: "object" }),
+    ),
+    patchForm: params.patchForm ?? vi.fn(),
+    removeFormValue: vi.fn(),
+    refresh: () => Promise.resolve(),
+  };
   (element as unknown as { context: ApplicationContext }).context = {
     gateway,
-    runtimeConfig: {
-      state: { configSaving: false, configApplying: false },
-      patchForm: params.patchForm ?? vi.fn(),
-      refresh: () => Promise.resolve(),
+    runtimeConfig,
+    agents: {
+      state: {
+        agentsList: {
+          defaultId: params.agents?.[0]?.id ?? "main",
+          agents: params.agents ?? [{ id: "main" }],
+        },
+        agentsLoading: false,
+      },
+      subscribe: () => () => undefined,
+      ensureList: () => Promise.resolve(),
     },
     navigate: params.navigate ?? vi.fn(),
   } as unknown as ApplicationContext;
   const setPhase = (phase: string) => {
     gateway.snapshot = { ...gateway.snapshot, phase };
-    for (const notify of listeners) {
+    runtimeConfig.state = { ...runtimeConfig.state, connected: phase === "connected" };
+    for (const notify of gatewayListeners) {
+      notify();
+    }
+    for (const notify of runtimeListeners) {
       notify();
     }
   };
-  return { element, request, setPhase };
+  return { element, request, setPhase, lookupSchemaPath: runtimeConfig.lookupSchemaPath };
 }
 
 function deferred<T>() {
@@ -89,15 +137,18 @@ function addonStatus(element: HTMLElement, label: string): string | null {
 }
 
 /** Which tab body is actually mounted, rather than what the tab strip claims. */
-function visibleTab(element: HTMLElement): "overview" | "search" | "dreaming" | null {
+function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | "settings" | null {
   const panel = element.querySelector('[role="tabpanel"]');
   if (!panel) {
     return null;
   }
   if (panel.querySelector("openclaw-memory-dreaming")) {
-    return "dreaming";
+    return "dreams";
   }
-  return panel.querySelector(".settings-page__intro") ? "search" : "overview";
+  if (panel.querySelector("openclaw-memory-memories")) {
+    return "memories";
+  }
+  return panel.querySelector(".memory-overview") ? "overview" : "settings";
 }
 
 function selectTab(element: HTMLElement, tab: string) {
@@ -308,11 +359,11 @@ describe("MemorySettingsPage tab routing", () => {
   it("honors every ?tab= arrival, including a repeat after a manual tab change", async () => {
     const navigate = vi.fn();
     const { element } = createPage({ configObject: {}, catalog: [], navigate });
-    element.tab = "search";
+    element.tab = "settings";
     document.body.append(element);
     try {
       await element.updateComplete;
-      expect(visibleTab(element)).toBe("search");
+      expect(visibleTab(element)).toBe("settings");
 
       // A manual click rewrites the URL rather than shadowing it with local state.
       selectTab(element, "overview");
@@ -322,9 +373,13 @@ describe("MemorySettingsPage tab routing", () => {
       expect(visibleTab(element)).toBe("overview");
 
       // Same intent as the first arrival: an adopt-once page would ignore this.
-      element.tab = "search";
+      element.tab = "settings";
       await element.updateComplete;
-      expect(visibleTab(element)).toBe("search");
+      expect(visibleTab(element)).toBe("settings");
+
+      element.tab = "memories";
+      await element.updateComplete;
+      expect(visibleTab(element)).toBe("memories");
     } finally {
       element.remove();
     }
@@ -333,16 +388,119 @@ describe("MemorySettingsPage tab routing", () => {
   it("writes the chosen tab into the URL so history restores it", async () => {
     const navigate = vi.fn();
     const { element } = createPage({ configObject: {}, catalog: [], navigate });
+    element.tab = "overview";
     document.body.append(element);
     try {
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
 
-      selectTab(element, "dreaming");
-      expect(navigate).toHaveBeenCalledWith("memory", { search: "?tab=dreaming" });
+      selectTab(element, "dreams");
+      expect(navigate).toHaveBeenCalledWith("memory", { search: "?tab=dreams" });
       // Nothing moves until the router feeds the new tab back in.
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
+
+      selectTab(element, "memories");
+      expect(navigate).toHaveBeenCalledWith("memory", { search: "?tab=memories" });
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("loads Overview status once per activation, agent change, and reconnect", async () => {
+    const memoryStatus = vi.fn((agentId: string) =>
+      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
+    );
+    const { element, request, setPhase } = createPage({
+      configObject: {},
+      agents: [{ id: "main" }, { id: "research" }],
+      memoryStatus,
+    });
+    element.tab = "overview";
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
+      await element.updateComplete;
+      expect(
+        request.mock.calls.filter(([method]) => method === "doctor.memory.status"),
+      ).toHaveLength(1);
+
+      const select = element.querySelector("openclaw-agent-select") as HTMLElement & {
+        onSelect?: (value: string) => void;
+      };
+      select.onSelect?.("research");
+      await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("research"));
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(3));
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("reloads status when one pinned engine replaces another", async () => {
+    const memoryStatus = vi.fn((agentId: string) =>
+      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
+    );
+    const { element } = createPage({
+      configObject: { plugins: { slots: { memory: "engine-a" } } },
+      catalog: [engine("engine-a", true), engine("engine-b", true)],
+      memoryStatus,
+    });
+    element.tab = "overview";
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(1));
+
+      element.configObject = { plugins: { slots: { memory: "engine-b" } } };
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
+      expect(element.textContent).toContain("engine-b");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("shows the offline state when Overview is activated after disconnecting elsewhere", async () => {
+    const { element, setPhase } = createPage({ configObject: {} });
+    document.body.append(element);
+    try {
+      await element.updateComplete;
+      setPhase("disconnected");
+      element.tab = "overview";
+      await waitForFast(() =>
+        expect(element.textContent).toContain(
+          "The gateway is offline, so memory status is unavailable.",
+        ),
+      );
+    } finally {
+      element.remove();
+    }
+  });
+});
+
+describe("MemorySettingsPage dreaming support", () => {
+  it("re-probes after reconnect and drops the abandoned capability result", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const { element, lookupSchemaPath, setPhase } = createPage({
+      configObject: {},
+      lookupSchemaPath: (call) => (call === 0 ? first.promise : second.promise),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(1));
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
+
+      first.resolve({ type: "object", additionalProperties: false, properties: {} });
+      await first.promise;
+      await element.updateComplete;
+      expect(element.textContent).not.toContain("Not available for this engine");
+
+      second.resolve({ type: "object" });
     } finally {
       element.remove();
     }

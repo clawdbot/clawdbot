@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -41,13 +40,6 @@ const log = heartbeatLog;
 // behind keeps the session stuck on a delivery that already happened.
 const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
   pendingFinalDelivery: undefined,
-  pendingFinalDeliveryText: undefined,
-  pendingFinalDeliveryCreatedAt: undefined,
-  pendingFinalDeliveryLastAttemptAt: undefined,
-  pendingFinalDeliveryAttemptCount: undefined,
-  pendingFinalDeliveryLastError: undefined,
-  pendingFinalDeliveryContext: undefined,
-  pendingFinalDeliveryIntentId: undefined,
 } as const;
 
 // Clear pending-final only when this run produced it: the agent run stamps
@@ -57,7 +49,7 @@ function heartbeatRunOwnsPendingFinalDelivery(
   entry: SessionEntry | undefined,
   runStartedAt: number,
 ): boolean {
-  const createdAt = entry?.pendingFinalDeliveryCreatedAt;
+  const createdAt = entry?.pendingFinalDelivery?.createdAt;
   return typeof createdAt === "number" && createdAt >= runStartedAt;
 }
 
@@ -456,7 +448,7 @@ async function clearSatisfiedPendingFinalDelivery(
       if (!context.existingEntry) {
         return null;
       }
-      if (current?.pendingFinalDelivery !== true && !current?.pendingFinalDeliveryText) {
+      if (!current?.pendingFinalDelivery) {
         return null;
       }
       if (!heartbeatRunOwnsPendingFinalDelivery(current, wake.startedAt)) {
@@ -466,7 +458,8 @@ async function clearSatisfiedPendingFinalDelivery(
       // several. Clear only when the delivered payload represents the whole final.
       if (
         expectedText !== undefined &&
-        normalizeOptionalString(current.pendingFinalDeliveryText) !== expectedText
+        (current.pendingFinalDelivery.kind !== "replayable" ||
+          current.pendingFinalDelivery.text !== expectedText)
       ) {
         return null;
       }

@@ -1,7 +1,6 @@
 // Covers session-manager guard behavior for tool-result pairing and transcript
 // redaction.
 import { readFileSync } from "node:fs";
-import "../../test/helpers/session-manager-file-compat.js";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -10,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { createFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
@@ -275,7 +275,7 @@ describe("guardSessionManager integration", () => {
 
   it("commits queued group sender metadata to JSONL and completes its recorder", () => {
     const dir = tempDirs.make("openclaw-queued-group-turn-");
-    const sessionManager = SessionManager.create(dir, dir);
+    const sessionManager = createFileBackedSessionManagerForTest(dir, dir);
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) {
       throw new Error("expected file-backed session manager");

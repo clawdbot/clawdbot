@@ -406,6 +406,32 @@ describe("gateway broadcaster", () => {
     expect(getBufferedAmount("c-admin")).toBeUndefined();
   });
 
+  it("closes a slow authoritative-session subscriber while delivering to healthy clients", () => {
+    const slowSocket = makeRecordingSocket();
+    slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    const healthySocket = makeRecordingSocket();
+    const clients = makeOperatorWsClients([
+      { connId: "slow-session", socket: slowSocket, scopes: ["operator.read"] },
+      { connId: "healthy-session", socket: healthySocket, scopes: ["operator.read"] },
+    ]);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    const payload = {
+      sessionKey: "agent:main:main",
+      messageId: "durable-user-1",
+      messageSeq: 1,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "shared durable prompt" }],
+      },
+    };
+
+    broadcastToConnIds("session.message", payload, new Set(["slow-session", "healthy-session"]));
+
+    expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    expect(slowSocket.send).not.toHaveBeenCalled();
+    expect(healthySocket.sent).toEqual([{ type: "event", event: "session.message", payload }]);
+  });
+
   it("keeps workers outside all generic and targeted gateway broadcasts", () => {
     const workerSocket = makeRecordingSocket();
     const worker = makeGatewayWsClient("c-worker", workerSocket, {

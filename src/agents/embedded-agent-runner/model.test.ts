@@ -38,6 +38,7 @@ const preparedSnapshotState = vi.hoisted(() => ({
   enabled: true,
   getInputs: [] as Array<Record<string, unknown>>,
   snapshots: new Map<string, unknown>(),
+  configuredRuntimeModels: [] as unknown[],
 }));
 
 vi.mock("../model-suppression.js", () => {
@@ -176,6 +177,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     }
     const snapshot = {
       ...(workspaceDir ? { workspaceDir } : {}),
+      configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
       createStores: () => ({ authStorage, modelRegistry }),
     };
     preparedSnapshotState.snapshots.set(key, snapshot);
@@ -247,6 +249,7 @@ beforeEach(() => {
   preparedSnapshotState.enabled = true;
   preparedSnapshotState.getInputs.length = 0;
   preparedSnapshotState.snapshots.clear();
+  preparedSnapshotState.configuredRuntimeModels = [];
   clearRuntimeAuthProfileStoreSnapshots();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
@@ -834,10 +837,55 @@ describe("resolveModel", () => {
       modelId: "mistral-medium-3-5",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("reuses configured static models from the loaded snapshot", async () => {
+    const preparedModel = {
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      name: "Mistral Medium 3.5",
+      api: "openai-completions" as const,
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text" as const, "image" as const],
+      cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 8192,
+    };
+
+    preparedSnapshotState.configuredRuntimeModels = [
+      {
+        provider: "mistral",
+        modelId: "mistral-medium-3-5",
+        model: preparedModel,
+      },
+    ];
+
+    const result = await resolveModelAsync(
+      "mistral",
+      "mistral-medium-3-5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      api: "openai-completions",
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
   });
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
@@ -880,6 +928,7 @@ describe("resolveModel", () => {
       modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "google",
@@ -1180,12 +1229,14 @@ describe("resolveModel", () => {
       modelId: "claude-haiku-4-5",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "openai",
       modelId: "gpt-4o",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1305,6 +1356,7 @@ describe("resolveModel", () => {
       modelId: "gpt-5.5-pro",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
   });
 

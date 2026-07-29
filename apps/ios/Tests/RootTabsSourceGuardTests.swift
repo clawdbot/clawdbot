@@ -1404,6 +1404,32 @@ extension RootTabsSourceGuardTests {
         #expect(resolvedPushes.contains("session: self.operatorGateway"))
         #expect(resolvedPushes.contains("generation: context.routeGeneration"))
     }
+
+    @Test func `watch approval reconnect teardown retains its source gateway route`() throws {
+        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let reconnect = try Self.extract(
+            source,
+            from: "private func ensureOperatorApprovalConnectionForWatchReview(",
+            to: "private func ensureOperatorApprovalConnection(timeoutMs:")
+        let initialWait = try #require(reconnect.range(of: "if await self.waitForGatewayConnection("))
+        let restartGuard = try #require(
+            reconnect.range(
+                of: "guard self.isCurrentGatewayRoute(",
+                range: initialWait.upperBound..<reconnect.endIndex))
+        let cancellation = try #require(reconnect.range(of: "self.operatorGatewayTask?.cancel()"))
+        let disconnect = try #require(reconnect.range(of: "await self.operatorGateway.disconnect()"))
+        let postDisconnectGuard = try #require(
+            reconnect.range(
+                of: "guard self.isCurrentGatewayRoute(",
+                range: disconnect.upperBound..<reconnect.endIndex))
+        let offline = try #require(reconnect.range(of: "self.setOperatorConnected(false)"))
+
+        #expect(reconnect.contains("routeGeneration: UInt64"))
+        #expect(reconnect.contains("gatewayStableID: String"))
+        #expect(restartGuard.lowerBound < cancellation.lowerBound)
+        #expect(disconnect.lowerBound < postDisconnectGuard.lowerBound)
+        #expect(postDisconnectGuard.lowerBound < offline.lowerBound)
+    }
 }
 
 extension RootTabsSourceGuardTests {

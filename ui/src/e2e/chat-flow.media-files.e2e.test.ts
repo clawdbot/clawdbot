@@ -109,6 +109,83 @@ suite.define(() => {
     }
   });
 
+  it("renders a managed image through an artifact-scoped ticket", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const attachmentId = crypto.randomUUID();
+    const artifactId = `artifact_managed_image_${attachmentId}`;
+    const imageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const ticketedUrl = `${imageUrl}?mediaTicket=ticket-e2e`;
+    await page.route("**/api/chat/media/outgoing/**", async (route) => {
+      const request = route.request();
+      expect(new URL(request.url()).searchParams.get("mediaTicket")).toBe("ticket-e2e");
+      expect(request.headers().authorization).toBeUndefined();
+      await route.fulfill({
+        contentType: "image/png",
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      });
+    });
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "image",
+              artifactId,
+              url: imageUrl,
+              alt: "Ticketed generated image",
+              mimeType: "image/png",
+              width: 1,
+              height: 1,
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: {
+        "artifacts.download": {
+          artifact: {
+            id: artifactId,
+            type: "image",
+            title: "Ticketed generated image",
+            mimeType: "image/png",
+            download: { mode: "url" },
+          },
+          url: ticketedUrl,
+          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const image = page.getByAltText("Ticketed generated image");
+      await image.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() =>
+          image.evaluate((element) =>
+            element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+          ),
+        )
+        .toBe(1);
+      const request = await gateway.waitForRequest("artifacts.download");
+      expect(request.params).toMatchObject({
+        sessionKey: "agent:main:main",
+        artifactId,
+      });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("renders a canonical inbound image through the ticketed media route", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({

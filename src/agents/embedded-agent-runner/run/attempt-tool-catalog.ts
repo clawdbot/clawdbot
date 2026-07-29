@@ -4,7 +4,6 @@
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
-  applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
@@ -15,13 +14,12 @@ import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
-  applyToolSchemaDirectoryCatalog,
-  applyToolSearchCatalog,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
+import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
@@ -93,45 +91,23 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         codeModeSkills,
       })
     : [];
-  // When the message tool is the only reply path it must stay directly visible
-  // in every search mode; a hidden delivery tool can leave the run mute.
-  const requiredDirectToolNames = preparedToolBase.forceDirectMessageTool ? ["message"] : [];
-  const toolSearch = codeModeControlsEnabledForRun
-    ? applyCodeModeCatalog({
-        tools: [...codeModeTools, ...effectiveTools],
-        config: attempt.config,
-        sessionId: attempt.sessionId,
-        sessionKey: input.sandboxSessionKey,
-        agentId: input.sessionAgentId,
-        runId: attempt.runId,
-        catalogRef: preparedToolBase.toolSearchCatalogRef,
-        toolHookContext: catalogToolHookContext,
-        directToolNames: requiredDirectToolNames,
-        codeModeSkills,
-      })
-    : toolSearchConfig.mode === "directory"
-      ? applyToolSchemaDirectoryCatalog({
-          tools: effectiveTools,
-          config: toolSearchRuntimeConfig,
-          sessionId: attempt.sessionId,
-          sessionKey: input.sandboxSessionKey,
-          agentId: input.sessionAgentId,
-          runId: attempt.runId,
-          catalogRef: preparedToolBase.toolSearchCatalogRef,
-          toolHookContext: catalogToolHookContext,
-          directToolNames: requiredDirectToolNames,
-        })
-      : applyToolSearchCatalog({
-          tools: effectiveTools,
-          config: toolSearchRuntimeConfig,
-          sessionId: attempt.sessionId,
-          sessionKey: input.sandboxSessionKey,
-          agentId: input.sessionAgentId,
-          runId: attempt.runId,
-          catalogRef: preparedToolBase.toolSearchCatalogRef,
-          toolHookContext: catalogToolHookContext,
-          directToolNames: requiredDirectToolNames,
-        });
+  const toolSearch = applyAgentToolSurfaceCatalog({
+    // `codeModeTools` is empty unless code-mode controls are on, so this stays
+    // exactly `effectiveTools` for the tool-search branches.
+    tools: [...codeModeTools, ...effectiveTools],
+    config: attempt.config,
+    toolSearchRuntimeConfig,
+    codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    toolSearchConfig,
+    forceDirectMessageTool: preparedToolBase.forceDirectMessageTool,
+    sessionId: attempt.sessionId,
+    sessionKey: input.sandboxSessionKey,
+    agentId: input.sessionAgentId,
+    runId: attempt.runId,
+    catalogRef: preparedToolBase.toolSearchCatalogRef,
+    toolHookContext: catalogToolHookContext,
+    codeModeSkills,
+  });
   const projectedToolSearchTools = filterLocalModelLeanTools({
     tools: toolSearch.tools,
     config: attempt.config,

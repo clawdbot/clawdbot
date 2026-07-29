@@ -40,6 +40,12 @@ let canvasEnabledKey = "openclaw.canvasEnabled"
 let quickChatEnabledKey = "openclaw.quickChatEnabled"
 let cameraEnabledKey = "openclaw.cameraEnabled"
 let computerControlEnabledKey = "openclaw.computerControlEnabled"
+
+func isComputerControlEnabled(defaults: UserDefaults = .standard) -> Bool {
+    // object(forKey:) preserves an explicit false; bool(forKey:) would conflate it with an unset default.
+    defaults.object(forKey: computerControlEnabledKey) as? Bool ?? true
+}
+
 let activeComputerPresenceEnabledKey = "openclaw.activeComputerPresenceEnabled"
 let locationModeKey = "openclaw.locationMode"
 let locationPreciseKey = "openclaw.locationPreciseEnabled"

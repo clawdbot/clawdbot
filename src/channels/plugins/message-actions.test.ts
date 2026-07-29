@@ -2,6 +2,10 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+  getPreparedMessageToolCatalog,
+} from "../../plugins/prepared-message-tool-catalog.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -80,6 +84,57 @@ describe("message action capability checks", () => {
 
     expect(channelSupportsMessageCapability({} as OpenClawConfig, "presentation")).toBe(true);
     expect(channelSupportsMessageCapability({} as OpenClawConfig, "delivery-pin")).toBe(true);
+  });
+
+  it("does not replace an explicitly empty prepared channel catalog", () => {
+    activateMessageActionTestRegistry();
+    const cfg = {} as OpenClawConfig;
+
+    expect(
+      channelSupportsMessageCapability(cfg, "presentation", EMPTY_PREPARED_MESSAGE_TOOL_CATALOG),
+    ).toBe(false);
+    expect(
+      resolveChannelMessageToolSchemaProperties({
+        cfg,
+        channel: "demo-buttons",
+        preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+      }),
+    ).toEqual({});
+  });
+
+  it("evaluates prepared discovery against each account context", () => {
+    const base = createChannelTestPluginBase({ id: "demo-account-scoped" });
+    const plugin: ChannelPlugin = {
+      ...base,
+      actions: {
+        describeMessageTool: ({ accountId }) => ({
+          actions: ["send"],
+          capabilities: accountId === "first" ? ["presentation"] : ["delivery-pin"],
+        }),
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+    const preparedMessageToolCatalog = getPreparedMessageToolCatalog();
+    const cfg = {} as OpenClawConfig;
+
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg, channel: plugin.id, accountId: "first", preparedMessageToolCatalog },
+        "presentation",
+      ),
+    ).toBe(true);
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg, channel: plugin.id, accountId: "second", preparedMessageToolCatalog },
+        "presentation",
+      ),
+    ).toBe(false);
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg, channel: plugin.id, accountId: "second", preparedMessageToolCatalog },
+        "delivery-pin",
+      ),
+    ).toBe(true);
   });
 
   it("checks per-channel capabilities", () => {

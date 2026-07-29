@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
@@ -157,6 +158,10 @@ export function normalizeMemoryPath(rawPath: string): string {
 
 export function buildClaimHash(snippet: string): string {
   return createHash("sha1").update(normalizeSnippet(snippet)).digest("hex").slice(0, 12);
+}
+
+export function buildDailyClaimEntryKey(claimHash: string): string {
+  return `memory:claim:${claimHash}`;
 }
 
 export function buildEntryKey(result: {
@@ -330,6 +335,42 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
             MAX_CONCEPT_TAGS,
           )
         : deriveConceptTags({ path: entryPath, snippet: fullSnippet });
+      const provenanceRaw =
+        entry.provenance && typeof entry.provenance === "object"
+          ? (entry.provenance as Record<string, unknown>)
+          : undefined;
+      const lastObservedAt = Date.parse(lastRecalledAt);
+      const fallbackObservedAt = Number.isFinite(lastObservedAt)
+        ? lastObservedAt
+        : Date.parse(nowIso);
+      const provenance: MemoryEntryProvenance | undefined = provenanceRaw
+        ? {
+            originClass:
+              provenanceRaw.originClass === "owner" ||
+              provenanceRaw.originClass === "agent" ||
+              provenanceRaw.originClass === "system" ||
+              provenanceRaw.originClass === "untrusted"
+                ? provenanceRaw.originClass
+                : "untrusted",
+            sessionKind:
+              provenanceRaw.sessionKind === "interactive" ||
+              provenanceRaw.sessionKind === "cron" ||
+              provenanceRaw.sessionKind === "heartbeat" ||
+              provenanceRaw.sessionKind === "subagent" ||
+              provenanceRaw.sessionKind === "unknown"
+                ? provenanceRaw.sessionKind
+                : "unknown",
+            observedAt:
+              typeof provenanceRaw.observedAt === "number" &&
+              Number.isFinite(provenanceRaw.observedAt)
+                ? provenanceRaw.observedAt
+                : fallbackObservedAt,
+            ...(typeof provenanceRaw.supersedesKey === "string" &&
+            provenanceRaw.supersedesKey.trim()
+              ? { supersedesKey: provenanceRaw.supersedesKey.trim() }
+              : {}),
+          }
+        : undefined;
 
       const normalizedKey =
         key || buildEntryKey({ path: entryPath, startLine, endLine, source, claimHash });
@@ -350,6 +391,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         queryHashes,
         recallDays: recallDays.slice(-MAX_RECALL_DAYS),
         conceptTags,
+        ...(provenance ? { provenance } : {}),
         ...(claimHash ? { claimHash } : {}),
         ...(promotedAt ? { promotedAt } : {}),
       };

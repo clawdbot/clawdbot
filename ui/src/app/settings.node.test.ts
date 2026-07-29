@@ -125,6 +125,24 @@ describe("loadSettings default gateway URL derivation", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps IPv6 dev-page default gateway hosts dialable", () => {
+    setTestLocation({ protocol: "http:", host: "[::1]:5173", pathname: "/" });
+    // A vite client script marks the page as dev, which reroutes the default
+    // gateway to port 18789 via formatHostWithPort.
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector.includes("@vite/client") ? {} : null),
+      documentElement: { getAttribute: () => null },
+    } as unknown as Document);
+
+    try {
+      expect(loadSettings().gatewayUrl).toBe("ws://[::1]:18789");
+    } finally {
+      // The document stub is unique to this test; drop it before the shared
+      // afterEach persistence pass instead of leaving it to unstubAllGlobals.
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses configured base path and normalizes trailing slash", () => {
     setTestLocation({
       protocol: "https:",

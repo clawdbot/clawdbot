@@ -183,7 +183,7 @@ function isMcpMethodNotFoundError(error: unknown): boolean {
     return true;
   }
   const message = String(error);
-  return message.includes("-32601") || /method not found/i.test(message);
+  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
 }
 
 async function listAllToolsBestEffort(params: {

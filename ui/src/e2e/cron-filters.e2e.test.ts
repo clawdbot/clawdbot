@@ -240,6 +240,70 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps read-only operators on Cron browse and history surfaces", async () => {
+    const readOnlyJob = cronJob(
+      "read-only-job",
+      "Read-only nightly digest",
+      { kind: "cron", expr: "0 1 * * *", tz: "UTC" },
+      { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
+    );
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      operatorScopes: ["operator.read"],
+      methodResponses: {
+        "cron.list": cronListResponse([readOnlyJob]),
+        "cron.runs": cronRunsResponse([
+          {
+            ts: 1,
+            jobId: readOnlyJob.id,
+            jobName: readOnlyJob.name,
+            status: "ok",
+            summary: "Read-only history remains available",
+          },
+        ]),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
+      await page.getByRole("note").filter({ hasText: "Browsing only" }).waitFor();
+
+      await expect.poll(() => page.locator('[data-test-id="cron-new-task"]').count()).toBe(0);
+      await expect
+        .poll(() => page.locator(`[data-test-id="cron-row-run-${readOnlyJob.id}"]`).count())
+        .toBe(0);
+      await expect
+        .poll(() => page.locator(`[data-test-id="cron-row-toggle-${readOnlyJob.id}"]`).count())
+        .toBe(0);
+      await expect.poll(() => page.locator("wa-dropdown.cron-job-menu").count()).toBe(0);
+      await expect.poll(() => page.locator("[data-suggestion]").count()).toBe(0);
+      expect(await page.locator(".cron-filter-popover__trigger").count()).toBe(1);
+
+      await jobTitle(page, readOnlyJob.name).click();
+      await page.locator("fieldset.cron-editor:disabled").waitFor();
+      await expect.poll(() => page.locator('[data-test-id="cron-run-now"]').count()).toBe(0);
+      await expect.poll(() => page.locator('[data-test-id="cron-submit"]').count()).toBe(0);
+      await expect.poll(() => page.locator(".cron-editor-actions").count()).toBe(0);
+
+      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
+      await page.getByText("Read-only history remains available", { exact: true }).waitFor();
+
+      const mutationMethods = new Set(["cron.add", "cron.remove", "cron.run", "cron.update"]);
+      expect(
+        (await gateway.getRequests()).filter((request) => mutationMethods.has(request.method)),
+      ).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps the newest visible overview when an older history search resolves last", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -437,6 +501,80 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
         },
       });
       expect(requireRecord(requestParams(addRequest).delivery).accountId).toBeUndefined();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("creates and edits agent-turn jobs with an explicit zero timeout", async () => {
+    const existingJob = {
+      ...cronJob("existing-no-timeout", "Existing no-timeout task", {
+        kind: "every",
+        everyMs: 60_000,
+      }),
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "Continue until the existing task finishes",
+        timeoutSeconds: 0,
+      },
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.add": { id: "created-no-timeout" },
+        "cron.update": { id: existingJob.id },
+        "cron.list": cronListResponse([existingJob]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-name").fill("Created no-timeout task");
+      await page.locator("#cron-payload-text").fill("Continue until the new task finishes");
+      await page.locator("details.cron-advanced > summary").click();
+      await page.locator("#cron-timeout-seconds").fill("0");
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const addRequest = await gateway.waitForRequest("cron.add");
+      expect(requestParams(addRequest)).toMatchObject({
+        name: "Created no-timeout task",
+        payload: {
+          kind: "agentTurn",
+          message: "Continue until the new task finishes",
+          timeoutSeconds: 0,
+        },
+      });
+
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+      await jobTitle(page, existingJob.name).click();
+      await page.locator("details.cron-advanced > summary").click();
+      expect(await page.locator("#cron-timeout-seconds").inputValue()).toBe("0");
+      await page.locator("#cron-payload-text").fill("Continue until the edited task finishes");
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const updateRequest = await gateway.waitForRequest("cron.update");
+      expect(requestParams(updateRequest)).toMatchObject({
+        id: existingJob.id,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            message: "Continue until the edited task finishes",
+            timeoutSeconds: 0,
+          },
+        },
+      });
     } finally {
       await context.close();
     }

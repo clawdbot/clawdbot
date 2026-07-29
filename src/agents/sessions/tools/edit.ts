@@ -15,6 +15,7 @@ import { Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
+import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
   applyEditsToNormalizedContent,
@@ -437,7 +438,7 @@ export function createEditToolDefinition(
         }
 
         const buffer = await ops.readFile(absolutePath);
-        const rawContent = buffer.toString("utf-8");
+        const rawContent = decodeUtf8File(buffer, absolutePath);
         try {
           if (signal?.aborted) {
             throw new Error("Operation aborted");

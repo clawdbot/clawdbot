@@ -7,6 +7,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
@@ -91,19 +92,6 @@ function resolveSteerSessionId(params: {
   return undefined;
 }
 
-function applySteerFallbackPrompt(ctx: HandleCommandsParams["ctx"], message: string): void {
-  const mutableCtx = ctx as Record<string, unknown>;
-  mutableCtx.commandText = message;
-  mutableCtx.agentText = message;
-  mutableCtx.rawText = message;
-  mutableCtx.Body = message;
-  mutableCtx.RawBody = message;
-  mutableCtx.CommandBody = message;
-  mutableCtx.BodyForCommands = message;
-  mutableCtx.BodyForAgent = message;
-  mutableCtx.BodyStripped = message;
-}
-
 function formatSteerError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -114,12 +102,7 @@ function continueWithSteerFallback(
   logMessage: string,
 ): CommandHandlerResult {
   logVerbose(logMessage);
-  applySteerFallbackPrompt(params.ctx, message);
-  if (params.rootCtx && params.rootCtx !== params.ctx) {
-    applySteerFallbackPrompt(params.rootCtx, message);
-  }
-  params.command.rawBodyNormalized = message;
-  params.command.commandBodyNormalized = message;
+  applyCommandTextToParams(params, message);
   return { shouldContinue: true };
 }
 

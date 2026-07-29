@@ -9,7 +9,7 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.11"
-  - "@openclaw/fs-safe@0.4.7"
+  - "@openclaw/fs-safe@0.5.0"
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.4"
   - "@openclaw/uirouter@0.1.0"
@@ -61,6 +61,7 @@ minimumReleaseAgeExclude:
   - "@microsoft/teams.cards@2.0.12"
   - "@microsoft/teams.common@2.0.12"
   - "@microsoft/teams.graph@2.0.12"
+  - "@modelcontextprotocol/sdk@1.30.0"
   - "@openai/codex"
   - "@openai/codex-*"
   - "@pierre/diffs@1.2.3"
@@ -123,7 +124,7 @@ overrides:
   "@aws-sdk/credential-provider-node": 3.972.70
   "@aws-sdk/xml-builder": 3.972.36
   hono: 4.12.31
-  "@hono/node-server": 1.19.14
+  "@hono/node-server": 2.0.12
   axios: 1.18.1
   fast-uri: 3.1.4
   follow-redirects: 1.16.0
@@ -141,7 +142,7 @@ overrides:
   qs: 6.15.3
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.3.6
-  tar: 7.5.20
+  tar: 7.5.22
   tough-cookie: 4.1.4
   yauzl: 3.4.0
   protobufjs: 7.6.5

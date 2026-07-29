@@ -1,7 +1,7 @@
-// Curated Memory home: engine/backend/add-on rows above the embedded memory
-// schema editor, with Dreaming as a sibling tab (see security.ts for the same
-// curated-rows-above-schema shape).
+// Memory destination shell and its merged Settings surface.
 import { html, nothing, type TemplateResult } from "lit";
+import "../../components/agent-select-registration.ts";
+import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderSettingsRow,
@@ -62,15 +62,45 @@ type MemoryViewProps = {
   addons: readonly MemoryAddonRow[];
   pluginsHref: string;
   memoryImportHref: string;
-  /** Embedded schema editor for this tab's slice of the `memory` section. */
+  /** New status-led landing view. */
+  overview: TemplateResult;
+  /** Search and read the selected agent's indexed memory. */
+  memories: TemplateResult;
+  /** Agent-scoped dream diary and scene. */
+  dreams: TemplateResult;
+  /** One embedded editor for every `memory.*` schema field. */
   editor: TemplateResult;
-  /** Dreaming tab body; owns its own agent picker and per-agent reads. */
-  dreaming: TemplateResult;
+  /** Global dreaming controls, sharing runtimeConfig with the editor above. */
+  dreamingSettings: TemplateResult;
 };
 
 const MEMORY_PANEL_ID = "memory-settings-panel";
 
 const MEMORY_ENGINE_OFF = "";
+
+export function renderMemoryAgentScope(props: {
+  agentId: string | null;
+  agents: readonly AgentSelectOption[];
+  onAgentChange: (agentId: string | null) => void;
+}) {
+  return renderSettingsSection(
+    {
+      title: t("memoryPage.dreaming.agentScope.title"),
+      description: t("memoryPage.dreaming.agentScope.description"),
+    },
+    renderSettingsRow({
+      title: t("memoryPage.dreaming.agentScope.rowTitle"),
+      control: html`
+        <openclaw-agent-select
+          .options=${props.agents}
+          .value=${props.agentId ?? ""}
+          .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
+          .onSelect=${(value: string) => props.onAgentChange(value || null)}
+        ></openclaw-agent-select>
+      `,
+    }),
+  );
+}
 
 function engineHintKey(selection: MemoryEngineSelection): string {
   switch (selection.kind) {
@@ -225,10 +255,15 @@ function renderAddonsSection(props: MemoryViewProps) {
   );
 }
 
-function renderOverviewTab(props: MemoryViewProps) {
+function renderSettingsTab(props: MemoryViewProps) {
   return html`
     <div class="settings-page">
       ${renderEngineSection(props)} ${renderBackendSection(props)} ${renderAddonsSection(props)}
+      <p class="settings-page__intro">${t("memoryPage.search.intro")}</p>
+    </div>
+    ${props.editor}
+    <div class="settings-page">
+      ${props.dreamingSettings}
       ${renderSettingsSection(
         { title: t("memoryPage.import.title"), description: t("memoryPage.import.description") },
         renderSettingsRow({
@@ -240,7 +275,6 @@ function renderOverviewTab(props: MemoryViewProps) {
         }),
       )}
     </div>
-    ${props.editor}
   `;
 }
 
@@ -252,8 +286,9 @@ export function renderMemory(props: MemoryViewProps) {
         active: props.activeTab,
         tabs: [
           { value: "overview", label: t("memoryPage.tabs.overview") },
-          { value: "search", label: t("memoryPage.tabs.search") },
-          { value: "dreaming", label: t("memoryPage.tabs.dreaming") },
+          { value: "memories", label: t("memoryPage.tabs.memories") },
+          { value: "dreams", label: t("memoryPage.tabs.dreams") },
+          { value: "settings", label: t("memoryPage.tabs.settings") },
         ],
         ariaLabel: t("memoryPage.tablistLabel"),
         panelId: MEMORY_PANEL_ID,
@@ -261,15 +296,12 @@ export function renderMemory(props: MemoryViewProps) {
       })}
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">
         ${props.activeTab === "overview"
-          ? renderOverviewTab(props)
-          : props.activeTab === "search"
-            ? html`
-                <div class="settings-page">
-                  <p class="settings-page__intro">${t("memoryPage.search.intro")}</p>
-                </div>
-                ${props.editor}
-              `
-            : props.dreaming}
+          ? props.overview
+          : props.activeTab === "memories"
+            ? props.memories
+            : props.activeTab === "dreams"
+              ? props.dreams
+              : renderSettingsTab(props)}
       </div>
     </section>
   `;

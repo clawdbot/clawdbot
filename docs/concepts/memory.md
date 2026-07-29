@@ -12,10 +12,13 @@ saved to disk; there is no hidden state.
 
 ## How it works
 
-Your agent has three memory-related files:
+Your agent has four memory-related files:
 
-- **`MEMORY.md`** — long-term memory. Durable facts, preferences, and
-  decisions. Loaded at the start of a session.
+- **`USER.md`** (optional) — stable preferences, communication style,
+  relationships, and active-project context written as directives. Loaded at
+  the start of a session with a separate small budget.
+- **`MEMORY.md`** — long-term memory. Durable non-profile facts and decisions.
+  Loaded at the start of a session.
 - **`memory/YYYY-MM-DD.md`** (or `memory/YYYY-MM-DD-<slug>.md`) — daily notes.
   Running context and observations. Today's and yesterday's dated notes load
   automatically on a bare `/new` or `/reset`; slugged variants, such as those
@@ -31,22 +34,25 @@ prefer TypeScript." It writes the note to the appropriate file.
 
 ## What goes where
 
-`MEMORY.md` is the compact, curated layer: durable facts, preferences, standing
-decisions, and short summaries that should be available at the start of a
-session. It is not a raw transcript, daily log, or exhaustive archive.
+`USER.md` is the compact user-model layer. Write stable preferences and profile
+facts as imperative directives with observed-date and active/superseded
+metadata. When a preference changes, supersede it in place instead of appending
+a contradictory active directive. See [User model](/concepts/user-model).
+
+`MEMORY.md` is the compact, curated layer for durable non-profile facts,
+standing decisions, and short summaries that should be available at the start
+of a session. It is not a raw transcript, daily log, or exhaustive archive.
 
 `memory/YYYY-MM-DD.md` files are the working layer: detailed daily notes,
 observations, session summaries, and raw context that may still be useful
 later. These are indexed for `memory_search` and `memory_get`, but are not
 injected into the bootstrap prompt on every turn.
 
-Over time, useful material from daily notes can be distilled into `MEMORY.md`
-and stale long-term entries removed — but this does not happen on its own in a
-default install. The generated workspace instructions encourage the agent to
-record durable facts as it works. You can make consolidation routine with a
-[scheduled job](/automation/cron-jobs) that reviews recent daily notes, or by
-enabling the optional [dreaming](/concepts/memory#dreaming) pass. The default
-heartbeat prompt performs no memory maintenance on its own.
+Over time, useful material from daily notes is distilled into `MEMORY.md` by
+the default [dreaming](/concepts/dreaming) sweep. The generated workspace
+instructions still encourage the agent to record durable facts as it works,
+while dreaming handles background consolidation. The default heartbeat prompt
+performs no memory maintenance on its own.
 
 If `MEMORY.md` grows past the bootstrap file budget, OpenClaw keeps the file on
 disk intact but truncates the copy injected into context. Treat that as a
@@ -132,9 +138,9 @@ work.
 
 ## Retired inferred commitments
 
-Some future follow-ups are not durable facts. If you mention an interview
-tomorrow, the useful memory may be "check in after the interview," not "store
-this forever in `MEMORY.md`."
+Some future follow-ups are not durable facts. If a future event should trigger
+an action, use a [standing intent](/concepts/standing-intents). If a clock time
+should trigger it, use a [scheduled task](/automation/cron-jobs).
 
 The inferred commitments experiment is retired. OpenClaw no longer extracts or
 delivers those follow-ups. Use [scheduled tasks](/automation/cron-jobs) for
@@ -143,11 +149,13 @@ inspect or dismiss existing stored rows.
 
 ## Memory tools
 
-The agent has two tools for working with memory:
+The agent has three tools for working with memory:
 
 - **`memory_search`** — finds relevant notes using semantic search, even when
   the wording differs from the original.
 - **`memory_get`** — reads a specific memory file or line range.
+- **`intent`** — creates, lists, or explicitly cancels event-conditioned
+  standing intents. Time-based reminders continue to use scheduled tasks.
 
 Both tools are provided by the active memory plugin (default: `memory-core`).
 
@@ -242,17 +250,27 @@ are saved automatically before the summary happens.
 
 ## Dreaming
 
-Dreaming is an optional background consolidation pass for memory. It collects
+Dreaming is the default background consolidation path for memory. It collects
 short-term recall signals, scores candidates, and promotes only qualified
-items into long-term memory (`MEMORY.md`):
+owner or agent-derived items into long-term memory (`MEMORY.md`):
 
-- **Opt-in**: disabled by default.
+- **Default on**: disable it with
+  `plugins.entries.memory-core.config.dreaming.enabled: false`.
 - **Scheduled**: when enabled, `memory-core` auto-manages one recurring cron
   job for a full dreaming sweep.
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
+- **Consolidated**: a bounded subagent rewrite merges duplicates and
+  supersedes stale entries after the deterministic gate. Invalid or
+  unavailable rewrites use append-only fallback.
+- **Taint gated**: untrusted and system-derived candidates never enter the
+  consolidation prompt or durable promotion path.
 - **Reviewable**: phase summaries and diary entries are written to
-  `DREAMS.md` for human review.
+  `DREAMS.md` for human review, including rewrite counts and highlights.
+
+This background pattern follows the motivation behind sleep-time compute
+(arXiv:2504.13171). Provenance-aware reflection also follows the durable
+memory lessons of the Generative Agents research.
 
 See [Dreaming](/concepts/dreaming) for phase behavior, scoring signals, and
 Dream Diary details.
@@ -310,3 +328,5 @@ openclaw memory index --force   # Rebuild the index
 - [Memory configuration reference](/reference/memory-config): all config knobs.
 - [Compaction](/concepts/compaction): how compaction interacts with memory.
 - [Active memory](/concepts/active-memory): sub-agent memory for interactive chat sessions.
+- [User model](/concepts/user-model): directive-based durable preferences and profile facts.
+- [Standing intents](/concepts/standing-intents): event-conditioned prospective memory.

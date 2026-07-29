@@ -3,11 +3,19 @@
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createSessionProjection,
+  type SessionProjectionState,
+} from "../../packages/gateway-client/src/session-projection.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
+import {
+  readTuiSessionProjectionScope,
+  reduceTuiSessionProjection,
+} from "./tui-session-projection.js";
 import {
   getPendingSubmitAcceptedRunId,
   getPendingSubmitDraft,
@@ -116,6 +124,7 @@ function createHarness(params?: {
   currentSessionId?: string | null;
   currentAgentId?: string;
   currentSessionKey?: string;
+  sessionProjection?: SessionProjectionState;
   sessionInfo?: SessionInfo;
   abortActive?: AbortActiveMock;
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
@@ -171,6 +180,7 @@ function createHarness(params?: {
     currentAgentId: params?.currentAgentId ?? "main",
     currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
     currentSessionId: params?.currentSessionId ?? null,
+    sessionProjection: params?.sessionProjection,
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingSubmit: params?.pendingSubmit ?? null,
     activityStatus: params?.activityStatus ?? "idle",
@@ -332,6 +342,34 @@ describe("tui command handlers", () => {
     expect(requestRender).toHaveBeenCalled();
   });
 
+  it("projects the canonical pending user before chat.send is acknowledged", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const sendChat = vi.fn(() => deferred.promise);
+    const harness = createHarness({ sendChat });
+
+    const sending = harness.handleCommand("hello");
+    const provisionalRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+
+    expect(harness.state.sessionProjection?.scope).toEqual({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(harness.state.sessionProjection?.entries).toEqual([
+      expect.objectContaining({
+        pending: true,
+        pendingRunId: provisionalRunId,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          __openclaw: { idempotencyKey: `${provisionalRunId}:user` },
+        },
+      }),
+    ]);
+
+    deferred.resolve({ runId: provisionalRunId });
+    await sending;
+  });
+
   it("re-keys the optimistic pending row to the gateway-accepted runId in place", async () => {
     const sendChat = vi.fn().mockResolvedValue({ runId: "r-accepted" });
     const harness = createHarness({ sendChat });
@@ -345,10 +383,63 @@ describe("tui command handlers", () => {
     expect(harness.rekeyPendingUser).toHaveBeenCalledWith(localRunId, "r-accepted");
     expect(harness.addPendingUser).toHaveBeenCalledTimes(1);
     expect(harness.dropPendingUser).not.toHaveBeenCalled();
+    expect(harness.state.sessionProjection?.entries).toEqual([
+      expect.objectContaining({
+        pending: true,
+        pendingRunId: "r-accepted",
+        message: expect.objectContaining({
+          role: "user",
+          __openclaw: { idempotencyKey: `${localRunId}:user` },
+        }),
+      }),
+    ]);
     expect(getPendingSubmitDraft(harness.state)).toEqual({
       runId: "r-accepted",
       text: "hello",
     });
+  });
+
+  it("retires only the provisional viewport when a persisted turn arrives before its ACK", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const sendChat = vi.fn(() => deferred.promise);
+    const harness = createHarness({ sendChat });
+    const sending = harness.handleCommand("hello");
+    const provisionalRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    const acceptedMessage = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      __openclaw: {
+        id: "accepted-user",
+        seq: 1,
+        idempotencyKey: "accepted-run:user",
+      },
+    };
+    const sameTextPeer = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      __openclaw: {
+        id: "peer-user",
+        seq: 2,
+        idempotencyKey: "peer-run:user",
+      },
+    };
+    for (const message of [acceptedMessage, sameTextPeer]) {
+      reduceTuiSessionProjection(harness.state as never, {
+        type: "messagePersisted",
+        message,
+        scope: readTuiSessionProjectionScope(harness.state),
+      });
+    }
+
+    deferred.resolve({ runId: "accepted-run" });
+    await sending;
+
+    expect(harness.state.sessionProjection?.messages).toEqual([acceptedMessage, sameTextPeer]);
+    expect(harness.state.sessionProjection?.entries.every((entry) => !entry.pending)).toBe(true);
+    expect(harness.dropPendingUser).toHaveBeenCalledExactlyOnceWith(provisionalRunId);
+    expect(harness.rekeyPendingUser).not.toHaveBeenCalled();
+    expect(harness.noteLocalRunId).toHaveBeenCalledWith("accepted-run");
+    expect(getPendingSubmitAcceptedRunId(harness.state)).toBe("accepted-run");
   });
 
   it("does not re-arm the submit draft when the accepted run already emitted events", async () => {
@@ -743,6 +834,7 @@ describe("tui command handlers", () => {
     const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
     expect(dropPendingUser).toHaveBeenCalledWith(sentRunId);
     expect(state.pendingSubmit).toBeNull();
+    expect(state.sessionProjection?.entries).toEqual([]);
     expect(addSystem).toHaveBeenCalledWith(
       "send failed: Chat failed before the run started; try again.",
     );
@@ -769,8 +861,25 @@ describe("tui command handlers", () => {
       "send failed: Chat failed before the run started; try again.",
     );
     expect(state.pendingSubmit).toBeNull();
+    expect(state.sessionProjection?.entries).toEqual([]);
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the accepted canonical pending turn after a re-keyed terminal failure", async () => {
+    const sendChat = vi.fn().mockResolvedValue({
+      runId: "accepted-failed-run",
+      status: "error",
+    });
+    const harness = createHarness({ sendChat });
+
+    await harness.handleCommand("hello");
+
+    const provisionalRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(harness.rekeyPendingUser).toHaveBeenCalledWith(provisionalRunId, "accepted-failed-run");
+    expect(harness.dropPendingUser).toHaveBeenCalledWith("accepted-failed-run");
+    expect(harness.state.sessionProjection?.entries).toEqual([]);
+    expect(harness.state.pendingSubmit).toBeNull();
   });
 
   it("refreshes history without waiting when chat send returns a terminal ok ack", async () => {
@@ -788,6 +897,7 @@ describe("tui command handlers", () => {
 
     expect(dropPendingUser).not.toHaveBeenCalled();
     expect(state.pendingSubmit).toBeNull();
+    expect(state.sessionProjection?.entries).toHaveLength(1);
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
@@ -920,6 +1030,35 @@ describe("tui command handlers", () => {
     const sentRunId = (firstMockArg(sendChatMock, "sendChat") as { runId: string }).runId;
     expect(dropPendingUser).toHaveBeenCalledWith(sentRunId);
     expect(state.pendingSubmit).toBeNull();
+    expect(state.sessionProjection?.entries).toEqual([]);
+  });
+
+  it("keeps a same-text persisted peer when the local send fails", async () => {
+    const peerMessage = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      __openclaw: {
+        id: "peer-user",
+        seq: 4,
+        idempotencyKey: "peer-run:user",
+      },
+    };
+    const sessionProjection = createSessionProjection(
+      { sessionKey: "agent:main:main", agentId: "main" },
+      [peerMessage],
+    );
+    const harness = createHarness({
+      sendChat: vi.fn().mockRejectedValue(new Error("local send failed")),
+      sessionProjection,
+    });
+
+    await harness.handleCommand("hello");
+
+    expect(harness.state.sessionProjection?.messages).toEqual([peerMessage]);
+    expect(harness.state.sessionProjection?.entries[0]).toMatchObject({
+      pending: false,
+      pendingRunId: null,
+    });
   });
 
   it("sends /btw without hijacking the active main run", async () => {
@@ -936,6 +1075,7 @@ describe("tui command handlers", () => {
     expect(noteLocalRunId).not.toHaveBeenCalled();
     expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
     expect(state.activeChatRunId).toBe("run-main");
+    expect(state.sessionProjection).toBeUndefined();
     expect(setActivityStatus).not.toHaveBeenCalledWith("sending");
     expect(setActivityStatus).not.toHaveBeenCalledWith("waiting");
     expectSendChatFields(sendChat, { message: "/btw what changed?" });
@@ -1194,6 +1334,68 @@ describe("tui command handlers", () => {
       { sessionKey: "agent:main:main", agentId: "main" },
     );
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the canonical transcript exactly once through the session mutation owner", async () => {
+    const sessionProjection = createSessionProjection(
+      { sessionKey: "agent:main:main", agentId: "main" },
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "before reset" }],
+          __openclaw: { id: "before-reset", seq: 1 },
+        },
+      ],
+    );
+    const resetResult = {
+      ok: true as const,
+      key: "agent:main:main",
+      entry: { sessionId: "reset-session" },
+    };
+    const applySessionMutationResult = vi.fn(() => {
+      reduceTuiSessionProjection(harness.state as never, {
+        type: "sessionReset",
+        scope: readTuiSessionProjectionScope(harness.state),
+      });
+      return true;
+    });
+    const harness = createHarness({
+      resetSession: vi.fn().mockResolvedValue(resetResult),
+      applySessionMutationResult,
+      sessionProjection,
+    });
+
+    await harness.handleCommand("/reset");
+
+    expect(applySessionMutationResult).toHaveBeenCalledExactlyOnceWith(resetResult, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(harness.state.sessionProjection?.messages).toEqual([]);
+    expect(harness.state.sessionProjection?.entries).toEqual([]);
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("preserves the canonical transcript when the selected session reset fails", async () => {
+    const message = {
+      role: "user",
+      content: [{ type: "text", text: "preserve failed reset" }],
+      __openclaw: { id: "before-failed-reset", seq: 1 },
+    };
+    const sessionProjection = createSessionProjection(
+      { sessionKey: "agent:main:main", agentId: "main" },
+      [message],
+    );
+    const harness = createHarness({
+      resetSession: vi.fn().mockRejectedValue(new Error("reset unavailable")),
+      sessionProjection,
+    });
+
+    await harness.handleCommand("/reset");
+
+    expect(harness.state.sessionProjection?.messages).toEqual([message]);
+    expect(harness.applySessionMutationResult).not.toHaveBeenCalled();
+    expect(harness.addSystem).toHaveBeenCalledWith("reset failed: reset unavailable");
   });
 
   it("scopes /reset for the selected global agent", async () => {

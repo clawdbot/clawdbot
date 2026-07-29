@@ -171,23 +171,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   pointer-events: auto;
 }
 
-.shell--mobile-nav .shell-nav-backdrop {
-  display: block;
-  position: fixed;
-  inset: 0;
-  z-index: 65;
-  border: 0;
-  background: color-mix(in srgb, black 52%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
-}
-
-.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 /* Inside the drawer there is no Escape key to hint at. */
 .shell--mobile-nav .settings-sidebar__esc {
   display: none;

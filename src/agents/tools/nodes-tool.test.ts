@@ -62,7 +62,9 @@ const screenMocks = vi.hoisted(() => ({
     hasAudio: true,
   })),
   screenRecordTempPath: vi.fn(() => "/tmp/screen-record.mp4"),
-  writeScreenRecordToFile: vi.fn(async () => ({ path: "/tmp/screen-record.mp4" })),
+  writeScreenRecordToFile: vi.fn(async (_filePath: string) => ({
+    path: "/tmp/screen-record.mp4",
+  })),
   parseScreenSnapshotPayload: vi.fn(() => ({
     base64: "ZmFrZQ==",
     format: "png",
@@ -70,8 +72,17 @@ const screenMocks = vi.hoisted(() => ({
     width: 1920,
     height: 1080,
   })),
+  // Mirrors nodes-screen's mapping; the real contract is covered in nodes-camera.test.ts.
+  screenSnapshotFormatForPath: vi.fn((filePath: string) => {
+    if (filePath.toLowerCase().endsWith(".png")) {
+      return "png";
+    }
+    return /\.jpe?g$/iu.test(filePath) ? "jpeg" : undefined;
+  }),
   screenSnapshotTempPath: vi.fn(() => "/tmp/screen-snapshot.png"),
-  writeScreenSnapshotToFile: vi.fn(async () => ({ path: "/tmp/screen-snapshot.png" })),
+  writeScreenSnapshotToFile: vi.fn(async (_filePath: string) => ({
+    path: "/tmp/screen-snapshot.png",
+  })),
 }));
 
 vi.mock("./gateway.js", () => ({
@@ -99,6 +110,7 @@ vi.mock("../../cli/nodes-screen.js", () => ({
   screenRecordTempPath: screenMocks.screenRecordTempPath,
   writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
   parseScreenSnapshotPayload: screenMocks.parseScreenSnapshotPayload,
+  screenSnapshotFormatForPath: screenMocks.screenSnapshotFormatForPath,
   screenSnapshotTempPath: screenMocks.screenSnapshotTempPath,
   writeScreenSnapshotToFile: screenMocks.writeScreenSnapshotToFile,
 }));
@@ -161,6 +173,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodeUtilsMocks.resolveNodeId.mockClear();
     nodeUtilsMocks.resolveNode.mockClear();
     screenMocks.parseScreenRecordPayload.mockClear();
+    screenMocks.screenRecordTempPath.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
     screenMocks.parseScreenSnapshotPayload.mockClear();
     screenMocks.screenSnapshotTempPath.mockClear();
@@ -459,7 +472,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       | undefined;
     expect(call?.[0]).toBe("node.invoke");
     expect(call?.[2].command).toBe("screen.snapshot");
-    expect(call?.[2].params).toEqual({ screenIndex: 1, maxWidth: 1200 });
+    expect(call?.[2].params).toEqual({ screenIndex: 1, maxWidth: 1200, format: undefined });
     expect(screenMocks.parseScreenSnapshotPayload).toHaveBeenCalledWith({ ok: true });
     expect(screenMocks.screenSnapshotTempPath).toHaveBeenCalledWith({ ext: "png" });
     expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
@@ -479,6 +492,113 @@ describe("createNodesTool screen_record duration guardrails", () => {
         },
       },
     });
+  });
+
+  it("requests the encoding a caller-supplied outPath already promises", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    screenMocks.writeScreenSnapshotToFile.mockImplementationOnce(async (filePath: string) => ({
+      path: filePath,
+    }));
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-snapshot", {
+      action: "screen_snapshot",
+      node: "miniclaw",
+      outPath: "/workspace/miniclaw-screen-2026-07-28.png",
+    });
+
+    // Without this the node falls back to its own default (JPEG on macOS) and a
+    // `.png` request quietly receives JPEG bytes.
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { format?: unknown } }]
+      | undefined;
+    expect(call?.[2].params?.format).toBe("png");
+    // The workspace guard alias-checked this exact path; it is written verbatim.
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/workspace/miniclaw-screen-2026-07-28.png",
+      "ZmFrZQ==",
+    );
+    expect(screenMocks.screenSnapshotTempPath).not.toHaveBeenCalled();
+    expect(result.content).toEqual([
+      { type: "text", text: "FILE:/workspace/miniclaw-screen-2026-07-28.png" },
+    ]);
+  });
+
+  it("requests jpeg for .jpg and .jpeg output paths", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const outPaths = ["/workspace/shot.jpg", "/workspace/shot.jpeg"];
+    for (const _ of outPaths) {
+      screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
+        base64: "ZmFrZQ==",
+        format: "jpeg",
+        screenIndex: 0,
+        width: 1600,
+        height: 1049,
+      });
+      screenMocks.writeScreenSnapshotToFile.mockImplementationOnce(async (filePath: string) => ({
+        path: filePath,
+      }));
+    }
+    const tool = createNodesTool();
+
+    for (const outPath of outPaths) {
+      await tool.execute("call-snapshot", {
+        action: "screen_snapshot",
+        node: "miniclaw",
+        outPath,
+      });
+    }
+
+    for (const call of gatewayMocks.callGatewayTool.mock.calls) {
+      expect((call as [string, unknown, { params?: { format?: unknown } }])[2].params?.format).toBe(
+        "jpeg",
+      );
+    }
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/workspace/shot.jpg",
+      "ZmFrZQ==",
+    );
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/workspace/shot.jpeg",
+      "ZmFrZQ==",
+    );
+  });
+
+  it("refuses to write snapshot bytes that contradict the outPath extension", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    // A node that ignores the requested format must not silently mislabel the file.
+    screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
+      base64: "ZmFrZQ==",
+      format: "jpeg",
+      screenIndex: 0,
+      width: 1600,
+      height: 1049,
+    });
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-snapshot", {
+        action: "screen_snapshot",
+        node: "miniclaw",
+        outPath: "/workspace/shot.png",
+      }),
+    ).rejects.toThrow("screen.snapshot returned jpg; outPath must use a matching extension");
+    expect(screenMocks.writeScreenSnapshotToFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses to write recording bytes that contradict the outPath extension", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-record", {
+        action: "screen_record",
+        node: "miniclaw",
+        durationMs: 1000,
+        outPath: "/workspace/clip.mov",
+      }),
+    ).rejects.toThrow("screen.record returned mp4; outPath must use a matching extension");
+    expect(screenMocks.writeScreenRecordToFile).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported screen.snapshot response formats before writing", async () => {

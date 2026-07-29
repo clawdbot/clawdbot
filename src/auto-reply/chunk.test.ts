@@ -215,6 +215,14 @@ describe("chunkText", () => {
       },
     },
     {
+      name: "trims trailing whitespace from the final outbound reply chunk",
+      text: "alpha beta   ",
+      limit: 8,
+      assert: (chunks: string[]) => {
+        expect(chunks).toEqual(["alpha", "beta"]);
+      },
+    },
+    {
       name: "falls back to a hard break when no whitespace is present",
       text: "Supercalifragilisticexpialidocious",
       limit: 10,

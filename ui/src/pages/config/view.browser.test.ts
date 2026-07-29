@@ -675,22 +675,19 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith(null);
   });
 
-  it("renders the virtual Notifications tab in Communication settings", () => {
+  it("renders the virtual Notifications tab on Notifications settings", () => {
     const onSectionChange = vi.fn();
     const { container } = renderConfigView({
-      navRootLabel: "Communication",
-      includeSections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
+      navRootLabel: "Notifications",
+      includeSections: ["__notifications__"],
       includeVirtualSections: true,
       onSectionChange,
       schema: {
         type: "object",
-        properties: {
-          channels: { type: "object", properties: {} },
-          messages: { type: "object", properties: {} },
-        },
+        properties: {},
       },
-      formValue: { channels: {}, messages: {} },
-      originalValue: { channels: {}, messages: {} },
+      formValue: {},
+      originalValue: {},
       webPush: {
         supported: true,
         permission: "default",
@@ -1742,6 +1739,53 @@ describe("config view", () => {
     expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
     row?.click();
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
+  });
+
+  it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {
+    const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        crimson: { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt },
+      }),
+    );
+    const onOpenLobsterdex = vi.fn();
+    try {
+      const { container } = renderConfigView({
+        activeSection: "__appearance__",
+        includeSections: ["__appearance__"],
+        lobsterPetVisits: true,
+        setLobsterPetVisits: vi.fn(),
+        lobsterPetSounds: true,
+        setLobsterPetSounds: vi.fn(),
+        lobsterdexHref: "/settings/lobsterdex",
+        onOpenLobsterdex,
+      });
+
+      const seen = container.querySelector(".lobster-pet--palette-crimson");
+      const seenTooltip = seen?.closest("openclaw-tooltip");
+      expect(seen?.hasAttribute("title")).toBe(false);
+      expect(seen?.getAttribute("aria-label")).toContain("Ruby ✦");
+      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
+        "The classic red, first in every tide pool.",
+      );
+      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
+        new Date(firstSeenAt).toLocaleDateString(),
+      );
+
+      const unseen = container.querySelector(".lobster-pet--palette-watermelon");
+      expect(unseen?.getAttribute("aria-label")).toContain("Ripe when thumped.");
+      expect(
+        unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
+      ).toContain("Ripe when thumped.");
+
+      container.querySelector<HTMLAnchorElement>(".lobsterdex__open")?.click();
+      expect(onOpenLobsterdex).toHaveBeenCalledOnce();
+    } finally {
+      localStorage.removeItem("openclaw.control.lobsterdex.v1");
+      vi.unstubAllGlobals();
+    }
   });
 
   it("validates and changes the browser-local chat width", () => {

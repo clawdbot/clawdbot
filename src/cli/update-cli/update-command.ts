@@ -573,6 +573,7 @@ async function updateCommandInternal(
   await finishUpdate({
     result,
     root,
+    installKindChanged: switchToGit || switchToPackage,
     configSnapshot,
     requestedChannel,
     storedChannel,
