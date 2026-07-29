@@ -3130,7 +3130,10 @@ describe("grouped chat rendering", () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toContain("meta=1");
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
-      return { ok: true, json: async () => mediaTicketPayload("ticket-bootstrap-audio") };
+      return {
+        ok: true,
+        json: async () => ({ ...mediaTicketPayload("ticket-bootstrap-audio"), durationMs: 2_345 }),
+      };
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -3164,6 +3167,7 @@ describe("grouped chat rendering", () => {
     expect(audio.getAttribute("src")).toBe(
       `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
     );
+    expect((audioPlayer as unknown as { serverDurationMs?: number }).serverDurationMs).toBe(2_345);
   });
 
   it("resolves managed transcode audio through an artifact ticket", async () => {
@@ -3222,6 +3226,7 @@ describe("grouped chat rendering", () => {
     expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(
       `${ticketedUrl}&playback=1`,
     );
+    expect((player as unknown as { serverDurationMs?: number }).serverDurationMs).toBeUndefined();
   });
 
   it("keeps a valid managed media ticket while refresh retries", async () => {

@@ -1,5 +1,6 @@
-export const CHAT_AUDIO_WAVEFORM_MAX_BYTES = 12 * 1024 * 1024;
-const CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS = 10 * 60;
+export const CHAT_AUDIO_WAVEFORM_MAX_BYTES = 8 * 1024 * 1024;
+export const CHAT_AUDIO_WAVEFORM_SAMPLE_RATE = 16_000;
+const CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS = 5 * 60;
 const CHAT_AUDIO_WAVEFORM_BUCKET_COUNT = 96;
 
 type ChatAudioBufferLike = {
@@ -65,11 +66,9 @@ export function computeChatAudioWaveformPeaks(
     const start = Math.floor((bucket * buffer.length) / count);
     const end = Math.max(start + 1, Math.floor(((bucket + 1) * buffer.length) / count));
     let peak = 0;
-    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
-      const samples = buffer.getChannelData(channel);
-      for (let index = start; index < Math.min(end, samples.length); index += 1) {
-        peak = Math.max(peak, Math.abs(samples[index] ?? 0));
-      }
+    const samples = buffer.getChannelData(0);
+    for (let index = start; index < Math.min(end, samples.length); index += 1) {
+      peak = Math.max(peak, Math.abs(samples[index] ?? 0));
     }
     peaks[bucket] = peak;
   }

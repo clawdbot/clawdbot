@@ -594,10 +594,11 @@ export function renderAssistantAttachments(
           assistantAvailability.status === "available"
             ? (assistantAvailability.sizeBytes ?? attachment.sizeBytes)
             : attachment.sizeBytes;
-        const durationMs =
+        const serverDurationMs =
+          isLocalAssistantAttachmentSource(attachment.url) &&
           assistantAvailability.status === "available"
-            ? (assistantAvailability.durationMs ?? attachment.durationMs)
-            : attachment.durationMs;
+            ? assistantAvailability.durationMs
+            : undefined;
         const playbackAuthToken = isLocalAssistantAttachmentSource(attachment.url)
           ? (authToken ?? null)
           : null;
@@ -652,7 +653,7 @@ export function renderAssistantAttachments(
               .playback=${playback}
               .authToken=${playbackAuthToken}
               .sizeBytes=${sizeBytes}
-              .durationMs=${durationMs}
+              .serverDurationMs=${serverDurationMs}
               .voiceNote=${attachment.isVoiceNote === true}
               .onMediaLoaded=${onAssistantAttachmentLoaded}
             ></openclaw-chat-audio-player>

@@ -15,6 +15,7 @@ import {
   cacheAndRetainChatAudioBlob,
   canDecodeChatAudioWaveform,
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
+  CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
   retainCachedChatAudioBlob,
   shouldFetchChatAudioWaveform,
@@ -30,6 +31,7 @@ import { ChatMediaSourceController } from "./chat-media-source.ts";
 
 const SEEK_STEP_SECONDS = 5;
 const WAVEFORM_FETCH_TIMEOUT_MS = 30_000;
+const WAVEFORM_DECODE_DURATION_TOLERANCE = 1.2;
 
 async function readResponseBytesWithinLimit(
   response: Response,
@@ -90,7 +92,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @property() playback: ChatMediaPlaybackMode = "native";
   @property() authToken: string | null = null;
   @property({ type: Number }) sizeBytes: number | undefined;
-  @property({ type: Number }) durationMs: number | undefined;
+  @property({ type: Number }) serverDurationMs: number | undefined;
   @property({ type: Boolean }) voiceNote = false;
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
 
@@ -149,8 +151,12 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       changedProperties.has("playback") ||
       changedProperties.has("authToken")
     ) {
+      const sourceIdentityChanged =
+        changedProperties.has("sourceIdentity") &&
+        Boolean(this.sourceController.currentIdentity) &&
+        this.sourceController.currentIdentity !== this.sourceIdentity.trim();
       if (
-        changedProperties.has("sourceIdentity") ||
+        sourceIdentityChanged ||
         changedProperties.has("playback") ||
         changedProperties.has("authToken")
       ) {
@@ -167,7 +173,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           this.media.pause();
           releaseChatAudioPlayback(this.media);
         }
-        if (changedProperties.has("authToken") && this.media) {
+        if ((sourceIdentityChanged || changedProperties.has("authToken")) && this.media) {
           this.sourceController.reset(this.media);
         }
       }
@@ -305,12 +311,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       return;
     }
     const durationSeconds =
-      this.durationMs !== undefined
-        ? this.durationMs / 1_000
-        : this.duration > 0
-          ? this.duration
-          : undefined;
-    if (!shouldFetchChatAudioWaveform({ sizeBytes: this.sizeBytes, durationSeconds })) {
+      this.serverDurationMs !== undefined ? this.serverDurationMs / 1_000 : undefined;
+    if (
+      durationSeconds === undefined ||
+      !shouldFetchChatAudioWaveform({ sizeBytes: this.sizeBytes, durationSeconds })
+    ) {
       return;
     }
     const AudioContextConstructor = globalThis.AudioContext;
@@ -362,14 +367,14 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     if (canDecodeChatAudioWaveform({ sizeBytes: bytes.byteLength, durationSeconds })) {
       let context: AudioContext | null = null;
       try {
-        context = new AudioContextConstructor();
+        // Duration is trusted only from the server-side ffprobe metadata.
+        // A 16 kHz decode bounds PCM; >20% duration mismatches are discarded.
+        context = new AudioContextConstructor({ sampleRate: CHAT_AUDIO_WAVEFORM_SAMPLE_RATE });
         const decoded = await context.decodeAudioData(bytes.slice(0));
         decodedDuration = Number.isFinite(decoded.duration) ? decoded.duration : undefined;
         if (
-          canDecodeChatAudioWaveform({
-            sizeBytes: bytes.byteLength,
-            durationSeconds: decodedDuration,
-          })
+          decodedDuration !== undefined &&
+          decodedDuration <= durationSeconds * WAVEFORM_DECODE_DURATION_TOLERANCE
         ) {
           peaks = computeChatAudioWaveformPeaks(decoded);
         }

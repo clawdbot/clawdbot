@@ -12,7 +12,7 @@ describe("chat audio waveform", () => {
     expect(
       canDecodeChatAudioWaveform({
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
-        durationSeconds: 600,
+        durationSeconds: 300,
       }),
     ).toBe(true);
     expect(canDecodeChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES + 1 })).toBe(
@@ -21,7 +21,7 @@ describe("chat audio waveform", () => {
     expect(
       canDecodeChatAudioWaveform({
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
-        durationSeconds: 601,
+        durationSeconds: 301,
       }),
     ).toBe(false);
     expect(shouldFetchChatAudioWaveform({})).toBe(false);
@@ -37,7 +37,7 @@ describe("chat audio waveform", () => {
   it("computes normalized peak buckets from every channel", () => {
     const channels = [
       new Float32Array([0.1, -0.5, 0.2, 0.4, -0.25, 0.75, 0, -1]),
-      new Float32Array([0, 0.25, -0.1, 0.3, 0.5, 0.1, -0.8, 0.2]),
+      new Float32Array([1, 0.25, -0.1, 0.3, 0.5, 0.1, -0.8, 0.2]),
     ];
     const peaks = computeChatAudioWaveformPeaks(
       {
@@ -82,7 +82,7 @@ describe("chat audio waveform", () => {
   });
 
   it("caps retained audio bytes at 48 MiB", () => {
-    const releases = Array.from({ length: 4 }, (_, index) =>
+    const releases = Array.from({ length: 6 }, (_, index) =>
       cacheAndRetainChatAudioBlob(`large-${index}`, {
         blobUrl: `blob:large-${index}`,
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
