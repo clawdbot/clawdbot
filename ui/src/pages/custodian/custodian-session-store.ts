@@ -32,7 +32,7 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 type StoreListener = () => void;
 type ConfiguredInferenceState = "unresolved" | "required" | "ready";
-export type CustodianSetupIssue = "missing" | "unavailable";
+type CustodianSetupIssue = "missing" | "unavailable";
 
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {

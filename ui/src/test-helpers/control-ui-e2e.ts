@@ -123,6 +123,7 @@ export type MockGatewayRequest = {
 };
 
 export type ControlUiMockGatewayScenario = {
+  agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
   basePath?: string;
@@ -371,6 +372,7 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    agentModel: scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
@@ -1108,6 +1110,7 @@ function installControlUiMockGateway(input: {
             {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
+              ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
               name: scenario.assistantName,
               ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
               workspaceGit: scenario.workspaceGit,
@@ -1160,6 +1163,7 @@ function installControlUiMockGateway(input: {
               {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
+                ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
                 name: scenario.assistantName,
                 ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
                 workspaceGit: scenario.workspaceGit,
