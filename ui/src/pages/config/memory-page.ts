@@ -69,7 +69,7 @@ type CatalogConnection = {
 type MemoryCatalog =
   | { kind: "loading" }
   | { kind: "unavailable" }
-  | { kind: "ready"; plugins: readonly PluginCatalogItem[] };
+  | { kind: "ready"; plugins: readonly PluginCatalogItem[]; mutationAllowed: boolean };
 
 type MemoryAddonNotice = {
   message: string;
@@ -296,7 +296,11 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const request = ++this.catalogRequest;
     try {
       const result = await loadPluginCatalog(client);
-      this.applyCatalog(connection, request, { kind: "ready", plugins: result.plugins });
+      this.applyCatalog(connection, request, {
+        kind: "ready",
+        plugins: result.plugins,
+        mutationAllowed: result.mutationAllowed,
+      });
     } catch {
       this.applyCatalog(connection, request, { kind: "unavailable" });
     }
@@ -442,6 +446,8 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   private async changeAddon(pluginId: string, enabled: boolean) {
     if (
       this.addonBusy.has(pluginId) ||
+      this.catalog.kind !== "ready" ||
+      !this.catalog.mutationAllowed ||
       !readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin
     ) {
       return;
@@ -627,7 +633,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       backendBusy: runtimeConfig.state.configSaving || runtimeConfig.state.configApplying,
       onBackendChange: (next) => runtimeConfig.patchForm(["memory", "backend"], next),
       addons: this.addonRows(),
-      canToggleAddons: readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin,
+      canToggleAddons:
+        this.catalog.kind === "ready" &&
+        this.catalog.mutationAllowed &&
+        readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin,
       onAddonChange: (pluginId, enabled) => void this.changeAddon(pluginId, enabled),
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,

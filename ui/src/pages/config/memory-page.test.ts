@@ -62,8 +62,11 @@ function addon(id: string, enabled: boolean): PluginCatalogItem {
 function createPage(params: {
   configObject: Record<string, unknown>;
   /** Resolves one `plugins.list` call; the default answers every call with `catalog`. */
-  listCatalog?: (call: number) => Promise<{ plugins: readonly PluginCatalogItem[] }>;
+  listCatalog?: (
+    call: number,
+  ) => Promise<{ plugins: readonly PluginCatalogItem[]; mutationAllowed?: boolean }>;
   catalog?: readonly PluginCatalogItem[];
+  mutationAllowed?: boolean;
   patchForm?: (path: Array<string | number>, value: unknown) => void;
   setEnabled?: (pluginId: string, enabled: boolean) => Promise<unknown>;
   refresh?: () => Promise<void>;
@@ -83,9 +86,14 @@ function createPage(params: {
   const request = vi.fn((method: string, payload?: { agentId?: string; probe?: boolean }) => {
     if (method === "plugins.list") {
       const call = listCalls++;
-      return params.listCatalog
+      const result = params.listCatalog
         ? params.listCatalog(call)
         : Promise.resolve({ plugins: params.catalog ?? [] });
+      return result.then((catalog) => ({
+        ...catalog,
+        diagnostics: [],
+        mutationAllowed: catalog.mutationAllowed ?? params.mutationAllowed ?? true,
+      }));
     }
     if (method === "doctor.memory.status") {
       return params.memoryStatus
@@ -495,6 +503,23 @@ describe("MemorySettingsPage catalog state", () => {
       expect(addonSwitch(element, "Active memory")).toBeNull();
       expect(addonSwitch(element, "Memory wiki")).toBeNull();
       expect(element.querySelector("a.memory-page__link")?.textContent).toContain("Open Plugins");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("falls back to read-only add-on status rows when plugin mutations are unavailable", async () => {
+    const { element } = createPage({
+      configObject: {},
+      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+      mutationAllowed: false,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Enabled"));
+      expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
+      expect(addonSwitch(element, "Active memory")).toBeNull();
+      expect(addonSwitch(element, "Memory wiki")).toBeNull();
     } finally {
       element.remove();
     }
