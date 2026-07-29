@@ -107,15 +107,13 @@ enum LaunchAgentManager {
 
     @discardableResult
     private static func runLaunchctl(_ args: [String]) async -> Int32 {
-        await Task.detached(priority: .utility) { () -> Int32 in
-            do {
-                return try BoundedProcess.run(
-                    path: "/bin/launchctl",
-                    arguments: args,
-                    timeout: 5).terminationStatus
-            } catch {
-                return -1
-            }
-        }.value
+        do {
+            return try await BoundedProcess.run(
+                path: "/bin/launchctl",
+                arguments: args,
+                timeout: 5).terminationStatus
+        } catch {
+            return -1
+        }
     }
 }

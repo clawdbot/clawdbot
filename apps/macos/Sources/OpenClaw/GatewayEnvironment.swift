@@ -132,7 +132,7 @@ enum GatewayEnvironment {
         Semver.parse(versionString)
     }
 
-    static func check() -> GatewayEnvironmentStatus {
+    static func check() async -> GatewayEnvironmentStatus {
         let start = Date()
         defer {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
@@ -148,7 +148,7 @@ enum GatewayEnvironment {
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
 
-        switch RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths()) {
+        switch await RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths()) {
         case let .failure(err):
             return GatewayEnvironmentStatus(
                 kind: .missingNode,
@@ -168,8 +168,11 @@ enum GatewayEnvironment {
                     message: "openclaw CLI not found in PATH; install the CLI.")
             }
 
-            let installedRaw = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
-                ?? self.readLocalGatewayVersion(projectRoot: projectRoot)
+            let installedRaw = if let gatewayBin {
+                await self.readGatewayVersion(binary: gatewayBin)
+            } else {
+                self.readLocalGatewayVersion(projectRoot: projectRoot)
+            }
             let installed = Semver.parse(installedRaw)
 
             if let expected, let installedRaw, installed != nil,
@@ -205,7 +208,7 @@ enum GatewayEnvironment {
         }
     }
 
-    static func resolveGatewayCommand() -> GatewayCommandResolution {
+    static func resolveGatewayCommand() async -> GatewayCommandResolution {
         let start = Date()
         defer {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
@@ -217,9 +220,9 @@ enum GatewayEnvironment {
         }
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
-        let status = self.check()
+        let status = await self.check()
         let gatewayBin = CommandResolver.openclawExecutable()
-        let runtime = RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
+        let runtime = await RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
 
         guard case .ok = status.kind else {
             return GatewayCommandResolution(status: status, command: nil)
@@ -284,10 +287,10 @@ enum GatewayEnvironment {
         return normalized
     }
 
-    private static func readGatewayVersion(binary: String) -> String? {
+    private static func readGatewayVersion(binary: String) async -> String? {
         let start = Date()
         do {
-            let result = try BoundedProcess.run(
+            let result = try await BoundedProcess.run(
                 path: binary,
                 arguments: ["--version"],
                 environment: ["PATH": CommandResolver.preferredPaths().joined(separator: ":")],

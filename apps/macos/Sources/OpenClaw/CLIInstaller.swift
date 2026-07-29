@@ -264,12 +264,10 @@ enum CLIInstaller {
 
     private static func runtimeIsCompatible(environment: [String: String]) async -> Bool {
         let paths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
-        return await Task.detached(priority: .utility) {
-            if case .success = RuntimeLocator.resolve(searchPaths: paths) {
-                return true
-            }
-            return false
-        }.value
+        if case .success = await RuntimeLocator.resolve(searchPaths: paths) {
+            return true
+        }
+        return false
     }
 
     static func classifyVersion(

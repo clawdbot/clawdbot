@@ -74,7 +74,8 @@ enum RuntimeLocator {
     }
 
     static func resolve(
-        searchPaths: [String] = CommandResolver.preferredPaths()) -> Result<RuntimeResolution, RuntimeResolutionError>
+        searchPaths: [String] = CommandResolver.preferredPaths()) async
+        -> Result<RuntimeResolution, RuntimeResolutionError>
     {
         let pathEnv = searchPaths.joined(separator: ":")
         let runtime: RuntimeKind = .node
@@ -82,7 +83,7 @@ enum RuntimeLocator {
         guard let binary = findExecutable(named: runtime.binaryName, searchPaths: searchPaths) else {
             return .failure(.notFound(searchPaths: searchPaths))
         }
-        guard let rawVersion = readVersion(of: binary, pathEnv: pathEnv) else {
+        guard let rawVersion = await readVersion(of: binary, pathEnv: pathEnv) else {
             return .failure(.versionParse(
                 kind: runtime,
                 raw: "(unreadable)",
@@ -139,10 +140,10 @@ enum RuntimeLocator {
         return nil
     }
 
-    private static func readVersion(of binary: String, pathEnv: String) -> String? {
+    private static func readVersion(of binary: String, pathEnv: String) async -> String? {
         let start = Date()
         do {
-            let result = try BoundedProcess.run(
+            let result = try await BoundedProcess.run(
                 path: binary,
                 arguments: ["--version"],
                 environment: ["PATH": pathEnv],
