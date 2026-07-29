@@ -327,6 +327,7 @@ function resolveGatewayProviderStaticModel(params: {
   agentId?: string;
   provider?: string;
   model: string;
+  catalogEntry?: ModelCatalogEntry;
 }): ModelCatalogEntry | undefined {
   if (
     !params.agentId ||
@@ -340,6 +341,14 @@ function resolveGatewayProviderStaticModel(params: {
     modelId: params.model,
   });
   if (!staticEntry) {
+    return undefined;
+  }
+  if (params.catalogEntry?.api && staticEntry.api && params.catalogEntry.api !== staticEntry.api) {
+    return undefined;
+  }
+  const catalogBaseUrl = normalizeGatewayModelCapabilityBaseUrl(params.catalogEntry?.baseUrl);
+  const staticBaseUrl = normalizeGatewayModelCapabilityBaseUrl(staticEntry.baseUrl);
+  if (catalogBaseUrl && staticBaseUrl && catalogBaseUrl !== staticBaseUrl) {
     return undefined;
   }
 
@@ -361,7 +370,6 @@ function resolveGatewayProviderStaticModel(params: {
   const configuredBaseUrl = normalizeGatewayModelCapabilityBaseUrl(
     configuredModel?.baseUrl ?? configuredProvider?.baseUrl,
   );
-  const staticBaseUrl = normalizeGatewayModelCapabilityBaseUrl(staticEntry.baseUrl);
   if (configuredBaseUrl && staticBaseUrl && configuredBaseUrl !== staticBaseUrl) {
     return undefined;
   }
@@ -398,18 +406,19 @@ export async function resolveGatewayModelSupportsImages(params: {
       provider: params.provider,
       modelId: params.model,
     });
-    // Provider-static capabilities belong to the same prepared agent generation;
-    // never promote them into public account discovery or override an explicit row.
+    // Same-generation provider facts repair stale discovered capabilities without
+    // crossing agent ownership, physical routes, or authored input policy.
     const staticEntry =
-      !catalogEntry && snapshot
+      snapshot && (!catalogEntry || !modelSupportsInput(catalogEntry, "image"))
         ? resolveGatewayProviderStaticModel({
             snapshot,
             agentId: params.agentId,
             provider: params.provider,
             model: params.model,
+            catalogEntry,
           })
         : undefined;
-    const modelEntry = catalogEntry ?? staticEntry;
+    const modelEntry = staticEntry ?? catalogEntry;
     const normalizedProvider = normalizeOptionalLowercaseString(
       params.provider ?? modelEntry?.provider,
     );

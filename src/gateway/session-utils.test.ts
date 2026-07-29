@@ -3376,7 +3376,7 @@ describe("resolveGatewayModelSupportsImages", () => {
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
 
-  test("keeps an explicit visible text-only row authoritative over provider-static vision", async () => {
+  test("repairs a stale visible text-only row with same-agent provider-static vision", async () => {
     await expect(
       resolveGatewayModelSupportsImages({
         agentId: "qa",
@@ -3397,7 +3397,31 @@ describe("resolveGatewayModelSupportsImages", () => {
             ],
           }),
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
+  });
+
+  test("repairs missing visible input metadata with same-agent provider-static vision", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            entries: [{ id: "gpt-5.4", name: "Stale model", provider: "openai" }],
+            staticEntries: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+                input: ["text", "image"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toBe(true);
   });
 
   test("does not borrow another agent's provider-static image capabilities", async () => {
@@ -3453,6 +3477,15 @@ describe("resolveGatewayModelSupportsImages", () => {
                 },
               },
             },
+            entries: [
+              {
+                id: "gpt-5.4",
+                name: "Configured text only",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+                input: ["text"],
+              },
+            ],
             staticEntries: [
               {
                 id: "gpt-5.4",
@@ -3500,6 +3533,55 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  test.each([
+    {
+      route: "API",
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+    },
+    {
+      route: "base URL",
+      api: "openai-responses",
+      baseUrl: "https://custom.example.test/v1",
+    },
+  ] as const)(
+    "does not borrow provider-static vision across a mismatched visible $route",
+    async ({ api, baseUrl }) => {
+      await expect(
+        resolveGatewayModelSupportsImages({
+          agentId: "qa",
+          model: "gpt-5.4",
+          provider: "openai",
+          loadGatewayModelCatalog: async () => [],
+          loadGatewayModelCatalogSnapshot: async () =>
+            createModelCatalogSnapshot({
+              agentId: "qa",
+              entries: [
+                {
+                  id: "gpt-5.4",
+                  name: "Custom route",
+                  provider: "openai",
+                  api,
+                  baseUrl,
+                  input: ["text"],
+                },
+              ],
+              staticEntries: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4",
+                  provider: "openai",
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                  input: ["text", "image"],
+                },
+              ],
+            }),
+        }),
+      ).resolves.toBe(false);
+    },
+  );
 
   test("does not borrow provider-static image capabilities from another provider", async () => {
     await expect(
