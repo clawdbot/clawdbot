@@ -21,10 +21,7 @@ vi.mock("../config/paths.js", () => ({
   resolveIsNixMode: () => mocks.isNixMode,
 }));
 
-import {
-  persistStickyModelSelection,
-  persistStickyModelSelectionBestEffort,
-} from "./sticky-model-selection.js";
+import { persistStickyModelSelectionBestEffort } from "./sticky-model-selection.js";
 
 beforeEach(() => {
   mocks.info.mockReset();
@@ -79,9 +76,12 @@ describe("persistStickyModelSelection", () => {
   ])("writes the $name", async ({ agentId, cfg, target }) => {
     mocks.cfg = structuredClone(cfg);
 
-    await expect(
-      persistStickyModelSelection({ agentId, model: " openai/gpt-5.6-sol " }),
-    ).resolves.toBe(target);
+    persistStickyModelSelectionBestEffort({ agentId, model: " openai/gpt-5.6-sol " });
+    await vi.waitFor(() =>
+      expect(mocks.info).toHaveBeenCalledWith(
+        `persisted sticky model selection agentId=${agentId} model=openai/gpt-5.6-sol target=${target}`,
+      ),
+    );
 
     const persistedPrimary =
       target === "defaults"
@@ -91,14 +91,15 @@ describe("persistStickyModelSelection", () => {
       primary: "openai/gpt-5.6-sol",
       fallbacks: ["openai/gpt-5.6-luna"],
     });
-    expect(mocks.info).toHaveBeenCalledWith(
-      `persisted sticky model selection agentId=${agentId} model=openai/gpt-5.6-sol target=${target}`,
-    );
   });
 
   it("rejects an empty model before starting a config mutation", async () => {
-    await expect(persistStickyModelSelection({ agentId: "main", model: "   " })).rejects.toThrow(
-      "Sticky model selection must be non-empty.",
+    persistStickyModelSelectionBestEffort({ agentId: "main", model: "   " });
+
+    await vi.waitFor(() =>
+      expect(mocks.warn).toHaveBeenCalledWith(
+        "failed sticky model persistence agentId=main model=    reason=Sticky model selection must be non-empty.",
+      ),
     );
     expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   });

@@ -10,7 +10,7 @@ const log = createSubsystemLogger("agents/sticky-model-selection");
 let warnedImmutableConfig = false;
 
 /** Persists a validated session model selection at the agent's effective config layer. */
-export async function persistStickyModelSelection(params: {
+async function persistStickyModelSelection(params: {
   agentId: string;
   model: string;
 }): Promise<AgentModelPrimaryWriteTarget> {
