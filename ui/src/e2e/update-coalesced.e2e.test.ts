@@ -10,6 +10,11 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 
 const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT = "openclaw:native-update-availability-changed";
+const MANAGED_UPDATE_HANDOFF_RESPONSE = {
+  ok: true,
+  handoff: { status: "started" },
+  result: { reason: "managed-service-handoff-started", status: "skipped" },
+} as const;
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -116,8 +121,21 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
     }
   });
 
-  it("reports the final version after a managed update handoff reconnects", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-managed-handoff");
+  it.each([
+    {
+      artifactName: "response-first",
+      name: "after the response arrives before disconnect",
+      responseFirst: true,
+    },
+    {
+      artifactName: "disconnect-first",
+      name: "when disconnect arrives before the response",
+      responseFirst: false,
+    },
+  ])("reports the final version $name", async ({ artifactName, responseFirst }) => {
+    const artifactDir = path.resolve(
+      `.artifacts/control-ui-e2e/update-managed-handoff-${artifactName}`,
+    );
     const context = await browser.newContext({
       locale: "en-US",
       recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
@@ -128,12 +146,9 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(String(error)));
     const gateway = await installMockGateway(page, {
+      deferredMethods: ["update.run"],
       methodResponses: {
-        "update.run": {
-          ok: true,
-          handoff: { status: "started" },
-          result: { reason: "managed-service-handoff-started", status: "skipped" },
-        },
+        "update.run": MANAGED_UPDATE_HANDOFF_RESPONSE,
         "update.status": {
           sequence: [
             {
@@ -168,6 +183,12 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
 
       await page.getByRole("button", { name: /Update Gateway/ }).click();
       await gateway.waitForRequest("update.run");
+      if (responseFirst) {
+        await gateway.resolveDeferred("update.run", MANAGED_UPDATE_HANDOFF_RESPONSE);
+        await expect
+          .poll(() => page.getByRole("button", { name: /Update Gateway/ }).isEnabled())
+          .toBe(true);
+      }
       await gateway.closeLatest(1012, "managed update handoff");
 
       await page
