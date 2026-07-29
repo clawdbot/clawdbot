@@ -920,8 +920,10 @@ export async function handleOpenResponsesHttpRequest(
   setSseHeaders(res);
 
   let accumulatedText = "";
+  let streamedAssistantText = "";
   let bufferedReplaceableAssistantContent = "";
   let sawAssistantDelta = false;
+  let unrepresentableAssistantReplacement = false;
   let closed = false;
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
@@ -1062,29 +1064,35 @@ export async function handleOpenResponsesHttpRequest(
 
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
-      const hadAssistantDelta = sawAssistantDelta;
       if (replace && typeof text === "string") {
         accumulatedText = text;
-      }
-
-      const content = resolveAssistantStreamDeltaText(evt);
-      if (!content) {
-        if (
-          replace &&
-          typeof text === "string" &&
-          text &&
-          !toolChoiceConstraint &&
-          !hadAssistantDelta
-        ) {
+        if (toolChoiceConstraint) {
+          return;
+        }
+        // Responses deltas can only append. A conflicting replacement must
+        // fail after usage resolves instead of claiming inconsistent success.
+        if (!text.startsWith(streamedAssistantText)) {
+          unrepresentableAssistantReplacement = true;
+          return;
+        }
+        unrepresentableAssistantReplacement = false;
+        const replacementDelta = text.slice(streamedAssistantText.length);
+        if (replacementDelta) {
           sawAssistantDelta = true;
+          streamedAssistantText = text;
           writeSseEvent(res, {
             type: "response.output_text.delta",
             item_id: outputItemId,
             output_index: 0,
             content_index: 0,
-            delta: text,
+            delta: replacementDelta,
           });
         }
+        return;
+      }
+
+      const content = resolveAssistantStreamDeltaText(evt);
+      if (!content) {
         return;
       }
 
@@ -1100,6 +1108,7 @@ export async function handleOpenResponsesHttpRequest(
 
       sawAssistantDelta = true;
       accumulatedText += content;
+      streamedAssistantText += content;
 
       writeSseEvent(res, {
         type: "response.output_text.delta",
@@ -1149,6 +1158,24 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       finalUsage = extractUsageFromResult(result);
+
+      if (unrepresentableAssistantReplacement) {
+        rememberResponseSession();
+        finalizeFailedResponse(
+          createResponseResource({
+            id: responseId,
+            model,
+            status: "failed",
+            output: [],
+            error: {
+              code: "server_error",
+              message: "Assistant output cannot be represented as an append-only response stream.",
+            },
+            usage: finalUsage,
+          }),
+        );
+        return;
+      }
 
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
