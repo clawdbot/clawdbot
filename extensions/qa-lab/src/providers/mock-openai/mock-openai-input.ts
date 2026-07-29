@@ -56,7 +56,7 @@ function isInternalRuntimeContextCarrierText(text: string) {
   );
 }
 
-export function isContinuationUserText(text: string) {
+function isContinuationUserText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
     return false;

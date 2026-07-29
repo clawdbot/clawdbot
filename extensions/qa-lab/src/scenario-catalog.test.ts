@@ -219,19 +219,15 @@ describe("qa scenario catalog", () => {
     ).toEqual([]);
   });
 
-  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+  it("uses graceful restart and isolation for Matrix replay dedupe", () => {
     const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+    const staleSync = requireFlowScenario(readQaScenarioById("matrix-stale-sync-replay-dedupe"));
 
     expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
     expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
       false,
     );
-  });
-
-  it("isolates Matrix stale-sync replay state mutation from shared transport config", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("matrix-stale-sync-replay-dedupe"));
-
-    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(staleSync.execution.suiteIsolation).toBe("isolated");
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
