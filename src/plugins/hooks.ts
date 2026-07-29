@@ -5,6 +5,7 @@
  * error handling and priority ordering.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
@@ -273,6 +274,9 @@ export function createHookRunner(
     ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.modifyingHookTimeoutMsByHook,
   };
+  // Prompt-build hooks may start nested agent runs through any caller. The
+  // mutable token lets detached descendants dispatch after the outer run settles.
+  const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
     catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
@@ -817,12 +821,22 @@ export function createHookRunner(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    return runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
-      "before_prompt_build",
-      event,
-      ctx,
-      { mergeResults: mergeBeforePromptBuild },
-    );
+    if (beforePromptBuildDispatch.getStore()?.active) {
+      return undefined;
+    }
+    const token = { active: true };
+    return await beforePromptBuildDispatch.run(token, async () => {
+      try {
+        return await runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
+          "before_prompt_build",
+          event,
+          ctx,
+          { mergeResults: mergeBeforePromptBuild },
+        );
+      } finally {
+        token.active = false;
+      }
+    });
   }
 
   async function runAgentTurnPrepare(

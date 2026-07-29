@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 /**
  * Builds and repairs prompt inputs for embedded-agent attempts.
@@ -65,30 +64,6 @@ type PromptBuildHookRunner = {
 // across long-lived processes; entries are evicted FIFO once the cap is hit.
 const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
 const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
-
-type PromptBuildHookDispatchScope = {
-  active: boolean;
-};
-
-// Nested runs started by prompt-build hooks must not recursively dispatch the
-// same hook family. Closing the shared scope token also clears detached async
-// descendants after the owning dispatch settles.
-const promptBuildHookDispatchStorage = new AsyncLocalStorage<PromptBuildHookDispatchScope>();
-
-export async function runWithPromptBuildHookDispatch<T>(run: () => Promise<T>): Promise<T> {
-  const scope: PromptBuildHookDispatchScope = { active: true };
-  return await promptBuildHookDispatchStorage.run(scope, async () => {
-    try {
-      return await run();
-    } finally {
-      scope.active = false;
-    }
-  });
-}
-
-export function shouldSkipPromptBuildHooks(params: { isRawModelRun: boolean }): boolean {
-  return params.isRawModelRun || promptBuildHookDispatchStorage.getStore()?.active === true;
-}
 
 function rememberDrainedInjections(
   runId: string,
