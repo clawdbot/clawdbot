@@ -7,7 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { createLocalWhisperRealtimeTranscriptionSession } from "./session.js";
 
-export const DEFAULT_LOCAL_WHISPER_MODEL = "small";
+const DEFAULT_LOCAL_WHISPER_MODEL = "small";
 
 type LocalWhisperConfig = {
   model: string;
@@ -47,7 +47,7 @@ function defaultWorkerScript(): string {
   return fileURLToPath(new URL("./worker.py", import.meta.url));
 }
 
-export function resolveLocalWhisperConfig(
+function resolveLocalWhisperConfig(
   rawConfig: RealtimeTranscriptionProviderConfig,
 ): LocalWhisperConfig {
   const raw = nestedConfig(rawConfig);
