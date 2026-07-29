@@ -14,10 +14,12 @@ export type PersistedUserTurnMediaInput = Pick<
   MediaFactInput,
   | "contentType"
   | "durationMs"
+  | "fileName"
   | "height"
   | "hydrationSuppressed"
   | "messageId"
   | "path"
+  | "sizeBytes"
   | "transcribed"
   | "url"
   | "width"

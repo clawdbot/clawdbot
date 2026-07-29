@@ -52,6 +52,8 @@ type EnsureCodexPluginActivationParams = {
   appCacheKey?: string;
   metadataCache?: CodexPluginMetadataCache;
   installEvenIfActive?: boolean;
+  /** Thread setup batches app refresh once after all plugin activations. */
+  deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 };
 
@@ -82,6 +84,12 @@ export async function ensureCodexPluginActivation(
     }
     return activationFailure(params.identity, "plugin_missing", {
       message: `${params.identity.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
+    });
+  }
+
+  if (resolved.marketplace.remoteMarketplaceName && !resolved.summary.remotePluginId) {
+    return activationFailure(params.identity, "plugin_missing", {
+      message: `${params.identity.pluginName} detail unavailable: Codex did not return a remote plugin id.`,
     });
   }
 
@@ -116,6 +124,7 @@ export async function ensureCodexPluginActivation(
       appCache: params.appCache,
       appCacheKey: params.appCacheKey,
       metadataCache: params.metadataCache,
+      deferAppInventoryRefresh: params.deferAppInventoryRefresh,
       targetAppIds: params.targetAppIds,
     });
     refreshDiagnostics.push(...refreshResult.diagnostics);
@@ -156,10 +165,11 @@ async function refreshCodexPluginRuntimeState(params: {
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
   metadataCache?: CodexPluginMetadataCache;
+  deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
-  await listCuratedCodexPluginMetadata(params);
+  await listCuratedCodexPluginMetadata(params, { forceRefetch: true });
   await (params.request("skills/list", {
     cwds: [],
     forceReload: true,
@@ -177,6 +187,9 @@ async function refreshCodexPluginRuntimeState(params: {
 
   if (params.appCache && params.appCacheKey) {
     params.appCache.invalidate(params.appCacheKey, "Codex plugin activation changed app inventory");
+    if (params.deferAppInventoryRefresh) {
+      return { diagnostics };
+    }
     const request: CodexAppInventoryRequest = async (method, requestParams) =>
       (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
     try {
@@ -198,12 +211,17 @@ async function refreshCodexPluginRuntimeState(params: {
   return { diagnostics };
 }
 
-async function listCuratedCodexPluginMetadata(params: {
-  request: CodexPluginRuntimeRequest;
-  metadataCache?: CodexPluginMetadataCache;
-  appCacheKey?: string;
-}): Promise<v2.PluginListResponse> {
-  const requestParams = {} satisfies v2.PluginListParams;
+async function listCuratedCodexPluginMetadata(
+  params: {
+    request: CodexPluginRuntimeRequest;
+    metadataCache?: CodexPluginMetadataCache;
+    appCacheKey?: string;
+  },
+  options: { forceRefetch?: boolean } = {},
+): Promise<v2.PluginListResponse> {
+  const requestParams = (
+    options.forceRefetch ? { forceRefetch: true } : {}
+  ) satisfies v2.PluginListParams;
   if (!params.metadataCache || !params.appCacheKey) {
     return (await params.request("plugin/list", requestParams)) as v2.PluginListResponse;
   }
@@ -217,7 +235,7 @@ async function listCuratedCodexPluginMetadata(params: {
     // marketplace itself (upstream returns local-only on remote fetch failure
     // without a load error). See listCodexPluginMetadata in plugin-inventory.
     cacheable: (response: v2.PluginListResponse) =>
-      (response.marketplaces ?? []).some((marketplace) => isOpenAiCuratedMarketplace(marketplace)),
+      response.marketplaces.some((marketplace) => isOpenAiCuratedMarketplace(marketplace)),
   });
   return snapshot.response;
 }

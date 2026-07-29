@@ -101,6 +101,16 @@ export async function readMemoryCoreWorkspaceEntries(
     .map((entry) => ({ key: entry.value.key, value: entry.value.value }));
 }
 
+export async function readMemoryCoreWorkspaceEntry<T>(
+  params: MemoryCoreWorkspaceParams & { key: string },
+): Promise<T | undefined> {
+  const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
+  const entry = await openWorkspaceStore<T>(params.namespace).lookup(
+    memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
+  );
+  return entry?.workspaceKey === workspaceKey ? entry.value : undefined;
+}
+
 // Caller owns typed encoding for values written to plugin state.
 export function writeMemoryCoreWorkspaceEntries<T>(
   params: WriteMemoryCoreWorkspaceEntriesParams<T>,
@@ -162,4 +172,14 @@ export async function clearMemoryCoreWorkspaceNamespace(params: {
       await store.delete(entry.key);
     }
   }
+}
+
+export async function deleteMemoryCoreWorkspaceEntry(params: {
+  namespace: string;
+  workspaceDir: string;
+  key: string;
+}): Promise<void> {
+  await openWorkspaceStore(params.namespace).delete(
+    memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
+  );
 }

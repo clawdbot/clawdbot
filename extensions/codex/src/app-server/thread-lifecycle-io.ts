@@ -17,7 +17,10 @@ import {
   type CodexNativeSkillIsolation,
 } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { attestCodexPluginThreadApps } from "./plugin-thread-attestation.js";
+import {
+  attestCodexPluginThreadApps,
+  discardUnattestedCodexPluginThread,
+} from "./plugin-thread-attestation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
@@ -469,48 +472,25 @@ export async function startFreshCodexThread(
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
-  // The thread config may be what makes a base-disabled app callable. Attest
-  // after start but before persistence so a failed app can never reach a turn.
-  if (pluginThreadConfig?.provisionalAppIds?.length) {
+  const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
+  // A deny-by-default app becomes callable only under this exact thread's
+  // allowlist. Never persist or run the thread before Codex confirms it.
+  if (provisionalAppIds?.length) {
     try {
       await lifecycleTiming.measure("plugin-app-attestation", () =>
         attestCodexPluginThreadApps({
           client: params.client,
           threadId: response.thread.id,
-          appIds: pluginThreadConfig.provisionalAppIds ?? [],
+          appIds: provisionalAppIds,
           signal: params.signal,
         }),
       );
     } catch (error) {
-      // Persistent pre-turn threads have no rollout for thread/archive, so delete
-      // them explicitly. Ephemeral threads cannot be deleted and unload after
-      // releasing their only subscription.
-      let cleanupConfirmed: boolean;
-      if (startParams.ephemeral === true) {
-        cleanupConfirmed = await unsubscribeCodexThreadBestEffort(params.client, {
-          threadId: response.thread.id,
-          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        });
-      } else {
-        try {
-          await params.client.request(
-            "thread/delete",
-            { threadId: response.thread.id },
-            { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
-          );
-          cleanupConfirmed = true;
-        } catch (cleanupError) {
-          embeddedAgentLog.debug("codex plugin app attestation thread deletion failed", {
-            threadId: response.thread.id,
-            cleanupError,
-          });
-          await unsubscribeCodexThreadBestEffort(params.client, {
-            threadId: response.thread.id,
-            timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-          });
-          cleanupConfirmed = false;
-        }
-      }
+      const cleanupConfirmed = await discardUnattestedCodexPluginThread({
+        client: params.client,
+        threadId: response.thread.id,
+        ephemeral: startParams.ephemeral === true,
+      });
       if (!cleanupConfirmed) {
         await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
         throw new CodexAppServerUnsafeSubscriptionError(

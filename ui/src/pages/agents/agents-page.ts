@@ -937,6 +937,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           onChannelsRefresh: () => void this.context.channels.refresh(false),
           onOpenMemoryImport: () => this.context.navigate("memory-import"),
           onOpenMemorySettings: () => this.context.navigate("memory"),
+          onOpenAgentDefaults: () => this.context.navigate("ai-agents"),
           onCronRefresh: () => void this.refreshCron(),
           onCronRunNow: (jobId) => this.runCronJobNow(jobId),
           onSkillsFilterChange: (next) => (this.skillsFilter = next),

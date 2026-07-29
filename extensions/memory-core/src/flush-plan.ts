@@ -10,7 +10,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  readMemoryCoreWorkspaceEntries,
+  deleteMemoryCoreWorkspaceEntry,
+  readMemoryCoreWorkspaceEntry,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import { resolveMemoryCoreNowMs } from "./time.js";
@@ -29,6 +30,22 @@ const MEMORY_FLUSH_REQUIRED_HINTS = [
   MEMORY_FLUSH_APPEND_ONLY_HINT,
   MEMORY_FLUSH_READ_ONLY_HINT,
 ];
+
+function normalizeAgentMemoryPath(relativePath: string): string | undefined {
+  const normalized = relativePath.replaceAll("\\", "/").replace(/^\.\//u, "");
+  if (["MEMORY.md", "memory.md", "USER.md"].includes(normalized)) {
+    return normalized;
+  }
+  if (
+    !normalized.startsWith("memory/") ||
+    !normalized.endsWith(".md") ||
+    normalized.startsWith("memory/dreaming/") ||
+    normalized.startsWith("memory/.dreams/")
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
 
 const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
@@ -139,17 +156,23 @@ export function buildMemoryFlushPlan(
     systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,
     recordWriteProvenance: async (write) => {
+      const writtenPath = normalizeAgentMemoryPath(write.relativePath);
+      if (!writtenPath) {
+        return undefined;
+      }
       const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-      const existing = (
-        await readMemoryCoreWorkspaceEntries<{
-          fileHash: string;
-          originClass: "agent" | "untrusted";
-          observedAt: number;
-        }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir: write.workspaceDir })
-      ).find((entry) => entry.key === write.relativePath)?.value;
+      const existing = await readMemoryCoreWorkspaceEntry<{
+        fileHash: string;
+        originClass: "agent" | "untrusted";
+        observedAt: number;
+      }>({
+        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+        workspaceDir: write.workspaceDir,
+        key: writtenPath,
+      });
       const originClass =
         write.originClass === "agent" &&
-        (!write.contentBefore ||
+        (!existing ||
           (existing?.originClass === "agent" && existing.fileHash === hash(write.contentBefore)))
           ? "agent"
           : "untrusted";
@@ -159,8 +182,35 @@ export function buildMemoryFlushPlan(
       await writeMemoryCoreWorkspaceEntry({
         namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
         workspaceDir: write.workspaceDir,
-        key: write.relativePath,
+        key: writtenPath,
         value: { fileHash: hash(write.contentAfter), originClass, observedAt: write.observedAt },
+      });
+      return async () => {
+        if (existing) {
+          await writeMemoryCoreWorkspaceEntry({
+            namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+            workspaceDir: write.workspaceDir,
+            key: writtenPath,
+            value: existing,
+          });
+          return;
+        }
+        await deleteMemoryCoreWorkspaceEntry({
+          namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+          workspaceDir: write.workspaceDir,
+          key: writtenPath,
+        });
+      };
+    },
+    clearWriteProvenance: async ({ workspaceDir, relativePath: writtenPath }) => {
+      const normalized = normalizeAgentMemoryPath(writtenPath);
+      if (!normalized) {
+        return;
+      }
+      await deleteMemoryCoreWorkspaceEntry({
+        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+        workspaceDir,
+        key: normalized,
       });
     },
   };

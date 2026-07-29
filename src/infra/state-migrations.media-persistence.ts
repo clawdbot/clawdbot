@@ -34,6 +34,7 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { repairGatewayAgentMediaMigrationStartupFailures } from "./gateway-boot-lifecycle.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -595,6 +596,7 @@ export function migrateLegacyMediaPersistence(
   }
 
   const seenPaths = new Set<string>();
+  let databaseMigrationFailed = false;
   const archiveDirectories = new Set<string>();
   for (const entry of registered) {
     const pathname = path.resolve(entry.path);
@@ -649,7 +651,20 @@ export function migrateLegacyMediaPersistence(
         );
       }
     } catch (error) {
+      databaseMigrationFailed = true;
       warnings.push(`Skipped media persistence migration for ${pathname}: ${String(error)}`);
+    }
+  }
+
+  if (!databaseMigrationFailed && seenPaths.size > 0) {
+    const repairedFailures = repairGatewayAgentMediaMigrationStartupFailures({
+      databasePaths: [...seenPaths],
+      env,
+    });
+    if (repairedFailures > 0) {
+      changes.push(
+        `Repaired ${repairedFailures} gateway startup failure ${repairedFailures === 1 ? "record" : "records"} after media migration.`,
+      );
     }
   }
 

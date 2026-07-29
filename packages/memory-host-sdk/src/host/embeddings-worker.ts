@@ -1,8 +1,10 @@
 // Memory Host SDK module implements embeddings worker behavior.
 import { fork, type ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/stable-node-path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import {
@@ -233,6 +235,18 @@ function resolveWorkerExecArgv(): string[] {
   return args;
 }
 
+async function resolveWorkerExecPath(nodePath: string): Promise<string> {
+  for (const candidate of stableHomebrewNodePathCandidates(nodePath)) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next Homebrew-managed stable path.
+    }
+  }
+  return nodePath;
+}
+
 /** IPC client that serializes local embedding calls through one child process. */
 class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
@@ -243,7 +257,10 @@ class LocalEmbeddingWorkerClient {
   private pending = new Map<number, PendingRequest>();
   private lastRuntimeFacts: LocalEmbeddingRuntimeFacts | undefined;
 
-  constructor(private readonly scriptPath: string) {}
+  constructor(
+    private readonly scriptPath: string,
+    private readonly execPath: string,
+  ) {}
 
   /** Start or reuse the child worker and initialize its provider. */
   async initialize(options: EmbeddingProviderOptions): Promise<void> {
@@ -340,6 +357,7 @@ class LocalEmbeddingWorkerClient {
     }
 
     const child = fork(this.scriptPath, [], {
+      execPath: this.execPath,
       execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -653,8 +671,12 @@ async function createLocalEmbeddingWorkerProviderOnce(
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
   const workerOptions = serializeLocalEmbeddingOptions(options, runtimeOptions);
+  // Resolve before constructing the client so worker restarts stay synchronous.
+  // The stable Homebrew symlink can retarget without changing this stored path.
+  const workerExecPath = await resolveWorkerExecPath(process.execPath);
   const client = new LocalEmbeddingWorkerClient(
     runtimeOptions?.workerScriptPath ?? resolveDefaultWorkerScriptPath(),
+    workerExecPath,
   );
   try {
     await client.initialize(workerOptions);

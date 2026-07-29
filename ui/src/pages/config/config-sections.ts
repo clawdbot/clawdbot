@@ -32,8 +32,8 @@ const INFRASTRUCTURE_SECTION_KEYS = ["gateway", "browser", "nodeHost", "discover
 const MCP_SECTION_KEYS = ["mcp"] as const;
 
 // Curated Memory home: engine/backend/add-on rows plus the Dreaming tab render
-// above the memory schema section (memory.ts). Memory left AI & Agents because
-// the engine choice and dreaming's global cron are not agent defaults.
+// above the memory schema section (memory.ts). Memory stays separate from Agent
+// Defaults because the engine choice and dreaming's global cron are not defaults.
 const MEMORY_SECTION_KEYS = ["memory"] as const;
 
 const AI_AGENTS_SECTION_KEYS = ["agents", "skills", "tools", "session"] as const;

@@ -45,7 +45,11 @@ describe("chat pane first-turn attachment lifecycle", () => {
     } as unknown as GatewayBrowserClient;
     const context = {
       basePath: "",
-      gateway: { snapshot: { client, hello: null } },
+      gateway: {
+        snapshot: { client, hello: null },
+        subscribe: vi.fn(() => vi.fn()),
+        subscribeEvents: vi.fn(() => vi.fn()),
+      },
       config: {
         current: {
           assistantIdentity: {

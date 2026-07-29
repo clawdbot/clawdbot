@@ -235,6 +235,34 @@ describe("settings sidebar search", () => {
     });
   });
 
+  it("finds Agent Defaults by page name after its sidebar demotion", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "agents",
+        offline: false,
+        lastError: null,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "agent defaults",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const result = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__item[href="/settings/ai-agents"]',
+    );
+    expect(result?.textContent?.trim()).toBe("Agent Defaults");
+  });
+
   it("keeps Memory search results on the canonical Settings tab path", () => {
     const onNavigate = vi.fn();
     render(
