@@ -580,6 +580,38 @@ describe("native hook relay registry", () => {
     );
   });
 
+  it("unions hook and trusted-policy matcher scopes for pre-tool relays", () => {
+    const registry = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: vi.fn(), matcher: ["exec_command"] },
+    ]);
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        policy: {
+          id: "patch-policy",
+          description: "Protect patch tools",
+          matcher: ["Write"],
+          evaluate: vi.fn(),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    initializeGlobalHookRunner(registry);
+
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      preToolUseLoopDetection: false,
+    });
+
+    expect(relay.toolMatcherForEvent("pre_tool_use")).toBe(
+      "Bash|Edit|Write|apply_patch|exec|exec_command",
+    );
+  });
+
   it("keeps pre-tool relays active when native loop detection is not disabled", () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
