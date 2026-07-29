@@ -120,6 +120,40 @@ describe("getSoonestCooldownExpiry", () => {
     ).toBe(now + 10_000);
   });
 
+  it("uses only matching overloaded cooldowns across multiple profiles", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:sol-p1": {
+        cooldownUntil: now + 10_000,
+        cooldownReason: "overloaded",
+        cooldownModel: "gpt-5.6-sol",
+      },
+      "openai:terra": {
+        cooldownUntil: now + 20_000,
+        cooldownReason: "overloaded",
+        cooldownModel: "gpt-5.6-terra",
+      },
+      "openai:sol-p2": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "overloaded",
+        cooldownModel: "gpt-5.6-sol",
+      },
+    });
+
+    expect(
+      getSoonestCooldownExpiry(store, ["openai:sol-p1", "openai:terra", "openai:sol-p2"], {
+        now,
+        forModel: "gpt-5.6-sol",
+      }),
+    ).toBe(now + 30_000);
+    expect(
+      getSoonestCooldownExpiry(store, ["openai:sol-p1", "openai:terra", "openai:sol-p2"], {
+        now,
+        forModel: "gpt-5.6-terra",
+      }),
+    ).toBe(now + 20_000);
+  });
+
   it("still counts profile-wide disables for other models", () => {
     const now = 1_700_000_000_000;
     const store = makeStore({

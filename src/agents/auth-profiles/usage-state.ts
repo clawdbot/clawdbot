@@ -21,6 +21,13 @@ export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | u
   return reason === "rate_limit" || reason === "timeout" || reason === "overloaded";
 }
 
+function usesSharedModelCooldownExpiry(reason: AuthProfileFailureReason | undefined): boolean {
+  // Timeout failures remain per-profile because another transport can recover
+  // sooner. Rate-limit and overload windows describe shared model availability,
+  // so wait for the latest matching profile signal before probing that model.
+  return isModelScopedCooldownReason(reason) && reason !== "timeout";
+}
+
 /** Resolves the latest active blocked/cooldown/disabled timestamp for a profile. */
 export function resolveProfileUnusableUntil(
   stats: Pick<
@@ -148,13 +155,13 @@ export function getSoonestCooldownExpiry(
     if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
       continue;
     }
-    const matchingModelScopedCooldown =
+    const matchingSharedModelCooldown =
       options?.forModel &&
-      stats.cooldownReason === "rate_limit" &&
+      usesSharedModelCooldownExpiry(stats.cooldownReason) &&
       stats.cooldownModel === options.forModel &&
       !isBlockedWindowActiveForModel(stats, ts, options.forModel) &&
       !isActiveUnusableWindow(stats.disabledUntil, ts);
-    if (matchingModelScopedCooldown) {
+    if (matchingSharedModelCooldown) {
       latestMatchingModelCooldown =
         latestMatchingModelCooldown === null ? until : Math.max(latestMatchingModelCooldown, until);
       continue;
