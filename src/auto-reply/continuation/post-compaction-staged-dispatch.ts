@@ -22,6 +22,11 @@ import {
   requeueReleasedPostCompactionTaskFlowDelegate,
   revalidatePendingDelegateForSpawn,
 } from "./delegate-store.js";
+import {
+  classifyPostCompactionDelegateAge,
+  formatPostCompactionStaleRejection,
+  POST_COMPACTION_DELEGATE_TTL_MS,
+} from "./post-compaction-staleness.js";
 import { rejectPostCompactionTaskFlowDelegate } from "./post-compaction-taskflow-rejection.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
@@ -70,6 +75,9 @@ export async function dispatchStagedPostCompactionDelegates(
      */
     flowId?: string;
     expectedRevision?: number;
+    /** RFC §4.4 stale-TTL inputs; `createdAt` is the legacy pre-`firstArmedAt` fallback. */
+    firstArmedAt?: number;
+    createdAt?: number;
   }>,
   sessionKey: string,
   spawnCtx: PostCompactionSpawnContext,
@@ -146,8 +154,21 @@ export async function dispatchStagedPostCompactionDelegates(
       parentSessionKey: () => sessionKey,
     });
 
+  const releaseNow = Date.now();
   const dispatchableDelegates: typeof delegates = [];
   for (const delegate of pendingDelegates) {
+    // RFC §4.4: staged work older than the TTL is terminal, and it must die here —
+    // before the artifact-policy gate and before any spawn — so an expired snapshot
+    // can never materialize attachments at a later compaction. Diagnostics carry
+    // only the age so a stale drop cannot spill task prose or attachment bytes.
+    const staleness = classifyPostCompactionDelegateAge(delegate, releaseNow);
+    if (staleness.stale) {
+      postCompactionLog.warn(
+        `[continuation:post-compaction-release-stale] flowId=${delegate.flowId ?? "none"} session=${sessionKey} ageMs=${staleness.ageMs} ttlMs=${POST_COMPACTION_DELEGATE_TTL_MS}`,
+      );
+      markTerminalRejected(delegate, formatPostCompactionStaleRejection(staleness.ageMs));
+      continue;
+    }
     const managedArtifacts =
       delegate.returnOptions?.artifacts === "optional" ||
       delegate.returnOptions?.artifacts === "required";

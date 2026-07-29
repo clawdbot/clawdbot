@@ -20,13 +20,17 @@ import {
   requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
 } from "../continuation/delegate-store.js";
+import {
+  classifyPostCompactionDelegateAge,
+  formatPostCompactionStaleRejection,
+  POST_COMPACTION_DELEGATE_TTL_MS,
+} from "../continuation/post-compaction-staleness.js";
 import { rejectPostCompactionTaskFlowDelegate } from "../continuation/post-compaction-taskflow-rejection.js";
 import type { ContinuationSignal } from "../continuation/signal.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
-  POST_COMPACTION_DELEGATE_TTL_MS,
   deliverQueuedPostCompactionDelegate,
   formatPostCompactionDelegateTaskPreview,
   isQueuedPostCompactionDelegateDelivery,
@@ -317,8 +321,8 @@ export async function dispatchPostCompactionDelegates(
   let staleDroppedDelegates = 0;
   const terminalizedManagedFlowIds = new Set<string>();
   for (const delegate of gateEligibleCompactionDelegates) {
-    const ageMs = now - (delegate.firstArmedAt ?? delegate.createdAt);
-    if (ageMs > POST_COMPACTION_DELEGATE_TTL_MS) {
+    const { ageMs, stale } = classifyPostCompactionDelegateAge(delegate, now);
+    if (stale) {
       staleDroppedDelegates += 1;
       deps.log(
         `Post-compaction delegate dropped as stale for ${params.sessionKey}: ageMs=${ageMs} ttlMs=${POST_COMPACTION_DELEGATE_TTL_MS} firstArmedAt=${delegate.firstArmedAt ?? delegate.createdAt} task=${formatPostCompactionDelegateTaskPreview(delegate.task)}`,
@@ -326,7 +330,7 @@ export async function dispatchPostCompactionDelegates(
       const terminalizedFlowId = terminalizeDroppedManagedDelegate({
         delegate,
         deps,
-        summary: `Post-compaction delegate rejected as stale after ${ageMs}ms.`,
+        summary: formatPostCompactionStaleRejection(ageMs),
       });
       if (terminalizedFlowId) {
         terminalizedManagedFlowIds.add(terminalizedFlowId);

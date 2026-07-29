@@ -40,8 +40,14 @@ import {
   revalidatePendingDelegateForSpawn,
   type DelegateSpawnFenceResult,
 } from "../continuation/delegate-store.js";
+import { reserveAcceptedPostCompactionChainHop } from "../continuation/post-compaction-chain-charge.js";
+import {
+  classifyPostCompactionDelegateAge,
+  formatPostCompactionStaleRejection,
+  POST_COMPACTION_DELEGATE_TTL_MS,
+} from "../continuation/post-compaction-staleness.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
-import type { ContinuationRuntimeConfig } from "../continuation/types.js";
+import type { ChainState, ContinuationRuntimeConfig } from "../continuation/types.js";
 
 export type QueuedPostCompactionDelegateDelivery = Extract<
   QueuedSessionDelivery,
@@ -82,6 +88,10 @@ export type PostCompactionDelegateDeliveryDeps = {
     blockedSummary: string,
     currentStep?: string,
   ): boolean;
+  reserveAcceptedPostCompactionChainHop(
+    delegate: { flowId?: string; expectedRevision?: number; task: string },
+    plannedChainState: ChainState,
+  ): { chainState: ChainState; expectedRevision: number | undefined };
 };
 
 const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryDeps = {
@@ -98,9 +108,8 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
   revalidatePendingDelegateForSpawn,
   markPendingDelegateSpawnAccepted,
   markPendingDelegateFailed,
+  reserveAcceptedPostCompactionChainHop,
 };
-
-export const POST_COMPACTION_DELEGATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function syncPendingPostCompactionDelegates(params: {
   sessionEntry?: SessionEntry;
@@ -320,12 +329,78 @@ function resolveQueuedPostCompactionTraceparent(
     : undefined;
 }
 
-function maybeFinalizePreviouslyAcceptedSourceBackedDelivery(params: {
+/**
+ * Settle the parent chain charge for an accepted post-compaction child exactly once.
+ *
+ * `reserveAcceptedPostCompactionChainHop` writes the durable `advanced` marker on
+ * the source row BEFORE this session-entry patch and returns that same hop on
+ * every later call, so a replayed delivery re-persists the identical count rather
+ * than advancing depth again. Charging here rather than before the spawn is what
+ * keeps a retry that never reached an accepted child at zero continuation budget
+ * (karmaterminal/openclaw#1198).
+ */
+async function commitAcceptedPostCompactionChainCharge(params: {
+  deps: PostCompactionDelegateDeliveryDeps;
+  entry: QueuedPostCompactionDelegateDelivery;
+  plannedChainState: ChainState;
+  sessionEntry?: SessionEntry;
+  storePath: string;
+}): Promise<{ expectedRevision: number | undefined }> {
+  const { deps, entry, sessionEntry, storePath } = params;
+  const reserved = deps.reserveAcceptedPostCompactionChainHop(
+    {
+      ...(entry.sourceFlowId ? { flowId: entry.sourceFlowId } : {}),
+      ...(entry.sourceExpectedRevision !== undefined
+        ? { expectedRevision: entry.sourceExpectedRevision }
+        : {}),
+      task: entry.task,
+    },
+    params.plannedChainState,
+  );
+  const { chainState } = reserved;
+  let persistedEntry: SessionEntry | null;
+  try {
+    persistedEntry = await deps.patchSessionEntry(
+      { storePath, sessionKey: entry.sessionKey },
+      () => ({
+        continuationChainCount: chainState.currentChainCount,
+        continuationChainStartedAt: chainState.chainStartedAt,
+        continuationChainTokens: chainState.accumulatedChainTokens,
+        ...(chainState.chainId ? { continuationChainId: chainState.chainId } : {}),
+      }),
+      {
+        ...(sessionEntry ? { fallbackEntry: sessionEntry } : {}),
+        preserveActivity: true,
+        requireWriteSuccess: true,
+      },
+    );
+    if (!persistedEntry) {
+      throw new Error(`session entry was not found: ${entry.sessionKey}`);
+    }
+  } catch (err) {
+    deps.log(
+      `Failed to persist post-compaction delegate chain state for ${entry.sessionKey}: ${String(err)}`,
+    );
+    // Rethrow so the delivery rejects, the queue entry stays in `pending/` with a
+    // bumped retryCount, and the next unfiltered drain re-considers it once
+    // backoff has elapsed. The child is already accepted here, so that retry is
+    // caught by the accepted-child replay path below and reserves the same hop
+    // instead of spawning a duplicate or charging a second time.
+    throw err;
+  }
+  if (sessionEntry) {
+    Object.assign(sessionEntry, persistedEntry);
+  }
+  return { expectedRevision: reserved.expectedRevision };
+}
+
+async function maybeFinalizePreviouslyAcceptedSourceBackedDelivery(params: {
   acceptedChildSessionKey: string | undefined;
   deps: PostCompactionDelegateDeliveryDeps;
   entry: QueuedPostCompactionDelegateDelivery;
-}): boolean {
-  const { acceptedChildSessionKey, deps, entry } = params;
+  storePath: string;
+}): Promise<boolean> {
+  const { acceptedChildSessionKey, deps, entry, storePath } = params;
   if (
     !entry.sourceFlowId ||
     entry.sourceExpectedRevision === undefined ||
@@ -342,10 +417,25 @@ function maybeFinalizePreviouslyAcceptedSourceBackedDelivery(params: {
   ) {
     return false;
   }
+  const sessionEntry = deps.loadSessionEntry({ storePath, sessionKey: entry.sessionKey });
+  const { expectedRevision } = await commitAcceptedPostCompactionChainCharge({
+    deps,
+    entry,
+    plannedChainState: {
+      currentChainCount: (sessionEntry?.continuationChainCount ?? 0) + 1,
+      chainStartedAt: sessionEntry?.continuationChainStartedAt ?? deps.now(),
+      accumulatedChainTokens: sessionEntry?.continuationChainTokens ?? 0,
+      chainId: sessionEntry?.continuationChainId ?? generateChainId(),
+    },
+    ...(sessionEntry ? { sessionEntry } : {}),
+    storePath,
+  });
   const committed = deps.markPendingDelegateSpawnAccepted(
     {
       flowId: entry.sourceFlowId,
-      expectedRevision: entry.sourceExpectedRevision,
+      // The marker write leaves the row a revision past the queued claim, so
+      // acceptance must commit against where the row actually is.
+      expectedRevision: expectedRevision ?? entry.sourceExpectedRevision,
       task: entry.task,
     },
     acceptedChildSessionKey,
@@ -369,77 +459,6 @@ function maybeFinalizePreviouslyAcceptedSourceBackedDelivery(params: {
   return true;
 }
 
-async function persistPostCompactionDelegateChainState(params: {
-  count: number;
-  log: (message: string) => void;
-  patchSessionEntry: typeof patchSessionEntry;
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  startedAt: number;
-  storePath?: string;
-  tokens: number;
-}): Promise<{ chainId: string }> {
-  // Mint or reuse `continuationChainId` (UUID) so the post-compaction
-  // handoff carries the same correlation key that
-  // `agent-runner.ts:persistContinuationChainState` would have used
-  // before compaction. If the pre-compaction sessionEntry already had
-  // a chain id, reuse it (chain survives the compaction boundary);
-  // otherwise mint fresh (this is the chain's first persisted step
-  // post-handoff).
-  const previousChainId = params.sessionEntry?.continuationChainId;
-  const chainId = previousChainId ?? generateChainId();
-  let persistedEntry: SessionEntry | null = null;
-  if (params.storePath) {
-    try {
-      persistedEntry = await params.patchSessionEntry(
-        { storePath: params.storePath, sessionKey: params.sessionKey },
-        () => ({
-          continuationChainCount: params.count,
-          continuationChainStartedAt: params.startedAt,
-          continuationChainTokens: params.tokens,
-          continuationChainId: chainId,
-        }),
-        {
-          ...(params.sessionEntry ? { fallbackEntry: params.sessionEntry } : {}),
-          preserveActivity: true,
-          requireWriteSuccess: true,
-        },
-      );
-      if (!persistedEntry) {
-        throw new Error(`session entry was not found: ${params.sessionKey}`);
-      }
-    } catch (err) {
-      params.log(
-        `Failed to persist post-compaction delegate chain state for ${params.sessionKey}: ${String(
-          err,
-        )}`,
-      );
-      // Rethrow so `deliverQueuedPostCompactionDelegate` rejects, the queue
-      // entry stays in `pending/` with a bumped retryCount, and the next
-      // unfiltered drain re-considers it once backoff has elapsed. With the
-      // persist-then-spawn ordering this is doubly safe: the persist runs
-      // BEFORE the subagent spawn, so a persist failure means no child was
-      // spawned and the retry re-attempts cleanly (no duplicate). It also keeps
-      // the on-disk chain count from going stale relative to the queue, which
-      // would otherwise let the next compaction-delegate overrun
-      // `maxChainLength`.
-      throw err;
-    }
-  }
-  if (params.sessionEntry) {
-    Object.assign(
-      params.sessionEntry,
-      persistedEntry ?? {
-        continuationChainCount: params.count,
-        continuationChainStartedAt: params.startedAt,
-        continuationChainTokens: params.tokens,
-        continuationChainId: chainId,
-      },
-    );
-  }
-  return { chainId };
-}
-
 export function isQueuedPostCompactionDelegateDelivery(
   entry: QueuedSessionDelivery,
 ): entry is QueuedPostCompactionDelegateDelivery {
@@ -461,28 +480,51 @@ export async function deliverQueuedPostCompactionDelegate(
   const sourceAcceptedChildSessionKey = params.entry.sourceFlowId
     ? deriveContinuationDelegateChildSessionKey(agentId, params.entry.sourceFlowId)
     : undefined;
-  if (
-    maybeFinalizePreviouslyAcceptedSourceBackedDelivery({
-      acceptedChildSessionKey: sourceAcceptedChildSessionKey,
-      deps,
-      entry: params.entry,
-    })
-  ) {
-    return;
-  }
-  const runtimeConfig = deps.resolveContinuationRuntimeConfig(cfg);
+  const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
   const artifactMode = params.entry.returnOptions?.artifacts;
   const removeRejectedArtifactPolicy = (): void => {
     if (params.entry.sourceFlowId && (artifactMode === "optional" || artifactMode === "required")) {
       removeUnacceptedDelegateArtifactPolicy(params.entry.sourceFlowId);
     }
   };
+  // An already-accepted child settles first and is never re-gated: its spawn is
+  // live, so re-running policy or staleness here would strand a running child.
+  if (
+    await maybeFinalizePreviouslyAcceptedSourceBackedDelivery({
+      acceptedChildSessionKey: sourceAcceptedChildSessionKey,
+      deps,
+      entry: params.entry,
+      storePath,
+    })
+  ) {
+    return;
+  }
+  // RFC §4.4 stale work dies before every other gate, including the disabled
+  // deferral, so a released row cannot outlive the staged row it came from and
+  // cannot be revived by a later retry, restart, or config flip. This must stay
+  // ahead of the artifact-policy assert and the spawn so no attachment snapshot
+  // is ever materialized for expired work.
+  const staleness = classifyPostCompactionDelegateAge(params.entry, deps.now());
+  if (staleness.stale) {
+    // Diagnostics carry only the age: a stale drop must not spill task prose or
+    // attachment bytes into logs, terminal rows, or queue diagnostics.
+    deps.log(
+      `[continuation:post-compaction-delivery-stale] entryId=${params.entry.id} flowId=${params.entry.sourceFlowId ?? "none"} ageMs=${staleness.ageMs} ttlMs=${POST_COMPACTION_DELEGATE_TTL_MS}`,
+    );
+    failSourceBackedPostCompactionDelivery(
+      deps,
+      params.entry,
+      formatPostCompactionStaleRejection(staleness.ageMs),
+    );
+    removeRejectedArtifactPolicy();
+    return;
+  }
+  const runtimeConfig = deps.resolveContinuationRuntimeConfig(cfg);
   if (!runtimeConfig.enabled) {
     throw new SessionDeliveryDeferredError(
       "post-compaction delegate delivery deferred while continuation is disabled",
     );
   }
-  const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
   const sessionEntry = deps.loadSessionEntry({
     storePath,
     sessionKey: params.entry.sessionKey,
@@ -564,38 +606,19 @@ export async function deliverQueuedPostCompactionDelegate(
 
   const nextCompactionChainCount = currentCompactionChainCount + 1;
   const compactionChainStartedAt = sessionEntry?.continuationChainStartedAt ?? deps.now();
+  // Mint or reuse `continuationChainId` (UUID) so the post-compaction handoff
+  // carries the same correlation key that
+  // `agent-runner.ts:persistContinuationChainState` would have used before
+  // compaction. A pre-compaction chain id survives the boundary; otherwise this
+  // is the chain's first step post-handoff. It is resolved but NOT persisted
+  // here: the child must be spawned with the id the accepted charge will record,
+  // and an attempt that never reaches an accepted child persists nothing.
+  const compactionChainId = sessionEntry?.continuationChainId ?? generateChainId();
   deps.log(
     `Post-compaction delegate dispatch for session ${params.entry.sessionKey}: ${params.entry.task}`,
   );
   const delegateWakeOnReturn = params.entry.silentWake ?? true;
   const delegateSilentAnnounce = params.entry.silent ?? delegateWakeOnReturn;
-
-  // Persist the advanced chain-count BEFORE spawning (persist-then-spawn), so the
-  // chain-count update and the spawn fail safe in the only direction that protects
-  // `maxChainLength`:
-  //   - persist throws (disk/SQLite) -> we throw before spawning, the queue entry
-  //     stays pending, and the next drain retries cleanly with NO child spawned
-  //     yet. This is the fix for the duplicate-delegate bug: there is no accepted
-  //     spawn to duplicate when the persist fails.
-  //   - spawn fails after a successful persist -> the count was advanced for a
-  //     delegate that did not start. That is the SAFE direction: an over-count only
-  //     makes `maxChainLength` *more* protective (the chain terminates earlier),
-  //     never overruns it. (A retry re-reads the advanced count and may bump again
-  //     on repeated spawn failures; that compounds conservatively, never past the
-  //     guard, and repeated spawn failures are anomalous.)
-  // The previous spawn-then-persist order had the opposite, unsafe failure: an
-  // accepted spawn whose persist then threw left the queue entry pending, so the
-  // next drain re-spawned the SAME delegate (duplicated work). See cmt451.
-  const persistedChain = await persistPostCompactionDelegateChainState({
-    count: nextCompactionChainCount,
-    log: (message) => deps.log(message),
-    patchSessionEntry: deps.patchSessionEntry,
-    sessionEntry,
-    sessionKey: params.entry.sessionKey,
-    startedAt: compactionChainStartedAt,
-    storePath,
-    tokens: compactionChainTokens,
-  });
 
   const artifactFlowId = params.entry.sourceFlowId ?? params.entry.id;
   if (artifactMode === "optional" || artifactMode === "required") {
@@ -640,7 +663,7 @@ export async function deliverQueuedPostCompactionDelegate(
         count: nextCompactionChainCount,
         startedAt: compactionChainStartedAt,
         tokens: compactionChainTokens,
-        chainId: persistedChain.chainId,
+        chainId: compactionChainId,
       },
       ...(params.entry.model ? { model: params.entry.model } : {}),
       ...(params.entry.attachments ? { attachments: params.entry.attachments } : {}),
@@ -673,12 +696,28 @@ export async function deliverQueuedPostCompactionDelegate(
     }
     throw new Error(`post-compaction delegate spawn ${spawnResult.status}`);
   }
+  // Charge the chain only now that a child is actually accepted. Everything
+  // above this line — artifact policy, spawn fence, attachment materialization,
+  // spawn rejection — leaves the persisted depth untouched, so a retry after any
+  // of those failures still has its full budget (karmaterminal/openclaw#1198).
+  const { expectedRevision: acceptedRevision } = await commitAcceptedPostCompactionChainCharge({
+    deps,
+    entry: params.entry,
+    plannedChainState: {
+      currentChainCount: nextCompactionChainCount,
+      chainStartedAt: compactionChainStartedAt,
+      accumulatedChainTokens: compactionChainTokens,
+      chainId: compactionChainId,
+    },
+    ...(sessionEntry ? { sessionEntry } : {}),
+    storePath,
+  });
   if (params.entry.sourceFlowId && params.entry.sourceExpectedRevision !== undefined) {
     const acceptedChildSessionKey = spawnResult.childSessionKey ?? sourceAcceptedChildSessionKey!;
     const committed = deps.markPendingDelegateSpawnAccepted(
       {
         flowId: params.entry.sourceFlowId,
-        expectedRevision: params.entry.sourceExpectedRevision,
+        expectedRevision: acceptedRevision ?? params.entry.sourceExpectedRevision,
         task: params.entry.task,
       },
       acceptedChildSessionKey,

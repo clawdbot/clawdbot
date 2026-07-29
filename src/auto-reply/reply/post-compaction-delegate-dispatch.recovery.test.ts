@@ -12,7 +12,7 @@ import {
   loadPendingSessionDelivery,
 } from "../../infra/session-delivery-queue-storage.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import type { ContinuationRuntimeConfig } from "../continuation/types.js";
+import type { ChainState, ContinuationRuntimeConfig } from "../continuation/types.js";
 import {
   deliverQueuedPostCompactionDelegate,
   normalizePostCompactionDelegate,
@@ -169,6 +169,9 @@ function createDispatchDeps(options?: {
   };
 }
 
+/** Delivery-time clock every `createDeliveryDeps()` mock reports. */
+const DELIVERY_NOW_MS = 1_700_000_000_000;
+
 function createQueuedEntry(
   overrides?: Partial<QueuedPostCompactionDelegateDelivery>,
 ): QueuedPostCompactionDelegateDelivery {
@@ -177,8 +180,12 @@ function createQueuedEntry(
     kind: "postCompactionDelegate",
     sessionKey: "main",
     task: "queued delegate",
-    createdAt: 1,
-    enqueuedAt: 1,
+    // Armed at the delivery clock: an entry stamped at epoch 1 would be ~54
+    // years old and would terminalize on the RFC §4.4 stale gate instead of
+    // exercising the guard under test.
+    createdAt: DELIVERY_NOW_MS,
+    firstArmedAt: DELIVERY_NOW_MS,
+    enqueuedAt: DELIVERY_NOW_MS,
     retryCount: 0,
     ...overrides,
     ...(overrides?.traceparent && overrides.traceparentProvenance === undefined
@@ -195,6 +202,8 @@ function deriveTestContinuationChildSessionKey(agentId: string, flowId: string):
 function createDeliveryDeps(params: {
   storePath: string;
   runtimeConfig?: Partial<ContinuationRuntimeConfig>;
+  /** Pre-existing accepted-hop marker on the source row, as a replay would see. */
+  reservedChainState?: ChainState;
   spawnStatus?: "accepted" | "forbidden" | "error";
   spawnError?: Error;
 }) {
@@ -208,6 +217,15 @@ function createDeliveryDeps(params: {
   });
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
   const markPendingDelegateFailed = vi.fn(() => true);
+  // Mirrors the real store: the marker write bumps the TaskFlow revision, and a
+  // row that already carries a marker returns that same hop on every replay.
+  const reserveAcceptedPostCompactionChainHop = vi.fn(
+    (flowRef: { flowId?: string; expectedRevision?: number }, plannedChainState: ChainState) => ({
+      chainState: params.reservedChainState ?? plannedChainState,
+      expectedRevision:
+        flowRef.expectedRevision === undefined ? undefined : flowRef.expectedRevision + 1,
+    }),
+  );
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
@@ -215,7 +233,7 @@ function createDeliveryDeps(params: {
       sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
     ),
     log,
-    now: vi.fn(() => 1_700_000_000_000),
+    now: vi.fn(() => DELIVERY_NOW_MS),
     patchSessionEntry: sessionAccessorModule.patchSessionEntry,
     resolveContinuationRuntimeConfig: vi.fn(() => ({
       ...defaultRuntimeConfig,
@@ -227,6 +245,7 @@ function createDeliveryDeps(params: {
     revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true }) as const),
     markPendingDelegateSpawnAccepted,
     markPendingDelegateFailed,
+    reserveAcceptedPostCompactionChainHop,
   };
   return {
     deps,
@@ -234,6 +253,7 @@ function createDeliveryDeps(params: {
     log,
     markPendingDelegateFailed,
     markPendingDelegateSpawnAccepted,
+    reserveAcceptedPostCompactionChainHop,
     spawnSubagentDirect,
   };
 }
@@ -251,6 +271,14 @@ async function seedSessionStore(
     Object.entries(store).map(async ([sessionKey, entry]) => {
       await sessionAccessorModule.upsertSessionEntry({ storePath, sessionKey }, entry);
     }),
+  );
+}
+
+function readSessionStore(storePath: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    sessionAccessorModule
+      .listSessionEntries({ storePath })
+      .map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
 
@@ -360,7 +388,10 @@ describe("post-compaction delegate dispatch extraction", () => {
       const mainId = await enqueuePostCompactionDelegateDeliveryQueue(
         {
           sessionKey: "main",
-          delegate: delegate("main retry"),
+          delegate: delegate("main retry", {
+            createdAt: DELIVERY_NOW_MS,
+            firstArmedAt: DELIVERY_NOW_MS,
+          }),
           sequence: 0,
           compactionCount: 1,
         },
@@ -369,7 +400,10 @@ describe("post-compaction delegate dispatch extraction", () => {
       const otherId = await enqueuePostCompactionDelegateDeliveryQueue(
         {
           sessionKey: "other",
-          delegate: delegate("other untouched"),
+          delegate: delegate("other untouched", {
+            createdAt: DELIVERY_NOW_MS,
+            firstArmedAt: DELIVERY_NOW_MS,
+          }),
           sequence: 0,
           compactionCount: 1,
         },
@@ -400,36 +434,47 @@ describe("post-compaction delegate dispatch extraction", () => {
     });
   });
 
-  it("persists chain-state BEFORE spawning, so a persist failure does not spawn (cmt451: no duplicate on retry)", async () => {
+  it("does not re-spawn an accepted child when the post-acceptance chain persist fails (karmaterminal/openclaw#1198)", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-persist-fail-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
-      const { deps, log, spawnSubagentDirect } = createDeliveryDeps({ storePath });
+      const { deps, log, markPendingDelegateSpawnAccepted, spawnSubagentDirect } =
+        createDeliveryDeps({ storePath });
+      const entry = createQueuedEntry({
+        sourceFlowId: "pc-flow-source",
+        sourceExpectedRevision: 7,
+      });
 
-      // Force the chain-state persist to throw through the storage-neutral accessor.
-      // With the persist-then-spawn ordering (cmt451), the persist runs BEFORE
-      // the subagent spawn, so a persist failure must reject WITHOUT having
-      // spawned a child. That is the fix: when the retry re-drains this entry,
-      // there is no already-accepted spawn to duplicate. (Pre-fix, the spawn ran
-      // first and a post-spawn persist failure left the entry pending -> the next
-      // drain re-spawned the same delegate = duplicated work.)
+      // The chain is charged only after the child is accepted, so a persist
+      // failure now happens with a live child. The delivery must reject (entry
+      // stays pending) without committing acceptance.
       const persist = vi.fn<typeof sessionAccessorModule.patchSessionEntry>();
       persist.mockRejectedValueOnce(new Error("persist failed"));
       deps.patchSessionEntry = persist;
-      await expect(
-        deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps),
-      ).rejects.toBeDefined();
+      await expect(deliverQueuedPostCompactionDelegate({ entry }, deps)).rejects.toBeDefined();
       expect(persist).toHaveBeenCalledWith(
         { storePath, sessionKey: "main" },
         expect.any(Function),
         expect.objectContaining({ requireWriteSuccess: true }),
       );
-
-      // The load-bearing assertion: NO spawn happened, so the retry cannot
-      // duplicate it. (This is what fails on the old spawn-then-persist order.)
-      expect(spawnSubagentDirect).not.toHaveBeenCalled();
+      expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      expect(markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(
         expect.stringContaining("Failed to persist post-compaction delegate chain state for main"),
+      );
+
+      // The load-bearing assertion: the retry sees the accepted child and
+      // settles it instead of spawning a duplicate. Duplicate protection is the
+      // accepted-child replay guard, not a persist-before-spawn ordering.
+      mockRegistryState.acceptedChildSessionKeys.add(
+        deriveTestContinuationChildSessionKey("main", "pc-flow-source"),
+      );
+      deps.patchSessionEntry = sessionAccessorModule.patchSessionEntry;
+      await deliverQueuedPostCompactionDelegate({ entry }, deps);
+      expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      expect(markPendingDelegateSpawnAccepted).toHaveBeenCalledTimes(1);
+      expect(expectDefined(readSessionStore(storePath).main, "main").continuationChainCount).toBe(
+        1,
       );
     });
   });

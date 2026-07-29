@@ -12,7 +12,7 @@ import {
   loadPendingSessionDelivery,
 } from "../../infra/session-delivery-queue-storage.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import type { ContinuationRuntimeConfig } from "../continuation/types.js";
+import type { ChainState, ContinuationRuntimeConfig } from "../continuation/types.js";
 import {
   deliverQueuedPostCompactionDelegate,
   normalizePostCompactionDelegate,
@@ -172,6 +172,9 @@ function createDispatchDeps(options?: {
   };
 }
 
+/** Delivery-time clock every `createDeliveryDeps()` mock reports. */
+const DELIVERY_NOW_MS = 1_700_000_000_000;
+
 function createQueuedEntry(
   overrides?: Partial<QueuedPostCompactionDelegateDelivery>,
 ): QueuedPostCompactionDelegateDelivery {
@@ -180,8 +183,12 @@ function createQueuedEntry(
     kind: "postCompactionDelegate",
     sessionKey: "main",
     task: "queued delegate",
-    createdAt: 1,
-    enqueuedAt: 1,
+    // Armed at the delivery clock: an entry stamped at epoch 1 would be ~54
+    // years old and would terminalize on the RFC §4.4 stale gate instead of
+    // exercising the guard under test.
+    createdAt: DELIVERY_NOW_MS,
+    firstArmedAt: DELIVERY_NOW_MS,
+    enqueuedAt: DELIVERY_NOW_MS,
     retryCount: 0,
     ...overrides,
     ...(overrides?.traceparent && overrides.traceparentProvenance === undefined
@@ -198,6 +205,8 @@ function deriveTestContinuationChildSessionKey(agentId: string, flowId: string):
 function createDeliveryDeps(params: {
   storePath: string;
   runtimeConfig?: Partial<ContinuationRuntimeConfig>;
+  /** Pre-existing accepted-hop marker on the source row, as a replay would see. */
+  reservedChainState?: ChainState;
   spawnStatus?: "accepted" | "forbidden" | "error";
   spawnError?: Error;
 }) {
@@ -211,6 +220,15 @@ function createDeliveryDeps(params: {
   });
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
   const markPendingDelegateFailed = vi.fn(() => true);
+  // Mirrors the real store: the marker write bumps the TaskFlow revision, and a
+  // row that already carries a marker returns that same hop on every replay.
+  const reserveAcceptedPostCompactionChainHop = vi.fn(
+    (flowRef: { flowId?: string; expectedRevision?: number }, plannedChainState: ChainState) => ({
+      chainState: params.reservedChainState ?? plannedChainState,
+      expectedRevision:
+        flowRef.expectedRevision === undefined ? undefined : flowRef.expectedRevision + 1,
+    }),
+  );
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
@@ -218,7 +236,7 @@ function createDeliveryDeps(params: {
       sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
     ),
     log,
-    now: vi.fn(() => 1_700_000_000_000),
+    now: vi.fn(() => DELIVERY_NOW_MS),
     patchSessionEntry: sessionAccessorModule.patchSessionEntry,
     resolveContinuationRuntimeConfig: vi.fn(() => ({
       ...defaultRuntimeConfig,
@@ -230,6 +248,7 @@ function createDeliveryDeps(params: {
     revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true }) as const),
     markPendingDelegateSpawnAccepted,
     markPendingDelegateFailed,
+    reserveAcceptedPostCompactionChainHop,
   };
   return {
     deps,
@@ -237,6 +256,7 @@ function createDeliveryDeps(params: {
     log,
     markPendingDelegateFailed,
     markPendingDelegateSpawnAccepted,
+    reserveAcceptedPostCompactionChainHop,
     spawnSubagentDirect,
   };
 }
