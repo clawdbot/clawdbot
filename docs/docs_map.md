@@ -10952,7 +10952,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /web/notifications
 - Headings:
-  - H2: Choose your notification surface
+  - H2: Which surface you get
   - H2: Enable browser notifications
   - H2: Enable notifications in the macOS app
   - H2: Troubleshooting

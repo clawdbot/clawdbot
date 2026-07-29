@@ -7,24 +7,24 @@ read_when:
   - Deciding whether the default agent is sufficient
 ---
 
-An agent binding routes an inbound channel conversation to a configured agent. Each binding names an `agentId` and matches channel facts such as the account, peer, guild, team, or Discord roles. Bindings choose the agent that owns the resulting session; they do not create channel accounts or change channel access policy.
+When a message arrives on a channel, OpenClaw has to decide which agent answers it. By default that is easy: the agent marked `default: true` gets everything. An agent binding overrides that decision for a slice of your traffic — each binding names an `agentId` and matches channel facts such as the account, peer, guild, team, or Discord roles, and the matched agent owns the resulting session.
+
+Bindings only pick the agent. They do not create channel accounts and they do not grant access — a binding is consulted only after the channel has already accepted the message through its normal pairing, allowlist, and account rules.
 
 ## When to use a binding
 
-Use the default agent when every unmatched conversation should share one workspace, model policy, and session boundary. With no matching binding, OpenClaw routes inbound traffic to the agent marked `default: true`.
-
-Add bindings when you need a stable split such as:
+If every conversation can share one workspace, one model policy, and one session boundary, you do not need bindings — the default agent is the right answer. Reach for bindings when you want a stable split, for example:
 
 - one channel account per agent
 - a support inbox routed to a support workspace
 - one direct message or group routed to a specialist
 - a guild, team, or Discord role routed differently from the rest of an account
 
-Configure the channel account first. A binding only selects an agent after that channel has accepted the inbound message through its normal pairing, allowlist, and account rules.
+Configure the channel account first, then bind it. A binding pointing at an account the channel never accepts does nothing.
 
 ## Route an account to an agent
 
-This example keeps `main` as the fallback and routes the Discord account named `support` to a separate agent:
+This example keeps `main` as the fallback and routes the Discord account named `support` to its own agent and workspace:
 
 ```json5
 {
@@ -52,9 +52,9 @@ This example keeps `main` as the fallback and routes the Discord account named `
 }
 ```
 
-Messages on the `support` account now resolve to `agentId: "support"`. Other Discord accounts and other channels continue to use `main` unless another binding matches.
+Messages on the `support` account now resolve to `agentId: "support"`; every other Discord account and every other channel keeps using `main` unless another binding matches.
 
-Restart the Gateway after changing routing config, then verify the roster and channel accounts:
+Routing config is read at startup, so restart the Gateway, then verify the roster and channel accounts:
 
 ```bash
 openclaw agents list --bindings
@@ -63,7 +63,7 @@ openclaw channels status --probe
 
 ## Match a specific conversation
 
-Add `match.peer` when only one direct message, group, or channel should use the specialized agent:
+Add `match.peer` when only one direct message, group, or channel should reach the specialized agent:
 
 ```json5
 {
@@ -83,35 +83,35 @@ Add `match.peer` when only one direct message, group, or channel should use the 
 }
 ```
 
-`peer.kind` accepts `direct`, `group`, or `channel`. Use the channel's canonical peer ID rather than a display name.
+`peer.kind` accepts `direct`, `group`, or `channel`. Use the channel's canonical peer ID, not a display name.
 
 ## Match fields and precedence
 
-Every binding requires `agentId` and `match.channel`. Optional route-match fields are:
+Every binding requires `agentId` and `match.channel`. The optional route-match fields:
 
-- `accountId`: one configured account; omitted matches only the channel's default account, while `"*"` is a channel-wide fallback
+- `accountId`: one configured account. Omitting it matches only the channel's default account; `"*"` is an explicit channel-wide fallback.
 - `peer`: a concrete or wildcard direct, group, or channel peer
 - `guildId` and `teamId`: channel-specific group-space constraints
-- `roles`: Discord role IDs, evaluated with the guild constraint
+- `roles`: Discord role IDs, evaluated together with the guild constraint
 - `session.dmScope`: an optional session-scoping override for matched direct messages
 
-More specific conversation and group-space matches win before account and channel fallbacks. Within the same match tier, the first binding in config order wins. Put narrow rules before broader rules when they share a tier.
+Precedence is by specificity: concrete conversation and group-space matches win over account and channel fallbacks. Within the same tier, the first binding in config order wins — put narrow rules before broad ones when they share a tier.
 
-Top-level `bindings` also accepts explicit `type: "acp"` entries for persistent ACP conversations. Those require a concrete `match.peer.id` and follow the ACP conversation identity contract rather than ordinary route precedence. See [ACP agents](/tools/acp-agents) when that is the behavior you need.
+Top-level `bindings` also accepts `type: "acp"` entries for persistent ACP conversations. Those require a concrete `match.peer.id` and follow the ACP conversation identity contract instead of ordinary route precedence; see [ACP agents](/tools/acp-agents) when that is what you need.
 
 ## Common mistakes
 
 ### Omitting accountId to mean every account
 
-An omitted `accountId` matches only the channel's default account. Use `accountId: "*"` for an intentional channel-wide fallback.
+An omitted `accountId` matches only the channel's default account. If you want a channel-wide fallback, say so explicitly with `accountId: "*"`.
 
 ### Binding to an unknown agent
 
-The `agentId` must exist under `agents.entries`. Keep exactly one configured entry marked `default: true`.
+The `agentId` must exist under `agents.entries`, and exactly one entry should be marked `default: true`. A binding that references a missing agent misroutes silently.
 
 ### Treating bindings as access control
 
-Bindings choose an agent after a message is admitted. Keep channel pairing, `dmPolicy`, group policy, and allowlists configured independently.
+Bindings choose an agent for messages that were already admitted. Pairing, `dmPolicy`, group policy, and allowlists are separate controls — configure them independently.
 
 ## Related
 

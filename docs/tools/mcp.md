@@ -7,33 +7,33 @@ read_when:
   - Troubleshooting MCP transport, OAuth, or tool discovery
 ---
 
-The Model Context Protocol (MCP) lets an agent use tools, resources, and prompts exposed by another process or service. OpenClaw keeps outbound server definitions under `mcp.servers`, connects eligible runtimes to enabled servers, and applies normal tool-profile and tool-policy controls to the tools they expose.
+The Model Context Protocol (MCP) is how an agent borrows tools from another program: an MCP server exposes tools, resources, and prompts, and OpenClaw connects to it and makes those tools available to your agents. Server definitions live under `mcp.servers` in config, and the tools they expose go through the same tool-profile and tool-policy controls as everything else — connecting a server does not bypass your policy.
 
 <Note>
-This guide connects third-party MCP servers **to OpenClaw**. To expose OpenClaw channel conversations to another MCP client, use [`openclaw mcp serve`](/cli/mcp#openclaw-as-an-mcp-server).
+This guide is about connecting third-party MCP servers **to OpenClaw**. For the reverse — exposing OpenClaw channel conversations to another MCP client — use [`openclaw mcp serve`](/cli/mcp#openclaw-as-an-mcp-server).
 </Note>
 
 ## Add a server from Settings
 
-1. Open the Control UI and choose **Settings → MCP**.
-2. In **Configured servers**, select **Add server**.
-3. Enter a unique name and choose **Streamable HTTP**, **SSE**, or **Stdio**.
-4. For HTTP transports, enter an `http://` or `https://` URL. For stdio, enter the command followed by its arguments.
+1. Open the Control UI and go to **Settings → MCP**.
+2. Under **Configured servers**, select **Add server**.
+3. Give it a unique name and pick a transport: **Streamable HTTP**, **SSE**, or **Stdio**.
+4. For the HTTP transports, enter the server's `http://` or `https://` URL. For stdio, enter the command followed by its arguments.
 5. Select **Add server**.
 
-The page saves the new `mcp.servers` entry through the Gateway config path. Use the scoped editor farther down the page for headers, environment values, OAuth metadata, TLS settings, timeouts, parallel-tool-call hints, or tool filters. Server rows can also enable, disable, or remove definitions.
+That writes the new `mcp.servers` entry through the Gateway. For anything beyond the basics — headers, environment values, OAuth metadata, TLS settings, timeouts, parallel-tool-call hints, tool filters — use the scoped config editor further down the page. The server rows also let you enable, disable, or remove a definition.
 
-Run a live probe after setup:
+Once the server is saved, verify it actually answers:
 
 ```bash
 openclaw mcp doctor <name> --probe
 ```
 
-Settings changes do not prove the remote service is reachable. Active Gateway or agent processes may also need a restart or runtime rebuild before they use the new definition.
+Saving a definition proves nothing about reachability — the probe does. Note that already-running Gateway or agent processes may need a restart or runtime reload before they pick up the new definition.
 
 ## Add a server from the CLI
 
-For a local stdio server:
+A local stdio server:
 
 ```bash
 openclaw mcp add local-tools \
@@ -43,7 +43,7 @@ openclaw mcp add local-tools \
 openclaw mcp doctor local-tools --probe
 ```
 
-For a remote Streamable HTTP server:
+A remote Streamable HTTP server, exposing only some of its tools:
 
 ```bash
 openclaw mcp add docs \
@@ -53,11 +53,11 @@ openclaw mcp add docs \
 openclaw mcp doctor docs --probe
 ```
 
-Use `openclaw mcp status --verbose` for a config-only summary, `openclaw mcp probe <name>` for live capabilities, and `openclaw mcp login <name>` when an HTTP server uses OAuth. The [MCP CLI reference](/cli/mcp) documents every command, flag, output shape, and the separate `mcp serve` bridge.
+Useful companions: `openclaw mcp status --verbose` for a config-only summary, `openclaw mcp probe <name>` for live capabilities, and `openclaw mcp login <name>` when an HTTP server uses OAuth. The [MCP CLI reference](/cli/mcp) documents every command, flag, and output shape, plus the separate `mcp serve` bridge.
 
 ## Configure a server directly
 
-This example registers a remote server and exposes only its read tools:
+The same `docs` server, written straight into config:
 
 ```json5
 {
@@ -78,31 +78,31 @@ This example registers a remote server and exposes only its read tools:
 }
 ```
 
-An enabled server needs either a command for stdio or a URL for SSE or Streamable HTTP. `enabled: false` keeps the definition but excludes it from embedded runtime discovery. Store sensitive headers and environment values through the supported secret mechanisms instead of committing literal credentials.
+An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
 ## Troubleshooting
 
 ### The server appears in Settings but exposes no tools
 
-Run `openclaw mcp doctor <name> --probe`. Doctor checks the saved definition before opening a live connection; the probe then reports tools and other advertised capabilities. Check `toolFilter.include` and `toolFilter.exclude` if the server connects but expected tools remain hidden.
+Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition first, then opens a live connection and reports the tools and other capabilities the server advertises. If it connects but expected tools are missing, check `toolFilter.include` and `toolFilter.exclude`.
 
 ### A stdio server does not start
 
-Confirm that `command` resolves in the Gateway process environment and that `cwd` exists. Arguments belong in `args`; an explicit `transport: "stdio"` requires a non-empty command.
+Confirm the `command` resolves in the Gateway process environment and that `cwd` exists. Arguments belong in `args`, and an explicit `transport: "stdio"` requires a non-empty command.
 
 ### An HTTP server needs authorization
 
-Set `auth: "oauth"` and any required `oauth` metadata, then run:
+Set `auth: "oauth"` plus any required `oauth` metadata, then:
 
 ```bash
 openclaw mcp login <name>
 ```
 
-Follow the printed authorization URL and rerun with `--code` when requested.
+Follow the printed authorization URL and rerun with `--code` when prompted.
 
 ### Changes do not reach an active agent
 
-Run `openclaw mcp reload` for runtimes owned by the current CLI process. Gateway and agent processes in another process need their own reload, config publish, or restart path.
+`openclaw mcp reload` refreshes runtimes owned by the current CLI process. A Gateway or agent running elsewhere needs its own reload, config publish, or restart.
 
 ## Related
 
