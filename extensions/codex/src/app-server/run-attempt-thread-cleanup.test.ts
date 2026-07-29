@@ -336,4 +336,60 @@ describe("Codex app-server main thread cleanup", () => {
     );
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
+
+  it("retires a Codex client when a failed turn cannot unsubscribe its thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionKey = "agent:main:dashboard:incognito-failed-unsubscribe";
+    const requests: string[] = [];
+    const request = vi.fn(async (method: string) => {
+      requests.push(method);
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        throw new Error("turn start exploded");
+      }
+      if (method === "thread/unsubscribe") {
+        throw new Error("thread unsubscribe failed");
+      }
+      return {};
+    });
+    const createClient = vi.fn(async () => {
+      return {
+        ...mockClientRuntimeMethods(),
+        request,
+        close: vi.fn(),
+        addNotificationHandler: () => () => undefined,
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as never;
+    });
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(createClient);
+
+    await expect(
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
+        bindingStore: testCodexAppServerBindingStore,
+        clientFactory,
+      }),
+    ).rejects.toThrow("turn start exploded");
+
+    await expect(
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
+        bindingStore: testCodexAppServerBindingStore,
+        clientFactory,
+      }),
+    ).rejects.toThrow("turn start exploded");
+
+    expect(requests).toEqual([
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+    expect(createClient).toHaveBeenCalledTimes(2);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+  });
 });
