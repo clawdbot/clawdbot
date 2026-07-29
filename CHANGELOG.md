@@ -2,32 +2,6 @@
 
 Docs: https://docs.openclaw.ai
 
-## 2026.7.2
-
-### Highlights
-
-- **Agent and provider runtimes:** expand runtime selection, session continuity, and model-provider reliability across embedded and CLI-backed agents.
-- **Control UI workflows:** improve chat, session, workspace, dashboard, and operator controls across desktop and browser surfaces.
-- **Channel delivery:** strengthen durable ingress, threading, media, commands, and delivery behavior across bundled channel plugins.
-- **Native apps:** improve mobile and macOS onboarding, offline behavior, paired-node operation, and cross-device session handling.
-- **Install and upgrade reliability:** harden package generation, plugin dependencies, release validation, and migration safety.
-
-### Changes
-
-- **Product capabilities:** this release expands agent, UI, channel, plugin, automation, and native-app workflows.
-
-### Fixes
-
-- **Reliability:** this release includes broad correctness, safety, packaging, and upgrade fixes across the supported product surfaces.
-
-### Complete contribution record
-
-This audited record covers the complete a5b2e4167de860fe3fe3da7284cd5f36883560c8..74163eda42668cf655cb52f48365b16ae884eab8 history: 1 merged PR. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
-
-#### Pull requests
-
-- **PR #112983** fix: gmail setup fails to load gcloud when an unsupported Python is first on PATH. Related #112712. Thanks @Sanjays2402.
-
 ## Unreleased
 
 ### Changes
