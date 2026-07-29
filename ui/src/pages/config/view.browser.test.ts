@@ -170,7 +170,8 @@ describe("config view", () => {
     );
     ghost.click();
     expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
-    expect(collapsed.container.querySelector(".config-show-advanced")).toBeNull();
+    expect(ghost.classList.contains("config-show-advanced")).toBe(true);
+    expect(ghost.getAttribute("aria-pressed")).toBe("false");
 
     const global = renderConfigView({
       schema,
@@ -183,6 +184,8 @@ describe("config view", () => {
     const divider = queryRequired(global.container, ".config-advanced-divider", HTMLElement);
     expect(divider.textContent?.replace(/\s+/g, " ").trim()).toBe("Advanced Hide Advanced");
     const hide = queryRequired(divider, ".config-advanced-divider__toggle", HTMLButtonElement);
+    expect(hide.classList.contains("config-show-advanced")).toBe(true);
+    expect(hide.getAttribute("aria-pressed")).toBe("true");
     hide.click();
     expect(global.props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
     expect(normalizedText(global.container)).toContain("Reload mode");

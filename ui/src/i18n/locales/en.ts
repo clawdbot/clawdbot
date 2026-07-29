@@ -2222,9 +2222,17 @@ export const en: TranslationMap = {
       },
       schedule: {
         title: "Sleep schedule",
+        lightDescription:
+          "Sorts fresh short-term notes and stages promising candidates without changing long-term memory.",
+        remDescription:
+          "Reflects on themes and recurring ideas across recent activity to strengthen ranking without changing long-term memory.",
+        deepDescription:
+          "Scores staged candidates, promotes the keepers into long-term memory (MEMORY.md), and writes the dream diary.",
         nextRun: "next {time}",
         lastRun: "last {time}",
         notScheduled: "Not scheduled",
+        learnMore: "How dreaming works",
+        openDocs: "Open dreaming guide",
       },
       activity: {
         title: "Activity",
@@ -2243,6 +2251,10 @@ export const en: TranslationMap = {
         healthy: "Ready",
         unavailable: "Unavailable",
         notChecked: "Not checked",
+        notCheckedDescription: "Embedding readiness has not been checked yet.",
+        checking: "Checking…",
+        test: "Test",
+        testing: "Testing…",
       },
       shortcuts: {
         title: "Explore memory",

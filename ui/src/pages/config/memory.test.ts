@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { renderConfigForm } from "../../components/config-form.ts";
 import {
   memorySchemaKeysForTab,
   memoryTabForRoute,
@@ -48,6 +49,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
         error: null,
       },
     ],
+    canToggleAddons: true,
     onAddonChange: vi.fn(),
     pluginsHref: "/settings/plugins",
     memoryImportHref: "/memory-import",
@@ -132,6 +134,15 @@ describe("renderMemory", () => {
     expect(link?.getAttribute("href")).toBe("/settings/plugins");
   });
 
+  it("uses read-only add-on statuses when mutations are not authorized", () => {
+    const container = renderInto(createProps({ canToggleAddons: false }));
+
+    expect(container.querySelector("wa-switch")).toBeNull();
+    expect(container.textContent).toContain("Enabled");
+    expect(container.textContent).toContain("Disabled");
+    expect(container.textContent).toContain("Open Plugins");
+  });
+
   it("keeps mutation busy and errors scoped to one add-on row", () => {
     const container = renderInto(
       createProps({
@@ -200,6 +211,53 @@ describe("renderMemory", () => {
     const dreams = renderInto(createProps({ activeTab: "dreams" }));
     expect(dreams.querySelector(".test-dreams")).not.toBeNull();
     expect(dreams.querySelector(".test-editor")).toBeNull();
+  });
+
+  it("shows the shared advanced disclosure only on Settings and reveals advanced fields", () => {
+    const onAdvancedChange = vi.fn();
+    const editor = (showAdvanced: boolean) =>
+      html`${renderConfigForm({
+        schema: {
+          type: "object",
+          properties: {
+            memory: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean", title: "Common memory field" },
+                extraPaths: { type: "string", title: "Advanced memory field" },
+              },
+            },
+          },
+        },
+        uiHints: {
+          "memory.enabled": { advanced: false },
+          "memory.extraPaths": { advanced: true },
+        },
+        value: { memory: { enabled: true, extraPaths: "/notes" } },
+        activeSection: "memory",
+        embedded: true,
+        showAdvanced,
+        onShowAdvanced: () => onAdvancedChange(true),
+        onHideAdvanced: () => onAdvancedChange(false),
+        onPatch: vi.fn(),
+      })}`;
+
+    const collapsed = renderInto(createProps({ editor: editor(false) }));
+    const show = collapsed.querySelector<HTMLButtonElement>(".config-show-advanced");
+    expect(show?.getAttribute("aria-pressed")).toBe("false");
+    expect(collapsed.textContent).not.toContain("Advanced memory field");
+    show?.click();
+    expect(onAdvancedChange).toHaveBeenCalledWith(true);
+
+    const expanded = renderInto(createProps({ editor: editor(true) }));
+    const hide = expanded.querySelector<HTMLButtonElement>(".config-show-advanced");
+    expect(hide?.getAttribute("aria-pressed")).toBe("true");
+    expect(expanded.textContent).toContain("Advanced memory field");
+    hide?.click();
+    expect(onAdvancedChange).toHaveBeenCalledWith(false);
+
+    const overview = renderInto(createProps({ activeTab: "overview", editor: editor(false) }));
+    expect(overview.querySelector(".config-show-advanced")).toBeNull();
   });
 });
 

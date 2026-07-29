@@ -2,6 +2,7 @@
 
 import { ContextProvider } from "@lit/context";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -71,12 +72,13 @@ function createPage(params: {
   routeData?: ConfigRouteData;
   basePath?: string;
   agents?: Array<{ id: string; name?: string }>;
-  memoryStatus?: (agentId: string) => Promise<unknown>;
+  memoryStatus?: (agentId: string, probe: boolean) => Promise<unknown>;
+  scopes?: string[];
   lookupSchemaPath?: (call: number) => Promise<unknown>;
 }) {
   let listCalls = 0;
   let schemaLookups = 0;
-  const request = vi.fn((method: string, payload?: { agentId?: string }) => {
+  const request = vi.fn((method: string, payload?: { agentId?: string; probe?: boolean }) => {
     if (method === "plugins.list") {
       const call = listCalls++;
       return params.listCatalog
@@ -85,7 +87,7 @@ function createPage(params: {
     }
     if (method === "doctor.memory.status") {
       return params.memoryStatus
-        ? params.memoryStatus(payload?.agentId ?? "main")
+        ? params.memoryStatus(payload?.agentId ?? "main", payload?.probe === true)
         : Promise.resolve({
             agentId: payload?.agentId ?? "main",
             provider: "none",
@@ -103,7 +105,11 @@ function createPage(params: {
   const gatewayListeners = new Set<() => void>();
   const runtimeListeners = new Set<() => void>();
   const gateway = {
-    snapshot: { client: { request }, phase: "connected" },
+    snapshot: {
+      client: { request },
+      phase: "connected",
+      hello: { auth: { role: "operator", scopes: params.scopes } },
+    },
     subscribe: (notify: () => void) => {
       gatewayListeners.add(notify);
       return () => gatewayListeners.delete(notify);
@@ -466,6 +472,24 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
+  it("falls back to read-only add-on status rows without operator.admin", async () => {
+    const { element } = createPage({
+      configObject: {},
+      catalog: [addon("active-memory", true), addon("memory-wiki", false)],
+      scopes: ["operator.read"],
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Enabled"));
+      expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
+      expect(addonSwitch(element, "Active memory")).toBeNull();
+      expect(addonSwitch(element, "Memory wiki")).toBeNull();
+      expect(element.querySelector("a.memory-page__link")?.textContent).toContain("Open Plugins");
+    } finally {
+      element.remove();
+    }
+  });
+
   it("toggles the requested add-on and refreshes config plus catalog on success", async () => {
     const refresh = vi.fn(() => Promise.resolve());
     const { element, request } = createPage({
@@ -558,6 +582,63 @@ describe("MemorySettingsPage catalog state", () => {
 });
 
 describe("MemorySettingsPage tab routing", () => {
+  it("probes embeddings through the guarded overview request and renders the result", async () => {
+    const probe = deferred<DoctorMemoryStatusPayload>();
+    const initial: DoctorMemoryStatusPayload = {
+      agentId: "main",
+      provider: "local",
+      embedding: { ok: false, checked: false },
+    };
+    const { element, request } = createPage({
+      configObject: {},
+      memoryStatus: (_agentId, shouldProbe) =>
+        shouldProbe ? probe.promise : Promise.resolve(initial),
+    });
+    element.routeData = memoryTabRoute("overview");
+    document.body.append(element);
+    try {
+      await waitForFast(() =>
+        expect(
+          [...element.querySelectorAll<HTMLButtonElement>("button")].some(
+            (button) => button.textContent?.trim() === "Test",
+          ),
+        ).toBe(true),
+      );
+      const testButton = [...element.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Test",
+      );
+      testButton?.click();
+
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("doctor.memory.status", {
+          agentId: "main",
+          probe: true,
+        }),
+      );
+      await waitForFast(() =>
+        expect(
+          [...element.querySelectorAll<HTMLButtonElement>("button")].find(
+            (button) => button.textContent?.trim() === "Testing…",
+          )?.disabled,
+        ).toBe(true),
+      );
+
+      probe.resolve({
+        agentId: "main",
+        provider: "local",
+        embedding: { ok: false, checked: true, error: "embedding probe failed" },
+      });
+      await waitForFast(() => expect(element.textContent).toContain("embedding probe failed"));
+      expect(
+        [...element.querySelectorAll<HTMLButtonElement>("button")].some(
+          (button) => button.textContent?.trim() === "Test",
+        ),
+      ).toBe(false);
+    } finally {
+      element.remove();
+    }
+  });
+
   it("renders every canonical tab path and honors browser history restoration", async () => {
     const navigate = vi.fn();
     const { element } = createPage({ configObject: {}, catalog: [], navigate });
@@ -726,7 +807,7 @@ describe("MemorySettingsPage tab routing", () => {
         onSelect?: (value: string) => void;
       };
       select.onSelect?.("research");
-      await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("research"));
+      await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("research", false));
 
       setPhase("disconnected");
       setPhase("connected");

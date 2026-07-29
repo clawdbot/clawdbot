@@ -8,6 +8,7 @@ import { property, state } from "lit/decorators.js";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
@@ -119,10 +120,15 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private addonErrors = new Map<string, string>();
   @state() private selectedAgentId: string | null = null;
   @state() private overviewStatus: MemoryOverviewStatus = { kind: "idle" };
+  @state() private probingEmbeddings = false;
   @state() private support: DreamingConfigPathSupport = "unknown";
 
   private connection: CatalogConnection | null = null;
-  private overviewRequest: { connection: CatalogConnection; agentId: string } | null = null;
+  private overviewRequest: {
+    connection: CatalogConnection;
+    agentId: string;
+    probeEmbeddings: boolean;
+  } | null = null;
   private supportPluginId: string | null = null;
   private supportProbe: { pluginId: string } | null = null;
   private normalizedLocation = "";
@@ -154,6 +160,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     this.connection = null;
     this.overviewRequest = null;
+    this.probingEmbeddings = false;
     this.catalog = { kind: "unavailable" };
     this.supportPluginId = null;
     this.supportProbe = null;
@@ -173,6 +180,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       const current = this.activeTab();
       if (previous !== current) {
         this.overviewRequest = null;
+        this.probingEmbeddings = false;
         void this.loadOverviewStatus();
       }
       this.syncCanonicalLocation();
@@ -185,6 +193,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       const currentEngine = selectedEngineId(resolveMemoryEngineSelection(this.configObject));
       if (previous && previousEngine !== currentEngine) {
         this.overviewRequest = null;
+        this.probingEmbeddings = false;
         void this.loadOverviewStatus();
       }
     }
@@ -222,6 +231,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const connection: CatalogConnection = { client, connected };
     this.connection = connection;
     this.overviewRequest = null;
+    this.probingEmbeddings = false;
     if (!client || !connected) {
       this.catalog = { kind: "unavailable" };
       if (this.activeTab() === "overview") {
@@ -278,16 +288,18 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
     this.selectedAgentId = agentId;
     this.overviewRequest = null;
+    this.probingEmbeddings = false;
     void this.loadOverviewStatus();
   }
 
-  private async loadOverviewStatus(force = false) {
+  private async loadOverviewStatus(options: { force?: boolean; probeEmbeddings?: boolean } = {}) {
     if (this.activeTab() !== "overview") {
       return;
     }
     if (resolveMemoryEngineSelection(this.configObject).kind === "off") {
       this.overviewRequest = null;
       this.overviewStatus = { kind: "idle" };
+      this.probingEmbeddings = false;
       return;
     }
     const connection = this.connection;
@@ -298,24 +310,30 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         kind: "error",
         message: t("memoryPage.overview.hero.gatewayOffline"),
       };
+      this.probingEmbeddings = false;
       return;
     }
     if (!agentId) {
       return;
     }
     if (
-      !force &&
+      !options.force &&
       this.overviewRequest?.connection === connection &&
       this.overviewRequest.agentId === agentId
     ) {
       return;
     }
-    const request = { connection, agentId };
+    const probeEmbeddings = options.probeEmbeddings === true;
+    const request = { connection, agentId, probeEmbeddings };
     this.overviewRequest = request;
-    this.overviewStatus = { kind: "loading" };
+    this.probingEmbeddings = probeEmbeddings;
+    if (!probeEmbeddings) {
+      this.overviewStatus = { kind: "loading" };
+    }
     try {
       const payload = await client.request<DoctorMemoryStatusPayload>("doctor.memory.status", {
         agentId,
+        ...(probeEmbeddings ? { probe: true } : {}),
       });
       if (!this.isConnected || this.overviewRequest !== request) {
         return;
@@ -326,6 +344,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         return;
       }
       this.overviewStatus = { kind: "error", message: errorMessage(error) };
+    } finally {
+      if (this.overviewRequest === request) {
+        this.probingEmbeddings = false;
+      }
     }
   }
 
@@ -371,7 +393,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private async changeAddon(pluginId: string, enabled: boolean) {
-    if (this.addonBusy.has(pluginId)) {
+    if (
+      this.addonBusy.has(pluginId) ||
+      !readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin
+    ) {
       return;
     }
     const catalog = this.catalog;
@@ -535,6 +560,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       backendBusy: runtimeConfig.state.configSaving || runtimeConfig.state.configApplying,
       onBackendChange: (next) => runtimeConfig.patchForm(["memory", "backend"], next),
       addons: this.addonRows(),
+      canToggleAddons: readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin,
       onAddonChange: (pluginId, enabled) => void this.changeAddon(pluginId, enabled),
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
@@ -544,8 +570,11 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         engineSelection,
         engineDisabled: this.engineState(engineSelection) === "disabled",
         status: this.overviewStatus,
+        probingEmbeddings: this.probingEmbeddings,
         onAgentChange: (next) => this.selectAgent(next),
-        onRefresh: () => void this.loadOverviewStatus(true),
+        onRefresh: () => void this.loadOverviewStatus({ force: true }),
+        onProbeEmbeddings: () =>
+          void this.loadOverviewStatus({ force: true, probeEmbeddings: true }),
         onNavigate: (tab) => this.navigateTab(tab),
       }),
       memories: html`

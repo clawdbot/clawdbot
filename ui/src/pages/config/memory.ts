@@ -64,6 +64,7 @@ type MemoryViewProps = {
   backendBusy: boolean;
   onBackendChange: (backend: MemoryBackend) => void;
   addons: readonly MemoryAddonRow[];
+  canToggleAddons: boolean;
   onAddonChange: (pluginId: string, enabled: boolean) => void;
   pluginsHref: string;
   memoryImportHref: string;
@@ -247,7 +248,7 @@ function renderAddonsSection(props: MemoryViewProps) {
     html`
       ${props.addons.map(
         (addon) => html`
-          ${addon.state === "enabled" || addon.state === "disabled"
+          ${props.canToggleAddons && (addon.state === "enabled" || addon.state === "disabled")
             ? renderSettingsToggleRow({
                 title: addon.label,
                 ariaLabel: t("memoryPage.addons.toggleAriaLabel", { plugin: addon.label }),
