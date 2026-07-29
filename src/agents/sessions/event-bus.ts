@@ -19,6 +19,7 @@ export interface EventBusController extends EventBus {
 /** Creates an in-process event bus with unsubscribe and clear support. */
 export function createEventBus(): EventBusController {
   const emitter = new EventEmitter();
+  emitter.setMaxListeners(0);
   return {
     emit: (channel, data) => {
       emitter.emit(channel, data);
