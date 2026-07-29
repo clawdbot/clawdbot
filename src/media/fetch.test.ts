@@ -239,6 +239,7 @@ describe("readRemoteMediaBuffer", () => {
   const botFileUrl = `https://files.example.test/file/bot${botToken}/photos/1.jpg`;
 
   beforeAll(async () => {
+    vi.resetModules();
     tempHome = await createTempHomeEnv("openclaw-test-home-");
     const fetchModule = await import("./fetch.js");
     readRemoteMediaBuffer = fetchModule.readRemoteMediaBuffer;
@@ -276,7 +277,12 @@ describe("readRemoteMediaBuffer", () => {
   });
 
   afterAll(async () => {
-    await tempHome.restore();
+    try {
+      await tempHome.restore();
+    } finally {
+      vi.doUnmock("../infra/net/fetch-guard.js");
+      vi.resetModules();
+    }
   });
 
   it.each([
