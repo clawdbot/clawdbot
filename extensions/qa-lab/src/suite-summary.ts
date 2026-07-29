@@ -185,7 +185,7 @@ function isQaSuiteBlockingStatus(status: unknown): boolean {
   return status !== "pass";
 }
 
-export function isQaSuiteReportOnlyOptionalScenario(
+function isQaSuiteReportOnlyOptionalScenario(
   scenario: QaSuiteReportOnlyScenario,
   optionalScenarioNames: ReadonlySet<string> | undefined,
 ): boolean {

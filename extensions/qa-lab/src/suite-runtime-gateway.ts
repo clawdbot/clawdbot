@@ -291,11 +291,7 @@ async function runConfigMutation(params: {
           typeof systemInfo === "object" && systemInfo !== null
             ? (systemInfo as { pid?: unknown }).pid
             : undefined;
-        if (
-          typeof targetPid !== "number" ||
-          !Number.isSafeInteger(targetPid) ||
-          targetPid <= 0
-        ) {
+        if (typeof targetPid !== "number" || !Number.isSafeInteger(targetPid) || targetPid <= 0) {
           throw new Error("qa gateway restart returned an invalid active process id");
         }
         restartTargetPid = targetPid;

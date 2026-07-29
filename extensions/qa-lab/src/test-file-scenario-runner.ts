@@ -276,8 +276,7 @@ async function runScenarioCommandSteps(params: {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
       const isNativeVitestStep =
-        params.scenario.execution.kind !== "script" &&
-        step.args[0] === "scripts/run-vitest.mjs";
+        params.scenario.execution.kind !== "script" && step.args[0] === "scripts/run-vitest.mjs";
       if (isNativeVitestStep) {
         // A reused scenario output directory must not let a previous run's
         // passing report authenticate a child that emitted no report.

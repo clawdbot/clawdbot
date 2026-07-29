@@ -527,8 +527,7 @@ export async function resumeMainSession(params: {
         params.gatewayRuntime,
       );
     }
-    const lifecycleGeneration =
-      params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+    const lifecycleGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
     const admission = await commitMainSessionRecovery({
       command: {
         kind: "admit_recovery",

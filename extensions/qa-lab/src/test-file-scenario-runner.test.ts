@@ -436,9 +436,9 @@ describe("qa test file scenario runner", () => {
 
       expect(result.results[0]).toMatchObject({ status: expectedStatus });
       expect(result.evidence.entries[0]?.result.status).toBe(expectedStatus);
-      expect(commands.filter((command) => command.args[0] === "scripts/run-vitest.mjs")).toHaveLength(
-        1,
-      );
+      expect(
+        commands.filter((command) => command.args[0] === "scripts/run-vitest.mjs"),
+      ).toHaveLength(1);
       if (expectedStatus === "fail") {
         expect(result.results[0]?.failureMessage).toBe(
           "Vitest exited successfully without reporting a successfully executed test.",

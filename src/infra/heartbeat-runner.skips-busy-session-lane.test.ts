@@ -91,39 +91,40 @@ describe("heartbeat runner skips when target session lane is busy", () => {
   it.each([
     { label: "scheduled", intent: "scheduled" as const },
     { label: "automatic immediate", intent: "immediate" as const },
-  ])("defers $label heartbeat while main-session restart recovery owns the session", async ({
-    intent,
-  }) => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig();
-      cfg.session = { store: storePath };
-      await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "123",
-        status: "running",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: "restart-cycle",
-          revision: 1,
-          chargedAttempts: 0,
-        },
-      });
+  ])(
+    "defers $label heartbeat while main-session restart recovery owns the session",
+    async ({ intent }) => {
+      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+        const cfg = createHeartbeatTelegramConfig();
+        cfg.session = { store: storePath };
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "123",
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "restart-cycle",
+            revision: 1,
+            chargedAttempts: 0,
+          },
+        });
 
-      const result = await runHeartbeatOnce({
-        cfg,
-        intent,
-        deps: {
-          getQueueSize: vi.fn((_lane?: string) => 0),
-          nowMs: () => Date.now(),
-          getReplyFromConfig: replySpy,
-        } as HeartbeatDeps,
-      });
+        const result = await runHeartbeatOnce({
+          cfg,
+          intent,
+          deps: {
+            getQueueSize: vi.fn((_lane?: string) => 0),
+            nowMs: () => Date.now(),
+            getReplyFromConfig: replySpy,
+          } as HeartbeatDeps,
+        });
 
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
+        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+        expect(replySpy).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("defers automatic heartbeat while an admitted recovery owns the current lifecycle", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {

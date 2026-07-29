@@ -2165,8 +2165,7 @@ describe("main-session-restart-recovery", () => {
         stateDir: tmpDir,
       });
 
-      recovery.stop();
-      recovery.stop();
+      await Promise.all([recovery.stop(), recovery.stop()]);
       await vi.advanceTimersByTimeAsync(5_000);
 
       expect(callGateway).not.toHaveBeenCalled();
@@ -2347,15 +2346,15 @@ describe("main-session-restart-recovery", () => {
     vi.useFakeTimers();
     const retryScheduled = createDeferred();
     const fakeSetTimeout = globalThis.setTimeout;
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(
-      (...args: Parameters<typeof setTimeout>) => {
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((...args: Parameters<typeof setTimeout>) => {
         const timer = fakeSetTimeout(...args);
         if (args[1] === 5_000) {
           retryScheduled.resolve();
         }
         return timer;
-      },
-    );
+      });
     const countAgentDispatches = () =>
       vi.mocked(callGateway).mock.calls.filter(([request]) => request.method === "agent").length;
     let recovery: ReturnType<typeof scheduleRestartAbortedMainSessionRecovery> | undefined;

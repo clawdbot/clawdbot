@@ -97,12 +97,7 @@ describe("qa suite gateway helpers", () => {
 
     await expect(restarting).resolves.toEqual({ ok: true });
     expect(gatewayCall).toHaveBeenNthCalledWith(1, "config.get", {}, { timeoutMs: 60_000 });
-    expect(gatewayCall).toHaveBeenNthCalledWith(
-      2,
-      "system.info",
-      {},
-      { timeoutMs: 180_000 },
-    );
+    expect(gatewayCall).toHaveBeenNthCalledWith(2, "system.info", {}, { timeoutMs: 180_000 });
     expect(gatewayCall).toHaveBeenNthCalledWith(
       3,
       "config.patch",
