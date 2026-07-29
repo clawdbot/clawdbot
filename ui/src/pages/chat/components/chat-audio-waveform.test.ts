@@ -34,11 +34,8 @@ describe("chat audio waveform", () => {
     ).toBe(false);
   });
 
-  it("computes normalized peak buckets from every channel", () => {
-    const channels = [
-      new Float32Array([0.1, -0.5, 0.2, 0.4, -0.25, 0.75, 0, -1]),
-      new Float32Array([1, 0.25, -0.1, 0.3, 0.5, 0.1, -0.8, 0.2]),
-    ];
+  it("computes normalized peak buckets", () => {
+    const channels = [new Float32Array([0.1, -0.5, 0.2, 0.4, -0.25, 0.75, 0, -1])];
     const peaks = computeChatAudioWaveformPeaks(
       {
         length: channels[0]!.length,
@@ -53,6 +50,20 @@ describe("chat audio waveform", () => {
     expect(peaks[1]).toBeCloseTo(0.4);
     expect(peaks[2]).toBeCloseTo(0.75);
     expect(peaks[3]).toBe(1);
+  });
+
+  it("includes peaks carried only by a non-first channel", () => {
+    const channels = [new Float32Array([0, 0, 0, 0]), new Float32Array([0, 0.25, 0, 1])];
+    const peaks = computeChatAudioWaveformPeaks(
+      {
+        length: channels[0]!.length,
+        numberOfChannels: channels.length,
+        getChannelData: (channel) => channels[channel]!,
+      },
+      2,
+    );
+
+    expect(peaks).toEqual([0.25, 1]);
   });
 
   it("declines a new Blob when all 32 cache entries are retained", () => {

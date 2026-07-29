@@ -61,14 +61,18 @@ export function computeChatAudioWaveformPeaks(
   if (buffer.length <= 0 || buffer.numberOfChannels <= 0) {
     return Array.from({ length: count }, () => 0);
   }
+  const channels = Array.from({ length: buffer.numberOfChannels }, (_, channel) =>
+    buffer.getChannelData(channel),
+  );
   const peaks = Array.from({ length: count }, () => 0);
   for (let bucket = 0; bucket < count; bucket += 1) {
     const start = Math.floor((bucket * buffer.length) / count);
     const end = Math.max(start + 1, Math.floor(((bucket + 1) * buffer.length) / count));
     let peak = 0;
-    const samples = buffer.getChannelData(0);
-    for (let index = start; index < Math.min(end, samples.length); index += 1) {
-      peak = Math.max(peak, Math.abs(samples[index] ?? 0));
+    for (const samples of channels) {
+      for (let index = start; index < Math.min(end, samples.length); index += 1) {
+        peak = Math.max(peak, Math.abs(samples[index] ?? 0));
+      }
     }
     peaks[bucket] = peak;
   }
