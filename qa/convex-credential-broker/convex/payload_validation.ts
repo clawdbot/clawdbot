@@ -1,4 +1,6 @@
 // Payload Validation module supports OpenClaw QA credential workflows.
+import { getPublicKey, nip19 } from "nostr-tools";
+
 class CredentialPayloadValidationError extends Error {
   code: string;
   httpStatus: number;
@@ -17,6 +19,7 @@ const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/u;
 const E164_RE = /^\+[1-9]\d{6,14}$/u;
 const BUZZ_ROOM_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const BUZZ_PRIVATE_KEY_HEX_RE = /^[0-9a-f]{64}$/iu;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
 const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
 const TELEGRAM_USER_ID_RE = /^\d+$/u;
@@ -67,6 +70,62 @@ function requireDiscordSnowflakePayloadString(
   return value;
 }
 
+function decodeBuzzPrivateKey(value: string) {
+  if (BUZZ_PRIVATE_KEY_HEX_RE.test(value)) {
+    const bytes = value.match(/.{2}/gu);
+    if (bytes?.length === 32) {
+      return Uint8Array.from(bytes.map((byte) => Number.parseInt(byte, 16)));
+    }
+  }
+  const decoded = nip19.decode(value);
+  if (decoded.type !== "nsec") {
+    throw new Error("not a Buzz private key");
+  }
+  return decoded.data;
+}
+
+function requireBuzzPrivateKey(
+  payload: Record<string, unknown>,
+  key: "driverPrivateKey" | "sutPrivateKey",
+  createFailure: PayloadValidationFailureFactory,
+) {
+  const value = requirePayloadString(payload, key, "buzz", createFailure);
+  try {
+    return { value, publicKey: getPublicKey(decodeBuzzPrivateKey(value)) };
+  } catch {
+    throwPayloadError(
+      createFailure,
+      `Credential payload for kind "buzz" must include "${key}" as an nsec or 64-character hex private key.`,
+    );
+  }
+}
+
+function requireBuzzAuthTag(
+  payload: Record<string, unknown>,
+  key: "driverAuthTag" | "sutAuthTag",
+  createFailure: PayloadValidationFailureFactory,
+) {
+  const value = requirePayloadString(payload, key, "buzz", createFailure);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    parsed = undefined;
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== 4 ||
+    parsed[0] !== "auth" ||
+    parsed.some((entry) => typeof entry !== "string")
+  ) {
+    throwPayloadError(
+      createFailure,
+      `Credential payload for kind "buzz" must include "${key}" as an auth tag JSON array.`,
+    );
+  }
+  return value;
+}
+
 function normalizeBuzzCredentialPayload(
   payload: Record<string, unknown>,
   createFailure: PayloadValidationFailureFactory,
@@ -92,19 +151,19 @@ function normalizeBuzzCredentialPayload(
       'Credential payload for kind "buzz" must include "roomId" as a channel UUID.',
     );
   }
-  const driverPrivateKey = requirePayloadString(payload, "driverPrivateKey", kind, createFailure);
-  const sutPrivateKey = requirePayloadString(payload, "sutPrivateKey", kind, createFailure);
-  if (driverPrivateKey === sutPrivateKey) {
+  const driverIdentity = requireBuzzPrivateKey(payload, "driverPrivateKey", createFailure);
+  const sutIdentity = requireBuzzPrivateKey(payload, "sutPrivateKey", createFailure);
+  if (driverIdentity.publicKey === sutIdentity.publicKey) {
     throwPayloadError(
       createFailure,
-      'Credential payload for kind "buzz" must use distinct driverPrivateKey and sutPrivateKey values.',
+      'Credential payload for kind "buzz" must use distinct driver and SUT identities.',
     );
   }
   const optionalString = (key: "driverAuthTag" | "sutAuthTag") => {
     if (payload[key] === undefined) {
       return undefined;
     }
-    return requirePayloadString(payload, key, kind, createFailure);
+    return requireBuzzAuthTag(payload, key, createFailure);
   };
   const driverAuthTag = optionalString("driverAuthTag");
   const sutAuthTag = optionalString("sutAuthTag");
@@ -112,8 +171,8 @@ function normalizeBuzzCredentialPayload(
   return {
     relayUrl,
     roomId,
-    driverPrivateKey,
-    sutPrivateKey,
+    driverPrivateKey: driverIdentity.value,
+    sutPrivateKey: sutIdentity.value,
     ...(driverAuthTag ? { driverAuthTag } : {}),
     ...(sutAuthTag ? { sutAuthTag } : {}),
   } satisfies Record<string, unknown>;

@@ -154,8 +154,10 @@ For `kind: "buzz"`, broker `admin/add` validates that payload includes:
 
 - `relayUrl` as a `ws://` or `wss://` URL
 - `roomId` as a channel UUID
-- non-empty, distinct `driverPrivateKey` and `sutPrivateKey`
-- optional non-empty `driverAuthTag` and `sutAuthTag`
+- valid, distinct `driverPrivateKey` and `sutPrivateKey` values in nsec or
+  64-character hex form
+- optional `driverAuthTag` and `sutAuthTag` values matching the four-string
+  Buzz authorization tag JSON shape
 
 Use dedicated QA identities only. Never add a human owner or admin private key
 to the shared pool.
