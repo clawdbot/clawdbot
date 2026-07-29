@@ -65,12 +65,8 @@ const HOST_PARAM_METHODS =
 export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
   "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
 );
-const LEGACY_HOST_PARAM_DEFAULT_COMPAT = getPluginCompatRecord(
-  "context-engine-legacy-host-param-default",
-);
-
 function wrapContextEngineWithHostParamProjection(engine: ContextEngine): ContextEngine {
-  const removeAfter = LEGACY_HOST_PARAM_DEFAULT_COMPAT.removeAfter;
+  const removeAfter = getPluginCompatRecord("context-engine-legacy-host-param-default").removeAfter;
   const accepted = engine.info.acceptedHostParams;
   const engineRecord = engine as unknown as Record<PropertyKey, unknown>;
   const wrappedRecord: Record<PropertyKey, unknown> = {};
