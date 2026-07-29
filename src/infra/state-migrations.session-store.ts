@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
@@ -21,7 +21,7 @@ import {
   listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
 import {
-  DEFAULT_AGENT_ID,
+  LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isValidAgentId,
   normalizeAgentId,
@@ -40,6 +40,7 @@ import {
   safeReadDir,
   type SessionEntryLike,
 } from "./state-migrations.fs.js";
+import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
 import {
   getLegacySessionSurfaces,
   isLegacyGroupKey,
@@ -234,8 +235,11 @@ export function pickLatestLegacyDirectEntry(
   return best;
 }
 
-export function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
-  const shaped = normalizePersistedSessionEntryShape(entry);
+export function normalizeSessionEntry(
+  entry: SessionEntryLike,
+  sessionKey?: string,
+): SessionEntry | null {
+  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
   if (!shaped) {
     return null;
   }
@@ -901,7 +905,7 @@ export async function migrateOrphanedSessionKeys(params: {
     }
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(working)) {
-      const ne = normalizeSessionEntry(entry);
+      const ne = normalizeSessionEntry(entry, key);
       if (ne) {
         normalized[key] = ne;
       }
@@ -950,7 +954,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   const pluginTargets = declaredTargets.filter(
     ({ agentId }) => agentId !== DEFAULT_AGENT_ID && normalizedPluginAgentIds.has(agentId),
   );
-  const configuredAgents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
+  const configuredAgents = listAgentEntries(params.cfg);
   const configuredAgentIds = new Set(
     configuredAgents.flatMap((entry) => (entry?.id ? [normalizeAgentId(entry.id)] : [])),
   );
@@ -1063,7 +1067,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     let migrated = 0;
     let preserved = 0;
     for (const [sessionKey, entry] of Object.entries(parsed.store)) {
-      const normalizedEntry = normalizeSessionEntry(entry);
+      const normalizedEntry = normalizeSessionEntry(entry, sessionKey);
       if (!normalizedEntry) {
         continue;
       }
@@ -1088,6 +1092,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         writeAcpSessionMetaForMigration({
           sessionKey: canonicalSessionKey,
           sessionId: normalizedEntry.sessionId,
+          lifecycleRevision: normalizedEntry.lifecycleRevision,
           meta: normalizedEntry.acp,
           env,
           now,
@@ -1213,7 +1218,12 @@ function resolveSessionStorePathRelationship(
     return "same";
   }
   try {
-    return sameFileIdentity(fs.statSync(left), fs.statSync(right)) ? "same" : "different";
+    return sameFileIdentity(
+      fs.statSync(left, { bigint: true }),
+      fs.statSync(right, { bigint: true }),
+    )
+      ? "same"
+      : "different";
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
@@ -1333,9 +1343,9 @@ export async function saveSessionStoreStrict(
   storePath: string,
   store: Record<string, SessionEntry>,
 ): Promise<void> {
-  await saveSessionStore(storePath, store, {
-    skipMaintenance: true,
+  await saveLegacySessionStore(storePath, store, {
     requireWriteSuccess: true,
+    skipMaintenance: true,
   });
 }
 

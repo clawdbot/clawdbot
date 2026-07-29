@@ -9,6 +9,8 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -60,6 +62,8 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
+import { isTerminalConfigEnabled } from "./terminal/enabled.js";
+import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -94,11 +98,17 @@ type ResolvePluginNodeCapabilityRoute = (
 
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
 
+const getCanvasServeModule = createLazyRuntimeModule(() => import("../canvas/serve.runtime.js"));
+
+const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js"));
+
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
 
-const getManagedImageAttachmentsModule = createLazyRuntimeModule(
+const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
+
+const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
 
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
 
@@ -115,6 +125,8 @@ const getSessionHistoryHttpModule = createLazyRuntimeModule(
 const getSessionKillHttpModule = createLazyRuntimeModule(() => import("./session-kill-http.js"));
 
 const getToolsInvokeHttpModule = createLazyRuntimeModule(() => import("./tools-invoke-http.js"));
+
+const getUserProfilesHttpModule = createLazyRuntimeModule(() => import("./user-profiles-http.js"));
 
 const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
   () => import("./server/plugin-node-capability-auth.js"),
@@ -140,6 +152,7 @@ function isControlUiCatalogIconRequest(pathname: string, basePath: string): bool
     pathname.startsWith(`${normalizedBasePath}${prefix}/`),
   );
 }
+
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
   Promise<ReadonlySet<string>>
@@ -181,6 +194,14 @@ function getCachedPluginGatewayAuthBypassPaths(
 
 function isOpenAiModelsPath(pathname: string): boolean {
   return pathname === "/v1/models" || pathname.startsWith("/v1/models/");
+}
+
+function isMcpAppStandalonePath(pathname: string): boolean {
+  return pathname === "/__openclaw__/mcp-app" || pathname === "/__openclaw__/mcp-app/view";
+}
+
+function isBoardWidgetPath(pathname: string): boolean {
+  return pathname.startsWith("/__openclaw__/board/");
 }
 
 function isEmbeddingsPath(pathname: string): boolean {
@@ -337,6 +358,30 @@ function parseGatewayRequestPath(rawUrl: string | undefined): string | undefined
   } catch {
     return undefined;
   }
+}
+
+function headerValueContainsToken(
+  value: string | readonly string[] | undefined,
+  token: string,
+): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  const expected = token.toLowerCase();
+  const values: readonly string[] = typeof value === "string" ? [value] : value;
+  return values.some((entry) =>
+    entry
+      .toLowerCase()
+      .split(",")
+      .some((part) => part.trim() === expected),
+  );
+}
+
+function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
+  return (
+    headerValueContainsToken(req.headers.upgrade, "websocket") &&
+    headerValueContainsToken(req.headers.connection, "upgrade")
+  );
 }
 
 type GatewayHttpRequestStage = {
@@ -518,8 +563,15 @@ export function createGatewayHttpServer(opts: {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
 
-    // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
-    if ((req.headers.upgrade ?? "").toLowerCase() === "websocket") {
+    // Don't interfere with real WebSocket upgrades; ws handles the 'upgrade' event.
+    if (isWebSocketUpgradeRequest(req)) {
+      return;
+    }
+    if (req.headers.upgrade !== undefined) {
+      res.statusCode = 400;
+      res.setHeader("Connection", "close");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Bad Request");
       return;
     }
 
@@ -556,16 +608,14 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedNodeCapability.rewrittenUrl;
       }
       const scopedRequestPath = scopedNodeCapability.pathname;
-      const pluginPathContext = handlePluginRequest
-        ? resolvePluginRoutePathContext(scopedRequestPath)
-        : null;
+      const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
+      const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
       const resolvedAuthValue = getResolvedAuth();
       const handleControlUiRequest = async () =>
         (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
           basePath: controlUiBasePath,
           config: configSnapshot,
-          terminalEnabled:
-            opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+          terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
           agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
           root: controlUiRoot,
           auth: resolvedAuthValue,
@@ -673,6 +723,34 @@ export function createGatewayHttpServer(opts: {
             ),
         });
       }
+      if (isBoardWidgetPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "board-widget",
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
+            ),
+        });
+      }
+      if (matchUserProfileAvatarPath(scopedRequestPath) !== undefined) {
+        requestStages.push({
+          name: "user-profile-avatar",
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
+                req,
+                res,
+                scopedRequestPath,
+                {
+                  auth: resolvedAuthValue,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                },
+              ),
+            ),
+        });
+      }
       if (openResponsesEnabled && isOpenResponsesPath(scopedRequestPath)) {
         requestStages.push({
           name: "openresponses",
@@ -729,14 +807,9 @@ export function createGatewayHttpServer(opts: {
           },
         });
       }
-      if (
-        handlePluginRequest &&
-        pluginPathContext &&
-        resolvePluginNodeCapabilityRoute?.(pluginPathContext)
-      ) {
-        const nodeCapability = resolvePluginNodeCapabilityRoute(pluginPathContext);
+      if (nodeCapability) {
         requestStages.push({
-          name: "plugin-node-capability-auth",
+          name: "node-capability-auth",
           run: async () => {
             if (!nodeCapability) {
               return false;
@@ -763,6 +836,17 @@ export function createGatewayHttpServer(opts: {
         });
       }
       if (
+        nodeCapability &&
+        isCoreCanvasHostEnabled(configSnapshot) &&
+        isCanvasDocumentHttpPath(scopedRequestPath)
+      ) {
+        requestStages.push({
+          name: "canvas-documents",
+          run: async () =>
+            await (await getCanvasServeModule()).handleCanvasDocumentHttpRequest(req, res),
+        });
+      }
+      if (
         controlUiEnabled &&
         isControlUiPluginManagerRequest({
           basePath: controlUiBasePath,
@@ -779,7 +863,7 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               config: configSnapshot,
               terminalEnabled:
-                opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+                opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
               root: controlUiRoot,
               auth: resolvedAuthValue,
@@ -787,6 +871,18 @@ export function createGatewayHttpServer(opts: {
               allowRealIpFallback,
               rateLimiter,
             }),
+        });
+      }
+      if (configSnapshot.mcp?.apps?.enabled === true && isMcpAppStandalonePath(scopedRequestPath)) {
+        requestStages.push({
+          name: "mcp-app-standalone",
+          run: async () => {
+            const standalone = await getMcpAppStandaloneModule();
+            return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
+              sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+              sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
+            });
+          },
         });
       }
       // Plugin routes run before the general Control UI SPA catch-all so
@@ -810,9 +906,9 @@ export function createGatewayHttpServer(opts: {
 
       if (isManagedOutgoingImagePath(scopedRequestPath)) {
         requestStages.push({
-          name: "chat-managed-image-media",
+          name: "chat-managed-media",
           run: async () =>
-            (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
+            (await getManagedMediaAttachmentsModule()).handleManagedOutgoingMediaHttpRequest(
               req,
               res,
               {

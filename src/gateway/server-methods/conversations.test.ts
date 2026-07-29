@@ -3,6 +3,7 @@ import {
   ConversationInputError,
   ConversationOperationConflictError,
 } from "../conversation-errors.js";
+import type { runGatewayConversationList } from "../conversation-list.js";
 import type { runGatewayConversationSend } from "../conversation-send.js";
 import type { runGatewayConversationTurn } from "../conversation-turn.js";
 import { createConversationHandlers } from "./conversations.js";
@@ -90,6 +91,76 @@ function invokeSend(params: {
     isWebchatConnect: () => false,
   });
 }
+
+function invokeList(params: {
+  handler: NonNullable<ReturnType<typeof createConversationHandlers>["conversations.list"]>;
+  context: GatewayRequestContext;
+  respond: RespondFn;
+  request?: Record<string, unknown>;
+}) {
+  return params.handler({
+    params: params.request ?? { agentId: "main", channel: "reef", query: "@molty", limit: 50 },
+    respond: params.respond,
+    context: params.context,
+    req: { type: "req", id: "list-1", method: "conversations.list" },
+    client: adminClient,
+    isWebchatConnect: () => false,
+  });
+}
+
+describe("conversations.list Gateway handler", () => {
+  it("runs discovery and listing inside the Gateway runtime", async () => {
+    const listed = {
+      conversations: [
+        {
+          conversationRef: request.conversationRef,
+          channel: "reef",
+          accountId: "default",
+          kind: "direct" as const,
+          target: "reef:molty",
+          firstSeenAt: 100,
+          lastSeenAt: 100,
+        },
+      ],
+    };
+    const runConversationList = vi.fn(
+      async (_params: Parameters<typeof runGatewayConversationList>[0]) => listed,
+    );
+    const handler = createConversationHandlers({ runConversationList })["conversations.list"]!;
+    const respond = vi.fn<RespondFn>();
+
+    await invokeList({ handler, context: context(), respond });
+
+    expect(runConversationList).toHaveBeenCalledWith({
+      config: {},
+      agentId: "main",
+      channel: "reef",
+      query: "@molty",
+      limit: 50,
+    });
+    expect(respond).toHaveBeenCalledWith(true, listed, undefined);
+  });
+
+  it("rejects invalid limits before directory discovery", async () => {
+    const runConversationList = vi.fn();
+    const handler = createConversationHandlers({ runConversationList })["conversations.list"]!;
+    const respond = vi.fn<RespondFn>();
+
+    await invokeList({
+      handler,
+      context: context(),
+      respond,
+      request: { agentId: "main", channel: "reef", limit: 101 },
+    });
+
+    expect(runConversationList).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+});
 
 describe("conversations.send Gateway handler", () => {
   it("owns the send and rejects operation-id reuse with different source input", async () => {

@@ -10,7 +10,7 @@ read_when:
 
 Most skills configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific visibility lives under
-`agents.defaults.skills` and `agents.list[].skills`.
+`agents.defaults.skills` and `agents.entries.*.skills`.
 
 ```json5
 {
@@ -20,7 +20,6 @@ Most skills configuration lives under `skills` in
       extraDirs: ["~/Projects/agent-scripts/skills"],
       allowSymlinkTargets: ["~/Projects/manager/skills"],
       watch: true,
-      watchDebounceMs: 250,
     },
     install: {
       preferBrew: true,
@@ -28,7 +27,7 @@ Most skills configuration lives under `skills` in
       allowUploadedArchives: false,
     },
     workshop: {
-      autonomous: { enabled: false },
+      autonomous: { mode: "auto" },
       allowSymlinkTargetWrites: false,
       approvalPolicy: "auto",
       maxPending: 50,
@@ -48,7 +47,7 @@ Most skills configuration lives under `skills` in
 ```
 
 <Note>
-  For built-in image generation, use `agents.defaults.imageGenerationModel`
+  For built-in image generation, use `agents.defaults.mediaModels.image`
   plus the core `image_generate` tool instead of `skills.entries`. Skill
   entries are for custom or third-party skill workflows only.
 </Note>
@@ -71,10 +70,6 @@ Most skills configuration lives under `skills` in
 <ParamField path="skills.load.watch" type="boolean" default="true">
   Watch skill folders and refresh the skills snapshot when `SKILL.md` files
   change. Covers nested files under grouped skill roots.
-</ParamField>
-
-<ParamField path="skills.load.watchDebounceMs" type="number" default="250">
-  Debounce window for skill watcher events in milliseconds.
 </ParamField>
 
 ## Install (`skills.install`)
@@ -317,11 +312,11 @@ different visible skill set per agent.
 
 <ParamField path="agents.defaults.skills" type="string[]">
   Shared baseline allowlist inherited by agents that omit
-  `agents.list[].skills`. Omit entirely to leave skills unrestricted by
+  `agents.entries.*.skills`. Omit entirely to leave skills unrestricted by
   default.
 </ParamField>
 
-<ParamField path="agents.list[].skills" type="string[]">
+<ParamField path="agents.entries.*.skills" type="string[]">
   Explicit final skill set for that agent. Explicit lists **replace**
   inherited defaults — they do not merge. Set to `[]` to expose no skills for
   that agent.
@@ -341,11 +336,12 @@ different visible skill set per agent.
 
 ## Workshop (`skills.workshop`)
 
-<ParamField path="skills.workshop.autonomous.enabled" type="boolean" default="false">
-  When `true`, OpenClaw can create pending proposals from durable corrections
-  and can review successful, substantial completed work after the system becomes
-  idle. This can add a background model run after eligible turns. User-prompted
-  skill creation and `/learn` continue to work when the setting is `false`.
+<ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
+  `off` disables autonomous capture while keeping the durable-instruction
+  suggestion nudge. `propose` creates pending proposals from corrections and
+  substantial completed work. `auto` sends the same captures through the normal
+  scanner-gated Workshop apply path. User-prompted skill creation, `/learn`, and
+  manual history scan continue to work in every mode.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,

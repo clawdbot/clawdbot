@@ -1,7 +1,13 @@
 // Tests infra environment loading and variable normalization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";
+import {
+  isFastTestRuntimeEnv,
+  isTruthyEnvValue,
+  logAcceptedEnvOption,
+  normalizeEnv,
+  normalizeZaiEnv,
+} from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -60,6 +66,27 @@ describe("isTruthyEnvValue", () => {
     expect(isTruthyEnvValue("false")).toBe(false);
     expect(isTruthyEnvValue("")).toBe(false);
     expect(isTruthyEnvValue(undefined)).toBe(false);
+  });
+});
+
+describe("isFastTestRuntimeEnv", () => {
+  it("ignores OPENCLAW_TEST_FAST outside a test runtime", () => {
+    withEnv(
+      {
+        NODE_ENV: "production",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+        OPENCLAW_TEST_FAST: "1",
+      },
+      () => {
+        expect(isFastTestRuntimeEnv()).toBe(false);
+      },
+    );
+  });
+
+  it("honors OPENCLAW_TEST_FAST inside a detected test runtime", () => {
+    expect(isFastTestRuntimeEnv({ VITEST: "1", OPENCLAW_TEST_FAST: "1" })).toBe(true);
   });
 });
 

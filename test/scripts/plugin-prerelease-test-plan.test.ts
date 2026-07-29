@@ -57,11 +57,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
   it("runs the package and Docker product lanes through the existing scheduler", () => {
     const plan = createPluginPrereleaseTestPlan();
+    const channelLaneScript = readFileSync(
+      "scripts/e2e/npm-onboard-channel-agent-docker.sh",
+      "utf8",
+    );
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
-      "npm-onboard-discord-channel-agent",
-      "npm-onboard-slack-channel-agent",
+      "npm-onboard-discord-candidate-channel-agent",
+      "npm-onboard-slack-candidate-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "plugins-offline",
@@ -82,6 +86,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     for (const lane of plan.dockerLanes) {
       expect(getDockerLane(lane).name).toBe(lane);
     }
+    expect(channelLaneScript).toContain("OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE");
+    expect(channelLaneScript).toContain("bash scripts/plugin-npm-publish.sh --pack");
+    expect(channelLaneScript).toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1");
+    expect(channelLaneScript).toContain("npm-pack:$container_package");
+    const candidateLane = getDockerLane("npm-onboard-discord-candidate-channel-agent");
+    expect(candidateLane.command).toContain("OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR");
+    expect(candidateLane.command).toContain(
+      'OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}"',
+    );
   });
 
   it("keeps live-ish coverage outside provider-backed Docker lanes", () => {
@@ -435,7 +448,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
     expect(normalCiScript).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
-      'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"',
+      'args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id")',
+    );
+    expect(pluginPrereleaseScript).toContain(
+      'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
+    );
+    expect(pluginPrereleaseScript).toContain(
+      'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"',
     );
     expect(pluginManifestScript).toContain("await import(");
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mjs"');
@@ -546,7 +565,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         (step: WorkflowStep) => step.name === "Run plugin prerelease static shard",
       ).run,
     ).toContain('bash -c "$PLUGIN_PRERELEASE_COMMAND"');
-    expect(dockerSuite).toEqual({
+    expect(dockerSuite).toMatchObject({
       if: "${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}",
       name: "plugin-prerelease-docker-suite",
       needs: ["preflight"],
@@ -672,8 +691,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
     expect(workflow.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual({
       default: false,
-      description:
-        "Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict",
+      description: "Allow explicitly opted-in current-tree packaging to use Unreleased notes",
       required: false,
       type: "boolean",
     });
@@ -688,6 +706,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(captureInputs?.run).toContain("refs/tags/");
     expect(captureInputs?.run).toContain("RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT");
     expect(captureInputs?.run).toContain("allow_unreleased_changelog=false");
+    const explicitOptIn = captureInputs?.run.indexOf('"$allow_unreleased_changelog" == "true"');
+    const releaseRefGuard = captureInputs?.run.indexOf(
+      '"$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/',
+    );
+    expect(explicitOptIn).toBeGreaterThanOrEqual(0);
+    expect(releaseRefGuard).toBeGreaterThan(explicitOptIn ?? -1);
     expect(workflow.jobs.install_smoke_release_checks.with.allow_unreleased_changelog).toBe(
       currentTreeAllowance,
     );
@@ -698,10 +722,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       currentTreeAllowance,
     );
     const fullReleaseAllowance =
-      "${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}";
+      "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}";
+    const summarizeTarget = fullReleaseWorkflow.jobs.resolve_target.steps.find(
+      (step: WorkflowStep) => step.name === "Summarize target",
+    );
     const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
     );
+    expect(summarizeTarget?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
     expect(releaseChecksDispatch?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
   });
 
@@ -721,7 +749,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(runtimeToolCoverage.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "Enforce standard runtime tool coverage",
+          name: "Enforce core runtime tool coverage",
           run: expect.stringContaining("pnpm openclaw qa coverage"),
         }),
       ]),
@@ -729,9 +757,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(runtimeToolCoverage.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "Enforce standard runtime tool coverage",
+          name: "Enforce core runtime tool coverage",
           run: expect.stringContaining(
-            "--summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+            "--summary .artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json",
           ),
         }),
       ]),

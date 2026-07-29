@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
+import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -15,6 +16,7 @@ import {
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
@@ -50,6 +52,7 @@ import {
   globalAfterAll1,
 } from "./loader.test-harness.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -440,6 +443,66 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
   });
 
+  it("loads scoped plugins from the current metadata snapshot without rediscovering manifests", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "snapshot-manifest",
+      body: `module.exports = { id: "snapshot-manifest", register() {} };`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: [plugin.id],
+      },
+    };
+    const metadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
+    setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, env: process.env });
+    fs.rmSync(path.join(plugin.dir, "openclaw.plugin.json"));
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config,
+      onlyPluginIds: [plugin.id],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+  });
+
+  it("discovers plugin paths supplied only by the activation source", () => {
+    useNoBundledPlugins();
+    const snapshotPlugin = writePlugin({
+      id: "snapshot-base",
+      body: `module.exports = { id: "snapshot-base", register() {} };`,
+    });
+    const sourcePlugin = writePlugin({
+      id: "activation-source-only",
+      body: `module.exports = { id: "activation-source-only", register() {} };`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [snapshotPlugin.file] },
+        allow: [snapshotPlugin.id, sourcePlugin.id],
+      },
+    };
+    const metadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
+    setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, env: process.env });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      config,
+      activationSourceConfig: {
+        plugins: {
+          load: { paths: [sourcePlugin.file] },
+          allow: [sourcePlugin.id],
+        },
+      },
+      onlyPluginIds: [sourcePlugin.id],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === sourcePlugin.id)?.status).toBe("loaded");
+  });
+
   it("loads installed plugin packages discovered from persisted install records", () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();
@@ -626,6 +689,32 @@ describe("loadOpenClawPlugins", () => {
     expect(transformRegistration?.transforms.output).toEqual([
       { from: /blue basket/g, to: "red basket" },
     ]);
+  });
+
+  it("loads multiple manifestless standalone files from one configured directory", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const alpha = path.join(pluginDir, "alpha.cjs");
+    const beta = path.join(pluginDir, "beta.cjs");
+    fs.writeFileSync(alpha, `module.exports = { id: "alpha", register() {} };`, "utf-8");
+    fs.writeFileSync(beta, `module.exports = { id: "beta", register() {} };`, "utf-8");
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [alpha, beta] },
+          allow: ["alpha", "beta"],
+        },
+      },
+    });
+
+    expect(
+      registry.plugins
+        .filter((entry) => entry.status === "loaded")
+        .map((entry) => entry.id)
+        .toSorted(),
+    ).toEqual(["alpha", "beta"]);
   });
 
   it.each([
@@ -1672,6 +1761,116 @@ describe("loadOpenClawPlugins", () => {
     expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
   });
 
+  it("restores cleared runtime registrations when an activating reload throws before activation", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "reload-rollback",
+      filename: "reload-rollback.cjs",
+      body: `module.exports = {
+        id: "reload-rollback",
+        register(api) {
+          api.registerAgentHarness({
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerCommand({
+            name: "pair",
+            description: "Pair device",
+            acceptsArgs: true,
+            handler: async () => ({ text: "paired" }),
+          });
+          api.registerProvider({
+            id: "rollback-provider",
+            label: "Rollback Provider",
+            auth: [],
+          });
+          api.registerAgentToolResultMiddleware(() => undefined, {
+            runtimes: ["openclaw"],
+          });
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push("rollback-hook-fired");
+            },
+            { name: "reload-rollback-hook" },
+          );
+          api.on("gateway_stop", async () => {});
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      providers: ["rollback-provider"],
+      contracts: { agentToolResultMiddleware: ["openclaw"] },
+    });
+
+    const loadOptions = {
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["reload-rollback"],
+        },
+      },
+      onlyPluginIds: ["reload-rollback"],
+    };
+
+    const activeRegistry = loadOpenClawPlugins(loadOptions);
+    const expectRegistrationsIntact = async () => {
+      expect(getActivePluginRegistry()).toBe(activeRegistry);
+      expect(getRegisteredAgentHarness("codex")).toBeDefined();
+      expect(getPluginCommandSpecs().map((entry) => entry.name)).toEqual(["pair"]);
+      expect(activeRegistry.providers.map((entry) => entry.provider.id)).toEqual([
+        "rollback-provider",
+      ]);
+      expect(activeRegistry.agentToolResultMiddlewares).toHaveLength(1);
+      expect(activeRegistry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["rollback-hook-fired"]);
+    };
+    await expectRegistrationsIntact();
+
+    const manifestRegistry = await import("./manifest-registry.js");
+    const manifestSpy = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistry")
+      .mockImplementation(() => {
+        throw new Error("corrupt plugin manifest");
+      });
+
+    try {
+      expect(() => loadOpenClawPlugins(loadOptions)).toThrow("corrupt plugin manifest");
+      await expectRegistrationsIntact();
+    } finally {
+      manifestSpy.mockRestore();
+    }
+
+    const failingPlugin = writePlugin({
+      id: "reload-rollback-failure",
+      filename: "reload-rollback-failure.cjs",
+      body: `module.exports = {
+        id: "reload-rollback-failure",
+        register() { throw new Error("register failed"); },
+      };`,
+    });
+    expect(() =>
+      loadOpenClawPlugins({
+        ...loadOptions,
+        throwOnLoadError: true,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file, failingPlugin.file] },
+            allow: ["reload-rollback", "reload-rollback-failure"],
+          },
+        },
+        onlyPluginIds: ["reload-rollback", "reload-rollback-failure"],
+      }),
+    ).toThrow("plugin load failed: reload-rollback-failure: Error: register failed");
+    await expectRegistrationsIntact();
+  });
+
   it("rejects malformed plugin agent harness registrations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1790,6 +1989,72 @@ describe("loadOpenClawPlugins", () => {
 
     clearInternalHooks();
   });
+
+  it.each(["disabled", "removed"] as const)(
+    "clears legacy internal hooks when their plugin is %s",
+    async (nextState) => {
+      useNoBundledPlugins();
+      const plugin = writePlugin({
+        id: "internal-hook-lifecycle",
+        filename: "internal-hook-lifecycle.cjs",
+        body: `module.exports = {
+          id: "internal-hook-lifecycle",
+          register(api) {
+            api.registerHook(
+              "gateway:startup",
+              (event) => {
+                event.messages.push("legacy-hook-fired");
+              },
+              { name: "legacy-lifecycle-hook" },
+            );
+          },
+        };`,
+      });
+
+      clearInternalHooks();
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["internal-hook-lifecycle"],
+          },
+        },
+      });
+
+      const activeEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(activeEvent);
+      expect(activeEvent.messages).toEqual(["legacy-hook-fired"]);
+
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins:
+            nextState === "disabled"
+              ? {
+                  load: { paths: [plugin.file] },
+                  allow: ["internal-hook-lifecycle"],
+                  entries: {
+                    "internal-hook-lifecycle": {
+                      enabled: false,
+                    },
+                  },
+                }
+              : {
+                  allow: [],
+                },
+        },
+      });
+
+      const retiredEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(retiredEvent);
+      expect(retiredEvent.messages).toStrictEqual([]);
+
+      clearInternalHooks();
+    },
+  );
 
   it("injects plugin config into internal hook event context", async () => {
     useNoBundledPlugins();

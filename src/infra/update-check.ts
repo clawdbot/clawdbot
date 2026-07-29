@@ -1,13 +1,20 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import {
+  detectPackageManager as detectPackageManagerImpl,
+  isBunOwnedPackageRoot,
+  isPnpmOwnedPackageRoot,
+  resolvePnpmNodeModulesRoot,
+} from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
+import {
+  fetchNpmPackageTargetStatus,
+  type NpmMetadataCommandRunner,
+} from "./update-check-package-target.js";
 
 type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
@@ -63,13 +70,6 @@ type NpmTagStatus = {
   error?: string;
 };
 
-type NpmPackageTargetStatus = {
-  target: string;
-  version: string | null;
-  nodeEngine: string | null;
-  error?: string;
-};
-
 export type UpdateCheckResult = {
   root: string | null;
   installKind: "git" | "package" | "unknown";
@@ -78,60 +78,6 @@ export type UpdateCheckResult = {
   deps?: DepsStatus;
   registry?: RegistryStatus;
 };
-
-type NpmMetadataCommandRunner = (
-  argv: string[],
-  options: {
-    timeoutMs: number;
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-    maxOutputBytes?: number;
-  },
-) => Promise<{
-  stdout: string;
-  stderr: string;
-  code: number | null;
-}>;
-
-function toOptionalTrimmedString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function parseNpmPackageTargetMetadata(raw: string): {
-  version: string | null;
-  nodeEngine: string | null;
-} {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.trim()) as unknown;
-  } catch (err) {
-    throw new Error(`npm view returned invalid JSON: ${String(err)}`, { cause: err });
-  }
-  // npm 12 wraps `npm view --json` results in a singleton array.
-  const entry = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : parsed;
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return { version: null, nodeEngine: null };
-  }
-  const rec = entry as Record<string, unknown>;
-  const engines = rec.engines && typeof rec.engines === "object" ? rec.engines : null;
-  const nodeEngine =
-    toOptionalTrimmedString(rec["engines.node"]) ??
-    (engines ? toOptionalTrimmedString((engines as Record<string, unknown>).node) : null);
-  return {
-    version: toOptionalTrimmedString(rec.version),
-    nodeEngine,
-  };
-}
-
-function formatNpmViewError(res: { stdout: string; stderr: string }): string {
-  const raw = (res.stderr.trim() || res.stdout.trim()).split("\n").slice(-3).join("\n");
-  return raw ? `npm view failed: ${raw}` : "npm view failed";
-}
-
-function packageTargetSpec(params: { target: string; spec?: string }): string {
-  const spec = params.spec?.trim();
-  return spec || `openclaw@${params.target.trim() || "latest"}`;
-}
 
 const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
 const PUBLIC_NPM_PACKAGE_NAME = "openclaw";
@@ -168,66 +114,6 @@ function resolveExtendedStableRegistryTarget(params: {
   };
 }
 
-function npmRegistryTargetUrl(params: {
-  registryUrl: string;
-  packageName: string;
-  target: string;
-}): string {
-  const baseUrl = params.registryUrl.endsWith("/") ? params.registryUrl : `${params.registryUrl}/`;
-  return new URL(
-    `${encodeURIComponent(params.packageName)}/${encodeURIComponent(params.target)}`,
-    baseUrl,
-  ).toString();
-}
-
-async function fetchNpmPackageTargetStatusFromRegistry(params: {
-  target: string;
-  timeoutMs: number;
-  registryUrl?: string;
-  packageName?: string;
-}): Promise<NpmPackageTargetStatus> {
-  const url = npmRegistryTargetUrl({
-    registryUrl: params.registryUrl ?? PUBLIC_NPM_REGISTRY_URL,
-    packageName: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
-    target: params.target,
-  });
-  const { signal, cleanup } = buildTimeoutAbortSignal({
-    timeoutMs: Math.max(250, params.timeoutMs),
-    operation: "npm-registry-update-check",
-    url,
-  });
-  let res: Response | undefined;
-  try {
-    res = await fetch(url, { signal });
-    if (!res.ok) {
-      return {
-        target: params.target,
-        version: null,
-        nodeEngine: null,
-        error: `HTTP ${res.status}`,
-      };
-    }
-    // Keep the deadline active through body consumption. Fetch resolves at
-    // headers, so clearing it earlier would leave a stalled registry body unbounded.
-    const json = await readProviderJsonResponse<{
-      version?: unknown;
-      engines?: { node?: unknown };
-    }>(res, "npm package target status");
-    return {
-      target: params.target,
-      version: toOptionalTrimmedString(json.version),
-      nodeEngine: toOptionalTrimmedString(json.engines?.node),
-    };
-  } catch (err) {
-    return { target: params.target, version: null, nodeEngine: null, error: String(err) };
-  } finally {
-    if (res?.bodyUsed !== true) {
-      await res?.body?.cancel().catch(() => undefined);
-    }
-    cleanup();
-  }
-}
-
 /** Resolves the extended-stable selector and verifies its exact package manifest. */
 export async function resolveExtendedStablePackage(params: {
   installKind: "git" | "package" | "unknown";
@@ -241,7 +127,7 @@ export async function resolveExtendedStablePackage(params: {
 
   const timeoutMs = params.timeoutMs ?? 3500;
   const registryTarget = resolveExtendedStableRegistryTarget(params);
-  const selector = await fetchNpmPackageTargetStatusFromRegistry({
+  const selector = await fetchNpmPackageTargetStatus({
     target: "extended-stable",
     timeoutMs,
     ...registryTarget,
@@ -253,7 +139,7 @@ export async function resolveExtendedStablePackage(params: {
     };
   }
 
-  const exact = await fetchNpmPackageTargetStatusFromRegistry({
+  const exact = await fetchNpmPackageTargetStatus({
     target: selector.version,
     timeoutMs,
     ...registryTarget,
@@ -296,6 +182,33 @@ async function exists(p: string): Promise<boolean> {
 
 async function detectPackageManager(root: string): Promise<PackageManager> {
   return (await detectPackageManagerImpl(root)) ?? "unknown";
+}
+
+// Packed manifests advertise the workspace pnpm packageManager, so installed roots need
+// topology proof (pnpm virtual store, Bun global root, or otherwise npm); mistakes break self-update.
+async function isLocklessOpenClawNpmInstall(params: {
+  root: string;
+  manager: PackageManager;
+}): Promise<boolean> {
+  if (params.manager !== "pnpm" || (await exists(path.join(params.root, "pnpm-lock.yaml")))) {
+    return false;
+  }
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(params.root, "package.json"), "utf8"));
+    if (manifest?.name !== "openclaw") {
+      return false;
+    }
+    if (
+      !resolvePnpmNodeModulesRoot(params.root) ||
+      (await isPnpmOwnedPackageRoot(params.root)) ||
+      (await isBunOwnedPackageRoot(params.root))
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function detectGitRoot(root: string): Promise<string | null> {
@@ -368,10 +281,28 @@ async function checkGitUpdateStatus(params: {
         .catch(() => false)
     : null;
 
-  const counts =
-    upstream && upstream.length > 0
+  // Freeze the post-fetch upstream for both graph queries. Resolve via @{upstream} rather than
+  // its display name so dashed remotes stay operands on older Git versions. Three-dot rev-list
+  // still counts disconnected or truncated histories, so require a visible common ancestor.
+  const upstreamCommitRes =
+    upstream && sha
       ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-list", "--left-right", "--count", `HEAD...${upstream}`],
+          ["git", "-C", root, "rev-parse", "--verify", "@{upstream}^{commit}"],
+          { timeoutMs },
+        ).catch(() => null)
+      : null;
+  const upstreamCommit =
+    upstreamCommitRes?.code === 0 ? upstreamCommitRes.stdout.trim() || null : null;
+  const mergeBase =
+    sha && upstreamCommit
+      ? await runCommandWithTimeout(["git", "-C", root, "merge-base", sha, upstreamCommit], {
+          timeoutMs,
+        }).catch(() => null)
+      : null;
+  const counts =
+    sha && upstreamCommit && mergeBase?.code === 0 && mergeBase.stdout.trim().length > 0
+      ? await runCommandWithTimeout(
+          ["git", "-C", root, "rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`],
           { timeoutMs },
         ).catch(() => null)
       : null;
@@ -424,17 +355,17 @@ async function resolveDepsMarker(params: { root: string; manager: PackageManager
     };
   }
   if (params.manager === "bun") {
+    const textLockfilePath = path.join(root, "bun.lock");
     return {
-      lockfilePath: path.join(root, "bun.lockb"),
+      lockfilePath: (await exists(textLockfilePath))
+        ? textLockfilePath
+        : path.join(root, "bun.lockb"),
       markerPath: path.join(root, "node_modules"),
     };
   }
   if (params.manager === "npm") {
-    const shrinkwrapPath = path.join(root, "npm-shrinkwrap.json");
     return {
-      lockfilePath: (await exists(shrinkwrapPath))
-        ? shrinkwrapPath
-        : path.join(root, "package-lock.json"),
+      lockfilePath: path.join(root, "package-lock.json"),
       markerPath: path.join(root, "node_modules"),
     };
   }
@@ -547,54 +478,6 @@ async function fetchNpmRegistryVersionForChannel(params: {
     tag: res.tag,
     ...(res.reason ? { error: res.reason, reason: res.reason } : {}),
   };
-}
-
-export async function fetchNpmPackageTargetStatus(params: {
-  target: string;
-  timeoutMs?: number;
-  spec?: string;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-}): Promise<NpmPackageTargetStatus> {
-  const timeoutMs = params.timeoutMs ?? 3500;
-  const target = params.target;
-  if (!params.command && !params.runCommand) {
-    return await fetchNpmPackageTargetStatusFromRegistry({ target, timeoutMs });
-  }
-  const runCommand = params.runCommand ?? runCommandWithTimeout;
-  try {
-    const res = await runCommand(
-      [
-        params.command ?? "npm",
-        "view",
-        packageTargetSpec({ target, spec: params.spec }),
-        "version",
-        "engines.node",
-        "--json",
-        "--global",
-      ],
-      {
-        timeoutMs: Math.max(250, timeoutMs),
-        cwd: params.cwd,
-        env: params.env,
-        maxOutputBytes: 1024 * 1024,
-      },
-    );
-    if (res.code !== 0) {
-      return {
-        target,
-        version: null,
-        nodeEngine: null,
-        error: formatNpmViewError(res),
-      };
-    }
-    const { version, nodeEngine } = parseNpmPackageTargetMetadata(res.stdout);
-    return { target, version, nodeEngine };
-  } catch (err) {
-    return { target, version: null, nodeEngine: null, error: String(err) };
-  }
 }
 
 export async function fetchNpmTagVersion(params: {
@@ -715,8 +598,19 @@ export async function checkUpdateStatus(params: {
   }
 
   const rootRealpath = await fs.realpath(root).catch(() => root);
-  const [pm, gitRoot] = await Promise.all([detectPackageManager(root), detectGitRoot(root)]);
+  const [detectedPackageManager, gitRoot] = await Promise.all([
+    detectPackageManager(root),
+    detectGitRoot(root),
+  ]);
   const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
+  const packageManager =
+    !isGit &&
+    (await isLocklessOpenClawNpmInstall({
+      root,
+      manager: detectedPackageManager,
+    }))
+      ? "npm"
+      : detectedPackageManager;
 
   const registry = params.includeRegistry
     ? params.registryChannel === "extended-stable" && isGit
@@ -738,13 +632,13 @@ export async function checkUpdateStatus(params: {
           fetch: Boolean(params.fetchGit),
         })
       : Promise.resolve(undefined),
-    checkDepsStatus({ root, manager: pm }),
+    checkDepsStatus({ root, manager: packageManager }),
   ]);
 
   return {
     root,
     installKind,
-    packageManager: pm,
+    packageManager,
     git,
     deps,
     registry,

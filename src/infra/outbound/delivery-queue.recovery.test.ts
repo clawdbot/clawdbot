@@ -17,6 +17,7 @@ import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -24,16 +25,18 @@ import {
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
+  claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
+  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
-  recoverPendingDeliveries,
-  type DeliverFn,
-} from "./delivery-queue.js";
+  reserveDeliveryAttempt,
+} from "./delivery-queue-storage.js";
+import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
 import {
   asDeliverFn,
   createRecoveryLog,
@@ -79,6 +82,18 @@ describe("delivery-queue recovery", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
   const baseCfg = {};
 
+  function enqueueRecoveryDelivery(params: Partial<Parameters<typeof enqueueDelivery>[0]> = {}) {
+    return enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        ...params,
+      },
+      tmpDir(),
+    );
+  }
+
   beforeEach(() => {
     resolveOutboundChannelMessageAdapterMock.mockReset();
     sleepMock.mockReset();
@@ -86,25 +101,16 @@ describe("delivery-queue recovery", () => {
   });
 
   const enqueueCrashRecoveryEntries = async () => {
-    await enqueueDelivery(
-      {
-        channel: "demo-channel-a",
-        to: "+1",
-        payloads: [{ text: "a" }],
-        preparedMessageId: "prepared-message-a",
-      },
-      tmpDir(),
-    );
-    await enqueueDelivery(
-      {
-        channel: "demo-channel-b",
-        to: "2",
-        payloads: [{ text: "b" }],
-        queuePolicy: "required",
-        requireUnknownSendReconciliation: true,
-      },
-      tmpDir(),
-    );
+    await enqueueRecoveryDelivery({
+      preparedMessageId: "prepared-message-a",
+    });
+    await enqueueRecoveryDelivery({
+      channel: "demo-channel-b",
+      to: "2",
+      payloads: [{ text: "b" }],
+      queuePolicy: "required",
+      requireUnknownSendReconciliation: true,
+    });
   };
 
   const runRecovery = async ({
@@ -125,6 +131,57 @@ describe("delivery-queue recovery", () => {
     });
     return { result, log };
   };
+
+  async function createConversationRecoveryFixture(operationId: string) {
+    const storePath = path.join(tmpDir(), "agent-sessions.json");
+    const scope = { agentId: "main", storePath };
+    const conversationRef = buildConversationRef({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-agent",
+    });
+    await upsertSessionEntry(
+      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+      {
+        sessionId: "reef-session",
+        updatedAt: 100,
+        chatType: "direct",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+          origin: {
+            provider: "reef",
+            accountId: "default",
+            nativeDirectUserId: "peer-agent",
+          },
+        }),
+      },
+    );
+    beginConversationDeliveryOperation(scope, {
+      operationId,
+      operationKind: "send",
+      conversationRef,
+      message: "hello",
+      preparedMessageId: "reef-prepared",
+    });
+    await enqueueDeliveryOnce(
+      {
+        channel: "reef",
+        to: "reef:peer-agent",
+        queuePolicy: "required",
+        payloads: [{ text: "hello" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId,
+          storePath,
+        },
+      },
+      operationId,
+      tmpDir(),
+    );
+    return scope;
+  }
 
   it("recovers entries from a simulated crash", async () => {
     await enqueueCrashRecoveryEntries();
@@ -155,51 +212,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("finalizes a persisted conversation operation during queue recovery", async () => {
-    const storePath = path.join(tmpDir(), "agent-sessions.json");
-    const scope = { agentId: "main", storePath };
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "peer-agent",
-    });
-    await upsertSessionEntry(
-      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
-      {
-        sessionId: "reef-session",
-        updatedAt: 100,
-        chatType: "direct",
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-        origin: {
-          provider: "reef",
-          accountId: "default",
-          nativeDirectUserId: "peer-agent",
-        },
-      },
-    );
-    beginConversationDeliveryOperation(scope, {
-      operationId: "operation-recovery",
-      operationKind: "send",
-      conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-prepared",
-    });
-    await enqueueDeliveryOnce(
-      {
-        channel: "reef",
-        to: "reef:peer-agent",
-        queuePolicy: "required",
-        payloads: [{ text: "hello" }],
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-recovery",
-          storePath,
-        },
-      },
-      "operation-recovery",
-      tmpDir(),
-    );
+    const scope = await createConversationRecoveryFixture("operation-recovery");
     const deliveryResult = { channel: "reef" as const, messageId: "reef-platform" };
     const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
       await params.onDeliveryResult?.(deliveryResult);
@@ -222,51 +235,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("acks a persisted suppressed conversation operation without replaying it", async () => {
-    const storePath = path.join(tmpDir(), "agent-sessions.json");
-    const scope = { agentId: "main", storePath };
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "peer-agent",
-    });
-    await upsertSessionEntry(
-      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
-      {
-        sessionId: "reef-session",
-        updatedAt: 100,
-        chatType: "direct",
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-        origin: {
-          provider: "reef",
-          accountId: "default",
-          nativeDirectUserId: "peer-agent",
-        },
-      },
-    );
-    beginConversationDeliveryOperation(scope, {
-      operationId: "operation-suppressed",
-      operationKind: "send",
-      conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-prepared",
-    });
-    await enqueueDeliveryOnce(
-      {
-        channel: "reef",
-        to: "reef:peer-agent",
-        queuePolicy: "required",
-        payloads: [{ text: "hello" }],
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-suppressed",
-          storePath,
-        },
-      },
-      "operation-suppressed",
-      tmpDir(),
-    );
+    const scope = await createConversationRecoveryFixture("operation-suppressed");
     markConversationDeliverySuppressed(scope, "operation-suppressed");
     const deliver = vi.fn();
 
@@ -285,51 +254,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("acks a persisted rejected conversation operation without replaying it", async () => {
-    const storePath = path.join(tmpDir(), "agent-sessions.json");
-    const scope = { agentId: "main", storePath };
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "peer-agent",
-    });
-    await upsertSessionEntry(
-      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
-      {
-        sessionId: "reef-session",
-        updatedAt: 100,
-        chatType: "direct",
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-        origin: {
-          provider: "reef",
-          accountId: "default",
-          nativeDirectUserId: "peer-agent",
-        },
-      },
-    );
-    beginConversationDeliveryOperation(scope, {
-      operationId: "operation-rejected",
-      operationKind: "send",
-      conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-prepared",
-    });
-    await enqueueDeliveryOnce(
-      {
-        channel: "reef",
-        to: "reef:peer-agent",
-        queuePolicy: "required",
-        payloads: [{ text: "hello" }],
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-rejected",
-          storePath,
-        },
-      },
-      "operation-rejected",
-      tmpDir(),
-    );
+    const scope = await createConversationRecoveryFixture("operation-rejected");
     markConversationDeliveryRejected(scope, "operation-rejected", "atomic message limit");
     const deliver = vi.fn();
 
@@ -351,15 +276,12 @@ describe("delivery-queue recovery", () => {
   it("permanently rejects provider-blocked rows before backoff or reconciliation", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const id = await enqueueDelivery(
-      {
-        channel: "slack",
-        to: "C123",
-        accountId: "enterprise",
-        payloads: [{ text: "blocked" }],
-      },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "slack",
+      to: "C123",
+      accountId: "enterprise",
+      payloads: [{ text: "blocked" }],
+    });
     setQueuedEntryState(tmpDir(), id, {
       retryCount: MAX_RETRIES,
       lastAttemptAt: Date.now(),
@@ -412,6 +334,61 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("checks bounded provider admission before replaying a reconciliable platform attempt", async () => {
+    const id = "cron-direct-delivery:v1:blocked-reconciled-admission";
+    await enqueueDeliveryOnce(
+      {
+        channel: "slack",
+        to: "C123",
+        accountId: "enterprise",
+        payloads: [{ text: "disabled account must never be replayed" }],
+        queuePolicy: "required",
+        completionRetention: {
+          idPrefix: "cron-direct-delivery:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+      },
+      id,
+      tmpDir(),
+    );
+    const producerClaimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!producerClaimId) {
+      throw new Error("test invariant: bounded platform attempt must be owned");
+    }
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, producerClaimId);
+    const admitDeferredDelivery = vi.fn(() => ({
+      status: "permanent_rejection" as const,
+      reason: "unsupported_enterprise_slack_delivery",
+    }));
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({ status: "not_sent" });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        admitDeferredDelivery,
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn();
+
+    await runRecovery({ deliver });
+
+    expect(admitDeferredDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "enterprise",
+        channel: "slack",
+        phase: "recovery",
+      }),
+    );
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir()))[0]).toMatchObject({
+      id,
+      recoveryState: "send_attempt_started",
+      platformSendAttemptId: producerClaimId,
+    });
+  });
+
   it("paces startup replay instead of draining eligible entries back-to-back", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
@@ -447,10 +424,11 @@ describe("delivery-queue recovery", () => {
     try {
       const controlledSleep = controlNextRecoverySleep(sleepMock);
       await enqueueCrashRecoveryEntries();
-      await enqueueDelivery(
-        { channel: "demo-channel-c", to: "#c", payloads: [{ text: "c" }] },
-        tmpDir(),
-      );
+      await enqueueRecoveryDelivery({
+        channel: "demo-channel-c",
+        to: "#c",
+        payloads: [{ text: "c" }],
+      });
       const deliveryTimes: number[] = [];
       const deliver = vi.fn(async () => {
         deliveryTimes.push(Date.now());
@@ -476,10 +454,7 @@ describe("delivery-queue recovery", () => {
   it("moves entries that exceeded max retries to failed/", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     setQueuedEntryState(tmpDir(), id, { retryCount: MAX_RETRIES });
 
     const deliver = vi.fn();
@@ -498,22 +473,59 @@ describe("delivery-queue recovery", () => {
     });
   });
 
+  it("honors a producer-specific retry budget", async () => {
+    const id = await enqueueRecoveryDelivery({
+      maxRetries: 45,
+    });
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 10_000_000,
+    });
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ recovered: 1, skippedMaxRetries: 0 });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
+  });
+
+  it("dead-letters an atomically exhausted attempt budget before replay", async () => {
+    const id = await enqueueRecoveryDelivery({
+      maxRetries: 1,
+    });
+    await reserveDeliveryAttempt(id, 1, tmpDir());
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.skippedMaxRetries).toBe(1);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+  });
+
+  it("ignores an invalid producer retry budget", async () => {
+    await enqueueRecoveryDelivery({
+      maxRetries: 0.5,
+    });
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ recovered: 1, skippedMaxRetries: 0 });
+  });
+
   it("dead-letters max-retry entries even when conversation owner state is missing", async () => {
     const storePath = path.join(tmpDir(), "missing-owner-sessions.json");
-    const id = await enqueueDelivery(
-      {
-        channel: "demo-channel-a",
-        to: "+1",
-        payloads: [{ text: "a" }],
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "missing-operation",
-          storePath,
-        },
+    const id = await enqueueRecoveryDelivery({
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "missing-operation",
+        storePath,
       },
-      tmpDir(),
-    );
+    });
     setQueuedEntryState(tmpDir(), id, { retryCount: MAX_RETRIES });
     const log = createRecoveryLog();
 
@@ -531,12 +543,10 @@ describe("delivery-queue recovery", () => {
   it("audits max-retry deadletters as unknown when platform send may have started", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     setQueuedEntryState(tmpDir(), id, {
       retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 10_000_000,
       platformSendStartedAt: Date.now(),
       recoveryState: "send_attempt_started",
     });
@@ -544,7 +554,7 @@ describe("delivery-queue recovery", () => {
     const { result } = await runRecovery({ deliver: vi.fn() });
     unsubscribe();
 
-    expect(result.skippedMaxRetries).toBe(1);
+    expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
     expect(auditEvents).toHaveLength(1);
     expect(auditEvents[0]).toMatchObject({
       sourceId: `message:outbound:queue:${id}:payload:0`,
@@ -556,10 +566,11 @@ describe("delivery-queue recovery", () => {
   it("increments retryCount on failed recovery attempt", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    await enqueueDelivery(
-      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "x" }] },
-      tmpDir(),
-    );
+    await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "x" }],
+    });
 
     const deliver = vi.fn().mockRejectedValue(new Error("network down"));
     const { result } = await runRecovery({ deliver });
@@ -571,15 +582,17 @@ describe("delivery-queue recovery", () => {
     const entries = await loadPendingDeliveries(tmpDir());
     expect(entries).toHaveLength(1);
     expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.attemptCount).toBe(1);
     expect(entries[0]?.lastError).toBe("network down");
     expect(auditEvents).toEqual([]);
   });
 
   it("keeps a repeated pre-connect recovery failure replayable", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "x" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "x" }],
+    });
     const connectError = Object.assign(new Error("connect ECONNREFUSED"), {
       code: "ECONNREFUSED",
       syscall: "connect",
@@ -600,10 +613,11 @@ describe("delivery-queue recovery", () => {
   });
 
   it("keeps a repeated provider-not-dispatched recovery failure replayable", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "x" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "x" }],
+    });
     const deliver = vi.fn(async () => {
       await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
       throw new PlatformMessageNotDispatchedError("upload stopped before finalization", {
@@ -622,14 +636,11 @@ describe("delivery-queue recovery", () => {
   });
 
   it("does not replay a recovery batch that rejected after an earlier send succeeded", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "demo-channel-c",
-        to: "#ch",
-        payloads: [{ text: "first" }, { text: "second" }],
-      },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "first" }, { text: "second" }],
+    });
     const partialFailure = new OutboundDeliveryError("second send failed", {
       cause: new Error("network down"),
       results: [{ channel: "demo-channel-c", messageId: "m1" }],
@@ -654,15 +665,12 @@ describe("delivery-queue recovery", () => {
   });
 
   it("keeps a best-effort recovery failure retryable when no payload was sent", async () => {
-    await enqueueDelivery(
-      {
-        channel: "demo-channel-c",
-        to: "#ch",
-        payloads: [{ text: "first" }],
-        bestEffort: true,
-      },
-      tmpDir(),
-    );
+    await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "first" }],
+      bestEffort: true,
+    });
     const deliver = vi.fn(
       async (params: {
         onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
@@ -689,15 +697,12 @@ describe("delivery-queue recovery", () => {
   });
 
   it("clears send evidence for an all-pre-connect best-effort recovery failure", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "demo-channel-c",
-        to: "#ch",
-        payloads: [{ text: "first" }],
-        bestEffort: true,
-      },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "first" }],
+      bestEffort: true,
+    });
     const deliver = vi.fn(
       async (params: {
         onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
@@ -728,15 +733,12 @@ describe("delivery-queue recovery", () => {
   });
 
   it("clears send evidence for an all-not-dispatched best-effort recovery failure", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "demo-channel-c",
-        to: "#ch",
-        payloads: [{ text: "first" }],
-        bestEffort: true,
-      },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "first" }],
+      bestEffort: true,
+    });
     const deliver = vi.fn(
       async (params: {
         onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
@@ -767,15 +769,12 @@ describe("delivery-queue recovery", () => {
   });
 
   it("preserves send evidence when a marked recovery batch has an ambiguous failure", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "demo-channel-c",
-        to: "#ch",
-        payloads: [{ text: "first" }, { text: "second" }],
-        bestEffort: true,
-      },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "first" }, { text: "second" }],
+      bestEffort: true,
+    });
     const deliver = vi.fn(
       async (params: {
         onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
@@ -816,15 +815,12 @@ describe("delivery-queue recovery", () => {
   });
 
   it("does not ack a partially sent best-effort recovery batch", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "demo-channel-c",
-        to: "#ch",
-        payloads: [{ text: "first" }, { text: "second" }],
-        bestEffort: true,
-      },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#ch",
+      payloads: [{ text: "first" }, { text: "second" }],
+      bestEffort: true,
+    });
     const deliver = vi.fn(
       async (params: {
         onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
@@ -858,10 +854,9 @@ describe("delivery-queue recovery", () => {
   it("moves entries abandoned after platform send may have started to failed without reconciliation", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "maybe sent" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "maybe sent" }],
+    });
     setQueuedEntryState(tmpDir(), id, {
       retryCount: 0,
       platformSendStartedAt: Date.now(),
@@ -895,14 +890,9 @@ describe("delivery-queue recovery", () => {
   it("reports every payload unknown when a multi-payload send is crash-ambiguous", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const id = await enqueueDelivery(
-      {
-        channel: "demo-channel-a",
-        to: "+1",
-        payloads: [{ text: "sent" }, { text: "hidden" }],
-      },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "sent" }, { text: "hidden" }],
+    });
     setQueuedEntryState(tmpDir(), id, {
       retryCount: 0,
       platformSendStartedAt: Date.now(),
@@ -928,10 +918,9 @@ describe("delivery-queue recovery", () => {
   });
 
   it("moves started entries without reconciliation to failed instead of blindly replaying", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "not yet sent" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "not yet sent" }],
+    });
     setQueuedEntryState(tmpDir(), id, {
       retryCount: 0,
       platformSendStartedAt: Date.now(),
@@ -955,10 +944,9 @@ describe("delivery-queue recovery", () => {
   });
 
   it("replays started entries only after adapter proves they were not sent", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "not yet sent" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "not yet sent" }],
+    });
     setQueuedEntryState(tmpDir(), id, {
       retryCount: 0,
       platformSendStartedAt: Date.now(),
@@ -996,21 +984,168 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
 
-  it("acks unknown-after-send entries reconciled as already sent before commit hooks", async () => {
-    const auditEvents: TrustedMessageAuditEvent[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const id = await enqueueDelivery(
+  it("keeps an in-flight stable platform send fenced across recovery", async () => {
+    const id = "cron-direct-delivery:v1:in-flight-producer-lease";
+    await enqueueDeliveryOnce(
       {
         channel: "demo-channel-a",
         to: "+1",
-        accountId: "acct-1",
-        payloads: [{ text: "maybe sent" }],
-        replyToId: "root-message",
-        threadId: "thread-1",
-        silent: true,
+        payloads: [{ text: "the original platform send is still in flight" }],
+        queuePolicy: "required",
+        completionRetention: {
+          idPrefix: "cron-direct-delivery:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+        requiresProducerClaim: true,
       },
+      id,
       tmpDir(),
     );
+    const producerClaimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!producerClaimId) {
+      throw new Error("test invariant: the live platform sender must own its producer lease");
+    }
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, producerClaimId);
+    await markDeliveryPlatformSendDispatched(id, tmpDir(), undefined, producerClaimId);
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({ status: "not_sent" });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 0 });
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir()))[0]).toMatchObject({
+      id,
+      recoveryState: "send_attempt_started",
+      platformSendAttemptId: producerClaimId,
+      availableAt: expect.any(Number),
+    });
+  });
+
+  it("atomically fences stable recovery after an adapter proves an ambiguous send was not sent", async () => {
+    const id = "cron-direct-delivery:v1:reconciled-stable-recovery";
+    await enqueueDeliveryOnce(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "recover exactly once after reconciliation" }],
+        queuePolicy: "required",
+        completionRetention: {
+          idPrefix: "cron-direct-delivery:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+      },
+      id,
+      tmpDir(),
+    );
+    const originalAttemptId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!originalAttemptId) {
+      throw new Error("test invariant: the original stable send must own a producer claim");
+    }
+    await markDeliveryPlatformSendAttemptStarted(
+      id,
+      tmpDir(),
+      { replyToId: null },
+      originalAttemptId,
+    );
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend: vi.fn().mockResolvedValue({ status: "not_sent" }),
+      },
+    });
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      if (!params.deliveryProducerClaimId) {
+        throw new Error("recovered provider send must own a fenced producer lease");
+      }
+      await markDeliveryPlatformSendAttemptStarted(
+        id,
+        tmpDir(),
+        { replyToId: null },
+        params.deliveryProducerClaimId,
+      );
+      return [{ channel: "demo-channel-a", messageId: "fenced-reconciled-message" }];
+    });
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 1, failed: 0 });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(mockCallArg(deliver)).toMatchObject({
+      deliveryQueueId: id,
+      deliveryProducerClaimId: expect.any(String),
+    });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("completed");
+  });
+
+  it("acknowledges a permanently fenced send reconciled as already sent", async () => {
+    const id = "permanent-reconciled-platform-delivery";
+    await enqueueDeliveryOnce(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "the platform already delivered this permanent intent" }],
+        queuePolicy: "required",
+        completionRetention: "permanent",
+        requiresProducerClaim: true,
+      },
+      id,
+      tmpDir(),
+    );
+    const platformSendAttemptId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+    if (!platformSendAttemptId) {
+      throw new Error("test invariant: the permanent platform send must own its attempt");
+    }
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, platformSendAttemptId);
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir(), platformSendAttemptId);
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "sent",
+      messageId: "reconciled-permanent-message",
+      receipt: {
+        primaryPlatformMessageId: "reconciled-permanent-message",
+        platformMessageIds: ["reconciled-permanent-message"],
+        parts: [{ platformMessageId: "reconciled-permanent-message", kind: "text", index: 0 }],
+        sentAt: Date.now(),
+      },
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 1, failed: 0 });
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("completed");
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
+  it("acks unknown-after-send entries reconciled as already sent before commit hooks", async () => {
+    const auditEvents: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+    const id = await enqueueRecoveryDelivery({
+      accountId: "acct-1",
+      payloads: [{ text: "maybe sent" }],
+      replyToId: "root-message",
+      threadId: "thread-1",
+      silent: true,
+      maxRetries: 1,
+    });
+    await reserveDeliveryAttempt(id, 1, tmpDir());
     await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), {
       replyToId: "hooked-root-message",
     });
@@ -1106,10 +1241,9 @@ describe("delivery-queue recovery", () => {
   });
 
   it("moves unknown-after-send entries to failed when adapter reports not sent", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "not sent" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "not sent" }],
+    });
     setQueuedEntryState(tmpDir(), id, {
       retryCount: 0,
       platformSendStartedAt: Date.now(),
@@ -1139,10 +1273,9 @@ describe("delivery-queue recovery", () => {
   });
 
   it("keeps retryable unresolved unknown-after-send entries on the queue without replaying", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "unknown" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "unknown" }],
+    });
     setQueuedEntryState(tmpDir(), id, {
       retryCount: 0,
       platformSendStartedAt: Date.now(),
@@ -1172,11 +1305,44 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.lastError).toContain("provider lookup timed out");
   });
 
+  it("dead-letters an exhausted unknown send after retryable reconciliation fails", async () => {
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "unknown final attempt" }],
+      maxRetries: 1,
+    });
+    await reserveDeliveryAttempt(id, 1, tmpDir());
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      lastAttemptAt: Date.now() - 10_000_000,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "unresolved",
+      error: "provider lookup timed out",
+      retryable: true,
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+  });
+
   it("does not reconcile unknown-after-send entries unless the adapter declares the capability", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "hidden method" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "hidden method" }],
+    });
     setQueuedEntryState(tmpDir(), id, {
       retryCount: 0,
       platformSendStartedAt: Date.now(),
@@ -1202,10 +1368,11 @@ describe("delivery-queue recovery", () => {
   });
 
   it("moves entries to failed/ immediately on permanent delivery errors", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel", to: "user:abc", payloads: [{ text: "hi" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel",
+      to: "user:abc",
+      payloads: [{ text: "hi" }],
+    });
     const deliver = vi
       .fn()
       .mockRejectedValue(new Error("No conversation reference found for user:abc"));
@@ -1220,10 +1387,11 @@ describe("delivery-queue recovery", () => {
   });
 
   it("moves typed permanent platform rejections to failed without retry backoff", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel", to: "user:abc", payloads: [{ text: "hi" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "demo-channel",
+      to: "user:abc",
+      payloads: [{ text: "hi" }],
+    });
     const deliver = vi.fn().mockRejectedValue(
       new PlatformMessageNotDispatchedError("atomic message limit", {
         cause: new Error("rendered text is too large"),
@@ -1239,10 +1407,11 @@ describe("delivery-queue recovery", () => {
   });
 
   it("treats Matrix 'User not in room' as a permanent error", async () => {
-    const id = await enqueueDelivery(
-      { channel: "matrix", to: "!lowercased:matrix.example.com", payloads: [{ text: "hi" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      channel: "matrix",
+      to: "!lowercased:matrix.example.com",
+      payloads: [{ text: "hi" }],
+    });
     const deliver = vi
       .fn()
       .mockRejectedValue(
@@ -1261,10 +1430,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
-    await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    await enqueueRecoveryDelivery();
 
     const deliver = vi.fn().mockResolvedValue([]);
     await runRecovery({ deliver });
@@ -1274,10 +1440,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("moves unknown-after-send entries to failed without replaying", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
 
     const deliver = vi.fn().mockResolvedValue([]);
@@ -1296,10 +1459,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("runs recovered send commit hooks only after the queue entry is acked", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     const order: string[] = [];
     const result = attachOutboundDeliveryCommitHook(
       { channel: "demo-channel-a", messageId: "m1" },
@@ -1323,10 +1483,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("does not restore an acked entry when a recovered send commit hook fails", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     const result = attachOutboundDeliveryCommitHook(
       { channel: "demo-channel-a", messageId: "m1" },
       async () => {
@@ -1348,10 +1505,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("marks a recovered send unknown before ack so ack failure cannot make it replayable", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     let recoveryStateAtAck: string | undefined;
     vi.resetModules();
     vi.doMock("./delivery-queue-storage.js", async () => {
@@ -1398,10 +1552,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("keeps a recovered zero-result delivery retryable when ack fails", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     vi.resetModules();
     vi.doMock("./delivery-queue-storage.js", async () => {
       const actual = await vi.importActual<typeof import("./delivery-queue-storage.js")>(
@@ -1439,10 +1590,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("directly acks a recovered send when its post-send marker fails", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     vi.resetModules();
     vi.doMock("./delivery-queue-storage.js", async () => {
       const actual = await vi.importActual<typeof import("./delivery-queue-storage.js")>(
@@ -1494,14 +1642,9 @@ describe("delivery-queue recovery", () => {
     const oldArtifactTime = new Date(Date.now() - 2 * 24 * 60 * 60_000);
     await fs.utimes(firstArtifact, oldArtifactTime, oldArtifactTime);
     await fs.utimes(secondArtifact, oldArtifactTime, oldArtifactTime);
-    await enqueueDelivery(
-      {
-        channel: "demo-channel-a",
-        to: "+1",
-        payloads: [{ mediaUrl: firstArtifact }, { mediaUrl: secondArtifact }],
-      },
-      tmpDir(),
-    );
+    await enqueueRecoveryDelivery({
+      payloads: [{ mediaUrl: firstArtifact }, { mediaUrl: secondArtifact }],
+    });
     vi.resetModules();
     vi.doMock("./delivery-queue-storage.js", async () => {
       const actual = await vi.importActual<typeof import("./delivery-queue-storage.js")>(
@@ -1547,15 +1690,10 @@ describe("delivery-queue recovery", () => {
   it("owns the stable terminal when recovery fallback ack precedes provider rejection", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const id = await enqueueDelivery(
-      {
-        channel: "demo-channel-a",
-        to: "+1",
-        queuePolicy: "best_effort",
-        payloads: [{ text: "secret" }],
-      },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      queuePolicy: "best_effort",
+      payloads: [{ text: "secret" }],
+    });
     const deliver = vi.fn(
       async (params: {
         onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
@@ -1588,15 +1726,10 @@ describe("delivery-queue recovery", () => {
   });
 
   it("runs recovered commit hooks when marker fallback ack precedes a partial failure", async () => {
-    await enqueueDelivery(
-      {
-        channel: "demo-channel-a",
-        to: "+1",
-        payloads: [{ text: "first" }, { text: "second" }],
-        bestEffort: true,
-      },
-      tmpDir(),
-    );
+    await enqueueRecoveryDelivery({
+      payloads: [{ text: "first" }, { text: "second" }],
+      bestEffort: true,
+    });
     const afterCommit = vi.fn();
     vi.resetModules();
     vi.doMock("./delivery-queue-storage.js", async () => {
@@ -1654,10 +1787,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("retains unknown-after-send when recovered-send marking and ack both fail", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     vi.resetModules();
     vi.doMock("./delivery-queue-storage.js", async () => {
       const actual = await vi.importActual<typeof import("./delivery-queue-storage.js")>(
@@ -1701,46 +1831,40 @@ describe("delivery-queue recovery", () => {
   });
 
   it("replays stored delivery options during recovery", async () => {
-    await enqueueDelivery(
-      {
-        channel: "demo-channel-a",
-        to: "+1",
-        payloads: [{ text: "a" }],
-        replyToId: "root-message",
-        replyToMode: "first",
-        formatting: {
-          textLimit: 1234,
-          maxLinesPerMessage: 7,
-          tableMode: "off",
-          chunkMode: "newline",
-        },
-        bestEffort: true,
-        gifPlayback: true,
-        silent: true,
-        gatewayClientScopes: ["operator.write"],
-        mirror: {
-          sessionKey: "agent:main:main",
-          expectedSessionId: "session-main",
-          text: "a",
-          mediaUrls: ["https://example.com/a.png"],
-          idempotencyKey: "channel-final:message-1",
-          deliveryMirror: {
-            kind: "channel-final",
-            sourceMessageId: "message-1",
-          },
-        },
-        session: {
-          key: "agent:main:main",
-          agentId: "agent-main",
-          requesterAccountId: "acct-1",
-          requesterSenderId: "sender-1",
-          requesterSenderName: "Sender One",
-          requesterSenderUsername: "sender.one",
-          requesterSenderE164: "+15551234567",
+    await enqueueRecoveryDelivery({
+      replyToId: "root-message",
+      replyToMode: "first",
+      formatting: {
+        textLimit: 1234,
+        maxLinesPerMessage: 7,
+        tableMode: "off",
+        chunkMode: "newline",
+      },
+      bestEffort: true,
+      gifPlayback: true,
+      silent: true,
+      gatewayClientScopes: ["operator.write"],
+      mirror: {
+        sessionKey: "agent:main:main",
+        expectedSessionId: "session-main",
+        text: "a",
+        mediaUrls: ["https://example.com/a.png"],
+        idempotencyKey: "channel-final:message-1",
+        deliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "message-1",
         },
       },
-      tmpDir(),
-    );
+      session: {
+        key: "agent:main:main",
+        agentId: "agent-main",
+        requesterAccountId: "acct-1",
+        requesterSenderId: "sender-1",
+        requesterSenderName: "Sender One",
+        requesterSenderUsername: "sender.one",
+        requesterSenderE164: "+15551234567",
+      },
+    });
 
     const deliver = vi.fn().mockResolvedValue([]);
     await runRecovery({ deliver });
@@ -1792,10 +1916,11 @@ describe("delivery-queue recovery", () => {
 
   it("respects maxRecoveryMs time budget without bumping deferred retries", async () => {
     await enqueueCrashRecoveryEntries();
-    await enqueueDelivery(
-      { channel: "demo-channel-c", to: "#c", payloads: [{ text: "c" }] },
-      tmpDir(),
-    );
+    await enqueueRecoveryDelivery({
+      channel: "demo-channel-c",
+      to: "#c",
+      payloads: [{ text: "c" }],
+    });
 
     const deliver = vi.fn().mockResolvedValue([]);
     const { result, log } = await runRecovery({
@@ -1843,10 +1968,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("defers entries until backoff becomes eligible", async () => {
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery();
     setQueuedEntryState(tmpDir(), id, { retryCount: 3, lastAttemptAt: Date.now() });
 
     const deliver = vi.fn().mockResolvedValue([]);
@@ -1868,14 +1990,14 @@ describe("delivery-queue recovery", () => {
 
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
     const now = Date.now();
-    const blockedId = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "blocked" }] },
-      tmpDir(),
-    );
-    const readyId = await enqueueDelivery(
-      { channel: "demo-channel-b", to: "2", payloads: [{ text: "ready" }] },
-      tmpDir(),
-    );
+    const blockedId = await enqueueRecoveryDelivery({
+      payloads: [{ text: "blocked" }],
+    });
+    const readyId = await enqueueRecoveryDelivery({
+      channel: "demo-channel-b",
+      to: "2",
+      payloads: [{ text: "ready" }],
+    });
 
     setQueuedEntryState(tmpDir(), blockedId, {
       retryCount: 3,
@@ -1913,10 +2035,9 @@ describe("delivery-queue recovery", () => {
     const start = new Date("2026-01-01T00:00:00.000Z");
     vi.setSystemTime(start);
 
-    const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "later" }] },
-      tmpDir(),
-    );
+    const id = await enqueueRecoveryDelivery({
+      payloads: [{ text: "later" }],
+    });
     setQueuedEntryState(tmpDir(), id, { retryCount: 3, lastAttemptAt: start.getTime() });
 
     const firstDeliver = vi.fn().mockResolvedValue([]);
@@ -1929,7 +2050,7 @@ describe("delivery-queue recovery", () => {
     });
     expect(firstDeliver).not.toHaveBeenCalled();
 
-    vi.setSystemTime(new Date(start.getTime() + 600_000 + 1));
+    vi.setSystemTime(new Date(start.getTime() + 120_000 + 1));
     const secondDeliver = vi.fn().mockResolvedValue([]);
     const secondRun = await runRecovery({ deliver: secondDeliver, maxRecoveryMs: 60_000 });
     expect(secondRun.result).toEqual({

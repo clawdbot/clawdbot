@@ -9,8 +9,8 @@ export function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolea
         path.startsWith("models.") ||
         path === "agents" ||
         path === "agents.defaults" ||
-        path === "agents.list" ||
-        path.startsWith("agents.list.") ||
+        path === "agents.entries" ||
+        path.startsWith("agents.entries.") ||
         path === "agents.defaults.workspace" ||
         path.startsWith("agents.defaults.workspace."),
     )
@@ -24,6 +24,7 @@ export function reloadPlanNeedsRecovery(plan: GatewayReloadPlan): boolean {
     plan.restartGmailWatcher ||
     plan.reloadPlugins ||
     plan.restartChannels.size > 0 ||
+    (plan.restartChannelAccounts?.size ?? 0) > 0 ||
     shouldRefreshContextWindowCache(plan)
   );
 }

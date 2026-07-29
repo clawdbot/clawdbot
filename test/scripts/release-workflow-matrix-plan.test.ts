@@ -58,6 +58,7 @@ function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
+  "prepare_only",
   "package_artifact_name",
   "package_artifact_id",
   "package_artifact_digest",
@@ -67,6 +68,12 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
   "package_source_sha",
   "package_sha256",
   "package_version",
+  "shared_image_artifact_name",
+  "shared_image_artifact_id",
+  "shared_image_artifact_digest",
+  "shared_image_artifact_run_id",
+  "shared_image_artifact_run_attempt",
+  "shared_image_archive_sha256",
 ]);
 
 const PROFILE_EXPECTATIONS = [
@@ -127,6 +134,7 @@ const PROFILE_EXPECTATIONS = [
       "opencode-go",
       "openrouter",
       "xai",
+      "zai",
       "fireworks",
     ],
   },
@@ -242,6 +250,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "opencode-go",
       "openrouter",
       "xai",
+      "zai",
       "fireworks",
     ]);
   });
@@ -308,7 +317,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
 
     expect(plan.liveModels.count).toBe(0);
-    expect(plan.liveModels.omitted).toHaveLength(9);
+    expect(plan.liveModels.omitted).toHaveLength(10);
     expect(plan.liveModels.omitted[0]?.reason).toBe(
       "Docker live model matrix disabled by input selection",
     );

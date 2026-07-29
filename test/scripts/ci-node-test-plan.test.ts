@@ -11,6 +11,10 @@ import {
 } from "../../scripts/lib/ci-node-test-plan.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
+import {
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "../vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
@@ -242,6 +246,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const jobOf = (name: string) =>
       compact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
     expect(jobOf("agentic-agents-core-runner-embedded")).toBeGreaterThanOrEqual(0);
+    // The complete Control UI and model catalog both cold-load broad graphs;
+    // pairing them starves model visibility and repeatedly hits its timeout.
+    expect(jobOf("agentic-agents-core-models")).not.toBe(jobOf("core-runtime-media-ui"));
     // Cheap stripes may legally co-locate in one bin; only existence matters.
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
@@ -285,6 +292,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       // default scales with the runner class.
       OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
+    expect(
+      compact.flatMap((shard) => shard.groups).find((group) => group.shard_name === "agentic-cli")
+        ?.env,
+    ).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
     const startupCoreJob = compact.find((shard) =>
       shard.groups.some((group) => group.shard_name === "agentic-control-plane-startup-core"),
     );
@@ -299,6 +312,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .flatMap((shard) => shard.groups)
         .find((group) => group.shard_name === "agentic-control-plane-startup-health-runtime")?.env,
     ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
+    const embeddedAgentJob = compact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-agents-embedded"),
+    );
+    expect(embeddedAgentJob?.groups).toHaveLength(1);
+    expect(embeddedAgentJob?.groups[0]?.env).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
+    });
     expect(
       compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
@@ -664,6 +684,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.media-understanding.config.ts",
           "test/vitest/vitest.tui.config.ts",
           "test/vitest/vitest.ui.config.ts",
+          "test/vitest/vitest.ui-isolated.config.ts",
           "test/vitest/vitest.wizard.config.ts",
         ],
         requiresDist: false,
@@ -841,7 +862,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(cliShard).toEqual({
       checkName: "checks-node-agentic-cli",
       shardName: "agentic-cli",
-      configs: ["test/vitest/vitest.cli.config.ts"],
+      configs: ["test/vitest/vitest.cli.config.ts", "test/vitest/vitest.cli-process.config.ts"],
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });
@@ -995,7 +1016,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       },
       {
         checkName: "checks-node-agentic-agents-embedded",
-        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        configs: [
+          "test/vitest/vitest.agents-embedded-agent.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+        ],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000" },
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-embedded",
@@ -1080,6 +1107,31 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
       .toSorted((a, b) => a.localeCompare(b));
 
+    expect(actual).toEqual(expected);
+    expect(new Set(actual).size).toBe(actual.length);
+  });
+
+  it("keeps embedded-agent tests in four bounded config surfaces", () => {
+    const shard = createNodeTestShards().find(
+      (candidate) => candidate.shardName === "agentic-agents-embedded",
+    );
+    const incompleteTurnFiles = new Set(agentVitestProjectOwners.embeddedIncompleteTurn.include);
+    const overflowCompactionFiles = new Set(
+      agentVitestProjectOwners.embeddedOverflowCompaction.include,
+    );
+    const actual = [
+      ...fg
+        .sync(agentVitestProjectOwners.embedded.include)
+        .filter((file) => !incompleteTurnFiles.has(file) && !overflowCompactionFiles.has(file)),
+      ...agentVitestProjectOwners.embeddedIncompleteTurn.include,
+      ...agentVitestProjectOwners.embeddedOverflowCompaction.include,
+      ...fg.sync(agentVitestProjectOwners.embeddedRun.include),
+    ].toSorted((left, right) => left.localeCompare(right));
+    const expected = listTestFiles("src/agents/embedded-agent-runner").toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+
+    expect(shard?.configs).toEqual(embeddedAgentVitestProjectOwners.map((owner) => owner.config));
     expect(actual).toEqual(expected);
     expect(new Set(actual).size).toBe(actual.length);
   });

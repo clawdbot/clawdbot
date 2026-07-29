@@ -10,6 +10,7 @@ export type AgentHarnessUserInputQuestion = {
   id: string;
   header: string;
   question: string;
+  multiSelect?: boolean;
   isOther?: boolean;
   isSecret?: boolean;
   options?: readonly AgentHarnessUserInputOption[] | null;
@@ -25,6 +26,13 @@ export type AgentHarnessUserInputPromptOptions = {
   secretWarning?: string;
   otherLabel?: string;
   presentation?: MessagePresentation;
+};
+
+type AgentHarnessQuestionPromptPayload = {
+  text: string;
+  presentation?: MessagePresentation;
+  presentationTextMode?: "fallback";
+  channelData: { askUser: { questionId: string } };
 };
 
 type PromptDeliveryParams = Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
@@ -77,6 +85,105 @@ export async function deliverAgentHarnessUserInputPrompt(
   await params.onPartialReply?.({ text });
 }
 
+/** Builds the portable one-question presentation shared by tools and harnesses. */
+function buildAgentHarnessQuestionPresentation(params: {
+  questionId: string;
+  questions: readonly AgentHarnessUserInputQuestion[];
+  formatText?: (text: string) => string;
+}): MessagePresentation | undefined {
+  // Button taps resolve atomically, so v1 keeps multi-question records text-only.
+  if (params.questions.length !== 1) {
+    return undefined;
+  }
+  const [question] = params.questions;
+  const options = question?.options ?? [];
+  const formatText = params.formatText ?? ((text: string) => text);
+  if (!question || question.multiSelect || question.isSecret || options.length === 0) {
+    return undefined;
+  }
+  // The question stays in its own leading text block so reaction/native
+  // adapters can keep it while replacing the tap-only guidance below.
+  const optionGuidance = [
+    ...options.map(
+      (option) =>
+        `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
+    ),
+    "",
+    question.isOther
+      ? "Tap an option, or reply with the option text or your own answer."
+      : "Tap an option, or reply with the option number or text.",
+  ].join("\n");
+  return {
+    blocks: [
+      { type: "text", text: formatText(question.question) },
+      { type: "text", text: optionGuidance },
+      {
+        type: "buttons",
+        buttons: options.map((option) => ({
+          label: formatText(option.label),
+          action: {
+            type: "question",
+            questionId: params.questionId,
+            optionValue: option.label,
+          },
+        })),
+      },
+    ],
+  };
+}
+
+/** Builds the exact question payload consumed by web chat and native channels. */
+export function buildAgentHarnessQuestionPromptPayload(params: {
+  questionId: string;
+  questions: readonly AgentHarnessUserInputQuestion[];
+  options?: AgentHarnessUserInputPromptOptions;
+}): AgentHarnessQuestionPromptPayload {
+  const prompt = formatAgentHarnessUserInputPrompt(params.questions, params.options);
+  // Callers may supply a fully-authored presentation; only build one otherwise.
+  const presentation =
+    params.options?.presentation ??
+    buildAgentHarnessQuestionPresentation({
+      ...params,
+      formatText: params.options?.formatText,
+    });
+  return {
+    text: `${prompt}\n\n${questionReplyGuidance(params.questions)}`,
+    ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
+    channelData: { askUser: { questionId: params.questionId } },
+  };
+}
+
+function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {
+  if (questions.length !== 1) {
+    return "Reply by number or question id. Use a declared option where choices are fixed.";
+  }
+  const [question] = questions;
+  if (!question || (question.options?.length ?? 0) === 0) {
+    return "Reply with your answer.";
+  }
+  return question.isOther
+    ? "Reply with the number, the option text, or your own answer."
+    : "Reply with the number or option text.";
+}
+
+/** Delivers a gateway-backed question through the harness block-reply surface. */
+export async function deliverAgentHarnessQuestionPrompt(
+  params: PromptDeliveryParams,
+  questionId: string,
+  questions: readonly AgentHarnessUserInputQuestion[],
+  options?: AgentHarnessUserInputPromptOptions,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const payload = buildAgentHarnessQuestionPromptPayload({ questionId, questions, options });
+  if (params.onBlockReply) {
+    await params.onBlockReply(payload, signal ? { abortSignal: signal } : undefined);
+    return;
+  }
+  signal?.throwIfAborted();
+  await params.onPartialReply?.({ text: payload.text });
+}
+
 export function buildAgentHarnessUserInputAnswers(
   questions: readonly AgentHarnessUserInputQuestion[],
   inputText: string,
@@ -92,6 +199,8 @@ export function buildAgentHarnessUserInputAnswers(
   }
 
   const keyed = parseKeyedAnswers(inputText);
+  // Unkeyed multi-question replies are positional. Preserve blank lines so a
+  // skipped answer cannot shift every later response onto the wrong question.
   const fallbackLines = inputText.split(/\r?\n/).map((line) => line.trim());
   questions.forEach((question, index) => {
     const key =
@@ -112,6 +221,8 @@ export function normalizeAgentHarnessUserInputAnswer(
 ): string | undefined {
   const trimmed = answer.trim();
   const options = question.options ?? [];
+  // Numeric replies use the one-based option numbers emitted in the prompt.
+  // Convert to zero-based only at the options-array boundary.
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
   const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
   if (indexed) {

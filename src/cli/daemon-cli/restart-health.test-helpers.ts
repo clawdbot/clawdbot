@@ -156,7 +156,11 @@ export async function inspectAmbiguousOwnershipWithProbe(
   });
 }
 
-export async function waitForStoppedFreeGatewayRestart() {
+export async function waitForStoppedFreeGatewayRestart(
+  params: {
+    supervisorKeepsAlive?: boolean;
+  } = {},
+) {
   const attempts = process.platform === "win32" ? 360 : 120;
   const service = makeGatewayService({ status: "stopped" });
   inspectPortUsage.mockResolvedValue({
@@ -172,6 +176,7 @@ export async function waitForStoppedFreeGatewayRestart() {
     port: 18789,
     attempts,
     delayMs: 500,
+    supervisorKeepsAlive: params.supervisorKeepsAlive,
   });
 }
 

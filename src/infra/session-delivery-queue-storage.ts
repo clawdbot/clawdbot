@@ -11,7 +11,7 @@ import {
   moveDeliveryQueueEntryToFailed,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
-  type DeliveryQueueRowMetadata,
+  type DeliveryQueueCompletionRetention,
 } from "./delivery-queue-sqlite.js";
 import { generateSecureUuid } from "./secure-random.js";
 
@@ -28,6 +28,8 @@ type SessionDeliveryContext = {
 
 type SessionDeliveryRetryPolicy = {
   maxRetries?: number;
+  /** Retain terminal ownership when the durable producer can replay forever. */
+  completionRetention?: DeliveryQueueCompletionRetention;
 };
 
 export type SessionDeliveryRoute = {
@@ -110,17 +112,6 @@ function buildEntryId(idempotencyKey?: string): string {
   return sha256Hex(idempotencyKey);
 }
 
-function queuedSessionDeliveryMetadata(entry: QueuedSessionDelivery): DeliveryQueueRowMetadata {
-  const route = entry.kind === "agentTurn" ? entry.route : undefined;
-  return {
-    entryKind: entry.kind,
-    sessionKey: entry.sessionKey,
-    channel: route?.channel ?? entry.deliveryContext?.channel,
-    target: route?.to ?? entry.deliveryContext?.to,
-    accountId: route?.accountId ?? entry.deliveryContext?.accountId,
-  };
-}
-
 /** Enqueue a session delivery and return its durable id. */
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
@@ -137,9 +128,10 @@ export async function enqueueSessionDelivery(
   upsertDeliveryQueueEntry({
     queueName: QUEUE_NAME,
     entry,
-    metadata: queuedSessionDeliveryMetadata(entry),
     stateDir,
-    reviveFailedOrCorruptPending: Boolean(params.idempotencyKey),
+    ...(params.completionRetention === "permanent"
+      ? { insertOnly: true }
+      : { reviveFailedOrCorruptPending: Boolean(params.idempotencyKey) }),
   });
   return id;
 }
@@ -165,7 +157,6 @@ export async function enqueueClaimedSessionDelivery(
   const claimed = upsertDeliveryQueueEntry({
     queueName: QUEUE_NAME,
     entry,
-    metadata: queuedSessionDeliveryMetadata(entry),
     stateDir,
     insertOnly: true,
   });
@@ -236,7 +227,6 @@ export async function markSessionDeliveryAttemptStarted(
         ...entry,
         deliveryStartedAt: entry.deliveryStartedAt ?? Date.now(),
       } as QueuedSessionDelivery,
-      metadata: queuedSessionDeliveryMetadata(entry),
       stateDir,
       updatePendingOnly: true,
     });
@@ -273,7 +263,6 @@ export async function markSessionDeliverySettlement(
         settlementOutcome: outcome,
         ...(outcome === "recovered" ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() } : {}),
       } as QueuedSessionDelivery,
-      metadata: queuedSessionDeliveryMetadata(entry),
       stateDir,
       updatePendingOnly: true,
     });

@@ -25,7 +25,9 @@ export type QaTransportAdapterFactoryResult<
   TAdapter extends QaTransportAdapter = QaTransportAdapter,
 > = {
   adapter: TAdapter;
-  cleanup: () => Promise<void>;
+  cleanupBeforeGatewayStop: () => Promise<void>;
+  cleanupAfterGatewayStop: () => Promise<void>;
+  cleanupWithoutGateway: () => Promise<void>;
 };
 
 export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
@@ -67,6 +69,24 @@ function requireQaTransportFactory(
   return factory;
 }
 
+function createQaTransportCleanup(cleanup: () => Promise<void> | undefined): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+
+  return () => {
+    if (!pending) {
+      // Share cleanup across overlapping owners; release failed phases so a
+      // later caller can retry instead of leaking a live transport or lease.
+      pending = Promise.resolve().then(async () => {
+        await cleanup();
+      });
+      void pending.catch(() => {
+        pending = undefined;
+      });
+    }
+    return pending;
+  };
+}
+
 function createQaTransportAdapterFactoryRegistry(
   factories: readonly QaTransportAdapterFactory[] = [],
 ): QaTransportAdapterFactoryRegistry {
@@ -101,11 +121,31 @@ function createQaTransportAdapterFactoryRegistry(
           },
         );
       }
+      const cleanupBeforeGatewayStop = createQaTransportCleanup(() => adapter.cleanup?.());
+      const cleanupAfterGatewayStop = createQaTransportCleanup(() =>
+        adapter.cleanupAfterGatewayStop?.(),
+      );
+      const cleanupWithoutGateway = async () => {
+        const errors: unknown[] = [];
+        for (const cleanup of [cleanupBeforeGatewayStop, cleanupAfterGatewayStop]) {
+          try {
+            await cleanup();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length === 1) {
+          throw errors[0];
+        }
+        if (errors.length > 1) {
+          throw new AggregateError(errors, "QA transport cleanup failed");
+        }
+      };
       return {
         adapter,
-        cleanup: async () => {
-          await adapter.cleanup?.();
-        },
+        cleanupBeforeGatewayStop,
+        cleanupAfterGatewayStop,
+        cleanupWithoutGateway,
       };
     },
   };

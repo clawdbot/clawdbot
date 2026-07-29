@@ -5,7 +5,10 @@ vi.mock("./group-activation.js", () => ({
   resolveGroupActivationFor: vi.fn(async () => "mention"),
 }));
 
-import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
+import {
+  createTestWebAudioInboundMessage,
+  createTestWebInboundMessage,
+} from "../../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
@@ -121,6 +124,37 @@ describe("applyGroupGating audio preflight mention text", () => {
         timestamp: 1700000000,
         id: "msg-1",
         senderJid: undefined,
+      },
+    ]);
+  });
+
+  it("stores a structured media fact for an unmentioned image", async () => {
+    const msg = createTestWebInboundMessage({
+      payload: {
+        body: "",
+        media: { path: "/tmp/image.jpg", type: "image/jpeg", kind: "image" },
+      },
+      platform: {
+        chatJid: "1203630@g.us",
+        sender: { e164: "+15550000002", name: "Alice" },
+      },
+      admission: {
+        conversation: { kind: "group", id: "1203630@g.us" },
+        sender: { id: "+15550000002" },
+        senderAccess: { reasonCode: "group_policy_allowed" },
+      },
+      wasMentioned: false,
+    });
+
+    expect(await applyGroupGating(makeParams(msg, groupHistories))).toEqual({
+      shouldProcess: false,
+    });
+    expect(groupHistories.get("whatsapp:group:1203630")?.[0]?.media).toEqual([
+      {
+        path: "/tmp/image.jpg",
+        url: "/tmp/image.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
       },
     ]);
   });

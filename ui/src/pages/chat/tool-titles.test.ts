@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover tool-title request eligibility and the title store.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";

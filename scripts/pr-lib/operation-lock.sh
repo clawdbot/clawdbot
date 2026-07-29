@@ -5,6 +5,9 @@ PR_OPERATION_LOCK_CANDIDATE_PR=""
 PR_OPERATION_LOCK_CANDIDATE_OID=""
 PR_OPERATION_LOCK_BLOCKED_OID=""
 PR_OPERATION_LOCK_BLOCKED_REASON=""
+# This is monotonic for one supervised command. Once side effects begin, a
+# descendant must not be able to reopen the auto-release validation window.
+PR_OPERATION_VALIDATION_PHASE_STATE=unannounced
 
 is_canonical_pr_number() {
   local pr="$1"
@@ -121,6 +124,32 @@ clear_pr_operation_lock_state() {
   PR_OPERATION_LOCK_CANDIDATE_OID=""
   PR_OPERATION_LOCK_BLOCKED_OID=""
   PR_OPERATION_LOCK_BLOCKED_REASON=""
+  PR_OPERATION_VALIDATION_PHASE_STATE=unannounced
+}
+
+notify_pr_operation_phase() {
+  local phase="$1"
+  if [ -z "${OPENCLAW_PR_LOCK_NOTIFY_FD:-}" ]; then
+    return 0
+  fi
+  case "$OPENCLAW_PR_LOCK_NOTIFY_FD" in ''|*[!0-9]*) return 1 ;; esac
+  printf 'phase\t%s\n' "$phase" >&"$OPENCLAW_PR_LOCK_NOTIFY_FD"
+}
+
+begin_pr_operation_validation_phase() {
+  if [ "$PR_OPERATION_VALIDATION_PHASE_STATE" != "unannounced" ]; then
+    return 0
+  fi
+  notify_pr_operation_phase validation-started || return 1
+  PR_OPERATION_VALIDATION_PHASE_STATE=validation
+}
+
+mark_pr_operation_side_effects_started() {
+  if [ "$PR_OPERATION_VALIDATION_PHASE_STATE" != "validation" ]; then
+    return 0
+  fi
+  notify_pr_operation_phase side-effects-started || return 1
+  PR_OPERATION_VALIDATION_PHASE_STATE=side_effects
 }
 
 pr_operation_lock_owner_is_current() {

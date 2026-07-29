@@ -58,6 +58,101 @@ describe("qa suite summary helpers", () => {
     ).resolves.toBe(2);
   });
 
+  it("excludes only catalog-confirmed report-only optional skips from suite gates", async () => {
+    await expect(
+      readSummary(
+        {
+          counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
+          scenarios: [
+            { name: "required scenario", status: "pass" },
+            {
+              name: "optional tool fixture",
+              status: "skip",
+              details: "expected-unavailable tool fixture; report-only",
+            },
+          ],
+        },
+        (summaryPath) =>
+          readQaSuiteFailedOrSkippedScenarioCountFromFile(summaryPath, {
+            optionalScenarioNames: new Set(["optional tool fixture"]),
+          }),
+      ),
+    ).resolves.toBe(0);
+  });
+
+  it("keeps unknown and unverified report-only skips fail-closed", async () => {
+    await expect(
+      readSummary(
+        {
+          counts: { total: 2, passed: 0, failed: 0, skipped: 2 },
+          scenarios: [
+            {
+              name: "optional tool fixture",
+              status: "skip",
+              details: "expected-unavailable tool fixture; report-only",
+            },
+            {
+              name: "unknown tool fixture",
+              status: "skip",
+              details: "expected-unavailable tool fixture; report-only",
+            },
+          ],
+        },
+        (summaryPath) =>
+          readQaSuiteFailedOrSkippedScenarioCountFromFile(summaryPath, {
+            optionalScenarioNames: new Set(["optional tool fixture"]),
+          }),
+      ),
+    ).resolves.toBe(1);
+  });
+
+  it("keeps catalog-confirmed skips without report-only evidence blocking", async () => {
+    await expect(
+      readSummary(
+        {
+          counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+          scenarios: [{ name: "optional tool fixture", status: "skip" }],
+        },
+        (summaryPath) =>
+          readQaSuiteFailedOrSkippedScenarioCountFromFile(summaryPath, {
+            optionalScenarioNames: new Set(["optional tool fixture"]),
+          }),
+      ),
+    ).resolves.toBe(1);
+  });
+
+  it("never lets an optional skip cancel a declared failure or unknown evidence", async () => {
+    const optionalScenario = {
+      name: "optional tool fixture",
+      status: "skip",
+      details: "expected-unavailable tool fixture; report-only",
+    };
+    const readWithOptionalPolicy = (summaryPath: string) =>
+      readQaSuiteFailedOrSkippedScenarioCountFromFile(summaryPath, {
+        optionalScenarioNames: new Set(["optional tool fixture"]),
+      });
+
+    await expect(
+      readSummary(
+        {
+          counts: { total: 1, passed: 0, failed: 1, skipped: 0 },
+          scenarios: [optionalScenario],
+        },
+        readWithOptionalPolicy,
+      ),
+    ).resolves.toBe(1);
+    await expect(
+      readSummary(
+        {
+          counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+          scenarios: [optionalScenario],
+          entries: [{ result: { status: "timeout" } }],
+        },
+        readWithOptionalPolicy,
+      ),
+    ).resolves.toBe(1);
+  });
+
   it("uses the larger failure signal when counts and scenarios disagree", async () => {
     await expect(
       readSummary(

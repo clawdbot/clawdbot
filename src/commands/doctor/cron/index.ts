@@ -4,6 +4,7 @@ import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadCronQuarantineFile, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
+import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import { countStaleDreamingJobs } from "./dreaming-payload-migration.js";
@@ -15,6 +16,7 @@ import {
 } from "./legacy-repair.js";
 import {
   formatLegacyIssuePreview,
+  formatScheduledToolPolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
 } from "./repair-plan.js";
@@ -30,15 +32,16 @@ function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
+  return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
+    ?.store;
 }
 
 // Count jobs the store still marks in-flight (`state.runningAtMs` is a number).
 // The scheduler sets this while a run is active and clears it on completion, so a
 // leftover marker (gateway killed mid-run) makes `cron list` show the job as
 // `running` while nothing executes it. Startup marks exactly these runs interrupted
-// (`src/cron/service/ops.ts` `start`), so doctor only reports the count here.
+// (`src/cron/service/ops-lifecycle.ts` `start`), so doctor only reports the count here.
 function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
   return jobs.filter((job) => {
     const state = job.state;
@@ -51,14 +54,13 @@ function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
 }
 
 // Fixed advisory threshold: three failures in a row is a clear chronic signal on
-// its own. It coincides with the scheduler's default transient-retry budget, but
-// `cron.retry.maxAttempts` is per-job configurable and doctor deliberately does
-// not mirror retry config or exhaustion semantics (`consecutiveErrors > maxAttempts`).
+// its own. It coincides with the scheduler's built-in transient-retry budget, but
+// doctor deliberately does not mirror retry exhaustion semantics.
 const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
 
 // Count enabled jobs stuck in repeated run failures. `state.consecutiveErrors`
 // resets to 0 on the next successful run and also increments for runs interrupted
-// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops.ts`),
+// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops-lifecycle.ts`),
 // so a streak can mean task failures, interrupted runs, or a mix — the note says so.
 // Failure alerts are opt-in, so by default nothing else surfaces the streak.
 // Disabled jobs no longer re-fire (e.g. the scheduler disables exhausted
@@ -109,7 +111,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
-    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
       legacyCronStoreFinding({
         message: `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
@@ -197,6 +199,29 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       }),
     );
   }
+  for (const [names, requirement, description] of [
+    [
+      normalized.legacyScheduledToolPolicyJobs,
+      "cron-scheduled-authority-reauthorization",
+      "require explicit scheduled authority reauthorization",
+    ],
+    [
+      normalized.invalidScheduledToolPolicyJobs,
+      "cron-scheduled-authority-valid",
+      "have invalid scheduled authority provenance",
+    ],
+  ] as const) {
+    if (names.length > 0) {
+      findings.push(
+        legacyCronStoreFinding({
+          message: `${pluralize(names.length, "tool-bearing cron job")} ${description}.`,
+          path: storePath,
+          requirement,
+          fixHint: `Review with ${formatCliCommand("openclaw cron list")} and reauthorize with ${formatCliCommand("openclaw cron edit <id> --tools <tool,...>")}.`,
+        }),
+      );
+    }
+  }
 
   if (sqliteProjectionBackfillCount > 0) {
     findings.push(
@@ -253,7 +278,7 @@ export async function maybeRepairLegacyCronStore(params: {
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     note(
       [
         `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
@@ -371,6 +396,13 @@ export async function maybeRepairLegacyCronStore(params: {
   );
   if (shellPromptAdvisory) {
     note(shellPromptAdvisory, "Cron");
+  }
+  const scheduledToolPolicyAdvisory = formatScheduledToolPolicyAdvisory({
+    legacyJobs: normalized.legacyScheduledToolPolicyJobs,
+    invalidJobs: normalized.invalidScheduledToolPolicyJobs,
+  });
+  if (scheduledToolPolicyAdvisory) {
+    note(scheduledToolPolicyAdvisory, "Cron");
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (legacyStoreDetected) {

@@ -1,3 +1,4 @@
+import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
@@ -10,17 +11,21 @@ type NavigationItem = {
   [TRouteId in NavigationRouteId]: IconName;
 };
 
-// The sidebar shows a small user-customizable pinned set; every other nav route
+// The sidebar shows a small user-customizable ordered zone; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
-// Session management lives in Settings (SETTINGS_NAVIGATION_GROUPS below).
+// Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
+  "dashboards",
   "usage",
   "cron",
   "tasks",
+  "sessions",
+  "activity",
   "plugins",
+  "apps",
 ] as const satisfies readonly NavigationRouteId[];
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
@@ -35,40 +40,88 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
   return PLUGINS_HUB_ROUTES.has(routeId);
 }
 
+// Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
+// Sessions entry for both routes, mirroring the Plugins hub behavior.
+const SESSIONS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set(["sessions", "worktrees"]);
+
+export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
+  return SESSIONS_HUB_ROUTES.has(routeId);
+}
+
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
+export type SidebarZoneEntry =
+  | { type: "route"; route: SidebarNavRoute }
+  | { type: "workboard"; boardId: string }
+  | { type: "session"; key: string };
+
 // Keep the highest-value operational destinations visible on first use. Users
-// can still replace this set through the customize menu.
-export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
-  "usage",
-  "cron",
-  "plugins",
-] as const satisfies readonly SidebarNavRoute[];
+// can still replace this route set through the customize menu.
+export const DEFAULT_SIDEBAR_ENTRIES = ["cron", "plugins"].map((route) =>
+  serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
+);
 
 /**
- * Normalize a persisted pinned-route list. Returns null when the value is not a
- * list (caller falls back to defaults); unknown or duplicate entries are dropped
- * so prefs survive route renames/removals without a migration.
+ * Parse the compact persisted representation used by browser and synced prefs.
  */
-export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
+export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  if (value.startsWith("route:")) {
+    const route = value.slice("route:".length);
+    return SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)
+      ? { type: "route", route: route as SidebarNavRoute }
+      : null;
+  }
+  if (value.startsWith("session:")) {
+    const key = value.slice("session:".length).trim();
+    return key ? { type: "session", key } : null;
+  }
+  if (value.startsWith("workboard:")) {
+    const boardId = value.slice("workboard:".length).trim();
+    return isValidWorkboardBoardId(boardId) ? { type: "workboard", boardId } : null;
+  }
+  return null;
+}
+
+export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
+  if (entry.type === "route") {
+    return `route:${entry.route}`;
+  }
+  return entry.type === "workboard" ? `workboard:${entry.boardId}` : `session:${entry.key}`;
+}
+
+/**
+ * Normalize a persisted sidebar-zone list. Returns null when the value is not a
+ * list; malformed and duplicate entries are dropped.
+ */
+export function normalizeSidebarEntries(value: unknown): string[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const pinned: SidebarNavRoute[] = [];
-  for (const entry of value) {
-    if (
-      typeof entry === "string" &&
-      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
-      !pinned.includes(entry as SidebarNavRoute)
-    ) {
-      pinned.push(entry as SidebarNavRoute);
+  const normalized: string[] = [];
+  for (const valueEntry of value) {
+    const parsed = parseSidebarEntry(valueEntry);
+    if (!parsed) {
+      continue;
+    }
+    const entry = serializeSidebarEntry(parsed);
+    if (!normalized.includes(entry)) {
+      normalized.push(entry);
     }
   }
-  return pinned;
+  return normalized;
 }
 
-export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+export function sidebarMoreRoutes(entries: readonly string[]): SidebarNavRoute[] {
+  const visibleRoutes = new Set(
+    entries.flatMap((entry) => {
+      const parsed = parseSidebarEntry(entry);
+      return parsed?.type === "route" ? [parsed.route] : [];
+    }),
+  );
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !visibleRoutes.has(routeId));
 }
 
 type SettingsNavigationGroup = {
@@ -80,6 +133,7 @@ type SettingsNavigationGroup = {
 export type SettingsSearchBlock = {
   routeId: RouteId;
   label: string;
+  pathname?: string;
   search?: string;
   hash: string;
 };
@@ -108,8 +162,8 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
 }
 
 export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value);
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
     return false;
   }
@@ -119,49 +173,56 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
   return settingsSearchHasWordPrefix(candidate, normalizedQuery);
 }
 
-// Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
+// Grouping feeds the full-page settings sidebar (settings-sidebar.ts). Ordered
+// by user attention: personal/look-and-feel first, system plumbing last.
+// Management surfaces (sessions, worktrees, activity, memory import) are
+// workspace destinations, not settings; model setup is a subpage of Models.
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["profile", "config", "appearance"] },
+  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications"],
+    routes: ["connection", "channels", "communications", "talk", "nodes"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: [
-      "agents",
-      "ai-agents",
-      "sessions",
-      "memory-import",
-      "model-setup",
-      "model-providers",
-      "automation",
-      "mcp",
-    ],
+    routes: ["agents", "labs", "model-providers", "mcp", "memory", "automation"],
+  },
+  {
+    labelKey: "nav.settingsGroupSecurity",
+    routes: ["security", "approvals"],
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: [
-      "infrastructure",
-      "nodes",
-      "approvals",
-      "worktrees",
-      "debug",
-      "logs",
-      "activity",
-      "about",
-    ],
+    routes: ["infrastructure", "advanced", "debug", "logs", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = SETTINGS_NAVIGATION_GROUPS.flatMap(
-  (group) => group.routes,
-);
+// Settings subpages render with settings chrome but stay out of the sidebar.
+// Subpages with a visible owner keep that owner selected so users retain
+// location context while completing the nested flow.
+const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  "ai-agents",
+  "model-setup",
+  "lobsterdex",
+];
+export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
+const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
+  Readonly<Record<NavigationRouteId, NavigationRouteId>>
+> = {
+  "ai-agents": "agents",
+  "model-setup": "model-providers",
+};
+
+const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
+  ...SETTINGS_SUBPAGE_ROUTES,
+]);
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
-  approvals: "shieldCheck",
+  apps: "layoutGrid",
+  approvals: "badgeCheck",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
@@ -175,18 +236,28 @@ const NAVIGATION_ICONS: NavigationItem = {
   "skill-workshop": "wrench",
   nodes: "monitorSmartphone",
   chat: "messageSquare",
+  dashboard: "layoutDashboard",
+  dashboards: "layoutDashboard",
+  custodian: "lobster",
   config: "settings",
-  profile: "lobster",
+  profile: "circleUser",
   communications: "send",
-  appearance: "spark",
+  appearance: "palette",
+  lobsterdex: "bug",
   automation: "terminal",
   mcp: "wrench",
+  memory: "book",
+  talk: "mic",
   infrastructure: "globe",
+  labs: "flaskConical",
   about: "fileText",
   "ai-agents": "brain",
   "model-setup": "spark",
   "model-providers": "plug",
   "memory-import": "download",
+  notifications: "bell",
+  security: "shieldCheck",
+  advanced: "fileCode",
   debug: "bug",
   logs: "scrollText",
   plugin: "puzzle",
@@ -194,7 +265,11 @@ const NAVIGATION_ICONS: NavigationItem = {
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
-  return (SETTINGS_NAVIGATION_ROUTES as readonly NavigationRouteId[]).includes(routeId);
+  return SETTINGS_NAVIGATION_ROUTES.has(routeId);
+}
+
+export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
+  return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -252,6 +327,7 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
+  apps: { titleKey: "tabs.apps", subtitleKey: "subtitles.apps" },
   approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
@@ -269,6 +345,9 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   },
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
+  custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
   profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
   communications: {
@@ -276,17 +355,27 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.communications",
   },
   appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
+  lobsterdex: { titleKey: "tabs.lobsterdex", subtitleKey: "subtitles.lobsterdex" },
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
+  memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },
+  talk: { titleKey: "tabs.talk", subtitleKey: "subtitles.talk" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
+  labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
   "model-providers": {
-    titleKey: "tabs.modelProviders",
+    titleKey: "routeTitles.modelProviders",
     subtitleKey: "subtitles.modelProviders",
   },
   "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
+  notifications: {
+    titleKey: "routeTitles.notifications",
+    subtitleKey: "subtitles.notifications",
+  },
+  security: { titleKey: "tabs.security", subtitleKey: "subtitles.security" },
+  advanced: { titleKey: "routeTitles.advanced", subtitleKey: "subtitles.advanced" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },
@@ -297,13 +386,37 @@ export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
 }
 
-/**
- * Sidebar item label inside the settings takeover. The config route is titled
- * "Settings" globally (gear tooltip, palette) but reads "General" next to its
- * sibling sections.
- */
+/** Window/tab title, markers leftmost because tabs truncate from the right.
+ * Offline replaces the approval count (a stale queue is not actionable) and
+ * carries the pending-outbox total; titles already ending in the brand
+ * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+export function formatDocumentTitle(options: {
+  context: string;
+  attentionCount?: number;
+  offline?: boolean;
+  queuedCount?: number;
+}): string {
+  const base = options.context.endsWith("OpenClaw")
+    ? options.context
+    : `${options.context} — OpenClaw`;
+  if (options.offline) {
+    const queued =
+      options.queuedCount && options.queuedCount > 0
+        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
+        : "";
+    return `(${t("common.offline")}${queued}) ${base}`;
+  }
+  if (options.attentionCount && options.attentionCount > 0) {
+    return `(${options.attentionCount}) ${base}`;
+  }
+  return base;
+}
+
 export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
-  return routeId === "config" ? t("nav.settingsGeneral") : titleForRoute(routeId);
+  if (routeId === "custodian") {
+    return t("nav.askOpenClaw");
+  }
+  return titleForRoute(routeId);
 }
 
 export function subtitleForRoute(routeId: NavigationRouteId): string {

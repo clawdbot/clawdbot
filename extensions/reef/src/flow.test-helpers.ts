@@ -111,6 +111,7 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
       textHash?: string;
       recipient: ReefPeerIdentity;
       resendDisabled?: true;
+      overdueNotifiedAt?: number;
       rejection?: {
         category?: string;
         notice?: ReefRejectionNoticeState;

@@ -364,6 +364,7 @@ function buildPersistedDetailsFallback(
       "exitCode",
       "exitSignal",
       "truncated",
+      "spill",
       "fullOutputPath",
       "spilledChars",
       "spillTruncated",
@@ -492,6 +493,7 @@ function sanitizeToolResultDetailsForPersistence(
     "totalLines",
     "totalChars",
     "truncated",
+    "spill",
     "fullOutputPath",
     "spilledChars",
     "spillTruncated",
@@ -554,6 +556,7 @@ function capToolResultForPersistence(
 function normalizePersistedToolResultName(
   message: AgentMessage,
   fallbackName?: string,
+  fallbackId?: string,
 ): AgentMessage {
   if ((message as { role?: unknown }).role !== "toolResult") {
     return message;
@@ -561,22 +564,28 @@ function normalizePersistedToolResultName(
   const toolResult = message as Extract<AgentMessage, { role: "toolResult" }>;
   const rawToolName = (toolResult as { toolName?: unknown }).toolName;
   const normalizedToolName = normalizeOptionalString(rawToolName);
-  if (normalizedToolName) {
-    if (rawToolName === normalizedToolName) {
-      return toolResult;
-    }
-    return { ...toolResult, toolName: normalizedToolName };
-  }
-
   const normalizedFallback = normalizeOptionalString(fallbackName);
-  if (normalizedFallback) {
-    return { ...toolResult, toolName: normalizedFallback };
+  const toolName = normalizedToolName ?? normalizedFallback ?? "unknown";
+  const rawToolCallIdValue = (toolResult as { toolCallId?: unknown }).toolCallId;
+  const rawToolCallId = typeof rawToolCallIdValue === "string" ? rawToolCallIdValue : undefined;
+  const toolCallId = rawToolCallId ?? normalizeOptionalString(fallbackId);
+  const isError =
+    typeof (toolResult as { isError?: unknown }).isError === "boolean"
+      ? (toolResult as { isError: boolean }).isError
+      : false;
+  if (
+    rawToolName === toolName &&
+    rawToolCallId === toolCallId &&
+    (toolResult as { isError?: unknown }).isError === isError
+  ) {
+    return toolResult;
   }
-
-  if (typeof rawToolName === "string") {
-    return { ...toolResult, toolName: "unknown" };
-  }
-  return toolResult;
+  return {
+    ...toolResult,
+    ...(toolCallId ? { toolCallId } : {}),
+    toolName,
+    isError,
+  };
 }
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolean {
@@ -680,7 +689,11 @@ export function installSessionToolResultGuard(
     options?: AppendMessageOptions,
   ): { entryId: string; messageSeq?: number; sessionFile?: string | null } => {
     const parentEntryId = sessionManager.getLeafId();
+    const appendParentEntryId = sessionManager.getAppendParentId();
     const entryId = originalAppend(message as never, options);
+    if (sessionManager.getAppendParentId() === appendParentEntryId) {
+      return { entryId };
+    }
     void opts?.onMessagePersisted?.(message);
     const sessionFile = getSessionFile();
     if (!sessionFile) {
@@ -790,10 +803,11 @@ export function installSessionToolResultGuard(
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pendingState.getToolName(id) : undefined;
-      if (id) {
-        pendingState.delete(id);
-      }
-      const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
+      const normalizedToolResult = normalizePersistedToolResultName(
+        nextMessage,
+        toolName,
+        id ?? undefined,
+      );
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
       const persistedToolResult = persistMessage(normalizedToolResult);
@@ -810,6 +824,10 @@ export function installSessionToolResultGuard(
       const persisted = applyBeforeWriteHook(transformed);
       if (!persisted) {
         return undefined;
+      }
+      // A blocked result must remain pending so the next message can repair its tool-call pair.
+      if (id) {
+        pendingState.delete(id);
       }
       return appendMessageAndCacheTranscriptSeq(
         capToolResultForPersistence(persisted.message, maxToolResultChars, redactionConfig),

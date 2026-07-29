@@ -23,13 +23,24 @@ import type { UpdateCheckResult } from "./update-check.js";
 const {
   detectRespawnSupervisorMock,
   getRuntimeConfigMock,
+  refreshRemoteModelCatalogMock,
   scheduleGatewaySigusr1RestartMock,
   startManagedServiceUpdateHandoffMock,
 } = vi.hoisted(() => ({
   detectRespawnSupervisorMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(() => ({})),
+  refreshRemoteModelCatalogMock: vi.fn<
+    typeof import("../model-catalog/remote-refresh.js").refreshRemoteModelCatalog
+  >(async () => ({
+    status: "unchanged" as const,
+    providers: 1,
+    models: 1,
+    generatedAt: 1_753_500_000_000,
+  })),
   scheduleGatewaySigusr1RestartMock: vi.fn(() => ({ scheduled: true })),
-  startManagedServiceUpdateHandoffMock: vi.fn(async () => ({
+  startManagedServiceUpdateHandoffMock: vi.fn<
+    typeof import("./update-managed-service-handoff.js").startManagedServiceUpdateHandoff
+  >(async () => ({
     status: "started" as const,
     pid: 12345,
     command: "openclaw update --yes --channel beta --timeout 2700",
@@ -40,6 +51,13 @@ const {
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
+
+vi.mock("../model-catalog/remote-refresh.js", async () => {
+  const actual = await vi.importActual<typeof import("../model-catalog/remote-refresh.js")>(
+    "../model-catalog/remote-refresh.js",
+  );
+  return { ...actual, refreshRemoteModelCatalog: refreshRemoteModelCatalogMock };
+});
 
 vi.mock("./openclaw-root.js", async () => {
   const actual = await vi.importActual<typeof import("./openclaw-root.js")>("./openclaw-root.js");
@@ -248,6 +266,7 @@ describe("update-startup", () => {
     vi.mocked(runCommandWithTimeout).mockClear();
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
+    refreshRemoteModelCatalogMock.mockClear();
     detectRespawnSupervisorMock.mockReset();
     detectRespawnSupervisorMock.mockReturnValue(null);
     scheduleGatewaySigusr1RestartMock.mockClear();
@@ -332,7 +351,6 @@ describe("update-startup", () => {
         channel: "beta" as const,
         auto: {
           enabled: true,
-          betaCheckIntervalHours: 1,
         },
       },
     };
@@ -912,8 +930,6 @@ describe("update-startup", () => {
         channel: "stable" as const,
         auto: {
           enabled: true,
-          stableDelayHours: 6,
-          stableJitterHours: 12,
         },
       },
     };
@@ -948,10 +964,6 @@ describe("update-startup", () => {
   it("runs beta auto-update checks hourly when enabled", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     const runAutoUpdate = createAutoUpdateSuccessMock();
-    getRuntimeConfigMock.mockReturnValue({
-      gateway: { reload: { deferralTimeoutMs: 90_000 } },
-    });
-
     await runAutoUpdateCheckWithDefaults({
       cfg: createBetaAutoUpdateConfig(),
       runAutoUpdate,
@@ -961,7 +973,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "beta",
       timeoutMs: 45 * 60 * 1000,
-      restartDrainTimeoutMs: 90_000,
+      restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
     });
   });
@@ -1070,7 +1082,7 @@ describe("update-startup", () => {
       throw new Error("expected command options object");
     }
     expect(options.timeoutMs).toBe(45 * 60 * 1000);
-    expect(options.env).toEqual({ OPENCLAW_AUTO_UPDATE: "1" });
+    expect(options.env).toBeUndefined();
   });
 
   it("hands supervised auto-updates to a detached service handoff before restarting", async () => {
@@ -1152,6 +1164,25 @@ describe("update-startup", () => {
     });
   });
 
+  it("does not schedule another restart when auto-update joins an active handoff", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    startManagedServiceUpdateHandoffMock.mockResolvedValueOnce({
+      status: "joined",
+      pid: 12345,
+      command: "openclaw update --yes --channel beta --timeout 2700",
+      logPath: "/tmp/openclaw-handoff.log",
+      handoffId: "handoff-existing",
+    });
+
+    await runAutoUpdateCheckWithDefaults({
+      cfg: createBetaAutoUpdateConfig(),
+    });
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+  });
+
   it("uses managed systemd handoff for Linux gateway service auto-updates", async () => {
     mockPackageInstallStatus();
     mockNpmChannelTag("beta", "2.0.0-beta.1");
@@ -1231,6 +1262,70 @@ describe("update-startup", () => {
     expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
     expect(checkUpdateStatus).not.toHaveBeenCalled();
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("refreshes the remote catalog every six hours and stops with gateway cleanup", async () => {
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60_000);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
+    stop();
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60_000);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts an in-flight remote catalog refresh during cleanup", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    refreshRemoteModelCatalogMock.mockImplementationOnce(
+      async ({ signal }) =>
+        await new Promise((resolve) => {
+          capturedSignal = signal;
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ status: "error", error: "aborted", providers: 0, models: 0 }),
+            { once: true },
+          );
+        }),
+    );
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(capturedSignal?.aborted).toBe(false);
+    stop();
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it("uses the remaining stored TTL after a fresh startup check", async () => {
+    refreshRemoteModelCatalogMock.mockResolvedValueOnce({
+      status: "fresh",
+      providers: 1,
+      models: 1,
+      generatedAt: 1_753_500_000_000,
+      nextCheckInMs: 1_000,
+    });
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
     stop();
   });
 });

@@ -135,14 +135,20 @@ describe("engine/utils/stt", () => {
     });
   });
 
-  it("falls back to framework audio model config when plugin STT is disabled", () => {
+  it("falls back to a generic framework media model when plugin STT is disabled", () => {
     const cfg = {
       channels: { qqbot: { stt: { enabled: false, apiKey: "ignored" } } },
       tools: {
         media: {
+          models: [
+            {
+              provider: "local",
+              baseUrl: "https://stt.example.test/",
+              model: "sense",
+            },
+          ],
           audio: {
             timeoutSeconds: 90,
-            models: [{ provider: "local", baseUrl: "https://stt.example.test/", model: "sense" }],
           },
         },
       },
@@ -160,7 +166,7 @@ describe("engine/utils/stt", () => {
       timeoutMs: 90_000,
     });
 
-    Object.assign(expectDefined(cfg.tools.media.audio.models[0], "QQBot STT model"), {
+    Object.assign(expectDefined(cfg.tools.media.models[0], "QQBot STT model"), {
       timeoutSeconds: 75,
     });
     expect(resolveSTTConfig(cfg)?.timeoutMs).toBe(75_000);

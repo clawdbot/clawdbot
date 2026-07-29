@@ -1,140 +1,14 @@
-// Model picker provider catalog helpers build provider choices from catalog data.
+// Model picker provider choices projected from the lifecycle-owned catalog.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
-  createProviderApiKeyResolver,
-  createProviderAuthResolver,
-} from "../agents/models-config.providers.secrets.js";
-import { resolveProviderCatalogPluginIdsForFilter } from "../commands/models/list.provider-catalog.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+  canonicalizePreparedModelCatalogProvider,
+  type ModelCatalogEntry,
+} from "../agents/model-catalog.js";
+import { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  groupPluginDiscoveryProvidersByOrder,
-  normalizePluginDiscoveryResult,
-  providerMatchesFilter,
-  resolveRuntimePluginDiscoveryProviders,
-  runProviderCatalog,
-} from "../plugins/provider-discovery.js";
-import type { ProviderPlugin } from "../plugins/types.js";
 
-// Loads live provider model catalogs for the preferred-provider model picker.
-const log = createSubsystemLogger("model-picker-provider-catalog");
-const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
-
-function positiveNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && value > 0 ? value : undefined;
-}
-
-function providerAuthIds(provider: ProviderPlugin): string[] {
-  return [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])]
-    .map(normalizeProviderId)
-    .filter(Boolean);
-}
-
-function hasLiveProviderCatalog(provider: ProviderPlugin): boolean {
-  return (
-    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
-  );
-}
-
-async function resolvePreferredProviderLiveCatalogProviders(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  onlyPluginIds: string[];
-  providerFilter: string;
-  workspaceDir?: string;
-}): Promise<ProviderPlugin[]> {
-  const providers = (
-    await resolveRuntimePluginDiscoveryProviders({
-      config: params.cfg,
-      env: params.env,
-      onlyPluginIds: params.onlyPluginIds,
-      includeUntrustedWorkspacePlugins: false,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    })
-  ).filter((provider) =>
-    providerMatchesFilter({ provider, providerFilter: params.providerFilter }),
-  );
-  const liveProviders = providers.filter(hasLiveProviderCatalog);
-  if (liveProviders.length > 0) {
-    return liveProviders;
-  }
-
-  // Fallback activates setup-mode providers only when discovery returned no live catalog runner.
-  const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
-  return resolvePluginProviders({
-    config: params.cfg,
-    env: params.env,
-    onlyPluginIds: params.onlyPluginIds,
-    includeUntrustedWorkspacePlugins: false,
-    mode: "setup",
-    activate: false,
-    cache: false,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-  }).filter(
-    (provider) =>
-      providerMatchesFilter({ provider, providerFilter: params.providerFilter }) &&
-      hasLiveProviderCatalog(provider),
-  );
-}
-
-function resolveProviderEnvApiKey(
-  provider: ProviderPlugin,
-  env: NodeJS.ProcessEnv,
-):
-  | {
-      apiKey: string;
-      discoveryApiKey?: string;
-    }
-  | undefined {
-  for (const envVar of provider.envVars ?? []) {
-    const normalized = envVar.trim();
-    const value = env[normalized]?.trim();
-    if (normalized && value) {
-      return {
-        apiKey: value,
-        discoveryApiKey: value,
-      };
-    }
-  }
-  return undefined;
-}
-
-// Converts provider plugin catalog rows into the model picker shape without losing window metadata.
-function modelFromProviderCatalog(params: {
-  provider: string;
-  providerConfig: ModelProviderConfig;
-  model: ModelDefinitionConfig;
-}): ModelCatalogEntry {
-  const id = normalizeConfiguredProviderCatalogModelId(params.provider, params.model.id);
-  const contextWindow =
-    positiveNumber(params.model.contextWindow) ??
-    positiveNumber(params.providerConfig.contextWindow);
-  const contextTokens =
-    positiveNumber(params.model.contextTokens) ??
-    positiveNumber(params.providerConfig.contextTokens);
-  const api = params.model.api ?? params.providerConfig.api;
-  const baseUrl = params.model.baseUrl ?? params.providerConfig.baseUrl;
-  return {
-    id,
-    name: params.model.name || id,
-    provider: params.provider,
-    ...(api !== undefined ? { api } : {}),
-    ...(baseUrl !== undefined ? { baseUrl } : {}),
-    ...(contextWindow !== undefined ? { contextWindow } : {}),
-    ...(contextTokens !== undefined ? { contextTokens } : {}),
-    reasoning: params.model.reasoning,
-    input: params.model.input,
-    ...(params.model.compat ? { compat: params.model.compat } : {}),
-  };
-}
-
-/** Loads live catalog models for the user's preferred provider, ordered by discovery priority. */
+/** Loads committed catalog models for the user's preferred provider. */
 export async function loadPreferredProviderPickerCatalog(params: {
   cfg: OpenClawConfig;
   preferredProvider: string;
@@ -142,102 +16,21 @@ export async function loadPreferredProviderPickerCatalog(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<ModelCatalogEntry[]> {
-  const env = params.env ?? process.env;
-  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.cfg, env);
-  const providerFilter = normalizeProviderId(params.preferredProvider);
-  if (!providerFilter) {
+  const requestedProvider = normalizeProviderId(params.preferredProvider);
+  if (!requestedProvider) {
     return [];
   }
-
-  const onlyPluginIds = await resolveProviderCatalogPluginIdsForFilter({
-    cfg: params.cfg,
-    env,
-    providerFilter,
+  const owner = await loadPreparedModelCatalogOwnerSnapshot({
+    config: params.cfg,
+    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.cfg, params.env),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.env ? { env: params.env } : {}),
   });
-  if (!onlyPluginIds || onlyPluginIds.length === 0) {
-    return [];
-  }
-
-  const providers = await resolvePreferredProviderLiveCatalogProviders({
-    cfg: params.cfg,
-    env,
-    onlyPluginIds,
-    providerFilter,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  if (providers.length === 0) {
-    return [];
-  }
-
-  let authStore: ReturnType<typeof ensureAuthProfileStoreWithoutExternalProfiles> | undefined;
-  const getAuthStore = () =>
-    (authStore ??= ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-      allowKeychainPrompt: false,
-    }));
-  const resolveProviderApiKey = createProviderApiKeyResolver(env, getAuthStore, params.cfg);
-  const resolveProviderAuth = createProviderAuthResolver(env, getAuthStore, params.cfg);
-  const resolveFastProviderApiKey = (provider: ProviderPlugin, providerId = provider.id) => {
-    const normalizedProviderId = normalizeProviderId(providerId);
-    // Prefer direct env keys for the current provider before touching the auth profile store.
-    if (providerAuthIds(provider).includes(normalizedProviderId)) {
-      const fromEnv = resolveProviderEnvApiKey(provider, env);
-      if (fromEnv) {
-        return fromEnv;
-      }
-    }
-    return resolveProviderApiKey(providerId);
-  };
-  const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
-  const rows: ModelCatalogEntry[] = [];
-  const seen = new Set<string>();
-
-  // Discovery order is a contract: simple/profile results win over paired/late duplicates.
-  for (const order of DISCOVERY_ORDERS) {
-    for (const provider of byOrder[order]) {
-      let result: Awaited<ReturnType<typeof runProviderCatalog>>;
-      const resolveCatalogProviderApiKey = (providerId?: string) =>
-        resolveFastProviderApiKey(provider, providerId?.trim() || provider.id);
-      const resolveCatalogProviderAuth = (
-        providerId?: string,
-        options?: { oauthMarker?: string },
-      ) => resolveProviderAuth(providerId?.trim() || provider.id, options);
-      try {
-        result = await runProviderCatalog({
-          provider,
-          config: params.cfg,
-          env,
-          resolveProviderApiKey: resolveCatalogProviderApiKey,
-          resolveProviderAuth: resolveCatalogProviderAuth,
-          agentDir,
-          ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-        });
-      } catch (error) {
-        log.warn(`provider catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
-        continue;
-      }
-
-      const normalized = normalizePluginDiscoveryResult({ provider, result });
-      for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
-        const providerId = normalizeProviderId(providerIdRaw);
-        if (providerId !== providerFilter || !Array.isArray(providerConfig.models)) {
-          continue;
-        }
-        for (const model of providerConfig.models) {
-          const entry = modelFromProviderCatalog({
-            provider: providerId,
-            providerConfig,
-            model,
-          });
-          const key = `${entry.provider}/${entry.id}`;
-          if (seen.has(key)) {
-            continue;
-          }
-          seen.add(key);
-          rows.push(entry);
-        }
-      }
-    }
-  }
-
-  return rows;
+  const providerFilter = canonicalizePreparedModelCatalogProvider(
+    requestedProvider,
+    owner.metadataSnapshot,
+  );
+  return owner.modelCatalog.entries.filter(
+    (entry) => normalizeProviderId(entry.provider) === providerFilter,
+  );
 }

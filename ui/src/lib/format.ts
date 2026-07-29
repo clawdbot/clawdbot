@@ -2,17 +2,192 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  formatDurationCompact,
-  formatDurationHuman,
+  formatDurationCompact as formatDurationCompactCore,
+  formatDurationHuman as formatDurationHumanCore,
 } from "../../../src/infra/format-time/format-duration.ts";
-import {
-  formatRelativeTimestamp,
-  formatTimeAgo,
-} from "../../../src/infra/format-time/format-relative.ts";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
-export { formatRelativeTimestamp, formatTimeAgo, formatDurationCompact, formatDurationHuman };
+
+type FormatTimeAgoOptions = {
+  suffix?: boolean;
+  fallback?: string;
+};
+
+type FormatRelativeTimestampOptions = {
+  dateFallback?: boolean;
+  timezone?: string;
+  fallback?: string;
+  suffix?: boolean;
+};
+
+type FormatDurationCompactOptions = {
+  spaced?: boolean;
+};
+
+type RelativeUnit = "second" | "minute" | "hour" | "day";
+
+function formatUnit(value: number, unit: RelativeUnit | "millisecond"): string {
+  return new Intl.NumberFormat(i18n.getLocale(), {
+    style: "unit",
+    unit,
+    unitDisplay: "narrow",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatRelative(value: number, unit: RelativeUnit): string {
+  return new Intl.RelativeTimeFormat(i18n.getLocale(), {
+    numeric: "auto",
+    style: "narrow",
+  }).format(value, unit);
+}
+
+export function formatTimeAgo(
+  durationMs: number | null | undefined,
+  options: FormatTimeAgoOptions = {},
+): string {
+  const fallback = options.fallback ?? t("common.unknown");
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) {
+    return fallback;
+  }
+
+  const seconds = Math.round(durationMs / 1000);
+  const minutes = Math.round(seconds / 60);
+  let value: number;
+  let unit: RelativeUnit;
+  if (seconds < 60) {
+    if (options.suffix !== false) {
+      return t("common.justNow");
+    }
+    value = seconds;
+    unit = "second";
+  } else if (minutes < 60) {
+    value = minutes;
+    unit = "minute";
+  } else {
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) {
+      value = hours;
+      unit = "hour";
+    } else {
+      value = Math.round(hours / 24);
+      unit = "day";
+    }
+  }
+  return options.suffix === false ? formatUnit(value, unit) : formatRelative(-value, unit);
+}
+
+export function formatRelativeTimestamp(
+  timestampMs: number | null | undefined,
+  options: FormatRelativeTimestampOptions = {},
+): string {
+  const fallback = options.fallback ?? t("common.na");
+  if (timestampMs == null || !Number.isFinite(timestampMs)) {
+    return fallback;
+  }
+
+  const diff = timestampMs - Date.now();
+  const isPast = diff <= 0;
+  const seconds = Math.round(Math.abs(diff) / 1000);
+  if (seconds < 60) {
+    if (options.suffix === false) {
+      return formatUnit(seconds, "second");
+    }
+    return isPast ? t("common.justNow") : formatRelative(seconds, "second");
+  }
+
+  const minutes = Math.round(seconds / 60);
+  let value = minutes;
+  let unit: RelativeUnit = "minute";
+  if (minutes >= 60) {
+    const hours = Math.round(minutes / 60);
+    value = hours;
+    unit = "hour";
+    if (hours >= 48) {
+      value = Math.round(hours / 24);
+      unit = "day";
+    }
+  }
+
+  if (options.dateFallback && unit === "day" && value > 7) {
+    try {
+      return new Intl.DateTimeFormat(i18n.getLocale(), {
+        month: "short",
+        day: "numeric",
+        ...(options.timezone ? { timeZone: options.timezone } : {}),
+      }).format(new Date(timestampMs));
+    } catch {
+      // Invalid time zones should still leave a useful localized relative value.
+    }
+  }
+
+  const signedValue = isPast ? -value : value;
+  return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
+}
+
+export function formatDurationCompact(
+  ms?: number | null,
+  options: FormatDurationCompactOptions = {},
+): string | undefined {
+  const coreValue = formatDurationCompactCore(ms, options);
+  if (!coreValue || ms == null || !Number.isFinite(ms) || ms <= 0) {
+    return coreValue;
+  }
+  const roundedMs = Math.round(ms);
+  if (roundedMs < 1000) {
+    return formatUnit(roundedMs, "millisecond");
+  }
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return formatUnit(totalSeconds, "second");
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    const seconds = totalSeconds % 60;
+    const parts = [formatUnit(totalMinutes, "minute")];
+    if (seconds > 0) {
+      parts.push(formatUnit(seconds, "second"));
+    }
+    return parts.join(options.spaced ? " " : "");
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    const parts = [formatUnit(days, "day")];
+    if (remainingHours > 0) {
+      parts.push(formatUnit(remainingHours, "hour"));
+    }
+    return parts.join(options.spaced ? " " : "");
+  }
+  const minutes = totalMinutes % 60;
+  const parts = [formatUnit(hours, "hour")];
+  if (minutes > 0) {
+    parts.push(formatUnit(minutes, "minute"));
+  }
+  return parts.join(options.spaced ? " " : "");
+}
+
+export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
+  const coreValue = formatDurationHumanCore(ms, fallback);
+  if (ms == null || !Number.isFinite(ms) || ms < 0) {
+    return coreValue;
+  }
+  if (ms < 1000) {
+    return formatUnit(Math.round(ms), "millisecond");
+  }
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) {
+    return formatUnit(seconds, "second");
+  }
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return formatUnit(minutes, "minute");
+  }
+  const hours = Math.round(minutes / 60);
+  return hours < 24 ? formatUnit(hours, "hour") : formatUnit(Math.round(hours / 24), "day");
+}
 
 export function formatUnknownText(
   value: unknown,
@@ -71,7 +246,7 @@ export function formatMs(ms?: number | null): string {
   if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(timestampMs).toLocaleString([], resolveUiHourCycleOptions());
+  return new Date(timestampMs).toLocaleString(i18n.getLocale(), resolveUiHourCycleOptions());
 }
 
 export function formatDateMs(
@@ -82,7 +257,7 @@ export function formatDateMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleDateString([], options);
+    : new Date(timestampMs).toLocaleDateString(i18n.getLocale(), options);
 }
 
 export function formatTimeMs(
@@ -93,7 +268,10 @@ export function formatTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleTimeString([], { ...resolveUiHourCycleOptions(), ...options });
+    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), {
+        ...resolveUiHourCycleOptions(),
+        ...options,
+      });
 }
 
 export function formatDateTimeMs(
@@ -104,12 +282,15 @@ export function formatDateTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleString([], { ...resolveUiHourCycleOptions(), ...options });
+    : new Date(timestampMs).toLocaleString(i18n.getLocale(), {
+        ...resolveUiHourCycleOptions(),
+        ...options,
+      });
 }
 
 export function formatList(values?: Array<string | null | undefined>): string {
   if (!values || values.length === 0) {
-    return "none";
+    return t("common.none");
   }
   return values.filter((v): v is string => Boolean(v && v.trim())).join(", ");
 }

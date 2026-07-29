@@ -1,4 +1,5 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { type DiscordVoiceIngressContext, resolveDiscordVoiceIngressContext } from "./ingress.js";
@@ -23,7 +24,7 @@ function normalizeLabel(value: unknown): string | undefined {
     return undefined;
   }
   const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized ? normalized.slice(0, 100) : undefined;
+  return normalized ? truncateUtf16Safe(normalized, 100) : undefined;
 }
 
 function memberLabel(state: APIVoiceState): string | undefined {

@@ -16,7 +16,7 @@ type TelegramSpooledReplayLifecycle = {
   onDeferred: () => void;
   /** Clears pre-adoption stall while durable adoption finalization is held. */
   onAdoptionFinalizing?: () => void;
-  onAbandoned: () => void;
+  onAbandoned: () => void | Promise<void>;
 };
 
 type TelegramSpooledReplayFrame = {
@@ -28,6 +28,8 @@ export type TelegramSpooledReplayDeferredParticipant = {
   key: string;
   abortSignal: AbortSignal;
   task: Promise<TelegramMessageProcessingResult>;
+  isSettled: () => boolean;
+  wasOwnerAbortedWhilePending: () => boolean;
   /** Defers external timeout settlement while durable adoption decides ownership. */
   beginSettlementHold: () => TelegramSpooledReplaySettlementHold | undefined;
   settle: (result: TelegramMessageProcessingResult) => void;
@@ -79,18 +81,27 @@ export function createTelegramSpooledReplayParticipant(
   key: string,
 ): TelegramSpooledReplayDeferredParticipant {
   const abortController = new AbortController();
+  const ownerAbortSignal = telegramSpooledReplayFrames.getStore()?.lifecycle?.abortSignal;
   let settled = false;
+  let ownerAbortedWhilePending = ownerAbortSignal?.aborted === true;
   let settlementHeld = false;
   let pendingSettlement: TelegramMessageProcessingResult | undefined;
   let resolveTask: (result: TelegramMessageProcessingResult) => void = () => {};
   const task = new Promise<TelegramMessageProcessingResult>((resolve) => {
     resolveTask = resolve;
   });
+  const onOwnerAbort = () => {
+    if (!settled) {
+      ownerAbortedWhilePending = true;
+    }
+  };
+  ownerAbortSignal?.addEventListener("abort", onOwnerAbort, { once: true });
   const settleNow = (result: TelegramMessageProcessingResult) => {
     if (settled) {
       return;
     }
     settled = true;
+    ownerAbortSignal?.removeEventListener("abort", onOwnerAbort);
     if (result.kind !== "completed") {
       abortController.abort(result.kind === "failed-retryable" ? result.error : result.kind);
     }
@@ -100,6 +111,8 @@ export function createTelegramSpooledReplayParticipant(
     key,
     abortSignal: abortController.signal,
     task,
+    isSettled: () => settled,
+    wasOwnerAbortedWhilePending: () => ownerAbortedWhilePending,
     beginSettlementHold: () => {
       if (settled || settlementHeld) {
         return undefined;

@@ -129,6 +129,24 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("never revives a failed permanent producer intent", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const payload = {
+        kind: "systemEvent" as const,
+        sessionKey: "agent:main:main",
+        text: "restart complete",
+        idempotencyKey: "restart:permanent-failed",
+        completionRetention: "permanent" as const,
+      };
+      const id = await enqueueSessionDelivery(payload, tempDir);
+      await moveSessionDeliveryToFailed(id, tempDir);
+
+      expect(await enqueueSessionDelivery(payload, tempDir)).toBe(id);
+      expect(readSessionQueueStatus(tempDir, id)).toBe("failed");
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+    });
+  });
+
   it("reports a completed conflict after acknowledgement", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
@@ -353,6 +371,24 @@ describe("session-delivery queue storage", () => {
       await settleSessionDelivery(id, tempDir);
 
       expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
+    });
+  });
+
+  it("retains a permanent completion receipt", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const payload = {
+        kind: "systemEvent" as const,
+        sessionKey: "agent:main:main",
+        text: "restart complete",
+        idempotencyKey: "restart:permanent-completed",
+        completionRetention: "permanent" as const,
+      };
+      const id = await enqueueSessionDelivery(payload, tempDir);
+      await settleSessionDelivery(id, tempDir);
+
+      expect(await enqueueSessionDelivery(payload, tempDir)).toBe(id);
+      expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
     });
   });
 });

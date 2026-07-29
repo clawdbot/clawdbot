@@ -10,7 +10,10 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
@@ -96,7 +99,7 @@ export function loadSubagentSessionEntry(params: {
   let store = params.storeCache?.get(storePath);
   if (!store) {
     store = Object.fromEntries(
-      listSessionEntries({ storePath, clone: false }).map(({ sessionKey, entry }) => [
+      listSessionEntriesReadOnly({ storePath, clone: false }).map(({ sessionKey, entry }) => [
         sessionKey,
         entry,
       ]),
@@ -118,7 +121,7 @@ function loadSubagentSessionEntryForAccessor(params: {
   const agentId = resolveAgentIdFromSessionKey(key);
   const cfg = params.cfg ?? getRuntimeConfig();
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  return loadSessionEntry({
+  return loadSessionEntryReadOnly({
     storePath,
     sessionKey: key,
     clone: false,

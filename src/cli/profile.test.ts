@@ -120,7 +120,7 @@ describe("parseCliProfileArgs", () => {
       "--profile",
       "smoke-ci",
       "--category",
-      "agent-runtime-and-provider-execution.agent-turn-execution",
+      "agent-runtime.agent-turn-execution",
     ]);
     if (!res.ok) {
       throw new Error(res.error);
@@ -132,7 +132,7 @@ describe("parseCliProfileArgs", () => {
       "qa",
       "run",
       "--category",
-      "agent-runtime-and-provider-execution.agent-turn-execution",
+      "agent-runtime.agent-turn-execution",
     ]);
   });
 
@@ -162,7 +162,7 @@ describe("parseCliProfileArgs", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
-      "agent-runtime-and-provider-execution",
+      "agent-runtime",
     ]);
     if (!res.ok) {
       throw new Error(res.error);
@@ -176,7 +176,7 @@ describe("parseCliProfileArgs", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
-      "agent-runtime-and-provider-execution",
+      "agent-runtime",
     ]);
   });
 
@@ -305,6 +305,128 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
   });
+
+  it.each([
+    {
+      name: "the default profile without a profile marker",
+      inheritedProfile: undefined,
+      inheritedStateDir: "/home/peter/.openclaw",
+    },
+    {
+      name: "the explicitly marked default profile",
+      inheritedProfile: "default",
+      inheritedStateDir: "/home/peter/.openclaw",
+    },
+    {
+      name: "another named profile",
+      inheritedProfile: "main",
+      inheritedStateDir: "/home/peter/.openclaw-main",
+    },
+    {
+      name: "a home-relative default state directory",
+      inheritedProfile: undefined,
+      inheritedStateDir: "~/.openclaw",
+    },
+  ])(
+    "switches inherited canonical state from $name to the requested profile",
+    ({ inheritedProfile, inheritedStateDir }) => {
+      const env: Record<string, string | undefined> = {
+        OPENCLAW_PROFILE: inheritedProfile,
+        OPENCLAW_STATE_DIR: inheritedStateDir,
+        OPENCLAW_CONFIG_PATH: path.join(inheritedStateDir, "openclaw.json"),
+      };
+
+      applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+      const expectedStateDir = path.join(path.resolve("/home/peter"), ".openclaw-work");
+      expect(env.OPENCLAW_PROFILE).toBe("work");
+      expect(env.OPENCLAW_STATE_DIR).toBe(expectedStateDir);
+      expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(expectedStateDir, "openclaw.json"));
+    },
+  );
+
+  it("preserves an explicit config outside inherited canonical profile state", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "main",
+      OPENCLAW_STATE_DIR: "/home/peter/.openclaw-main",
+      OPENCLAW_CONFIG_PATH: "/srv/openclaw/custom.json",
+    };
+
+    applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+    expect(env.OPENCLAW_STATE_DIR).toBe("/home/peter/.openclaw-work");
+    expect(env.OPENCLAW_CONFIG_PATH).toBe("/srv/openclaw/custom.json");
+  });
+
+  it.each([
+    { inheritedProfile: "Main", selectedProfile: "main" },
+    { inheritedProfile: "main", selectedProfile: "Main" },
+  ])(
+    "keeps case-distinct named profiles isolated ($inheritedProfile to $selectedProfile)",
+    ({ inheritedProfile, selectedProfile }) => {
+      const inheritedStateDir = `/home/peter/.openclaw-${inheritedProfile}`;
+      const env: Record<string, string | undefined> = {
+        OPENCLAW_PROFILE: inheritedProfile,
+        OPENCLAW_STATE_DIR: inheritedStateDir,
+        OPENCLAW_CONFIG_PATH: path.join(inheritedStateDir, "openclaw.json"),
+      };
+
+      applyCliProfileEnv({ profile: selectedProfile, env, homedir: () => "/home/peter" });
+
+      const expectedStateDir = `/home/peter/.openclaw-${selectedProfile}`;
+      expect(env.OPENCLAW_PROFILE).toBe(selectedProfile);
+      expect(env.OPENCLAW_STATE_DIR).toBe(expectedStateDir);
+      expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(expectedStateDir, "openclaw.json"));
+    },
+  );
+
+  it("treats case variants of the default profile as the same canonical profile", () => {
+    const stateDir = "/home/peter/.openclaw";
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "Default",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    };
+
+    applyCliProfileEnv({ profile: "default", env, homedir: () => "/home/peter" });
+
+    expect(env.OPENCLAW_PROFILE).toBe("default");
+    expect(env.OPENCLAW_STATE_DIR).toBe(stateDir);
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(stateDir, "openclaw.json"));
+  });
+
+  it.each([
+    {
+      name: "the default profile",
+      inheritedProfile: undefined,
+      inheritedConfigPath: "/home/peter/.openclaw/openclaw.json",
+    },
+    {
+      name: "another named profile",
+      inheritedProfile: "main",
+      inheritedConfigPath: "/home/peter/.openclaw-main/openclaw.json",
+    },
+    {
+      name: "a home-relative named profile",
+      inheritedProfile: "main",
+      inheritedConfigPath: "~/.openclaw-main/openclaw.json",
+    },
+  ])(
+    "switches an inherited $name config when the state directory is absent",
+    ({ inheritedProfile, inheritedConfigPath }) => {
+      const env: Record<string, string | undefined> = {
+        OPENCLAW_PROFILE: inheritedProfile,
+        OPENCLAW_CONFIG_PATH: inheritedConfigPath,
+      };
+
+      applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+      const expectedStateDir = "/home/peter/.openclaw-work";
+      expect(env.OPENCLAW_PROFILE).toBe("work");
+      expect(env.OPENCLAW_STATE_DIR).toBe(expectedStateDir);
+      expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(expectedStateDir, "openclaw.json"));
+    },
+  );
 
   it("uses OPENCLAW_HOME when deriving profile state dir", () => {
     const env: Record<string, string | undefined> = {

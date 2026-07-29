@@ -2,6 +2,7 @@ import {
   isHostScopedAgentToolActive,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
@@ -185,10 +186,13 @@ export function buildThreadStartParams(
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-    // Canonical typed specs (`type: "function" | "namespace"`); the 0.142 floor
-    // accepts them natively (codex-rs normalize_dynamic_tool_specs).
+    // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
+    // Codex `ephemeral` skips rollout/state DB writes while loaded threads remain reusable
+    // (`codex-rs/app-server-protocol/src/protocol/v2/thread.rs:108`;
+    // `codex-rs/core/src/session/session.rs:599-683`, `thread_manager.rs:1157-1163`).
+    ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
   };
 }
 
@@ -232,6 +236,14 @@ export function buildThreadResumeParams(
       });
   return {
     threadId: options.threadId,
+    // Only the latest turn id/status is needed to preserve active-turn conflict
+    // handling; avoid rebuilding and validating the full persisted history.
+    excludeTurns: true,
+    initialTurnsPage: {
+      limit: 1,
+      sortDirection: "desc",
+      itemsView: "notLoaded",
+    },
     ...(modelSelection
       ? {
           model: modelSelection.model,

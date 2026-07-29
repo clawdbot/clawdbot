@@ -16,7 +16,7 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, type NormalizedAllowFrom } from "./bot-access.js";
-import { isRecoverableMediaGroupError } from "./bot-handlers.media.js";
+import { hasInboundMedia, isRecoverableMediaGroupError } from "./bot-handlers.media.js";
 import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
@@ -24,7 +24,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { getTelegramTextParts, hasBotMention } from "./bot/helpers.js";
+import { getTelegramTextParts, hasBotMention, resolveTelegramPrimaryMedia } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
@@ -66,7 +66,6 @@ export function createTelegramInboundMediaGroupRuntime(
     | "opts"
     | "runtime"
     | "mediaMaxBytes"
-    | "telegramCfg"
     | "logger"
     | "resolveGroupActivation"
     | "resolveGroupRequireMention"
@@ -79,7 +78,6 @@ export function createTelegramInboundMediaGroupRuntime(
     opts,
     runtime,
     mediaMaxBytes,
-    telegramCfg,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -102,10 +100,7 @@ export function createTelegramInboundMediaGroupRuntime(
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
-      : typeof telegramCfg.mediaGroupFlushMs === "number" &&
-          Number.isFinite(telegramCfg.mediaGroupFlushMs)
-        ? Math.max(10, Math.floor(telegramCfg.mediaGroupFlushMs))
-        : MEDIA_GROUP_TIMEOUT_MS;
+      : MEDIA_GROUP_TIMEOUT_MS;
   const buffer = new Map<string, BufferedMediaGroupEntry>();
   const queue = new KeyedAsyncQueue();
 
@@ -119,7 +114,11 @@ export function createTelegramInboundMediaGroupRuntime(
     const mayNeedDownload =
       !textParts.text.trim() &&
       Boolean(msg.audio ?? msg.voice ?? documentMime?.startsWith("audio/"));
-    if (!isGroup || mayNeedDownload) {
+    // Media-less messages have nothing to skip-download. They must reach the
+    // canonical mention gate (bot-message-context.body), which records group
+    // history, fires ingest hooks, and settles an explicit skipped result;
+    // consuming them here tombstones the ingress row without any trace.
+    if (!isGroup || !hasInboundMedia(msg) || mayNeedDownload) {
       return false;
     }
     const sessionState = resolveTelegramSessionState({
@@ -229,9 +228,11 @@ export function createTelegramInboundMediaGroupRuntime(
       }
       const allMedia: TelegramMediaRef[] = [];
       const selection = new Map<string, "include" | "exclude">();
+      let materializedCount = 0;
       let skippedCount = 0;
       for (const { ctx, msg } of entry.messages) {
         const sourceMessageId = String(msg.message_id);
+        const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
         let media;
         try {
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntimeWithAbort });
@@ -246,6 +247,7 @@ export function createTelegramInboundMediaGroupRuntime(
             throw error;
           }
           runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
+          allMedia.push({ kind: nativeKind, sourceMessageId });
           selection.set(sourceMessageId, "exclude");
           skippedCount++;
           continue;
@@ -254,11 +256,14 @@ export function createTelegramInboundMediaGroupRuntime(
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
+            kind: media.kind,
             stickerMetadata: media.stickerMetadata,
             sourceMessageId,
           });
+          materializedCount++;
           selection.set(sourceMessageId, "include");
         } else {
+          allMedia.push({ kind: nativeKind, sourceMessageId });
           selection.set(sourceMessageId, "exclude");
           skippedCount++;
         }
@@ -271,7 +276,7 @@ export function createTelegramInboundMediaGroupRuntime(
           fn: () =>
             bot.api.sendMessage(
               primary.msg.chat.id,
-              `⚠️ Received ${allMedia.length} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
+              `⚠️ Received ${materializedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
               {
                 reply_parameters: {
                   message_id: primary.msg.message_id,

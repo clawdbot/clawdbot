@@ -1,5 +1,6 @@
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 // Control UI view renders config form.shared screen content.
+import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 
 export type JsonSchema = {
@@ -9,6 +10,7 @@ export type JsonSchema = {
   tags?: string[];
   "x-tags"?: string[];
   properties?: Record<string, JsonSchema>;
+  required?: string[];
   items?: JsonSchema | JsonSchema[];
   additionalProperties?: JsonSchema | boolean;
   enum?: unknown[];
@@ -27,7 +29,7 @@ export function schemaType(schema: JsonSchema): string | undefined {
     return undefined;
   }
   if (Array.isArray(schema.type)) {
-    return schema.type.find((t) => t !== "null") ?? schema.type[0];
+    return schema.type.find((type) => type !== "null") ?? schema.type[0];
   }
   return schema.type;
 }
@@ -121,7 +123,9 @@ const SENSITIVE_PATTERNS = [
 
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 
-export const REDACTED_PLACEHOLDER = "[redacted - click reveal to view]";
+export function redactedPlaceholder(): string {
+  return t("configForm.redactedPlaceholder");
+}
 
 const MAX_SENSITIVE_SCAN_DEPTH = 64;
 const MAX_SENSITIVE_SCAN_NODES = 20_000;

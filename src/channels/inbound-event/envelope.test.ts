@@ -20,7 +20,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({ readSessionUpdated
 vi.mock("../../routing/resolve-route.js", () => ({ resolveAgentRoute }));
 
 const cfg = {
-  agents: { defaults: { envelopeTimestamp: "off" } },
+  agents: { defaults: { userTimezone: "UTC" } },
   session: { store: "/state/{agentId}/sessions.json" },
 } as OpenClawConfig;
 
@@ -40,7 +40,7 @@ describe("channel inbound envelope", () => {
         body: "hello",
         timestamp: 120_000,
       }),
-    ).toBe("[Telegram Alice +1m] hello");
+    ).toBe("[Telegram Alice +1m Thu 1970-01-01T00:02:00Z] hello");
     expect(resolveStorePath).toHaveBeenCalledWith(cfg.session?.store, { agentId: "main" });
     expect(readSessionUpdatedAt).toHaveBeenCalledWith({
       storePath: "/state/main/sessions.json",
@@ -78,7 +78,7 @@ describe("channel inbound envelope", () => {
         timestamp: 30_000,
         previousTimestamp: null,
       }),
-    ).toBe("[Telegram Alice] older");
+    ).toBe("[Telegram Alice Thu 1970-01-01T00:00:30Z] older");
     expect(readSessionUpdatedAt).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import type { SessionCompanionService } from "./session-companion.js";
+import type { SessionObserverService } from "./session-observer-contract.js";
 
 type GatewayRequestContextClient = GatewayClient & {
   socket: { close: (code: number, reason: string) => void };
@@ -20,12 +22,19 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
+  runtimeState: Pick<
+    GatewayServerLiveState,
+    "cronState" | "configReloader" | "controlUiSessionPullRequests"
+  >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  sessionCompanion: SessionCompanionService;
+  sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
+  ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
@@ -54,6 +63,13 @@ type GatewayRequestContextParams = {
   ) => void;
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
+  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
+  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
+  completeControlUiDeviceAuthMigration?: (device: {
+    deviceId: string;
+    publicKey: string;
+    scopes: string[];
+  }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
@@ -62,14 +78,7 @@ type GatewayRequestContextParams = {
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
-  chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
-  chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
-  chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
-  chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
-  chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
-  agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"];
-  bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"];
-  clearChatRunState: GatewayRequestContext["clearChatRunState"];
+  chatRunState: GatewayRequestContext["chatRunState"];
   addChatRun: GatewayRequestContext["addChatRun"];
   removeChatRun: GatewayRequestContext["removeChatRun"];
   subscribeSessionEvents: GatewayRequestContext["subscribeSessionEvents"];
@@ -143,7 +152,7 @@ export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContextWithClientLookup {
-  return {
+  const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
@@ -154,12 +163,19 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
+    sessionCompanion: params.sessionCompanion,
+    sessionObserver: params.sessionObserver,
     notifyPluginMetadataChanged: () =>
       params.runtimeState.configReloader.notifyPluginMetadataChanged(),
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
+    ensureSandboxHostPort: params.ensureSandboxHostPort,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    cancelRunBoundApprovals: params.cancelRunBoundApprovals
+      ? (runId) => params.cancelRunBoundApprovals!(runId, context)
+      : undefined,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
     pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
@@ -243,8 +259,11 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
-        // Marking is separate from socket close so already-buffered requests
-        // fail authorization even if transport teardown has not completed.
+        // Retire node-owned projections and pending invokes synchronously; socket
+        // close remains separate so already-buffered requests fail authorization.
+        if (gatewayClient.connId) {
+          params.nodeRegistry.invalidateConnectionForPairingChange(gatewayClient.connId, reason);
+        }
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }
@@ -276,6 +295,9 @@ export function createGatewayRequestContext(
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
+    claimControlUiDeviceAuthMigration: params.claimControlUiDeviceAuthMigration,
+    releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
+    completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
@@ -290,21 +312,18 @@ export function createGatewayRequestContext(
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,
     chatQueuedTurns: params.chatQueuedTurns,
-    chatAbortedRuns: params.chatAbortedRuns,
-    chatRunBuffers: params.chatRunBuffers,
-    chatDeltaSentAt: params.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: params.agentDeltaSentAt,
-    bufferedAgentEvents: params.bufferedAgentEvents,
-    clearChatRunState: params.clearChatRunState,
+    chatRunState: params.chatRunState,
     addChatRun: params.addChatRun,
     removeChatRun: params.removeChatRun,
     subscribeSessionEvents: params.subscribeSessionEvents,
     unsubscribeSessionEvents: params.unsubscribeSessionEvents,
     subscribeSessionMessageEvents: params.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: params.unsubscribeSessionMessageEvents,
-    unsubscribeAllSessionEvents: params.unsubscribeAllSessionEvents,
+    unsubscribeAllSessionEvents: (connId) => {
+      params.unsubscribeAllSessionEvents(connId);
+      // PR replace-sets share this websocket cleanup boundary with session events.
+      params.runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);
+    },
     getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,
@@ -324,4 +343,5 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: params.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,
   };
+  return context;
 }

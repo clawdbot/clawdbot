@@ -22,7 +22,6 @@ const {
   createEventDispatcherMock,
   dispatchReplyFromConfigMock,
   ensureConfiguredBindingRouteReadyMock,
-  finalizeInboundContextMock,
   resolveAgentRouteMock,
   resolveBoundConversationMock,
   resolveConfiguredBindingRouteMock,
@@ -145,11 +144,8 @@ describe("Feishu ACP-init failure lifecycle", () => {
       queuedFinal: false,
       counts: { final: 0 },
     });
-    withReplyDispatcherMock.mockImplementation(async ({ run }) => await run());
-
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
-      finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
       storePath: "/tmp/feishu-acp-failure-sessions.json",

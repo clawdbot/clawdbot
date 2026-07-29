@@ -195,7 +195,7 @@ export function emitDiagnosticsTimelineEvent(
     if (!warnedAboutTimelineWrite) {
       warnedAboutTimelineWrite = true;
       // Diagnostics output is best-effort; one warning avoids recursive stderr spam.
-      process.stderr.write(`[diagnostics] failed to write timeline event: ${String(error)}\n`);
+      console.warn(`[diagnostics] failed to write timeline event: ${String(error)}`);
     }
   }
 }

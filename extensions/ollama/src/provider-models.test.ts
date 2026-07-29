@@ -1,4 +1,7 @@
 // Ollama tests cover provider models plugin behavior.
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,11 +10,35 @@ import {
   buildOllamaModelDefinition,
   capLocalOllamaProviderContext,
   enrichOllamaModelsWithContext,
+  isOllamaCloudModel,
   fetchOllamaModels,
   queryOllamaModelShowInfo,
+  readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
 
 describe("ollama provider models", () => {
   afterEach(() => {
@@ -30,13 +57,33 @@ describe("ollama provider models", () => {
       models: [
         buildOllamaModelDefinition("qwen3.5:4b", 262_144),
         buildOllamaModelDefinition("small", 16_384),
+        buildOllamaModelDefinition("glm-5.2:cloud", 1_000_000),
+        buildOllamaModelDefinition("gpt-oss:120b-cloud", 131_072),
+        buildOllamaModelDefinition("local-cloud", 65_536),
       ],
     });
 
     expect(provider.models).toEqual([
       expect.objectContaining({ contextWindow: 262_144, contextTokens: 32_768 }),
       expect.objectContaining({ contextWindow: 16_384, contextTokens: 16_384 }),
+      expect.objectContaining({ id: "glm-5.2:cloud", contextWindow: 1_000_000 }),
+      expect.objectContaining({ id: "gpt-oss:120b-cloud", contextWindow: 131_072 }),
+      expect.objectContaining({ id: "local-cloud", contextTokens: 32_768 }),
     ]);
+    expect(provider.models?.[2]).not.toHaveProperty("contextTokens");
+    expect(provider.models?.[3]).not.toHaveProperty("contextTokens");
+  });
+
+  it.each([
+    ["glm-5.2:cloud", true],
+    ["gpt-oss:120b-cloud", true],
+    ["local-cloud", false],
+    ["invalid:cloud-cloud", false],
+    ["invalid:local:cloud", false],
+    ["invalid:local-cloud", false],
+    ["invalid:cloud:local", false],
+  ])("classifies Ollama model source %s", (modelId, expected) => {
+    expect(isOllamaCloudModel(modelId)).toBe(expected);
   });
 
   it("sets discovered models with context windows from /api/show", async () => {
@@ -100,6 +147,36 @@ describe("ollama provider models", () => {
       }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("discovers a chat model after 200 embedding-only catalog entries", async () => {
+    const embeddingModels = Array.from({ length: 200 }, (_, index) => ({
+      name: `embedding-${index}:latest`,
+    }));
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/api/tags")) {
+        return jsonResponse({
+          models: [...embeddingModels, { name: "qwen-chat:latest" }],
+        });
+      }
+      if (url.endsWith("/api/show")) {
+        const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
+        const completion = body.name === "qwen-chat:latest";
+        return jsonResponse({
+          capabilities: completion ? ["completion", "tools"] : ["embedding"],
+          model_info: completion ? { "qwen.context_length": 32_768 } : {},
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = await buildOllamaProvider("http://127.0.0.1:11434");
+
+    expect(provider.models?.map((model) => model.id)).toEqual(["qwen-chat:latest"]);
+    expect(provider.models?.[0]?.contextWindow).toBe(32_768);
+    expect(fetchMock).toHaveBeenCalledTimes(202);
   });
 
   it("scopes cached show metadata by credential", async () => {
@@ -358,6 +435,7 @@ describe("ollama provider models", () => {
     expect(visionModel.reasoning).toBe(true);
     expect(visionModel.compat?.supportsTools).toBe(true);
     expect(visionModel.compat?.supportsUsageInStreaming).toBe(true);
+    expect(visionModel.compat?.supportsJsonSchemaResponseFormat).toBe(false);
 
     const textModel = buildOllamaModelDefinition("glm-5.1:cloud", 202752, ["completion", "tools"]);
     expect(textModel.input).toEqual(["text"]);
@@ -382,6 +460,7 @@ describe("ollama provider models", () => {
     expect(noCapabilities.input).toEqual(["text"]);
     expect(noCapabilities.compat?.supportsTools).toBe(true);
     expect(noCapabilities.compat?.supportsUsageInStreaming).toBe(true);
+    expect(noCapabilities.compat?.supportsJsonSchemaResponseFormat).toBe(true);
   });
 
   it("disables tool support when Ollama capabilities omit tools", () => {
@@ -406,6 +485,158 @@ describe("ollama provider models", () => {
     const info = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "test-model");
 
     expect(info.contextWindow).toBe(expected);
+  });
+
+  it("cancels non-OK discovery response bodies before fallback results", async () => {
+    const tagsResponse = cancelTrackedResponse("ollama unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tagsResponse.response),
+    );
+
+    await expect(fetchOllamaModels("http://127.0.0.1:11434")).resolves.toEqual({
+      reachable: true,
+      models: [],
+    });
+    expect(tagsResponse.wasCanceled()).toBe(true);
+
+    const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => showResponse.response),
+    );
+
+    await expect(queryOllamaModelShowInfo("http://127.0.0.1:11434", "llama3:8b")).resolves.toEqual(
+      {},
+    );
+    expect(showResponse.wasCanceled()).toBe(true);
+  });
+
+  it("reports failed strict model inspections while releasing their response bodies", async () => {
+    const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => showResponse.response),
+    );
+
+    await expect(readOllamaModelShowInfo("http://127.0.0.1:11434", "llama3:8b")).rejects.toThrow(
+      "Ollama model inspection failed with HTTP 503",
+    );
+    expect(showResponse.wasCanceled()).toBe(true);
+  });
+
+  it("closes real failed discovery sockets while preserving successful discovery", async () => {
+    const sockets = new Set<Socket>();
+    const socketClosures = new Map<string, Promise<void>>();
+    let mode: "failure" | "success" = "failure";
+
+    const server = createServer((request, response) => {
+      const path = request.url;
+      if (path !== "/api/tags" && path !== "/api/show") {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+
+      if (mode === "failure") {
+        socketClosures.set(
+          path,
+          new Promise<void>((resolve) => {
+            request.socket.once("close", () => resolve());
+          }),
+        );
+        response.writeHead(503, { "content-type": "text/plain" });
+        // Leave the body open so only real client cancellation can close its socket.
+        response.write("ollama unavailable");
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      if (path === "/api/tags") {
+        response.end(JSON.stringify({ models: [{ name: "llama3:8b" }] }));
+        return;
+      }
+      response.end(
+        JSON.stringify({
+          model_info: { "llama.context_length": 32768 },
+          capabilities: ["completion", "tools"],
+        }),
+      );
+    });
+
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+
+    const waitForSocketClose = async (path: string): Promise<void> => {
+      const closed = socketClosures.get(path);
+      if (!closed) {
+        throw new Error(`No failed discovery socket was recorded for ${path}`);
+      }
+
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          closed,
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              reject(new Error(`Failed discovery socket was not closed for ${path}`));
+            }, 2_000);
+          }),
+        ]);
+      } finally {
+        if (timeout !== undefined) {
+          clearTimeout(timeout);
+        }
+      }
+    };
+
+    const listening = once(server, "listening");
+    try {
+      server.listen(0, "127.0.0.1");
+      await listening;
+
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Ollama test server did not expose a TCP address");
+      }
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+
+      await expect(fetchOllamaModels(baseUrl)).resolves.toEqual({
+        reachable: true,
+        models: [],
+      });
+      await waitForSocketClose("/api/tags");
+
+      await expect(queryOllamaModelShowInfo(baseUrl, "llama3:8b")).resolves.toEqual({});
+      await waitForSocketClose("/api/show");
+
+      mode = "success";
+      await expect(fetchOllamaModels(baseUrl)).resolves.toEqual({
+        reachable: true,
+        models: [{ name: "llama3:8b" }],
+      });
+      await expect(queryOllamaModelShowInfo(baseUrl, "llama3:8b")).resolves.toEqual({
+        contextWindow: 32768,
+        capabilities: ["completion", "tools"],
+      });
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve();
+          });
+        });
+      }
+    }
   });
 
   it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {

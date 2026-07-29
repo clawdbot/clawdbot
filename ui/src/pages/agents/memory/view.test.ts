@@ -1,12 +1,92 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../../i18n/index.ts";
+import type { TranslationMap } from "../../../i18n/lib/types.ts";
+import { en } from "../../../i18n/locales/en.ts";
 import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 
 let viewState = createDreamingViewState();
+let restoreTranslations = () => {};
+
+function asTranslationMap(value: string | TranslationMap | undefined): TranslationMap {
+  return value && typeof value === "object" ? value : {};
+}
+
+beforeAll(() => {
+  const dreaming = asTranslationMap(en.dreaming);
+  const wiki = asTranslationMap(dreaming.wiki);
+  i18n.registerTranslation("en", {
+    ...en,
+    dreaming: {
+      ...dreaming,
+      wiki: {
+        ...wiki,
+        pageTypes: {
+          entity: "entity",
+          concept: "concept",
+          source: "source",
+          synthesis: "synthesis",
+          report: "report",
+        },
+        pageGroups: {
+          sources: "Sources",
+          syntheses: "Syntheses",
+          reports: "Reports",
+          entities: "Entities",
+          concepts: "Concepts",
+        },
+        counts: {
+          pageOne: "{count} page",
+          pages: "{count} pages",
+          claimRowOne: "{count} claim row",
+          claimRows: "{count} claim rows",
+          openQuestionOne: "{count} open question",
+          openQuestions: "{count} open questions",
+          contradictionOne: "{count} contradiction",
+          contradictions: "{count} contradictions",
+          chats: "{count} chats",
+          sensitive: "{count} sensitive",
+          signals: "{count} signals",
+          messages: "{count} messages",
+          userMessages: "{count} user",
+          assistantMessages: "{count} assistant",
+        },
+        pageGroupSummary: "{label} · {count}",
+        noPagesYet: "No pages yet",
+        sectionPageSummary: "{label}: {count}",
+        questionCountOnPages: "{questionCount} on {pageCount}",
+        risk: {
+          needsReview: "needs review",
+          low: "low risk",
+          medium: "medium risk",
+          high: "high risk",
+          unknown: "unknown risk",
+        },
+        pageNotFound: "No wiki page found for {lookup}.",
+        previewTruncated: "Showing the first chunk of this page.",
+        previewTruncatedWithTotal: "Showing the first chunk of this page ({count} total lines).",
+        importedClusterSummary: "Imported chats clustered around {label}.",
+        withheldDigestOne: "{count} digest was withheld pending review.",
+        withheldDigests: "{count} digests were withheld pending review.",
+        details: "Details",
+        hideDetails: "Hide details",
+        vault: "Vault",
+        fullVaultBreakdown: "Full vault breakdown: {breakdown}.",
+        selectedSection: "Selected section: {summary}.",
+        latestUpdate: "Latest update {date}.",
+      },
+    },
+  });
+  restoreTranslations = () => i18n.registerTranslation("en", en);
+});
+
+afterAll(() => {
+  restoreTranslations();
+});
 
 function setDreamSubTab(tab: DreamingViewState["activeSubTab"]) {
   viewState.activeSubTab = tab;
@@ -347,15 +427,44 @@ describe("dreaming view", () => {
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
       "Travel · 1 chats · 1 signals",
     );
+    expect(compactText(container.querySelector(".dreams-diary__para"))).toBe(
+      "Imported chats clustered around travel.",
+    );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
       "BA flight receipts process",
     );
+    expect(compactText(insight?.querySelector(".dreams-diary__insight-badge") ?? null)).toBe(
+      "low risk",
+    );
     expect(insight?.querySelector(".dreams-diary__insight-line")?.textContent).toBe(
       "Use the BA request-a-receipt flow first.",
     );
+    expect(compactText(insight?.querySelector(".dreams-diary__insight-actions .btn") ?? null)).toBe(
+      "Details",
+    );
     expect(compactText(container.querySelector(".dreams-diary__explainer"))).toBe(
       "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
+    );
+    setDreamDiarySubTab("dreams");
+    setDreamSubTab("scene");
+  });
+
+  it("renders sensitive imported insight summaries and review badges", () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("insights");
+    viewState.diaryPage = 1;
+
+    const container = renderInto(buildProps());
+
+    expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
+      "Health · 1 chats · 1 sensitive",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__para"))).toBe(
+      "Imported chats clustered around health. 1 digest was withheld pending review.",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__insight-badge"))).toBe(
+      "needs review",
     );
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
@@ -444,6 +553,12 @@ describe("dreaming view", () => {
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
       "Travel system",
+    );
+    expect(compactText(insight?.querySelector(".dreams-diary__insight-badge") ?? null)).toBe(
+      "synthesis",
+    );
+    expect(compactText(insight?.querySelector(".dreams-diary__insight-actions .btn") ?? null)).toBe(
+      "Details",
     );
     expect(insight?.querySelector(".dreams-diary__insight-list strong")?.textContent).toBe(
       "Claims",

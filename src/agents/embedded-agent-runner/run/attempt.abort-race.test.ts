@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { findAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -61,5 +62,43 @@ describe("runEmbeddedAttempt abort races", () => {
     expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
     expect(prompt).not.toHaveBeenCalled();
     expect(observedSignal).toBe(abortController.signal);
+  });
+
+  it("preserves a run-budget timeout when abort blocks prompt submission", async () => {
+    let releasePendingEvents!: () => void;
+    const pendingEvents = new Promise<void>((resolve) => {
+      releasePendingEvents = resolve;
+    });
+    const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
+    if (!baseSubscribe) {
+      throw new Error("missing embedded subscription mock");
+    }
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => ({
+      ...baseSubscribe(params),
+      waitForPendingEvents: async () => await pendingEvents,
+    }));
+
+    const attempt = createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:telegram:direct:timeout",
+      tempPaths,
+      sessionPrompt: async () => {},
+      attemptOverrides: {
+        timeoutMs: 20,
+        onAttemptTimeout: () => releasePendingEvents(),
+      },
+    });
+
+    const error = await attempt.catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: "attempt aborted before prompt submission",
+    });
+    expect(findAgentRunTerminalOutcome(error)).toMatchObject({
+      reason: "hard_timeout",
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
   });
 });

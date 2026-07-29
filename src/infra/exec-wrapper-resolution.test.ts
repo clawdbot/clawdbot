@@ -64,7 +64,16 @@ describe("wrapper classification", () => {
     { token: "time", dispatch: true, shell: false },
     { token: "timeout.exe", dispatch: true, shell: false },
     { token: "bash", dispatch: false, shell: true },
+    { token: "csh", dispatch: false, shell: true },
+    { token: "elvish", dispatch: false, shell: true },
+    { token: "mksh", dispatch: false, shell: true },
+    { token: "nu", dispatch: false, shell: true },
+    { token: "nu.exe", dispatch: false, shell: true },
+    { token: "osh", dispatch: false, shell: true },
     { token: "pwsh.exe", dispatch: false, shell: true },
+    { token: "tcsh", dispatch: false, shell: true },
+    { token: "xonsh", dispatch: false, shell: true },
+    { token: "yash", dispatch: false, shell: true },
     { token: "node", dispatch: false, shell: false },
   ])("classifies wrappers for %j", ({ token, dispatch, shell }) => {
     expect(isDispatchWrapperExecutable(token)).toBe(dispatch);
@@ -81,6 +90,10 @@ describe("unwrapKnownShellMultiplexerInvocation", () => {
     {
       argv: ["busybox", "sh", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "busybox", argv: ["sh", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["busybox", "tcsh", "-c", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "busybox", argv: ["tcsh", "-c", "echo hi"] },
     },
     {
       argv: ["toybox", "--", "pwsh.exe", "-Command", "Get-Date"],
@@ -286,15 +299,28 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     });
   });
 
-  test.each(["chrt", "doas", "ionice", "setsid", "sudo", "taskset"])(
-    "fails closed for blocked dispatch wrapper %s",
-    (wrapper) => {
-      expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
-        kind: "blocked",
-        wrapper,
-      });
-    },
-  );
+  test.each([
+    "catchsegv",
+    "chrt",
+    "doas",
+    "ionice",
+    "linux32",
+    "linux64",
+    "numactl",
+    "proxychains",
+    "proxychains4",
+    "setarch",
+    "setsid",
+    "sudo",
+    "taskset",
+    "torify",
+    "unbuffer",
+  ])("fails closed for blocked dispatch wrapper %s", (wrapper) => {
+    expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
+      kind: "blocked",
+      wrapper,
+    });
+  });
 });
 
 describe("resolveDispatchWrapperTrustPlan", () => {
@@ -587,6 +613,51 @@ describe("extractShellWrapperCommand", () => {
     },
     {
       argv: ["cmd", "-k", "echo", "hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["tcsh", "-c", "echo hi"],
+      expectedInline: null,
+      expectedCommand: { isWrapper: false, command: null },
+    },
+    {
+      argv: ["nu", "--commands", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--execute", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--execute=echo Hi"],
+      expectedInline: "echo Hi",
+      expectedCommand: { isWrapper: true, command: "echo Hi" },
+    },
+    {
+      argv: ["nu", "--commands=echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "-e", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--interactive", "-e", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: null },
+    },
+    {
+      argv: ["nu", "--interactive", "--execute=echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: null },
+    },
+    {
+      argv: ["elvish", "-c", "echo hi"],
       expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: "echo hi" },
     },

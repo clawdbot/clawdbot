@@ -3,10 +3,10 @@ title: "Runtime tool fixture — tavily_search"
 scenario:
   id: runtime-tool-tavily-search
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
-      - tools.tavily-search
+      - web-search.api-backed-providers
   objective: Track tavily_search parity once the tool is present in the runtime surface.
   successCriteria:
     - If tavily_search is present, the fixture exercises happy and failure paths.
