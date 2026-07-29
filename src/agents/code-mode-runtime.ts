@@ -11,7 +11,7 @@ import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
-import type { CodeModeWorkerResult as WorkerThreadCodeModeResult } from "./code-mode-worker-types.js";
+import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -51,6 +51,7 @@ export type CodeModeConfig = {
 };
 
 export type {
+  CodeModeFailurePhase,
   CodeModeSettlementMode,
   PendingBridgeRequest,
   SettledBridgeRequest,
@@ -81,11 +82,13 @@ export type CodeModeHeadlessResult =
     };
 
 export type CodeModeWorkerResult =
-  | Extract<WorkerThreadCodeModeResult, { status: "completed" | "waiting" }>
+  | Extract<CodeModeWorkerThreadResult, { status: "completed" | "waiting" }>
   | {
       status: "failed";
       error: string;
       code: CodeModeFailureCode;
+      failurePhase: CodeModeFailurePhase;
+      bridgeDispatchStarted: boolean;
       output: unknown[];
     };
 

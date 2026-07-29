@@ -29,6 +29,7 @@ import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   sessionDeliveryChannel,
@@ -500,6 +501,29 @@ export async function getReplyFromConfig(
       return { text: error.message };
     }
     throw error;
+  }
+  if (!useFastTestBootstrap) {
+    try {
+      const baselineEntry = await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
+        ensureSessionDiffBaseline({
+          cwd:
+            normalizeOptionalString(sessionState.sessionEntry.spawnedCwd) ??
+            normalizeOptionalString(sessionState.sessionEntry.spawnedWorkspaceDir) ??
+            workspaceDir,
+          entry: sessionState.sessionEntry,
+          isNewSession: sessionState.isNewSession,
+          sessionKey: sessionState.sessionKey,
+          storePath: sessionState.storePath,
+        }),
+      );
+      sessionState.sessionEntry = baselineEntry;
+      sessionState.sessionEntryHandle.replaceCurrent(baselineEntry);
+      sessionState.sessionStore[sessionState.sessionKey] = baselineEntry;
+    } catch (error) {
+      logVerbose(
+        `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
+      );
+    }
   }
   const {
     sessionCtx,

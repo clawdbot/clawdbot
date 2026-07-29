@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { formatHelpExamples } from "../help-format.js";
 
 type AgentViaGatewayModule = typeof import("../../commands/agent-via-gateway.js");
@@ -52,7 +53,7 @@ export function registerAgentTurnCommand(
     .option("--model <id>", "Model override for this run (provider/model or model id)")
     .option(
       "--thinking <level>",
-      "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
+      `Thinking level: ${THINKING_LEVELS_HELP.replaceAll("|", " | ")} where supported`,
     )
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
@@ -130,7 +131,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--local-model-lean", "Use the reduced local-model tool surface")
     .option(
       "--thinking <level>",
-      "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
+      `Thinking level: ${THINKING_LEVELS_HELP.replaceAll("|", " | ")} where supported`,
     )
     .option(
       "--fallback <provider/model>",

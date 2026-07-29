@@ -279,22 +279,18 @@ function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] |
   if (!value?.trim()) {
     return undefined;
   }
-  const runtimes = value
-    .split(",")
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean)
-    .map(normalizeQaRuntimeId);
-  if (runtimes.length !== 2) {
+  const runtimeNames = value.split(",");
+  if (runtimeNames.length !== 2) {
     throw new Error('--runtime-pair must use exactly two runtimes, e.g. "openclaw,codex".');
   }
-  const [left, right] = runtimes;
+  const [left, right] = runtimeNames.map((part) => normalizeQaRuntimeId(part.trim().toLowerCase()));
   if (!left || !right) {
     throw new Error('--runtime-pair only supports "openclaw" and "codex".');
   }
   if (left === right) {
     throw new Error("--runtime-pair must compare two different runtimes.");
   }
-  return ["openclaw", "codex"];
+  return [left, right];
 }
 
 function parseQaRuntimePairLaneFilters(input: string[] | undefined): QaRuntimePairLane[] {

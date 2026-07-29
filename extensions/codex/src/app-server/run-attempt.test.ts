@@ -4101,7 +4101,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
-  it("surfaces Codex-native image generation saved paths as reply media", async () => {
+  it("materializes Codex-native image generation into Gateway-owned reply media", async () => {
     const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
     const harness = createAppServerHarness(async (method) => {
       if (method === "thread/start") {
@@ -4130,8 +4130,10 @@ describe("runCodexAppServerAttempt", () => {
     const result = await runCodexAppServerAttempt(createRunParams());
     expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result.assistantTexts).toEqual([]);
-    expect(result.toolMediaUrls).toEqual([savedPath]);
-    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(Buffer.from("foo"));
   });
   it("does not complete on unscoped turn/completed notifications", async () => {
     const harness = createStartedThreadHarness();

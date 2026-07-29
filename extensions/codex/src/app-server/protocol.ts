@@ -7,6 +7,7 @@ import type {
   CodexAppsReadParams,
   CodexAppsReadResponse,
 } from "./app-inventory-protocol.js";
+import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 
@@ -716,6 +717,7 @@ type CodexAppServerRequestParamsOverride = {
   "app/installed": CodexAppsInstalledParams;
   "app/list": CodexAppsListParams;
   "app/read": CodexAppsReadParams;
+  "command/exec": CodexCommandExecParams;
   "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
@@ -743,6 +745,7 @@ type CodexAppServerRequestResultMap = {
   "app/installed": CodexAppsInstalledResponse;
   "app/list": CodexAppsListResponse;
   "app/read": CodexAppsReadResponse;
+  "command/exec": CodexCommandExecResponse;
   "config/mcpServer/reload": JsonValue;
   "config/read": CodexConfigReadResponse;
   "configRequirements/read": CodexConfigRequirementsReadResponse;
