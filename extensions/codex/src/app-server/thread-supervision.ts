@@ -15,6 +15,10 @@ import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { attestCodexPluginThreadApps } from "./plugin-thread-attestation.js";
 import {
+  attestCodexPluginThreadApps,
+  discardUnattestedCodexPluginThread,
+} from "./plugin-thread-attestation.js";
+import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
@@ -216,13 +220,13 @@ export async function materializePendingSupervisionBranch(
           }),
         );
       } catch (error) {
-        // The canonical branch has not reached a turn, so persistent threads
-        // require delete rather than archive; the forked probe has a rollout.
-        const finalCleanupConfirmed = await cleanUnmaterializedSupervisionThread(
-          params.client,
-          finalThreadId,
-          startParams.ephemeral === true,
-        );
+        // The fresh persistent branch has no rollout yet; delete it before
+        // archiving the probe, and retain both for recovery if cleanup fails.
+        const finalCleanupConfirmed = await discardUnattestedCodexPluginThread({
+          client: params.client,
+          threadId: finalThreadId,
+          ephemeral: startParams.ephemeral === true,
+        });
         if (
           !finalCleanupConfirmed ||
           !(await archiveSupervisionArtifact(params.client, probeThreadId))

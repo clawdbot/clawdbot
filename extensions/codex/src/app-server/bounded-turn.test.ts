@@ -3,6 +3,7 @@ import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification, JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function modelList() {
   return {
@@ -37,7 +38,7 @@ function threadStartResult() {
       updatedAt: 1,
       status: { type: "idle" },
       cwd: "/tmp/finalizer",
-      cliVersion: "0.144.5",
+      cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,
       agentRole: null,

@@ -4,6 +4,7 @@
  * Resolves container paths to mounted host paths and executes guarded reads, writes, stats, renames, and deletes.
  */
 import fs from "node:fs";
+import { readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandResult,
@@ -76,9 +77,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;
+    maxBytes?: number;
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    return this.readPinnedFile(target);
+    return this.readPinnedFile(target, params.maxBytes);
   }
 
   async copyFile(params: {
@@ -281,10 +283,30 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
   }
 
-  private async readPinnedFile(target: SandboxResolvedFsPath): Promise<Buffer> {
+  private async readPinnedFile(target: SandboxResolvedFsPath, maxBytes?: number): Promise<Buffer> {
     const opened = await this.pathGuard.openReadableFile(target);
     try {
-      return fs.readFileSync(opened.fd);
+      if (maxBytes === undefined) {
+        return fs.readFileSync(opened.fd);
+      }
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+        throw new RangeError("maxBytes must be a non-negative safe integer");
+      }
+      const initialStat = fs.fstatSync(opened.fd);
+      if (!initialStat.isFile()) {
+        throw new Error(`Sandbox read requires a regular file: ${target.containerPath}`);
+      }
+      if (initialStat.size > maxBytes) {
+        throw new RangeError(`File exceeds ${maxBytes} bytes`);
+      }
+      // Read and recheck the same guarded descriptor so path swaps and file
+      // growth cannot bypass the byte limit or allocate an unbounded buffer.
+      const data = readFileDescriptorBoundedSync(opened.fd, maxBytes);
+      const finalStat = fs.fstatSync(opened.fd);
+      if (!finalStat.isFile() || finalStat.size > maxBytes) {
+        throw new RangeError(`File exceeds ${maxBytes} bytes`);
+      }
+      return data;
     } finally {
       fs.closeSync(opened.fd);
     }
