@@ -29,20 +29,32 @@ type SubagentRunSqliteInsert = Insertable<SubagentRunsTable>;
 type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "execution" | "completion" | "delivery">>;
-const EXECUTION_STATUS_RE = /^(?:queued|running|interrupted|terminal)$/;
-const DELIVERY_STATUS_RE = /^(?:not_required|pending|in_progress|delivered|failed|suspended|discarded)$/;
+const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
+const DELIVERY_STATUSES = new Set(
+  "not_required pending in_progress delivered failed suspended discarded".split(" "),
+);
 
-function hasStateStatus(value: unknown, pattern: RegExp): value is Record<string, unknown> {
-  return isRecord(value) && typeof value.status === "string" && pattern.test(value.status);
+function hasStateStatus(
+  value: unknown,
+  statuses: ReadonlySet<string>,
+): value is Record<string, unknown> {
+  return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
+}
+
+function hasCanonicalDeliveryState(value: unknown): value is Record<string, unknown> {
+  return (
+    hasStateStatus(value, DELIVERY_STATUSES) &&
+    !("handoffLeaseId" in value || "handoffLeasedAt" in value || "handoffInjectedAt" in value)
+  );
 }
 
 function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
   return (
     isRecord(value) &&
-    hasStateStatus(value.execution, EXECUTION_STATUS_RE) &&
+    hasStateStatus(value.execution, EXECUTION_STATUSES) &&
     isRecord(value.completion) &&
     typeof value.completion.required === "boolean" &&
-    hasStateStatus(value.delivery, DELIVERY_STATUS_RE)
+    hasCanonicalDeliveryState(value.delivery)
   );
 }
 
@@ -177,15 +189,6 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
     return null;
   }
   const payload = parsedPayload;
-  const persistedDelivery = payload.delivery as SubagentCompletionDeliveryState &
-    Record<string, unknown>;
-  if (
-    "handoffLeaseId" in persistedDelivery ||
-    "handoffLeasedAt" in persistedDelivery ||
-    "handoffInjectedAt" in persistedDelivery
-  ) {
-    return null;
-  }
   const requesterOrigin =
     (parseJson(row.requester_origin_json) as SubagentRunRecord["requesterOrigin"] | undefined) ??
     payload.requesterOrigin;

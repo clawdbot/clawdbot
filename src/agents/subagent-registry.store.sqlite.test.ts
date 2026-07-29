@@ -152,13 +152,20 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it("rejects writes without canonical nested state", async () => {
+  it("rejects writes outside the canonical nested state", async () => {
     await withTempStateEnv(async () => {
-      const run = createRun({ execution: undefined });
+      const missingState = createRun({ execution: undefined });
+      const retiredState = createRun();
+      Object.assign(retiredState.delivery!, { handoffLeaseId: "lease-1" });
+      const invalidStatus = createRun({
+        execution: { status: "running\n" } as unknown as SubagentRunRecord["execution"],
+      });
 
-      expect(() => saveSubagentRegistryToSqlite(new Map([[run.runId, run]]))).toThrow(
-        "subagent run is missing canonical nested state",
-      );
+      for (const run of [missingState, retiredState, invalidStatus]) {
+        expect(() => saveSubagentRegistryToSqlite(new Map([[run.runId, run]]))).toThrow(
+          "subagent run is missing canonical nested state",
+        );
+      }
     });
   });
 
