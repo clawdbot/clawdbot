@@ -150,7 +150,11 @@ Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent.
 
 Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
 
-Guided channel setup, workspace skills setup, and web-search provider setup run as hosted wizards inside the chat: wizard steps render as structured question cards, secret steps mask input in the browser, and every applied write is approved, audited, and re-validated. If a chosen web-search provider needs a plugin install and that install fails, setup stops and reports the failure instead of pretending the provider is configured. See [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
+Guided channel setup, workspace skills setup, web-search provider setup, and local Gateway setup run as hosted wizards inside the chat. Wizard questions stay in the conversation, secret steps mask input in the browser, and successful config-backed flows are audited and re-validated. If a chosen web-search provider needs a plugin install and that install fails, setup stops and reports the failure instead of pretending the provider is configured.
+
+For Gateway setup, say `configure gateway` to choose the port, bind address, token or password auth, and Tailscale exposure. Before the first question, the web surface warns that applying the saved settings requires a restart that may disconnect the chat or require a new Control UI sign-in. The wizard changes config only; say `restart gateway` when you are ready to apply it. It manages only a local Gateway, so remote mode changes stay in `openclaw onboard` or `openclaw configure`.
+
+Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import assistant memory](#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
 
 Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
@@ -329,7 +333,7 @@ select it to open the owning Approvals page.
 
 ## Import assistant memory
 
-Open **Settings** → **Import Memory** to bring local Codex or Claude Code memory
+Open **Settings** → **Import Memory** to bring local Codex, Claude Code, or Hermes memory
 into an OpenClaw agent. The Gateway discovers supported local memory on its own
 host, so a remote Control UI imports from the Gateway computer rather than the
 browser computer.
@@ -348,6 +352,13 @@ Code imports Markdown from project auto-memory directories and a configured
 credentials through this page. Files are copied below `memory/imports/` in the
 selected workspace, where the active memory plugin can index them. Sources are
 never changed.
+
+For a narrower conversational path, open **Settings → Ask OpenClaw** and say
+`import memory`. The chat wizard copies only new detected memory into the
+existing default agent workspace; it does not choose another destination agent
+or replace conflicts. It reports each source's confirmed copy count and warns
+when a failure may have happened after a partial copy. Use the dedicated Import
+Memory page when you need destination selection, a file preview, or replacement.
 
 Planning and applying require `operator.admin`. Every apply creates a verified
 OpenClaw backup when state exists, writes a redacted migration report, and keeps
