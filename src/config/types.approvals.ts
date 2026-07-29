@@ -1,5 +1,3 @@
-Source: Web Fetch
----
 // Defines command approval configuration types.
 export type NativeExecApprovalEnableMode = boolean | "auto";
 
