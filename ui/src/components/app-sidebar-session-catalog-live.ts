@@ -21,13 +21,42 @@ function sessionCatalogSnapshot(catalogs: readonly SessionCatalog[]): string {
   return JSON.stringify(catalogs);
 }
 
+function sessionCatalogMaterialSnapshot(catalogs: readonly SessionCatalog[]): string {
+  // Fast follow-up polls cover catalog/host/session identity sets, labels, connectivity,
+  // and session title/status. Ordering and recency timestamps cannot pin the 5s cadence.
+  return JSON.stringify(
+    catalogs
+      .map((catalog) => ({
+        id: catalog.id,
+        label: catalog.label,
+        hosts: catalog.hosts
+          .map((host) => ({
+            hostId: host.hostId,
+            label: host.label,
+            connected: host.connected,
+            errorCode: host.error?.code,
+            sessions: host.sessions
+              .map((session) => ({
+                threadId: session.threadId,
+                name: session.name,
+                status: session.status,
+                archived: session.archived,
+              }))
+              .toSorted((left, right) => left.threadId.localeCompare(right.threadId)),
+          }))
+          .toSorted((left, right) => left.hostId.localeCompare(right.hostId)),
+      }))
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
+  );
+}
+
 export function sessionCatalogListClient(
   snapshot: ApplicationGatewaySnapshot | undefined,
   connected: boolean,
 ): GatewayBrowserClient | null {
   if (
     !connected ||
-    !snapshot?.connected ||
+    snapshot?.phase !== "connected" ||
     !snapshot.client ||
     isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
   ) {
@@ -58,7 +87,7 @@ async function requestSessionCatalogList(params: {
       progressive: true,
     };
   } catch (error) {
-    if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
+    if (!isLegacyProgressIdRejection(error)) {
       throw error;
     }
     // Older Gateways advertise the list method but reject the additive field.
@@ -68,6 +97,21 @@ async function requestSessionCatalogList(params: {
       progressive: false,
     };
   }
+}
+
+function isLegacyProgressIdRejection(error: unknown): boolean {
+  if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("progressid") &&
+    (message.includes("unexpected property") ||
+      message.includes("additional property") ||
+      message.includes("additional properties") ||
+      message.includes("unknown property") ||
+      message.includes("unrecognized property"))
+  );
 }
 
 function isSessionsCatalogHostEvent(value: unknown): value is SessionsCatalogHostEvent {
@@ -116,6 +160,7 @@ export class SessionCatalogLiveState {
   private readonly hostProgressSequences = new Map<string, number>();
   private readonly hostIdsByCatalog = new Map<string, ReadonlySet<string>>();
   private readonly requestChangedHostKeys = new Set<string>();
+  private readonly warnedRequestErrors = new Set<string>();
   private requestOwner: symbol | null = null;
 
   cancelTimer() {
@@ -188,6 +233,10 @@ export class SessionCatalogLiveState {
     return this.refetchOwner !== null;
   }
 
+  get hasRequested() {
+    return this.progressSequence > 0;
+  }
+
   beginRefetch(active: boolean): symbol | null {
     if (!active) {
       return null;
@@ -229,14 +278,27 @@ export class SessionCatalogLiveState {
     return this.requestOwner === owner;
   }
 
+  warnRequestError(error: unknown) {
+    const code = error instanceof GatewayRequestError ? error.gatewayCode : "UNAVAILABLE";
+    const message = error instanceof Error ? error.message : String(error);
+    const signature = `${code}\u0000${message}`;
+    if (this.warnedRequestErrors.has(signature)) {
+      return;
+    }
+    this.warnedRequestErrors.add(signature);
+    console.warn("Session catalog refresh failed", error);
+  }
+
   markFinal(params: {
     catalogs: readonly SessionCatalog[];
     hadCatalogs: boolean;
-    previousSnapshot: string;
+    previousMaterialSnapshot: string;
     progressSequence: number;
   }) {
     this.sawChange =
-      params.hadCatalogs && params.previousSnapshot !== sessionCatalogSnapshot(params.catalogs);
+      params.hadCatalogs &&
+      (this.sawChange ||
+        params.previousMaterialSnapshot !== sessionCatalogMaterialSnapshot(params.catalogs));
     const finalCatalogIds = new Set(params.catalogs.map((catalog) => catalog.id));
     for (const [catalogId, previousHostIds] of this.hostIdsByCatalog) {
       if (finalCatalogIds.has(catalogId)) {
@@ -311,7 +373,7 @@ export class SessionCatalogLiveState {
     agentId: string;
     catalogs: SessionCatalog[];
     pageDepths: ReadonlyMap<string, number>;
-  }): { catalogs: SessionCatalog[]; catalogId: string } | null {
+  }): { catalogs: SessionCatalog[]; catalogId: string; materialChange: boolean } | null {
     if (!isSessionsCatalogHostEvent(params.payload)) {
       return null;
     }
@@ -359,8 +421,10 @@ export class SessionCatalogLiveState {
     if (sessionCatalogSnapshot(catalogs) === sessionCatalogSnapshot(params.catalogs)) {
       return null;
     }
-    this.sawChange = true;
-    return { catalogs, catalogId: event.catalog.id };
+    const materialChange =
+      sessionCatalogMaterialSnapshot(catalogs) !== sessionCatalogMaterialSnapshot(params.catalogs);
+    this.sawChange ||= materialChange;
+    return { catalogs, catalogId: event.catalog.id, materialChange };
   }
 
   schedule(delayMs: number, isConnected: boolean, refresh: () => void) {
@@ -407,8 +471,8 @@ export class SessionCatalogLiveState {
     if (this.activationTimer !== null) {
       return;
     }
-    // Browsers fire visibilitychange and focus as one foregrounding pair.
-    // The short window prevents that pair from triggering two fleet scans.
+    // Presence, host updates, visibilitychange, and focus arrive in activation bursts.
+    // One short window keeps the burst to a single fleet scan.
     this.activationTimer = globalThis.setTimeout(() => {
       this.activationTimer = null;
       refresh();
@@ -430,6 +494,7 @@ export async function refreshSessionCatalogsLive(params: {
   pageDepths: ReadonlyMap<string, number>;
   connected: () => boolean;
   applyFinal: (catalogs: SessionCatalog[], revisedCatalogIds: ReadonlySet<string>) => void;
+  applyError: (error: unknown) => void;
   refresh: () => void;
 }) {
   const { live, client, generation, revision } = params;
@@ -438,7 +503,7 @@ export async function refreshSessionCatalogsLive(params: {
   }
   const { progressId, progressSequence, requestOwner } = live.beginRequest(generation);
   const hadCatalogs = params.catalogs().length > 0;
-  const previousSnapshot = sessionCatalogSnapshot(params.catalogs());
+  const previousMaterialSnapshot = sessionCatalogMaterialSnapshot(params.catalogs());
   let refetchOwner: symbol | null = null;
   const requestIsCurrent = () =>
     live.ownsRequest(requestOwner) &&
@@ -447,7 +512,7 @@ export async function refreshSessionCatalogsLive(params: {
   const revisionIsCurrent = () => requestIsCurrent() && revision === params.currentRevision();
   try {
     const result = await live.requestList(client, params.agentId, progressId);
-    if (!requestIsCurrent()) {
+    if (!requestIsCurrent() || !result?.catalogs) {
       return;
     }
     refetchOwner = live.beginRefetch(params.pageDepths.size > 0);
@@ -468,9 +533,13 @@ export async function refreshSessionCatalogsLive(params: {
       ...catalogs.map((catalog) => catalog.id),
     ]);
     params.applyFinal(catalogs, revisedCatalogIds);
-    live.markFinal({ catalogs, hadCatalogs, previousSnapshot, progressSequence });
-  } catch {
+    live.markFinal({ catalogs, hadCatalogs, previousMaterialSnapshot, progressSequence });
+  } catch (error) {
     // A transient poll failure must not collapse already visible or expanded pages.
+    if (revisionIsCurrent()) {
+      live.warnRequestError(error);
+      params.applyError(error);
+    }
   } finally {
     live.endRefetch(refetchOwner);
     const ownsRequest = live.ownsRequest(requestOwner);

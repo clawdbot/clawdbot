@@ -101,7 +101,7 @@ jobs:
           exit 1
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
@@ -187,7 +187,7 @@ jobs:
 
       - name: Restore preflight build outputs
         id: dist_build_cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             dist/
@@ -204,7 +204,7 @@ jobs:
       - name: Pack publishable core packages
         id: core_package_tarballs
         env:
-          CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol
+          CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client
         run: |
           set -euo pipefail
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
@@ -249,7 +249,7 @@ jobs:
       - name: Save preflight build outputs
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             dist/
@@ -386,6 +386,7 @@ jobs:
           set -euo pipefail
           AI_TARBALL_PATH=""
           GATEWAY_PROTOCOL_TARBALL_PATH=""
+          GATEWAY_CLIENT_TARBALL_PATH=""
           if [[ -n "$CORE_PACKAGE_TARBALL_DIR" ]]; then
             mapfile -t AI_TARBALLS < <(find "$CORE_PACKAGE_TARBALL_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | sort)
             if node -e 'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)'; then
@@ -394,7 +395,6 @@ jobs:
                 exit 1
               fi
               AI_TARBALL_PATH="${AI_TARBALLS[0]}"
-              node --import tsx scripts/prepare-openclaw-npm-shrinkwrap.ts "$AI_TARBALL_PATH"
             elif [[ "${#AI_TARBALLS[@]}" -ne 0 ]]; then
               echo "Frozen target without an @openclaw/ai dependency contains unexpected AI runtime artifacts." >&2
               exit 1
@@ -408,6 +408,17 @@ jobs:
               GATEWAY_PROTOCOL_TARBALL_PATH="${GATEWAY_PROTOCOL_TARBALLS[0]}"
             elif [[ "${#GATEWAY_PROTOCOL_TARBALLS[@]}" -ne 0 ]]; then
               echo "Frozen target without a publishable @openclaw/gateway-protocol package contains unexpected artifacts." >&2
+              exit 1
+            fi
+            mapfile -t GATEWAY_CLIENT_TARBALLS < <(find "$CORE_PACKAGE_TARBALL_DIR" -maxdepth 1 -type f -name 'openclaw-gateway-client-*.tgz' -print | sort)
+            if [[ -f packages/gateway-client/package.json ]] && node -e 'const pkg = require("./packages/gateway-client/package.json"); process.exit(pkg.openclaw?.release?.publishToNpm === true ? 0 : 1)'; then
+              if [[ "${#GATEWAY_CLIENT_TARBALLS[@]}" -ne 1 ]]; then
+                echo "Expected exactly one prepared @openclaw/gateway-client tarball, found ${#GATEWAY_CLIENT_TARBALLS[@]}." >&2
+                exit 1
+              fi
+              GATEWAY_CLIENT_TARBALL_PATH="${GATEWAY_CLIENT_TARBALLS[0]}"
+            elif [[ "${#GATEWAY_CLIENT_TARBALLS[@]}" -ne 0 ]]; then
+              echo "Frozen target without a publishable @openclaw/gateway-client package contains unexpected artifacts." >&2
               exit 1
             fi
           fi
@@ -508,6 +519,9 @@ jobs:
           GATEWAY_PROTOCOL_TARBALL_NAME=""
           GATEWAY_PROTOCOL_TARBALL_SHA256=""
           GATEWAY_PROTOCOL_PACKAGE_VERSION=""
+          GATEWAY_CLIENT_TARBALL_NAME=""
+          GATEWAY_CLIENT_TARBALL_SHA256=""
+          GATEWAY_CLIENT_PACKAGE_VERSION=""
           ARTIFACT_DIR="$RUNNER_TEMP/openclaw-npm-preflight"
           rm -rf "$ARTIFACT_DIR"
           mkdir -p "$ARTIFACT_DIR"
@@ -536,6 +550,18 @@ jobs:
               exit 1
             fi
           fi
+          if [[ -n "$GATEWAY_CLIENT_TARBALL_PATH" ]]; then
+            GATEWAY_CLIENT_TARBALL_NAME="$(basename "$GATEWAY_CLIENT_TARBALL_PATH")"
+            GATEWAY_CLIENT_TARBALL_SHA256="$(sha256sum "$GATEWAY_CLIENT_TARBALL_PATH" | awk '{print $1}')"
+            GATEWAY_CLIENT_PACKAGE_VERSION="$(
+              tar -xOf "$GATEWAY_CLIENT_TARBALL_PATH" package/package.json |
+                node -e 'let raw = ""; process.stdin.on("data", (chunk) => (raw += chunk)); process.stdin.on("end", () => process.stdout.write(JSON.parse(raw).version));'
+            )"
+            if [[ "$GATEWAY_CLIENT_PACKAGE_VERSION" != "$PACKAGE_VERSION" ]]; then
+              echo "Prepared @openclaw/gateway-client version ${GATEWAY_CLIENT_PACKAGE_VERSION} does not match openclaw ${PACKAGE_VERSION}." >&2
+              exit 1
+            fi
+          fi
           if [[ -n "$CORE_PACKAGE_TARBALL_DIR" ]]; then
             cp "$CORE_PACKAGE_TARBALL_DIR"/*.tgz "$ARTIFACT_DIR/"
             cp "$CORE_PACKAGE_TARBALL_DIR/SHA256SUMS" "$ARTIFACT_DIR/core-packages-SHA256SUMS"
@@ -544,7 +570,7 @@ jobs:
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
           printf '%s\n' "$RELEASE_NPM_DIST_TAG" > "$ARTIFACT_DIR/release-npm-dist-tag.txt"
-          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" AI_PACKAGE_VERSION="$AI_PACKAGE_VERSION" AI_TARBALL_NAME="$AI_TARBALL_NAME" AI_TARBALL_SHA256="$AI_TARBALL_SHA256" GATEWAY_PROTOCOL_PACKAGE_VERSION="$GATEWAY_PROTOCOL_PACKAGE_VERSION" GATEWAY_PROTOCOL_TARBALL_NAME="$GATEWAY_PROTOCOL_TARBALL_NAME" GATEWAY_PROTOCOL_TARBALL_SHA256="$GATEWAY_PROTOCOL_TARBALL_SHA256" node <<'NODE'
+          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" AI_PACKAGE_VERSION="$AI_PACKAGE_VERSION" AI_TARBALL_NAME="$AI_TARBALL_NAME" AI_TARBALL_SHA256="$AI_TARBALL_SHA256" GATEWAY_PROTOCOL_PACKAGE_VERSION="$GATEWAY_PROTOCOL_PACKAGE_VERSION" GATEWAY_PROTOCOL_TARBALL_NAME="$GATEWAY_PROTOCOL_TARBALL_NAME" GATEWAY_PROTOCOL_TARBALL_SHA256="$GATEWAY_PROTOCOL_TARBALL_SHA256" GATEWAY_CLIENT_PACKAGE_VERSION="$GATEWAY_CLIENT_PACKAGE_VERSION" GATEWAY_CLIENT_TARBALL_NAME="$GATEWAY_CLIENT_TARBALL_NAME" GATEWAY_CLIENT_TARBALL_SHA256="$GATEWAY_CLIENT_TARBALL_SHA256" node <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
           const manifest = {
@@ -574,6 +600,16 @@ jobs:
                       packageVersion: process.env.GATEWAY_PROTOCOL_PACKAGE_VERSION,
                       tarballName: process.env.GATEWAY_PROTOCOL_TARBALL_NAME,
                       tarballSha256: process.env.GATEWAY_PROTOCOL_TARBALL_SHA256,
+                    },
+                  ]
+                : []),
+              ...(process.env.GATEWAY_CLIENT_TARBALL_NAME
+                ? [
+                    {
+                      packageName: "@openclaw/gateway-client",
+                      packageVersion: process.env.GATEWAY_CLIENT_PACKAGE_VERSION,
+                      tarballName: process.env.GATEWAY_CLIENT_TARBALL_NAME,
+                      tarballSha256: process.env.GATEWAY_CLIENT_TARBALL_SHA256,
                     },
                   ]
                 : []),
@@ -656,7 +692,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           filter: blob:none
@@ -799,7 +835,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ inputs.tag }}
           # Frozen preflight evidence already binds the exact release SHA and
@@ -1046,6 +1082,7 @@ jobs:
           EXPECTED_PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           SEEN_AI_TARBALL="false"
           SEEN_GATEWAY_PROTOCOL_TARBALL="false"
+          SEEN_GATEWAY_CLIENT_TARBALL="false"
           while IFS=$'\t' read -r package_name package_version tarball_name tarball_sha256; do
             if [[ -z "$tarball_name" || "$tarball_name" != "$(basename -- "$tarball_name")" || "$tarball_name" != *.tgz ]]; then
               echo "Prepared core package tarball name is unsafe: $tarball_name" >&2
@@ -1059,6 +1096,10 @@ jobs:
               "@openclaw/gateway-protocol")
                 [[ "$SEEN_GATEWAY_PROTOCOL_TARBALL" == "false" ]] || { echo "Prepared core package manifest contains duplicate @openclaw/gateway-protocol metadata." >&2; exit 1; }
                 SEEN_GATEWAY_PROTOCOL_TARBALL="true"
+                ;;
+              "@openclaw/gateway-client")
+                [[ "$SEEN_GATEWAY_CLIENT_TARBALL" == "false" ]] || { echo "Prepared core package manifest contains duplicate @openclaw/gateway-client metadata." >&2; exit 1; }
+                SEEN_GATEWAY_CLIENT_TARBALL="true"
                 ;;
               *)
                 echo "Prepared core package manifest contains unsupported package: $package_name" >&2
@@ -1091,6 +1132,15 @@ jobs:
             fi
           elif jq -e '.corePackageTarballs[] | select(.packageName == "@openclaw/gateway-protocol")' "$MANIFEST_FILE" >/dev/null || find preflight-tarball -maxdepth 1 -type f -name 'openclaw-gateway-protocol-*.tgz' -print -quit | grep -q .; then
             echo "Frozen target without a publishable @openclaw/gateway-protocol package contains unexpected artifacts." >&2
+            exit 1
+          fi
+          if [[ -f packages/gateway-client/package.json ]] && node -e 'const pkg = require("./packages/gateway-client/package.json"); process.exit(pkg.openclaw?.release?.publishToNpm === true ? 0 : 1)'; then
+            if [[ "$SEEN_GATEWAY_CLIENT_TARBALL" != "true" ]]; then
+              echo "Prepared @openclaw/gateway-client tarball is missing from the manifest." >&2
+              exit 1
+            fi
+          elif jq -e '.corePackageTarballs[] | select(.packageName == "@openclaw/gateway-client")' "$MANIFEST_FILE" >/dev/null || find preflight-tarball -maxdepth 1 -type f -name 'openclaw-gateway-client-*.tgz' -print -quit | grep -q .; then
+            echo "Frozen target without a publishable @openclaw/gateway-client package contains unexpected artifacts." >&2
             exit 1
           fi
           echo "tarball_name=$ARTIFACT_TARBALL_NAME" >> "$GITHUB_OUTPUT"

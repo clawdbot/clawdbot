@@ -18,8 +18,7 @@ function createSettings(): UiSettings {
     themeMode: "dark",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    chatPersistCommentary: false,
-    splitRatio: 0.6,
+    chatPersistCommentary: true,
     navCollapsed: false,
     navWidth: 280,
     sidebarEntries: ["route:workboard", "route:tasks"],
@@ -69,7 +68,7 @@ describe("chat composer view menu", () => {
       t("chat.view.toolCalls"),
       t("chat.view.commentary"),
     ]);
-    expect(items.map((item) => item.checked)).toEqual([true, true, false]);
+    expect(items.map((item) => item.checked)).toEqual([true, true, true]);
   });
 
   it("toggles settings from the menu rows", () => {
@@ -98,7 +97,7 @@ describe("chat composer view menu", () => {
     );
     select(commentary!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ chatPersistCommentary: true }),
+      expect.objectContaining({ chatPersistCommentary: false }),
     );
   });
 
@@ -110,7 +109,7 @@ describe("chat composer view menu", () => {
     const items = menuItems(container);
     expect(items.every((item) => item.disabled)).toBe(true);
     // Onboarding forces thinking hidden and tool calls visible.
-    expect(items.map((item) => item.checked)).toEqual([false, true, false]);
+    expect(items.map((item) => item.checked)).toEqual([false, true, true]);
     container.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,

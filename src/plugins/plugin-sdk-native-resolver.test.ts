@@ -5,8 +5,12 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeAll, describe, expect, it } from "vitest";
-import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import {
+  installOpenClawInternalCorePackageNativeResolver,
+  installOpenClawPluginSdkNativeResolver,
+} from "./plugin-sdk-native-resolver.js";
 
 type NativeEsmLazyImportProbe = {
   status: number | null;
@@ -100,6 +104,144 @@ function addFakePluginSdkDistExport(root: string, subpath: string): string {
   fs.writeFileSync(distPath, `export const ${subpath.replaceAll("-", "_")} = true;\n`, "utf8");
   return distPath;
 }
+
+function createInternalCoreAliasFixture(prefix: string): {
+  coreSourceParent: string;
+  loaderModulePath: string;
+  moduleUrl: string;
+  root: string;
+  sourcePath: string;
+} {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const { loaderModulePath } = writeFakeOpenClawPackage(root);
+  const sourcePath = writeInternalCorePackageSource(root, "markdown-core", "code-spans.ts");
+  const coreSourceParent = path.join(root, "src", "host-probe.js");
+  fs.mkdirSync(path.dirname(coreSourceParent), { recursive: true });
+  fs.writeFileSync(coreSourceParent, "export default {};\n", "utf8");
+  return {
+    coreSourceParent,
+    loaderModulePath,
+    moduleUrl: pathToFileURL(loaderModulePath).href,
+    root,
+    sourcePath,
+  };
+}
+
+describe("installOpenClawInternalCorePackageNativeResolver", () => {
+  it("shares one internal core alias scan between resolver installers", () => {
+    const fixture = createInternalCoreAliasFixture("openclaw-sdk-native-core-cache-");
+    const externalPluginEntry = writeExternalPluginEntry(
+      path.join(path.dirname(path.dirname(fixture.loaderModulePath)), "external-plugin"),
+    );
+    const existsSync = vi.spyOn(fs, "existsSync");
+
+    try {
+      installOpenClawPluginSdkNativeResolver({
+        modulePath: fixture.loaderModulePath,
+        pluginModulePath: externalPluginEntry,
+      });
+      expect(existsSync).toHaveBeenCalledWith(fixture.sourcePath);
+
+      existsSync.mockClear();
+      const aliases = installOpenClawInternalCorePackageNativeResolver({
+        moduleUrl: fixture.moduleUrl,
+      });
+
+      expect(aliases).toContain("@openclaw/markdown-core/code-spans");
+      expect(existsSync).not.toHaveBeenCalled();
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it("shares one internal core alias scan across importers from the same host package", () => {
+    const fixture = createInternalCoreAliasFixture("openclaw-sdk-native-core-shared-host-");
+    const secondModulePath = path.join(
+      path.dirname(fixture.loaderModulePath),
+      "provider-policy.js",
+    );
+    fs.writeFileSync(secondModulePath, "export default {};\n", "utf8");
+    const existsSync = vi.spyOn(fs, "existsSync");
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+
+    try {
+      installOpenClawInternalCorePackageNativeResolver({ moduleUrl: fixture.moduleUrl });
+      expect(existsSync).toHaveBeenCalledWith(fixture.sourcePath);
+
+      existsSync.mockClear();
+      readFileSync.mockClear();
+      const secondModuleUrl = pathToFileURL(secondModulePath).href;
+      const aliases = installOpenClawInternalCorePackageNativeResolver({
+        moduleUrl: secondModuleUrl,
+      });
+
+      expect(aliases).toContain("@openclaw/markdown-core/code-spans");
+      expect(existsSync).not.toHaveBeenCalledWith(fixture.sourcePath);
+      expect(readFileSync).toHaveBeenCalledExactlyOnceWith(
+        path.join(fixture.root, "package.json"),
+        "utf8",
+      );
+
+      existsSync.mockClear();
+      readFileSync.mockClear();
+      installOpenClawInternalCorePackageNativeResolver({ moduleUrl: secondModuleUrl });
+
+      expect(existsSync).not.toHaveBeenCalled();
+      expect(readFileSync).not.toHaveBeenCalled();
+    } finally {
+      readFileSync.mockRestore();
+      existsSync.mockRestore();
+    }
+  });
+
+  it("keeps internal core alias registration isolated between host modules", () => {
+    const first = createInternalCoreAliasFixture("openclaw-sdk-native-core-host-a-");
+    const second = createInternalCoreAliasFixture("openclaw-sdk-native-core-host-b-");
+    const existsSync = vi.spyOn(fs, "existsSync");
+
+    try {
+      installOpenClawInternalCorePackageNativeResolver({ moduleUrl: first.moduleUrl });
+      existsSync.mockClear();
+
+      installOpenClawInternalCorePackageNativeResolver({ moduleUrl: second.moduleUrl });
+
+      expect(existsSync).toHaveBeenCalledWith(second.sourcePath);
+      expect(
+        fs.realpathSync(
+          createRequire(first.coreSourceParent).resolve("@openclaw/markdown-core/code-spans"),
+        ),
+      ).toBe(fs.realpathSync(first.sourcePath));
+      expect(
+        fs.realpathSync(
+          createRequire(second.coreSourceParent).resolve("@openclaw/markdown-core/code-spans"),
+        ),
+      ).toBe(fs.realpathSync(second.sourcePath));
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it("rescans internal core aliases after plugin metadata lifecycle invalidation", () => {
+    const fixture = createInternalCoreAliasFixture("openclaw-sdk-native-core-invalidation-");
+    const existsSync = vi.spyOn(fs, "existsSync");
+
+    try {
+      installOpenClawInternalCorePackageNativeResolver({ moduleUrl: fixture.moduleUrl });
+      existsSync.mockClear();
+
+      installOpenClawInternalCorePackageNativeResolver({ moduleUrl: fixture.moduleUrl });
+      expect(existsSync).not.toHaveBeenCalled();
+
+      clearPluginMetadataLifecycleCaches();
+      existsSync.mockClear();
+      installOpenClawInternalCorePackageNativeResolver({ moduleUrl: fixture.moduleUrl });
+
+      expect(existsSync).toHaveBeenCalledWith(fixture.sourcePath);
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+});
 
 describe("installOpenClawPluginSdkNativeResolver", () => {
   it("resolves installed plugin SDK imports to the dev source root", () => {
@@ -385,6 +527,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "markdown-core",
       "code-spans.ts",
     );
+    const aiTransportsSource = writeInternalCorePackageSource(root, "ai", "transports.ts");
     const aiRuntimeSource = writeInternalCorePackageSource(
       root,
       "ai",
@@ -418,6 +561,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(installedAliases).toContain("@openclaw/normalization-core/agent-id");
     expect(installedAliases).toContain("@openclaw/media-core/mime");
     expect(installedAliases).toContain("@openclaw/markdown-core/code-spans");
+    expect(installedAliases).toContain("@openclaw/ai/transports");
     expect(installedAliases).toContain("@openclaw/ai/internal/retry-after");
     expect(installedAliases).toContain("@openclaw/ai/internal/runtime");
     expect(installedAliases).toContain("@openclaw/acp-core/runtime/types");
@@ -444,6 +588,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(
       fs.realpathSync(requireFromCoreSource.resolve("@openclaw/markdown-core/code-spans")),
     ).toBe(fs.realpathSync(markdownCoreSource));
+    expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/transports"))).toBe(
+      fs.realpathSync(aiTransportsSource),
+    );
     expect(
       fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/retry-after")),
     ).toBe(fs.realpathSync(aiRetryAfterSource));
@@ -463,6 +610,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(() => requireFromPlugin.resolve("@openclaw/normalization-core/result")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/media-core/mime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/markdown-core/code-spans")).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/ai/transports")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/retry-after")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/runtime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/acp-core/runtime/types")).toThrow();

@@ -1,7 +1,10 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
+import {
+  getCliSessionBinding,
+  shouldClearFailedCliSessionBinding,
+} from "../../agents/cli-session.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import {
@@ -10,6 +13,10 @@ import {
 } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../tasks/task-status-access.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -18,7 +25,7 @@ import {
 } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
-  clearDroppedCliSessionBinding,
+  clearCliSessionBindingForRun,
   createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
@@ -35,7 +42,10 @@ import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 
 type CliPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
-  "handlePartialForTyping" | "preparePartialForTyping" | "startPresentationWhileTyping"
+  | "blockReplyHandler"
+  | "handlePartialForTyping"
+  | "preparePartialForTyping"
+  | "startPresentationWhileTyping"
 >;
 
 export async function runCliFallbackCandidate(params: {
@@ -118,6 +128,11 @@ export async function runCliFallbackCandidate(params: {
       await turn.opts?.onToolResult?.(payload);
     },
   });
+  const bridgeCliPreambleProgress =
+    Boolean(turn.opts?.onItemEvent) && shouldBridgeCliPreambleEvents(turn.opts);
+  const bridgeCliDurableCommentary =
+    Boolean(params.presentation.blockReplyHandler) &&
+    (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnAdmission(
       {
@@ -126,8 +141,11 @@ export async function runCliFallbackCandidate(params: {
         agentId: turn.followupRun.run.agentId,
         runId: params.runId,
       },
-      () =>
-        runCliAgentWithLifecycle({
+      () => {
+        // Admission may wait behind another turn that starts detached media.
+        // Snapshot only after this turn owns the session placement.
+        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
+        return runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
           provider: params.cliExecutionProvider,
@@ -136,6 +154,31 @@ export async function runCliFallbackCandidate(params: {
           onAgentRunStart: params.notifyAgentRunStart,
           suppressAssistantBridge: turn.followupRun.run.silentExpected,
           onActivity: () => turn.replyOperation?.recordActivity(),
+          onErrorBeforeLifecycle:
+            params.cliExecutionProvider === "claude-cli" && cliSessionBinding?.sessionId
+              ? async (error) => {
+                  if (
+                    !shouldClearFailedCliSessionBinding({
+                      error,
+                      binding: cliSessionBinding,
+                      hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+                        turn.sessionKey,
+                        mediaTaskIdsBefore,
+                      ),
+                    })
+                  ) {
+                    return;
+                  }
+                  await clearCliSessionBindingForRun({
+                    provider: params.cliExecutionProvider,
+                    expectedSessionId: cliSessionBinding.sessionId,
+                    sessionKey: turn.sessionKey,
+                    sessionStore: turn.activeSessionStore,
+                    storePath: turn.storePath,
+                    activeSessionEntry: turn.getActiveSessionEntry(),
+                  });
+                }
+              : undefined,
           preserveProgressCallbackStartOrder: params.preserveProgressCallbackStartOrder,
           onAssistantText: async (text) => {
             if (!params.preserveProgressCallbackStartOrder) {
@@ -205,13 +248,31 @@ export async function runCliFallbackCandidate(params: {
             ]);
           },
           onCommentaryText:
-            turn.opts?.onItemEvent && shouldBridgeCliPreambleEvents(turn.opts)
+            bridgeCliPreambleProgress || bridgeCliDurableCommentary
               ? async (payload) => {
-                  await turn.opts?.onItemEvent?.({
-                    itemId: payload.itemId,
-                    kind: "preamble",
-                    progressText: payload.text,
-                  });
+                  const deliveries: unknown[] = [];
+                  if (bridgeCliPreambleProgress) {
+                    deliveries.push(
+                      turn.opts?.onItemEvent?.({
+                        itemId: payload.itemId,
+                        kind: "preamble",
+                        progressText: payload.text,
+                        // The block bridge owns durability; this event remains a progress preview.
+                        ...(bridgeCliDurableCommentary ? { suppressDurableProgress: true } : {}),
+                      }),
+                    );
+                  }
+                  if (bridgeCliDurableCommentary) {
+                    // Block mode treats completed CLI text as an ordinary answer block so
+                    // the existing pipeline owns coalescing and final-payload dedupe.
+                    deliveries.push(
+                      params.presentation.blockReplyHandler?.({
+                        text: payload.text,
+                        ...(turn.blockStreamingEnabled ? {} : { isCommentary: true }),
+                      }),
+                    );
+                  }
+                  await Promise.all(deliveries);
                 }
               : undefined,
           onFastModeAutoProgress: async (payload) => {
@@ -239,8 +300,10 @@ export async function runCliFallbackCandidate(params: {
             workspaceDir: turn.followupRun.run.workspaceDir,
             cwd: turn.followupRun.run.cwd,
             config: params.runtimeConfig,
+            toolOverrides: turn.followupRun.run.toolOverrides,
             prompt: turn.commandBody,
             transcriptPrompt: turn.transcriptCommandBody,
+            media: turn.followupRun.media,
             suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             onUserMessagePersisted: params.notifyUserMessagePersisted,
@@ -314,12 +377,14 @@ export async function runCliFallbackCandidate(params: {
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,
           },
-        }),
+        });
+      },
     ),
   );
   if (droppedCliSessionReplacement) {
-    await clearDroppedCliSessionBinding({
+    await clearCliSessionBindingForRun({
       provider: params.cliExecutionProvider,
+      expectedSessionId: cliSessionBinding?.sessionId,
       sessionKey: turn.sessionKey,
       sessionStore: turn.activeSessionStore,
       storePath: turn.storePath,

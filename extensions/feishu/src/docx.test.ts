@@ -34,7 +34,6 @@ vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValu
   perm: false,
   scopes: false,
   bitable: false,
-  base: false,
 });
 vi.spyOn(toolAccountModule, "resolveFeishuToolAccount").mockImplementation((...args) =>
   resolveFeishuToolAccountMock(...args),
@@ -537,6 +536,63 @@ describe("feishu_doc image fetch hardening", () => {
     expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expect(driveUploadAllMock).not.toHaveBeenCalled();
     expect(result.details.images_processed).toBe(0);
+  });
+
+  it.each([
+    { name: "Markdown body", content: "# Hello\n\nBody content here" },
+    { name: "empty body", content: "" },
+  ])("rejects a create request with a $name before creating a document", async ({ content }) => {
+    const feishuDocTool = resolveFeishuDocTool({
+      messageChannel: "feishu",
+      requesterSenderId: "ou_123",
+    });
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "create",
+      title: "Demo",
+      content,
+    });
+
+    expect(result.details.error).toBe(
+      'Feishu document creation does not support content. Call action "create" first, then call action "write" with the returned document_id as doc_token.',
+    );
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(documentCreateMock).not.toHaveBeenCalled();
+    expect(convertMock).not.toHaveBeenCalled();
+    expect(blockDescendantCreateMock).not.toHaveBeenCalled();
+    expect(permissionMemberCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("creates and writes document content through the documented two-call workflow", async () => {
+    const feishuDocTool = resolveFeishuDocTool({
+      messageChannel: "feishu",
+      requesterSenderId: "ou_123",
+    });
+    const markdown = "# Hello\n\nBody content here";
+
+    const created = await executeFeishuDocTool(feishuDocTool, {
+      action: "create",
+      title: "Demo",
+    });
+    const written = await executeFeishuDocTool(feishuDocTool, {
+      action: "write",
+      doc_token: created.details.document_id,
+      content: markdown,
+    });
+
+    expect(documentCreateMock).toHaveBeenCalledTimes(1);
+    expect(permissionMemberCreateMock).toHaveBeenCalledTimes(1);
+    expect(convertMock).toHaveBeenCalledWith({
+      data: { content_type: "markdown", content: markdown },
+    });
+    expect(blockDescendantCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { document_id: "doc_created", block_id: "doc_created" },
+      }),
+    );
+    expect(created.details.document_id).toBe("doc_created");
+    expect(written.details.success).toBe(true);
+    expect(written.details.blocks_added).toBe(1);
   });
 
   it("create grants permission only to trusted Feishu requester", async () => {

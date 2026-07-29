@@ -7,7 +7,13 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  deliveryContextFromSession,
+  getSessionEntry,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
@@ -47,6 +53,15 @@ const resolveMatrixMentionsForBodyMock = vi.hoisted(() =>
     };
   }),
 );
+const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: getGlobalHookRunnerMock,
+  };
+});
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMessageMatrixMock,
@@ -87,22 +102,22 @@ async function writeMatrixSessionMeta(
     sessionId: `sess-${sessionKey}`,
     updatedAt: Date.now(),
   };
-  const existingOrigin =
-    typeof existing.origin === "object" && existing.origin !== null
-      ? (existing.origin as Record<string, unknown>)
-      : {};
+  const existingOrigin = sessionDeliveryOrigin(existing) ?? {};
   await upsertSessionEntry({
     storePath,
     sessionKey,
     entry: {
       ...existing,
-      origin: {
-        ...existingOrigin,
-        provider: "matrix",
-        surface: "matrix",
-        accountId: "ops",
-        ...origin,
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: deliveryContextFromSession(existing),
+        origin: {
+          ...existingOrigin,
+          provider: "matrix",
+          surface: "matrix",
+          accountId: "ops",
+          ...origin,
+        },
+      }),
     },
   });
 }
@@ -110,6 +125,7 @@ async function writeMatrixSessionMeta(
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   installMatrixMonitorTestRuntime();
+  getGlobalHookRunnerMock.mockReset().mockReturnValue(null);
   prepareMatrixSingleTextMock.mockReset().mockImplementation((text: string) => {
     const trimmedText = text.trim();
     return {
@@ -865,8 +881,8 @@ describe("matrix monitor handler pairing account scope", () => {
     const hasControlCommand = vi.fn((text?: string) => text === "/new");
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({
-        cfg: { commands: { useAccessGroups: false } },
         isDirectMessage: false,
+        groupAllowFrom: ["@user:example.org"],
         mentionRegexes: [],
         shouldHandleTextCommands: () => true,
         hasControlCommand,
@@ -878,20 +894,14 @@ describe("matrix monitor handler pairing account scope", () => {
       createMatrixTextMessageEvent({
         eventId: "$mxid-command",
         body: "@bot:example.org /new",
+        mentions: { user_ids: ["@bot:example.org"] },
       }),
     );
 
     expect(callArg(hasControlCommand, 0, 0, "control command")).toBe("/new");
     requireRecord(callArg(hasControlCommand, 0, 1, "control command"), "control command context");
-    const context = requireRecord(
-      callArg(finalizeInboundContext, 0, 0, "finalized context"),
-      "finalized context",
-    );
-    expect(context.RawBody).toBe("@bot:example.org /new");
-    expect(context.CommandBody).toBe("/new");
-    expect(context.BodyForAgent).toBe("@bot:example.org /new");
-    expect(context.BodyForCommands).toBe("/new");
-    expect(recordInboundSession).toHaveBeenCalled();
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -901,8 +911,9 @@ describe("matrix monitor handler pairing account scope", () => {
     "keeps require-mention decision for unmentioned room text $body",
     async ({ body, isControlCommand, expectedDispatches }) => {
       const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
-        cfg: { commands: { useAccessGroups: false } },
+        cfg: { channels: { matrix: { groupAllowFrom: ["@user:example.org"] } } },
         isDirectMessage: false,
+        groupAllowFrom: ["@user:example.org"],
         mentionRegexes: [],
         shouldHandleTextCommands: () => true,
         hasControlCommand: (text?: string) => isControlCommand && text === body,
@@ -1511,11 +1522,13 @@ describe("matrix monitor handler pairing account scope", () => {
       entry: {
         sessionId: "sess-main",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!other:example.org",
-          accountId: "ops",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const sendNotice = vi.fn(async () => "$notice");
@@ -1556,11 +1569,13 @@ describe("matrix monitor handler pairing account scope", () => {
       entry: {
         sessionId: "sess-bound",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!other:example.org",
-          accountId: "ops",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const sendNotice = vi.fn(async () => "$notice");
@@ -2980,6 +2995,53 @@ describe("matrix monitor handler draft streaming", () => {
     expectFinalizedPreviewEdit("$draft1", "Single block");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("preserves provider previews for observer-only hooks", async () => {
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "message_sent"),
+    });
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Visible preview" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    await deliver({ text: "Visible preview" }, { kind: "final" });
+
+    expectEditLiveFlag("$draft1", "Visible preview", false);
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it.each([
+    { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
+    { label: "message_sending", hooks: ["message_sending"] },
+    {
+      label: "both modifying hooks",
+      hooks: ["reply_payload_sending", "message_sending"],
+    },
+  ])("suppresses provider previews when $label is registered", async ({ hooks }) => {
+    const registered = new Set(hooks);
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => registered.has(hookName)),
+    });
+    const { dispatch } = createStreamingHarness({
+      previewToolProgressEnabled: true,
+      streaming: "progress",
+    });
+    const { deliver, opts, finish } = await dispatch();
+
+    expect(opts.onPartialReply).toBeUndefined();
+    expect(opts.onToolStart).toBeUndefined();
+    expect(opts.suppressDefaultToolProgressMessages).toBeUndefined();
+    await deliver({ text: "Durable final" }, { kind: "final" });
+
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     await finish();
   });
 

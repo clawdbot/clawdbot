@@ -45,7 +45,10 @@ export async function runNonInteractiveRemoteSetup(params: {
   const remoteUrlChanged = normalizeOptionalString(existingRemote?.url) !== remoteUrl;
   // A remote block belongs to one endpoint. Reusing it for a different URL can
   // send old credentials or keep routing through the old SSH target.
-  const preservedRemote = remoteUrlChanged ? {} : existingRemote;
+  const preservedRemote = remoteUrlChanged ? {} : { ...existingRemote };
+  if (remoteToken) {
+    delete preservedRemote.password;
+  }
 
   let nextConfig: OpenClawConfig = {
     ...baseConfig,

@@ -5,10 +5,9 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.update-run
+      - cli.update-status-and-rpc
     secondary:
-      - runtime.gateway-restart
-      - runtime.package-update
+      - cli.managed-gateway-restart
   objective: Verify an installed OpenClaw 2026.4.26 package upgrades to the resolved latest package through the authenticated Gateway update.run RPC and returns healthy after restart.
   successCriteria:
     - The package-backed Docker lane installs and verifies openclaw@2026.4.26 before invoking the authenticated Gateway update.run RPC directly.

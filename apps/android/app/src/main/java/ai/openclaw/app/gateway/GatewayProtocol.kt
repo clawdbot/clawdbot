@@ -23,6 +23,7 @@ data class GatewayRequestFrame(
   val id: String,
   val method: String,
   val params: JsonElement? = null,
+  val traceparent: String? = null,
 )
 
 @Serializable
@@ -101,6 +102,7 @@ data class QuestionRecord(
   val questions: List<Question>,
   val agentId: String? = null,
   val sessionKey: String? = null,
+  val runId: String? = null,
   val createdAtMs: Long,
   val expiresAtMs: Long,
   val status: String,
@@ -116,6 +118,25 @@ data class QuestionGetResult(
 @Serializable
 data class QuestionListResult(
   val questions: List<QuestionRecord>,
+)
+
+@Serializable
+data class SessionObserverPlanProgress(
+  val completed: Long,
+  val total: Long,
+)
+
+@Serializable
+data class SessionObserverDigest(
+  val sessionKey: String,
+  val agentId: String? = null,
+  val runId: String? = null,
+  val revision: Long,
+  val updatedAt: Long,
+  val headline: String,
+  val assessment: String? = null,
+  val health: String,
+  val planProgress: SessionObserverPlanProgress? = null,
 )
 
 @Serializable
@@ -368,6 +389,8 @@ enum class GatewayMethod(
   CronGet("cron.get"),
   CronList("cron.list"),
   CronStatus("cron.status"),
+  CronScratchGet("cron.scratch.get"),
+  CronScratchSet("cron.scratch.set"),
   CronAdd("cron.add"),
   CronUpdate("cron.update"),
   CronRemove("cron.remove"),
@@ -396,6 +419,9 @@ enum class GatewayMethod(
   TerminalInput("terminal.input"),
   TerminalResize("terminal.resize"),
   TerminalClose("terminal.close"),
+  ChannelsPairingList("channels.pairing.list"),
+  ChannelsPairingApprove("channels.pairing.approve"),
+  ChannelsPairingDismiss("channels.pairing.dismiss"),
   AssistantMediaGet("assistant.media.get"),
   SessionsGet("sessions.get"),
   SessionsResolve("sessions.resolve"),
@@ -431,7 +457,7 @@ enum class GatewayMethod(
   PluginsSetEnabled("plugins.setEnabled"),
   PluginsUninstall("plugins.uninstall"),
   PluginsRefresh("plugins.refresh"),
-  ControlUiSessionPullRequests("controlUi.sessionPullRequests"),
+  ControlUiSessionPullRequestsSubscribe("controlUi.sessionPullRequests.subscribe"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
   GatewaySuspendResume("gateway.suspend.resume"),
@@ -459,6 +485,24 @@ enum class GatewayMethod(
   ConversationsList("conversations.list"),
   SessionDiscussionInfo("session.discussion.info"),
   SessionDiscussionOpen("session.discussion.open"),
+  BoardPromptAuthorize("board.prompt.authorize"),
+  BoardDataRead("board.data.read"),
+  BoardAction("board.action"),
+  SessionsObserverVisibility("sessions.observer.visibility"),
+  SessionVisibilitySet("session.visibility.set"),
+  SessionMembersList("session.members.list"),
+  SessionMembersAdd("session.members.add"),
+  SessionMembersRemove("session.members.remove"),
+  SessionSuggestionsAdd("session.suggestions.add"),
+  SessionSuggestionsList("session.suggestions.list"),
+  SessionSuggestionsResolve("session.suggestions.resolve"),
+  SessionTyping("session.typing"),
+  SessionsCompanionAsk("sessions.companion.ask"),
+  SessionsCompanionState("sessions.companion.state"),
+  SessionsCompanionReset("sessions.companion.reset"),
+  MemorySearch("memory.search"),
+  SkillsProposalsEventsList("skills.proposals.events.list"),
+  SkillsProposalsEvaluate("skills.proposals.evaluate"),
 }
 
 enum class GatewayEvent(
@@ -470,9 +514,14 @@ enum class GatewayEvent(
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
+  SessionObserver("session.observer"),
   SessionOperation("session.operation"),
+  SessionSharing("session.sharing"),
+  SessionSuggestion("session.suggestion"),
+  SessionTyping("session.typing"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),
+  ControlUiSessionPullRequestsChanged("controlUi.sessionPullRequests.changed"),
   Presence("presence"),
   Tick("tick"),
   TalkMode("talk.mode"),
@@ -491,6 +540,7 @@ enum class GatewayEvent(
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),
+  SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),

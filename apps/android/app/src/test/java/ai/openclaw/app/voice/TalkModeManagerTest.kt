@@ -838,6 +838,37 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun browserOnlyRealtimeConfigStartsNativeTalkInsteadOfRelay() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val packageManager = shadowOf(app.packageManager)
+      val speechService = ComponentName(app, "TestSpeechRecognitionService")
+      packageManager.addServiceIfNotPresent(speechService)
+      packageManager.addIntentFilterForService(speechService, IntentFilter(RecognitionService.SERVICE_INTERFACE))
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val manager =
+        createManager(
+          scope = this,
+        )
+      try {
+        setPrivateField(manager, "configLoaded", true)
+        setPrivateField(manager, "realtimeRelayModelSupported", false)
+        manager.setEnabled(true)
+        advanceUntilIdle()
+
+        assertTrue(manager.isEnabled.value)
+        assertTrue(manager.isListening.value)
+        assertNull(readPrivateField(manager, "realtimeSessionId"))
+        assertEquals("Listening", manager.statusText.value)
+      } finally {
+        manager.setEnabled(false)
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun textReadyDoesNotEnterSpeakingUntilAudioPlaybackStarts() =
     runTest {
       val talkSpeakClient = FakeTalkSpeechSynthesizer()
@@ -1068,6 +1099,43 @@ class TalkModeManagerTest {
       assertEquals("PTT_BUSY: previous push-to-talk turn is still finishing", error?.message)
       assertTrue(oneShot is TalkPttOnceStart.Busy)
       assertEquals("capture-1", (oneShot as TalkPttOnceStart.Busy).payload.captureId)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun cancelledQueuedFinalizerResumesOnlyItsRealtimeCaptureOnMain() =
+    runTest {
+      val finalizerDispatcher = StandardTestDispatcher()
+      val manager =
+        createManager(
+          scope = CoroutineScope(SupervisorJob() + finalizerDispatcher),
+        )
+      Dispatchers.setMain(Dispatchers.Unconfined)
+      try {
+        setMutableStateFlow(manager, "_isEnabled", true)
+        manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+        setPrivateField(manager, "activePttCaptureId", "capture-1")
+        @Suppress("UNCHECKED_CAST")
+        (readPrivateField(manager, "pttFinalSegments") as MutableList<String>) += "finish this capture"
+
+        val payload = manager.endPushToTalk("capture-1")
+        val finalizer = readPrivateField(manager, "finishingPttJob") as Job
+
+        assertEquals("queued", payload.status)
+        assertEquals("capture-1", manager.finishingPushToTalkCaptureId)
+        assertTrue(readPrivateField(manager, "realtimeCapturePause") != null)
+
+        finalizer.cancel()
+        finalizerDispatcher.scheduler.runCurrent()
+
+        assertTrue(finalizer.isCancelled)
+        assertNull(manager.finishingPushToTalkCaptureId)
+        assertNull(readPrivateField(manager, "realtimeCapturePause"))
+        assertNull(readPrivateField(manager, "activePttCaptureId"))
+      } finally {
+        manager.stopAllCapture()
+        Dispatchers.resetMain()
+      }
     }
 
   @Test

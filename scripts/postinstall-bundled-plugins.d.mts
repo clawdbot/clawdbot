@@ -28,7 +28,6 @@ export function runPluginRegistryPostinstallMigration(
 ): Promise<unknown>;
 export function isSourceCheckoutRoot(params: unknown): unknown;
 export function pruneBundledPluginSourceNodeModules(params?: Record<string, unknown>): void;
-export function pruneOpenClawCompileCache(params?: Record<string, unknown>): void;
 export function runBundledPluginPostinstall(params?: Record<string, unknown>): void;
 export function isDirectPostinstallInvocation(params?: Record<string, unknown>): boolean;
 export const MAX_INSTALLED_DIST_SCAN_ENTRIES: 100000;

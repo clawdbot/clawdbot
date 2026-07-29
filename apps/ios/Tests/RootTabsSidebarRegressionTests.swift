@@ -42,47 +42,115 @@ struct RootTabsSidebarRegressionTests {
         #expect(layoutUpdate.contains("guard force || !self.sidebarVisibilityUserOverridden else { return }"))
     }
 
-    @Test func `push reveal keeps sidebar behind an interactive dismissal card`() throws {
+    @Test func `sidebar controls keep glass inside their hit target`() throws {
+        let source = try String(contentsOf: Self.openClawProComponentsSourceURL(), encoding: .utf8)
+        let revealButton = try Self.extract(
+            source,
+            from: "struct OpenClawSidebarControlButton: View",
+            to: "struct OpenClawSidebarHeaderLeadingSlot: View")
+        let toolbarItem = try Self.extract(
+            source,
+            from: "struct OpenClawSidebarToolbarItem: ToolbarContent",
+            to: "struct OpenClawGlassControlGroup")
+
+        let button = try Self.extract(
+            revealButton,
+            from: "private var button: some View",
+            to: "@ViewBuilder\n    private var icon")
+        let icon = try Self.extract(
+            revealButton,
+            from: "private var icon: some View",
+            to: "@ViewBuilder\n    private func identified")
+
+        #expect(revealButton.contains("self.identified(self.button.buttonStyle(.plain))"))
+        #expect(button.contains(".frame(width: 44, height: 44)"))
+        #expect(button.contains(".contentShape(Rectangle())"))
+        #expect(icon.contains(".regular.interactive()"))
+        #expect(icon.contains("in: Circle()"))
+        #expect(icon.contains("width: OpenClawProMetric.compactControlSize"))
+        #expect(toolbarItem.contains(".sharedBackgroundVisibility(.hidden)"))
+    }
+
+    @Test func `push reveal uses one full bleed card with local gesture state`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let drawerSource = try String(contentsOf: Self.rootSidebarDrawerSourceURL(), encoding: .utf8)
+        let sidebarSource = try String(contentsOf: Self.rootSidebarSourceURL(), encoding: .utf8)
         let drawerContent = try Self.extract(
             source,
             from: "private func sidebarDrawerContent(",
             to: "private var sidebarDetailShell: some View")
+        let contentCard = try Self.extract(
+            drawerSource,
+            from: "private var contentCard: some View",
+            to: "@ViewBuilder\n    private var dismissalLayer")
+        let drawerGesture = try Self.extract(
+            drawerSource,
+            from: "private var drawerGesture: some Gesture",
+            to: "private static func dragDisposition(")
+        let detailShell = try Self.extract(
+            source,
+            from: "private var sidebarDetailShell: some View",
+            to: "private func sidebarColumn(")
 
-        let sidebarLayer = try Self.extract(
-            drawerContent,
-            from: "private func sidebarDrawerLayer(",
-            to: "private func sidebarDrawerContentSurface(")
-        let contentSurface = try Self.extract(
-            drawerContent,
-            from: "private func sidebarDrawerContentSurface(",
-            to: "private func sidebarDrawerContentCard(")
-        let contentCardStart = try #require(
-            drawerContent.range(of: "private func sidebarDrawerContentCard("))
-        let contentCard = String(drawerContent[contentCardStart.lowerBound...])
-
-        #expect(drawerContent.contains("ZStack(alignment: .leading)"))
-        #expect(drawerContent.contains("self.sidebarDrawerLayer"))
-        #expect(drawerContent.contains("self.sidebarDrawerContentSurface"))
-        #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
-        #expect(drawerContent.contains(".background(OpenClawSidebarPalette.background)"))
-        #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
-        #expect(!sidebarLayer.contains(".clipShape"))
-        #expect(!sidebarLayer.contains(".shadow"))
+        #expect(drawerContent.contains("RootSidebarDrawer("))
         #expect(drawerContent.contains("self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets)"))
-        #expect(sidebarLayer.contains(".ignoresSafeArea(.container, edges: .vertical)"))
-        #expect(contentSurface.contains(".fill(Color(uiColor: .systemGroupedBackground))"))
-        #expect(contentSurface.contains(".ignoresSafeArea(.container, edges: .vertical)"))
-        #expect(contentSurface.contains(".shadow("))
-        #expect(contentSurface.contains(".offset(x: Self.sidebarContentOffset("))
-        #expect(contentCard.contains(".allowsHitTesting(!self.isSidebarVisible)"))
-        #expect(contentCard.contains("if self.isSidebarVisible {"))
-        #expect(contentCard.contains("self.hideSidebar()"))
-        #expect(contentCard.contains("isEnabled: self.isSidebarVisible && !self.reduceMotion"))
-        #expect(contentCard.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
-        #expect(contentCard.contains(".offset(x: Self.sidebarContentOffset("))
-        #expect(!contentCard.contains("OpenClawProBackground()"))
+        #expect(drawerContent.contains("self.sidebarDetailNavigationShell"))
+        #expect(drawerContent.contains("self.isSidebarDetailRootVisible && self.sidebarNavigationPath.isEmpty"))
+        #expect(!source.contains("sidebarDrawerContentSurface"))
+        #expect(!source.contains("sidebarDrawerContentCard"))
+        #expect(!source.contains("sidebarContentDragOffset"))
+
+        #expect(drawerSource.contains("@GestureState(resetTransaction:"))
+        #expect(drawerSource.contains(".simultaneousGesture("))
+        #expect(drawerSource.contains("isEnabled: !self.reduceMotion"))
+        #expect(drawerSource.contains(".accessibilityHidden(!self.isPresented)"))
+        #expect(drawerSource.contains(".accessibilityHidden(self.isPresented)"))
+        #expect(drawerSource.contains(".onTapGesture(perform: self.onHide)"))
+        #expect(drawerSource.contains(".background(OpenClawSidebarPalette.background)"))
+        #expect(drawerSource.contains(".ignoresSafeArea(.container, edges: .vertical)"))
+        #expect(!drawerSource.contains("Color.black.opacity(0.35)"))
+        #expect(!drawerSource.contains("UIScreenEdgePanGestureRecognizer"))
+
+        #expect(contentCard.contains(".background(OpenClawProBackground())"))
+        #expect(contentCard.contains(".ignoresSafeArea(.container, edges: .vertical)"))
+        #expect(contentCard.contains(".allowsHitTesting(!self.isPresented)"))
+        #expect(contentCard.contains(".clipShape(shape)"))
+        #expect(contentCard.contains("shape.strokeBorder("))
+        #expect(contentCard.contains(".offset(x: offset)"))
+        #expect(!contentCard.contains("Color(uiColor: .systemGroupedBackground)"))
         #expect(!contentCard.contains(".shadow("))
+
+        #expect(drawerGesture.contains(".updating(self.$dragState)"))
+        #expect(drawerGesture.contains("if let latchedDisposition = state.disposition"))
+        #expect(drawerGesture.contains("dragSession.disposition = disposition"))
+        #expect(drawerGesture.contains("let disposition = dragSession.disposition"))
+        #expect(drawerGesture.contains("dragSession.disposition = nil"))
+        #expect(drawerGesture.contains("case .opening:"))
+        #expect(drawerGesture.contains("case .closing:"))
+        #expect(drawerGesture.contains("onShow()"))
+        #expect(drawerGesture.contains("onHide()"))
+        #expect(drawerSource.contains("value.startLocation.x <= RootSidebarDrawerMetric.edgeGestureWidth"))
+        #expect(drawerSource.contains("value.startLocation.y > RootSidebarDrawerMetric.topGestureExclusion"))
+        #expect(drawerSource.contains("value.translation.width > abs(value.translation.height)"))
+        #expect(drawerSource.contains("-value.translation.width > abs(value.translation.height)"))
+        #expect(drawerSource.contains("UnevenRoundedRectangle("))
+        #expect(drawerSource.contains("topLeadingRadius: RootSidebarDrawerMetric.topLeadingRadius * progress"))
+        #expect(drawerSource.contains("bottomLeadingRadius: RootSidebarDrawerMetric.cornerRadius * progress"))
+
+        #expect(!source.contains("showsDismissButton:"))
+        #expect(!sidebarSource.contains("let showsDismissButton: Bool"))
+        #expect(!sidebarSource.contains("let selectSettingsRoute:"))
+        #expect(source.contains("isDismissButtonEnabled: self.isSidebarVisible"))
+        #expect(sidebarSource.contains("OpenClawSidebarControlButton(action: self.dismissAction)"))
+        #expect(sidebarSource.contains(".allowsHitTesting(self.isDismissButtonEnabled)"))
+        #expect(sidebarSource.contains(".accessibilityHidden(!self.isDismissButtonEnabled)"))
+        #expect(sidebarSource.contains("accessibilityIdentifier: self.isDismissButtonEnabled"))
+        #expect(sidebarSource.contains("systemName: \"xmark\""))
+        #expect(detailShell.contains(".onAppear"))
+        #expect(detailShell.contains("guard self.sidebarDetailShellID == shellID else { return }"))
+        #expect(detailShell.contains("self.isSidebarDetailRootVisible = true"))
+        #expect(detailShell.contains(".onDisappear"))
+        #expect(detailShell.contains("self.isSidebarDetailRootVisible = false"))
     }
 
     @Test func `sidebar selection resets embedded settings navigation path`() throws {
@@ -135,6 +203,20 @@ struct RootTabsSidebarRegressionTests {
             .appendingPathComponent("Sources/RootTabs.swift")
     }
 
+    private static func rootSidebarDrawerSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/RootSidebarDrawer.swift")
+    }
+
+    private static func rootSidebarSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/RootSidebar.swift")
+    }
+
     private static func rootTabsNavigationSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -147,6 +229,13 @@ struct RootTabsSidebarRegressionTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/CommandCenterTab.swift")
+    }
+
+    private static func openClawProComponentsSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/OpenClawProComponents.swift")
     }
 
     private static func extract(_ source: String, from start: String, to end: String) throws -> String {

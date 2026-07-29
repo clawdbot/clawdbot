@@ -28,6 +28,7 @@ import {
   type QaScenarioCommandExecution,
   type QaScenarioCommandResult,
 } from "./test-file-scenario-command-lifecycle.js";
+import { isDockerE2eScenario, runDockerE2eBatch } from "./test-file-scenario-docker-batch.js";
 export type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
@@ -43,6 +44,7 @@ type QaTestFileScenarioRunParams = {
   commandTimeoutMs?: number;
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
+  failFast?: boolean;
   outputDir: string;
   primaryModel: string;
   providerMode: QaProviderMode;
@@ -96,10 +98,18 @@ export function isQaTestFileScenario(
 }
 
 function vitestSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+  const e2eConfigArgs = scenario.execution.path.endsWith(".e2e.test.ts")
+    ? ["run", "--config", "test/vitest/vitest.e2e.config.ts"]
+    : [];
   return [
     {
       command: process.execPath,
-      args: ["scripts/run-vitest.mjs", scenario.execution.path, "--reporter=verbose"],
+      args: [
+        "scripts/run-vitest.mjs",
+        ...e2eConfigArgs,
+        scenario.execution.path,
+        "--reporter=verbose",
+      ],
     },
   ];
 }
@@ -190,6 +200,20 @@ function buildScenarioEvidenceTarget(scenario: QaTestFileScenario) {
     docsRefs: scenario.docsRefs,
     codeRefs: scenario.codeRefs,
   };
+}
+
+function coverageForScenario(scenario: QaTestFileScenario) {
+  return [
+    ...(scenario.coverage?.primary ?? []).map((id) => ({ id, role: "primary" as const })),
+    ...(scenario.coverage?.secondary ?? []).map((id) => ({ id, role: "secondary" as const })),
+  ];
+}
+
+function withScenarioCoverage(
+  entry: QaEvidenceSummaryJson["entries"][number],
+  scenario: QaTestFileScenario,
+) {
+  return { ...entry, coverage: coverageForScenario(scenario) };
 }
 
 async function runScenarioCommandSteps(params: {
@@ -341,8 +365,12 @@ function buildTestFileEvidence(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
 }) {
-  const producerEntries = params.results.flatMap(
-    (result) => result.producerEvidence?.entries ?? [],
+  const producerEntries = params.results.flatMap((result) =>
+    // Producer artifacts own execution facts; the scenario catalog remains the
+    // sole owner of which semantic features those facts cover.
+    (result.producerEvidence?.entries ?? []).map((entry) =>
+      withScenarioCoverage(entry, result.scenario),
+    ),
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
@@ -561,18 +589,55 @@ export async function runQaTestFileScenarios(
     ...params.env,
   };
   const results: QaTestFileScenarioResult[] = [];
-  for (const scenario of scenarios) {
+  const dockerBatchScenarios =
+    kind === "script" && !params.failFast ? scenarios.filter(isDockerE2eScenario) : [];
+  const dockerBatchGroups = new Map<number, typeof dockerBatchScenarios>();
+  for (const scenario of dockerBatchScenarios) {
+    const scenarioTimeoutMs = resolvePositiveTimerTimeoutMs(
+      scenario.execution.timeoutMs,
+      commandTimeoutMs,
+    );
+    const group = dockerBatchGroups.get(scenarioTimeoutMs) ?? [];
+    group.push(scenario);
+    dockerBatchGroups.set(scenarioTimeoutMs, group);
+  }
+  for (const [scenarioTimeoutMs, group] of dockerBatchGroups) {
+    // A scheduler invocation shares one fallback lane timeout, so timeout overrides
+    // stay in separate batches instead of borrowing another scenario's budget.
     results.push(
-      await runQaTestFileScenario({
+      ...(await runDockerE2eBatch({
+        commandTimeoutMs: scenarioTimeoutMs,
         env,
-        commandTimeoutMs,
         outputDir: params.outputDir,
         repoRoot: params.repoRoot,
         runCommand,
-        scenario,
-      }),
+        scenarios: group,
+      })),
     );
   }
+  const dockerBatchScenarioIds = new Set(dockerBatchScenarios.map((scenario) => scenario.id));
+  for (const scenario of scenarios) {
+    if (dockerBatchScenarioIds.has(scenario.id)) {
+      continue;
+    }
+    const result = await runQaTestFileScenario({
+      env,
+      commandTimeoutMs,
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+      runCommand,
+      scenario,
+    });
+    results.push(result);
+    if (params.failFast && result.status !== "pass") {
+      break;
+    }
+  }
+  const scenarioOrder = new Map(scenarios.map((scenario, index) => [scenario, index]));
+  results.sort(
+    (left, right) =>
+      (scenarioOrder.get(left.scenario) ?? 0) - (scenarioOrder.get(right.scenario) ?? 0),
+  );
   const generatedAt = new Date().toISOString();
   const artifactPaths = buildScenarioArtifactPaths({
     repoRoot: params.repoRoot,

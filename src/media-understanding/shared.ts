@@ -653,6 +653,7 @@ type GuardedPostRequestParams<TBody> = GuardedProviderRequestParams &
     headers: Headers;
     body: TBody;
     timeoutMs?: number;
+    signal?: AbortSignal;
     fetchFn: typeof fetch;
   };
 
@@ -663,6 +664,7 @@ export async function postTranscriptionRequest(params: GuardedPostRequestParams<
       method: "POST",
       headers: params.headers,
       body: params.body,
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
@@ -682,6 +684,7 @@ async function postGuardedRequest(params: {
   retry?: TransientProviderRetryConfig;
 }) {
   const operation = async () => {
+    params.init.signal?.throwIfAborted();
     const result = await fetchWithTimeoutGuarded(
       params.url,
       params.init,
@@ -707,6 +710,7 @@ async function postGuardedRequest(params: {
     provider: "provider-http",
     stage: params.retryStage,
     retry: params.retry,
+    signal: params.init.signal ?? undefined,
     operation,
   });
 }
@@ -718,6 +722,7 @@ export async function postJsonRequest(params: GuardedPostRequestParams<unknown>)
       method: "POST",
       headers: params.headers,
       body: JSON.stringify(params.body),
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
@@ -734,6 +739,7 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
       method: "POST",
       headers: params.headers,
       body: params.body,
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,

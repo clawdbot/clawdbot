@@ -1,13 +1,32 @@
-/**
- * Subagent registry record types.
- *
- * Defines execution, completion, delivery, pending-delivery, and attachment state stored for child runs.
- */
+import type { SubagentEndReason } from "../context-engine/types.js";
+/** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+
+export type SubagentCompletionRequest = {
+  runId: string;
+  endedAt?: number;
+  outcome: SubagentRunOutcome;
+  reason: SubagentLifecycleEndedReason;
+  sendFarewell?: boolean;
+  accountId?: string;
+  triggerCleanup: boolean;
+  startedAt?: number;
+  suppressSessionEffects?: boolean;
+  recoverInterrupted?: true;
+  completionSnapshot?: { resultText: string | null; capturedAt: number };
+};
+
+export type ContextEngineSubagentEndedParams = {
+  childSessionKey: string;
+  reason: SubagentEndReason;
+  agentDir?: string;
+  workspaceDir?: string;
+};
 
 export type SubagentProgressOrigin = {
   channel?: string;
@@ -38,6 +57,7 @@ export type PendingFinalDeliveryPayload = {
 
 export type SubagentExecutionState = {
   status: "queued" | "running" | "interrupted" | "terminal";
+  acceptedAt?: number;
   startedAt?: number;
   endedAt?: number;
   outcome?: SubagentRunOutcome;
@@ -71,6 +91,8 @@ export type SwarmStructuredOutputState = {
 
 export type SwarmQueuedLaunch = {
   request: Record<string, unknown>;
+  /** Exact trusted launch capability, persisted so restart replay cannot lose it. */
+  authorization?: SubagentLaunchAuthorization;
   timeoutMs: number;
   schedulerGroupKey: string;
   maxConcurrent: number;

@@ -3,9 +3,9 @@ scenario:
   id: whatsapp-status-reaction-lifecycle
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - channels.reply-message-actions
   execution:
-    profiles: { "whatsapp:mock-default": 30 }
     kind: flow
     channel: whatsapp
     timeoutMs: 90000

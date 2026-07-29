@@ -113,6 +113,7 @@ const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
 );
 const resolveChunkModeHoisted = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableModeHoisted = vi.hoisted(() => vi.fn(() => "preserve"));
+const getGlobalHookRunnerHoisted = vi.hoisted(() => vi.fn());
 
 export const createTelegramDraftStream = createTelegramDraftStreamHoisted;
 export const dispatchReplyWithBufferedBlockDispatcher =
@@ -153,6 +154,7 @@ const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
 const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
 export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
+export const getGlobalHookRunner = getGlobalHookRunnerHoisted;
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream: createTelegramDraftStreamHoisted,
@@ -163,6 +165,14 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   return {
     ...actual,
     deliverInboundReplyWithMessageSendContext: deliverInboundReplyWithMessageSendContextHoisted,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: getGlobalHookRunnerHoisted,
   };
 });
 
@@ -195,6 +205,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       if (!("route" in resolved) || !("delivery" in resolved)) {
         throw new Error("expected assembled Telegram channel turn plan");
       }
+      const delivery =
+        resolved.delivery as unknown as import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">["delivery"];
       const testTurn = (params.raw as { turn: TestTurn }).turn;
       const result = await actual.runPreparedInboundReply({
         channel: resolved.channel,
@@ -214,8 +226,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             cfg: resolved.cfg,
             dispatcherOptions: {
               ...resolved.dispatcherOptions,
-              deliver: resolved.delivery.deliver,
-              onError: resolved.delivery.onError,
+              deliver: delivery.deliverWithProviderMessageSending,
+              onError: delivery.onError,
             },
             toolsAllow: resolved.toolsAllow,
             replyOptions: resolved.replyOptions,
@@ -378,6 +390,7 @@ function resetTelegramDispatchTestState() {
   getAgentScopedMediaLocalRoots.mockClear();
   resolveChunkMode.mockClear();
   resolveMarkdownTableMode.mockClear();
+  getGlobalHookRunner.mockReset();
   describeStickerImage.mockReset();
   loadModelCatalog.mockReset();
   findModelInCatalog.mockReset();
@@ -445,6 +458,7 @@ function resetTelegramDispatchTestState() {
     provider: "openai",
     model: "gpt-test",
   });
+  getGlobalHookRunner.mockReturnValue(null);
 }
 
 function cleanupTelegramDispatchTestState() {
@@ -573,7 +587,6 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     sendChatActionHandler: { sendChatAction: vi.fn(async () => undefined) },
     ackReactionPromise: null,
     reactionApi: null,
-    removeAckAfterReply: false,
   } as unknown as TelegramMessageContext;
   base.turn = {
     storePath: "/tmp/openclaw/telegram-sessions.json",

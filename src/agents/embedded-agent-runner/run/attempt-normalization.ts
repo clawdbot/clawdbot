@@ -1,4 +1,4 @@
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
@@ -7,7 +7,11 @@ import { log } from "../logger.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-state.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
-import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import {
+  mergeAttemptRunStatsIntoAccumulator,
+  mergeUsageIntoAccumulator,
+} from "../usage-accumulator.js";
+import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
@@ -35,11 +39,12 @@ import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
   isEmbeddedRunTerminalTimeout,
-  resolveEmbeddedRunAttemptTerminalOutcome,
+  resolveEmbeddedRunAttemptTerminalState,
 } from "./terminal-outcome.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 
 export async function normalizeEmbeddedRunAttempt(input: {
@@ -73,15 +78,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
       lastTurnTotal: number | undefined;
       replayState: ReplayState;
       attempt: ReturnType<typeof normalizeEmbeddedRunAttemptResult>;
-      aborted: boolean;
-      externalAbort: boolean;
-      promptError: unknown;
-      promptErrorSource: ReturnType<typeof normalizeEmbeddedRunAttemptResult>["promptErrorSource"];
-      timedOut: boolean;
-      idleTimedOut: boolean;
-      timedOutDuringCompaction: boolean;
-      timedOutDuringToolExecution: boolean;
-      timedOutByRunBudget: boolean;
       sessionIdUsed: string;
       sessionFileUsed: string | undefined;
       currentAttemptAssistant: ReturnType<
@@ -93,11 +89,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       attemptAssistant: ReturnType<
         typeof normalizeEmbeddedRunAttemptResult
       >["currentAttemptAssistant"];
-      terminalOutcome: ReturnType<typeof resolveEmbeddedRunAttemptTerminalOutcome>;
-      terminalAborted: boolean;
-      terminalTimedOut: boolean;
-      terminalInterrupted: boolean;
-      signalOwnedInterruption: boolean;
+      terminalState: ReturnType<typeof resolveEmbeddedRunAttemptTerminalState>;
       setTerminalLifecycleMeta: NonNullable<
         ReturnType<typeof normalizeEmbeddedRunAttemptResult>["setTerminalLifecycleMeta"]
       >;
@@ -120,22 +112,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
     throw createAgentRunDirectAbortError();
   }
   const {
-    aborted,
-    externalAbort,
-    promptError,
-    promptErrorSource,
+    terminal,
     preflightRecovery,
-    timedOut,
-    idleTimedOut,
-    timedOutDuringCompaction,
     sessionIdUsed,
     sessionFileUsed,
     lastAssistant: sessionLastAssistant,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
   } = attempt;
-  const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
-  const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
+  const { idleTimedOut } = projectAgentRunAttemptTerminal(terminal);
   const sessionAssistantForCandidate =
     !currentAttemptAssistant &&
     !isAssistantForModelRef(sessionLastAssistant, {
@@ -145,15 +130,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
       ? undefined
       : sessionLastAssistant;
   const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
-  const terminalOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
+  const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
     assistant: currentAttemptAssistant,
     abortSignal: params.abortSignal,
   });
+  const { outcome: terminalOutcome, signalOwnedInterruption } = terminalState;
   const terminalAborted = isEmbeddedRunTerminalAbort(terminalOutcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(terminalOutcome);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalOutcome);
-  const signalOwnedInterruption = terminalInterrupted && params.abortSignal?.aborted === true;
   const setTerminalLifecycleMeta: NonNullable<typeof attempt.setTerminalLifecycleMeta> = (meta) => {
     const { stopReason, ...remainingMeta } = meta;
     const terminalStopReason = terminalInterrupted ? terminalOutcome.stopReason : stopReason;
@@ -163,26 +148,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  const previousSessionId = sessionPromptState.sessionId;
-  const previousSessionFile = sessionPromptState.sessionFile;
-  sessionPromptState.adoptSessionId(sessionIdUsed);
-  if (sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile) {
-    sessionPromptState.sessionFile = sessionFileUsed;
-  }
-  if (
-    (sessionIdUsed && sessionIdUsed !== previousSessionId) ||
-    (sessionFileUsed && sessionFileUsed !== previousSessionFile)
-  ) {
-    const marker = parseSqliteSessionFileMarker(sessionPromptState.sessionFile);
-    sessionPromptState.sessionTarget = marker
-      ? {
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          sessionKey: runInput.resolvedSessionKey,
-          storePath: marker.storePath,
-        }
-      : undefined;
-  }
+  applyEmbeddedAttemptSessionIdentity({ sessionPromptState, sessionFileUsed, sessionIdUsed });
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature
@@ -202,6 +168,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
   });
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
+  mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
   const lastRunPromptUsage = callUsage.latest;
   const lastTurnTotal = callUsage.latest?.total;
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
@@ -312,25 +279,12 @@ export async function normalizeEmbeddedRunAttempt(input: {
     lastTurnTotal,
     replayState,
     attempt,
-    aborted,
-    externalAbort,
-    promptError,
-    promptErrorSource,
-    timedOut,
-    idleTimedOut,
-    timedOutDuringCompaction,
-    timedOutDuringToolExecution,
-    timedOutByRunBudget,
     sessionIdUsed,
     sessionFileUsed,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
     attemptAssistant,
-    terminalOutcome,
-    terminalAborted,
-    terminalTimedOut,
-    terminalInterrupted,
-    signalOwnedInterruption,
+    terminalState,
     setTerminalLifecycleMeta,
     attemptCompactionCount,
     activeErrorContext,

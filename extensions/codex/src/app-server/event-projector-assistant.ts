@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
+  createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
   createAssistantMessage as buildAssistantMessage,
   createAssistantMirrorMessage as buildAssistantMirrorMessage,
   type AssistantMessageOptions,
@@ -15,6 +16,7 @@ type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
 export class CodexAssistantProjection {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
+  private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
   private latestCompletedItemId: string | undefined;
   private latestCompletedTerminalAssistantItemId: string | undefined;
@@ -41,6 +43,7 @@ export class CodexAssistantProjection {
     private readonly params: EmbeddedRunAttemptParams,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
     private readonly matchesToolProgressEcho: (text: string) => boolean,
+    private readonly nextTranscriptTimestamp: () => number,
   ) {}
 
   hasCompletedTerminalAssistantText(completedItemIds: ReadonlySet<string>): boolean {
@@ -152,6 +155,9 @@ export class CodexAssistantProjection {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
     this.rememberAssistantPhase(item);
+    if (item?.type === "agentMessage" && itemId) {
+      this.rememberAssistantItem(itemId);
+    }
     if (itemId && itemId !== this.latestTerminalAssistantCandidateItemId) {
       this.markTerminalAssistantCandidateSupersededBy(itemId, {
         preserveEarlierActiveItem: true,
@@ -282,6 +288,25 @@ export class CodexAssistantProjection {
   collectAssistantTexts(): string[] {
     const finalText = this.resolveFinalAssistantTextItem()?.text;
     return finalText ? [finalText] : [];
+  }
+
+  collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
+    return this.assistantItemOrder.flatMap((itemId) => {
+      if (!this.isCommentaryAssistantItem(itemId)) {
+        return [];
+      }
+      const text = this.assistantTextByItem.get(itemId)?.trim();
+      const timestamp = this.assistantTimestampByItem.get(itemId);
+      if (!text || timestamp === undefined) {
+        return [];
+      }
+      return [
+        {
+          itemId,
+          message: buildAssistantCommentaryMessage(this.params, text, itemId, timestamp),
+        },
+      ];
+    });
   }
 
   finalizeAnswerCandidate(turn: { status?: string; items?: CodexThreadItem[] }): void {
@@ -502,6 +527,7 @@ export class CodexAssistantProjection {
       return;
     }
     this.assistantItemOrder.push(itemId);
+    this.assistantTimestampByItem.set(itemId, this.nextTranscriptTimestamp());
   }
 
   private isToolProgressEchoText(itemId: string, text: string): boolean {

@@ -4,10 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
@@ -18,6 +16,7 @@ import {
 } from "./installed-plugin-index.js";
 import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -559,7 +558,56 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.diagnostics).toStrictEqual([]);
   });
 
-  it("refreshes a memoized derived snapshot when workspace plugins are installed", () => {
+  it("reuses a memoized registry without polling plugin files", () => {
+    const tempRoot = makeTempDir();
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    const first = loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir });
+    const readDirectory = vi.spyOn(fs, "readdirSync");
+    const readFile = vi.spyOn(fs, "readFileSync");
+    const statFile = vi.spyOn(fs, "statSync");
+
+    expect(loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir })).toBe(first);
+    expect(readDirectory).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(statFile).not.toHaveBeenCalled();
+  });
+
+  it("retains only the current process-lifecycle registry graph", () => {
+    const tempRoot = makeTempDir();
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const firstWorkspace = path.join(tempRoot, "first-workspace");
+    const secondWorkspace = path.join(tempRoot, "second-workspace");
+
+    const first = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: firstWorkspace,
+    });
+    const second = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: secondWorkspace,
+    });
+    const refreshedFirst = loadPluginRegistrySnapshotWithMetadata({
+      config: {},
+      env,
+      workspaceDir: firstWorkspace,
+    });
+
+    expect(second).not.toBe(first);
+    expect(refreshedFirst).not.toBe(first);
+    expect(
+      loadPluginRegistrySnapshotWithMetadata({
+        config: {},
+        env,
+        workspaceDir: firstWorkspace,
+      }),
+    ).toBe(refreshedFirst);
+  });
+
+  it("refreshes workspace plugin discovery on explicit metadata invalidation", () => {
     const tempRoot = makeTempDir();
     const workspaceDir = path.join(tempRoot, "workspace");
     const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
@@ -570,10 +618,15 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     writePackagePlugin(path.join(workspaceDir, ".openclaw", "extensions", "demo"));
 
     const second = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, workspaceDir });
-    expect(second.snapshot.plugins.map((plugin) => plugin.pluginId)).toContain("demo");
+    expect(second).toBe(first);
+
+    clearPluginMetadataLifecycleCaches();
+
+    const refreshed = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, workspaceDir });
+    expect(refreshed.snapshot.plugins.map((plugin) => plugin.pluginId)).toContain("demo");
   });
 
-  it("ignores malformed load paths while fingerprinting memoized snapshots", () => {
+  it("ignores malformed load paths while memoizing snapshots", () => {
     const tempRoot = makeTempDir();
     const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
     const config = {
@@ -988,6 +1041,35 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
     expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["codex", "whatsapp"]);
+  });
+
+  it("resolves a persisted bundled root only once per registry load", () => {
+    const tempRoot = makeTempDir();
+    const packageRoot = path.join(tempRoot, "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+    const pluginIds = ["bundled-one", "bundled-two", "bundled-three", "bundled-four"];
+
+    for (const pluginId of pluginIds) {
+      writeBundledPlugin(path.join(bundledRoot, pluginId), pluginId, "index.js");
+    }
+    const index = loadInstalledPluginIndex({ config: {}, env, stateDir });
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId).toSorted()).toEqual(
+      pluginIds.toSorted(),
+    );
+    expect(realpathSpy.mock.calls.filter(([filePath]) => filePath === bundledRoot)).toHaveLength(1);
   });
 
   it("treats a persisted source bundled root as stale once its built peer appears", () => {

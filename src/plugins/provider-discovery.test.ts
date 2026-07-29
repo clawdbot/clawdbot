@@ -95,7 +95,7 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
   it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
     const callerPaths = [
       "src/agents/models-config.providers.implicit.ts",
-      "src/commands/models/list.provider-catalog.ts",
+      "src/commands/models/list.row-sources.ts",
     ];
 
     for (const callerPath of callerPaths) {

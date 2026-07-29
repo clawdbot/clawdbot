@@ -23,6 +23,9 @@ const modelsCommandMock = vi.hoisted(() => ({
   delegateToActual: false,
   resolveModelsCommandReply: vi.fn(),
 }));
+const stickyModelMock = vi.hoisted(() => ({
+  persistBestEffort: vi.fn(),
+}));
 
 function defaultModelsCommandReply() {
   return {
@@ -94,6 +97,11 @@ vi.mock("./commands-models.js", () => ({
     }
     return defaultModelsCommandReply();
   },
+}));
+
+vi.mock("../../agents/sticky-model-selection.js", () => ({
+  persistStickyModelSelectionBestEffort: (params: { agentId: string; model: string }) =>
+    stickyModelMock.persistBestEffort(params),
 }));
 
 vi.mock("./directive-handling.auth.js", () => ({
@@ -410,6 +418,7 @@ function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return {
     sessionId: "s1",
     updatedAt: Date.now(),
+    delivery: { kind: "none" },
     ...overrides,
   };
 }
@@ -472,6 +481,7 @@ beforeEach(() => {
   vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
   vi.mocked(enqueueSystemEvent).mockClear();
   queueMocks.refreshQueuedFollowupSession.mockReset();
+  stickyModelMock.persistBestEffort.mockClear();
   clearInternalHooks();
 });
 
@@ -555,6 +565,7 @@ async function persistModelDirectiveForTest(params: {
   provider?: string;
   model?: string;
   initialModelLabel?: string;
+  canPersistStickyModelSelection?: boolean;
 }) {
   if (params.profiles) {
     setAuthProfiles(params.profiles);
@@ -584,6 +595,7 @@ async function persistModelDirectiveForTest(params: {
       params.initialModelLabel ??
       `${params.provider ?? "anthropic"}/${params.model ?? "claude-opus-4-6"}`,
     formatModelSwitchEvent: (label) => label,
+    canPersistStickyModelSelection: params.canPersistStickyModelSelection ?? true,
     agentCfg: cfg.agents?.defaults,
   });
   return { persisted, sessionEntry };
@@ -637,6 +649,8 @@ async function resolveModelInfoReply(
     aliasIndex: baseAliasIndex(),
     allowedModelKeys: new Set(),
     allowedModelCatalog: [],
+    currentThinkLevel: "medium",
+    runtimePolicySessionKey: "agent:main:main",
     resetModelOverride: false,
     ...overrides,
   });
@@ -647,8 +661,63 @@ describe("/model chat UX", () => {
     const reply = await resolveModelInfoReply();
 
     expect(reply?.text).toContain("Current:");
+    expect(reply?.text).toContain("Think: medium (change with /think <level>)");
     expect(reply?.text).toContain("Browse: /models");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("includes the thinking level in channel-specific model summaries", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.channels = [
+      {
+        pluginId: "test",
+        plugin: {
+          id: "telegram",
+          commands: {
+            buildModelBrowseChannelData: () => ({ telegram: { inlineKeyboard: [] } }),
+          },
+        },
+        source: "test",
+      },
+    ] as never;
+    setActivePluginRegistry(registry);
+
+    const reply = await resolveModelInfoReply({ surface: "telegram" });
+
+    expect(reply?.channelData).toBeDefined();
+    expect(reply?.text).toContain("Think: medium (change with /think <level>)");
+  });
+
+  it("shows the effective thinking level for the selected runtime", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        resolveThinkingProfile: ({ agentRuntime }) => ({
+          levels: [
+            { id: "off" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "high" },
+            { id: "max" },
+            ...(agentRuntime === "openclaw" ? ([{ id: "ultra" }] as const) : []),
+          ],
+        }),
+      },
+    ]);
+
+    const reply = await resolveModelInfoReply({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-luna",
+      currentThinkLevel: "ultra",
+      sessionEntry: { agentRuntimeOverride: "codex" },
+    });
+
+    expect(reply?.text).toContain("Think: max (change with /think <level>)");
+    expect(reply?.text).not.toContain("Think: ultra");
   });
 
   it("treats /model list as a models browser alias, not a model id", async () => {
@@ -659,6 +728,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Providers:");
     expect(reply?.text).toContain("Use: /models <provider>");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
   it("passes workspace scope through the /model list browser alias", async () => {
@@ -1312,7 +1382,7 @@ describe("/model chat UX", () => {
     });
 
     expect(resolved.errorText).toContain(
-      'Add "openai/gpt-5.5" or its provider wildcard to agents.list[].modelPolicy.allow.',
+      'Add "openai/gpt-5.5" or its provider wildcard to agents.entries.*.modelPolicy.allow.',
     );
   });
 
@@ -1782,6 +1852,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       model: "claude-opus-4-6",
       initialModelLabel: "anthropic/claude-opus-4-6",
       formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      canPersistStickyModelSelection: true,
       ...rest,
       sessionEntry: entry,
       sessionStore: store,
@@ -1819,6 +1890,46 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).toContain("for this session");
     expect(result?.text).not.toContain("failed");
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
+    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
+      agentId: "main",
+      model: "openai/gpt-4o",
+    });
+  });
+
+  it("uses the target session agent when persisting a model selection", async () => {
+    vi.mocked(resolveSessionAgentId).mockReturnValue("work");
+    const sessionEntry = createSessionEntry();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        sessionEntry,
+      }),
+    );
+
+    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
+      agentId: "work",
+      model: "openai/gpt-4o",
+    });
+  });
+
+  it("keeps a non-owner model selection session-scoped", async () => {
+    const sessionEntry = createSessionEntry();
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        sessionEntry,
+        canPersistStickyModelSelection: false,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to openai/gpt-4o for this session.");
+    expect(sessionEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
   it("persists an explicit runtime with a directive-only model switch", async () => {
@@ -1917,6 +2028,34 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(otherEntry.modelOverrideSource).toBeUndefined();
   });
 
+  it("persists a mixed-command model selection after its session transaction", async () => {
+    vi.mocked(resolveSessionAgentId).mockReturnValue("work");
+
+    await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o continue with the request",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+    });
+
+    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
+      agentId: "work",
+      model: "openai/gpt-4o",
+    });
+  });
+
+  it("keeps a mixed-command model selection session-scoped without authority", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o continue with the request",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      canPersistStickyModelSelection: false,
+    });
+
+    expect(sessionEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
+  });
+
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
     const { persisted } = await persistModelDirectiveForTest({
@@ -1932,6 +2071,26 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       provider: "openai",
       model: "gpt-4o",
     });
+  });
+
+  it("announces the model change before the thinking remap in the ack", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
+        sessionEntry,
+      }),
+    );
+
+    const text = result?.text ?? "";
+    expect(text).toContain("Model set to openai/gpt-4o for this session.");
+    expect(text).toContain(
+      "Thinking level set to medium (adaptive not supported for openai/gpt-4o).",
+    );
+    // The model change (cause) must be reported before the thinking remap (effect).
+    expect(text.indexOf("Model set to")).toBeLessThan(text.indexOf("Thinking level set to"));
   });
 
   it("fires session:patch when /model changes the persisted session model", async () => {
@@ -1998,6 +2157,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       key: sessionKey,
       nextProvider: "openai",
       nextModel: "gpt-4o",
+      nextRouteResolution: "resolved",
       nextModelOverrideSource: "user",
       nextAuthProfileId: undefined,
       nextAuthProfileIdSource: undefined,
@@ -2064,6 +2224,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "s2",
       updatedAt: sessionEntry.updatedAt + 1,
+      delivery: { kind: "none" },
       elevatedLevel: "full",
     };
     await replaceSessionEntry({ sessionKey, storePath }, rotatedEntry);
@@ -2204,6 +2365,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       key: sessionKey,
       nextProvider: "anthropic",
       nextModel: "claude-opus-4-6",
+      nextRouteResolution: "resolved",
       nextModelOverrideSource: "user",
       nextAuthProfileId: "anthropic:work",
       nextAuthProfileIdSource: "user",
@@ -2775,6 +2937,7 @@ describe("persistInlineDirectives session directive persistence policy", () => {
         model: "claude-opus-4-6",
         initialModelLabel: "anthropic/claude-opus-4-6",
         formatModelSwitchEvent: (label) => `Switched to ${label}`,
+        canPersistStickyModelSelection: true,
         agentCfg: undefined,
       });
 

@@ -339,7 +339,11 @@ internal fun SessionsScreen(
             SessionRow(
               session = session,
               title = displaySessionTitle(session),
-              subtitle = if (active) nativeString("Current thread") else nativeString("OpenClaw thread"),
+              subtitle =
+                sessionListSubtitle(
+                  session,
+                  fallback = if (active) nativeString("Current thread") else nativeString("OpenClaw thread"),
+                ),
               metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: nativeString("now"),
               active = active,
               compact = compactLayout,
@@ -844,6 +848,38 @@ private enum class SessionFilter {
   Recent,
   Current,
   Archived,
+}
+
+internal fun sessionListSubtitle(
+  session: ChatSessionEntry,
+  fallback: String,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
+  val agentStatus =
+    session.agentStatus?.takeIf { status ->
+      status.expiresAt > nowMs && status.note.isNotBlank()
+    }
+  val declaredAttention = agentStatus?.takeIf { it.attention != null }?.note
+  val runStatus = session.status?.trim()?.lowercase()
+  val failureAt = session.endedAt ?: session.updatedAtMs ?: 0L
+  val failedAttention =
+    session.lastRunError
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() && (runStatus == "failed" || runStatus == "timeout") && (session.lastReadAt ?: 0L) < failureAt }
+  val digest = session.observerDigest
+  val running = session.hasActiveRun == true || runStatus == "running"
+  val digestMatchesActiveRun =
+    digest
+      ?.runId
+      ?.trim()
+      ?.takeIf(String::isNotEmpty)
+      ?.let { runId -> session.activeRunIds.orEmpty().any { it.trim() == runId } } == true
+  val finalDigestUnread =
+    digest != null &&
+      (digest.health == "done" || digest.health == "failed") &&
+      (session.lastReadAt ?: 0L) < digest.updatedAt
+  val observer = digest?.headline?.takeIf { (running && digestMatchesActiveRun) || (!running && finalDigestUnread) }
+  return declaredAttention ?: failedAttention ?: agentStatus?.note ?: observer ?: fallback
 }
 
 internal data class SessionSection(

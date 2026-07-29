@@ -6,6 +6,7 @@ import {
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
 } from "./hybrid.js";
+import { applyProjectRanking } from "./project-ranking.js";
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
@@ -78,6 +79,84 @@ describe("memory hybrid helpers", () => {
     expect(b?.score).toBeCloseTo(0.3 * 1);
     expect(b?.vectorScore).toBe(0);
     expect(b?.textScore).toBeCloseTo(1);
+  });
+
+  it("keeps null importance neutral and deterministically boosts important entries", async () => {
+    const baseEntry = {
+      id: "neutral",
+      path: "MEMORY.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory" as const,
+      snippet: "neutral",
+      vectorScore: 0.8,
+    };
+    const base = {
+      vectorWeight: 1,
+      textWeight: 0,
+      keyword: [],
+      vector: [baseEntry],
+    };
+    const neutral = await mergeHybridResults(base);
+    const important = await mergeHybridResults({
+      ...base,
+      vector: [{ ...baseEntry, id: "important", importance: 10 }],
+    });
+    const low = await mergeHybridResults({
+      ...base,
+      vector: [{ ...baseEntry, id: "low", importance: 1 }],
+    });
+
+    expect(neutral[0]?.score).toBeCloseTo(0.8);
+    expect(important[0]?.score).toBeCloseTo(1);
+    expect(low[0]?.score).toBeCloseTo(0.64);
+  });
+
+  it("boosts active-project results, demotes foreign results, and leaves global results neutral", async () => {
+    const merged = applyProjectRanking(
+      await mergeHybridResults({
+        vectorWeight: 1,
+        textWeight: 0,
+        keyword: [],
+        vector: [
+          {
+            id: "same",
+            path: "MEMORY.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "same",
+            vectorScore: 0.8,
+            projectKey: "github.com/openclaw/openclaw",
+          },
+          {
+            id: "global",
+            path: "MEMORY.md",
+            startLine: 2,
+            endLine: 2,
+            source: "memory",
+            snippet: "global",
+            vectorScore: 0.8,
+          },
+          {
+            id: "foreign",
+            path: "MEMORY.md",
+            startLine: 3,
+            endLine: 3,
+            source: "memory",
+            snippet: "foreign",
+            vectorScore: 0.8,
+            projectKey: "github.com/example/other",
+          },
+        ],
+      }),
+      ["github.com/openclaw/openclaw"],
+    );
+    expect(merged.map((entry) => [entry.snippet, entry.score])).toEqual([
+      ["same", 0.9199999999999999],
+      ["global", 0.8],
+      ["foreign", 0.7200000000000001],
+    ]);
   });
 
   it("uses path BM25 only for partial path-only hybrid hits", async () => {
@@ -561,5 +640,98 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1);
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
     expect(merged[0]?.textScore).toBeCloseTo(1);
+  });
+
+  const vectorResult = (id: string, path: string, vectorScore: number) => ({
+    id,
+    path,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    snippet: `vector ${id}`,
+    vectorScore,
+  });
+  const keywordResult = (id: string, path: string, textScore: number) => ({
+    id,
+    path,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    snippet: `keyword ${id}`,
+    textScore,
+  });
+
+  it("removes the text-weight discount only from vector-only non-text media", async () => {
+    const paths = {
+      vectorMedia: "memory/generated/photo.png",
+      vectorText: "memory/notes.md",
+      keywordMedia: "memory/clip.wav",
+      bothMedia: "memory/matched.png",
+      bothText: "memory/matched.md",
+    };
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      isNonTextMediaPath: (path) => /\.(?:png|wav)$/u.test(path),
+      vector: [
+        vectorResult("vector-media", paths.vectorMedia, 0.8),
+        vectorResult("vector-text", paths.vectorText, 0.8),
+        vectorResult("both-media", paths.bothMedia, 0.95),
+        vectorResult("both-text", paths.bothText, 0.6),
+      ],
+      keyword: [
+        keywordResult("keyword-media", paths.keywordMedia, 0.9),
+        keywordResult("both-media", paths.bothMedia, 0.8),
+        keywordResult("both-text", paths.bothText, 0.9),
+      ],
+    });
+    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
+
+    expect(byPath.get(paths.vectorMedia)?.score).toBeCloseTo(0.8);
+    expect(byPath.get(paths.vectorText)?.score).toBeCloseTo(0.7 * 0.8);
+    expect(byPath.get(paths.keywordMedia)?.score).toBeCloseTo(0.3 * 0.9);
+    expect(byPath.get(paths.bothMedia)?.score).toBeCloseTo(0.7 * 0.95 + 0.3 * 0.8);
+    expect(byPath.get(paths.bothMedia)?.textScore).toBeCloseTo(0.8);
+    expect(byPath.get(paths.bothText)?.score).toBeCloseTo(0.7 * 0.6 + 0.3 * 0.9);
+  });
+
+  it.each([
+    {
+      name: "keeps media keyword scoring when vector weight is zero",
+      vectorWeight: 0,
+      textWeight: 1,
+      path: "memory/photo.png",
+      vector: [vectorResult("candidate", "memory/photo.png", 0.95)],
+      keyword: [keywordResult("candidate", "memory/photo.png", 0.8)],
+      expected: 0.8,
+    },
+    {
+      name: "keeps vector-only text scoring when weights total two",
+      vectorWeight: 1,
+      textWeight: 1,
+      path: "memory/notes.md",
+      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
+      keyword: [],
+      expected: 0.6,
+    },
+    {
+      name: "keeps both-signal text scoring when weights total two",
+      vectorWeight: 1,
+      textWeight: 1,
+      path: "memory/notes.md",
+      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
+      keyword: [keywordResult("candidate", "memory/notes.md", 0.9)],
+      expected: 1.5,
+    },
+  ])("$name", async ({ vectorWeight, textWeight, path, vector, keyword, expected }) => {
+    const merged = await mergeHybridResults({
+      vectorWeight,
+      textWeight,
+      isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
+      vector,
+      keyword,
+    });
+
+    expect(merged.find((entry) => entry.path === path)?.score).toBeCloseTo(expected);
   });
 });

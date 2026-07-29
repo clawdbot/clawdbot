@@ -25,7 +25,11 @@ type SyncPluginVersionsOptions = {
 };
 
 const OPENCLAW_VERSION_RANGE_RE = /^>=\d{4}\.\d{1,2}\.\d{1,2}(?:[-.][^"\s]+)?$/u;
-const VERSION_ALIGNED_PACKAGE_DIRS = ["packages/ai", "packages/gateway-protocol"] as const;
+const VERSION_ALIGNED_PACKAGE_DIRS = [
+  "packages/ai",
+  "packages/gateway-client",
+  "packages/gateway-protocol",
+] as const;
 
 function syncOpenClawDependencyRange(
   deps: Record<string, string> | undefined,

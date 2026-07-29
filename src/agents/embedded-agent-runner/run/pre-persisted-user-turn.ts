@@ -14,10 +14,9 @@ export function sessionMessagesContainIdempotencyKey(
 export function detachPrePersistedCurrentUserTurn(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
   preparedUserTurnMessage: AgentMessage | undefined;
-  suppressNextUserMessagePersistence: boolean | undefined;
   userTurnAlreadyPersisted: boolean;
 }): boolean {
-  if (!params.suppressNextUserMessagePersistence || !params.userTurnAlreadyPersisted) {
+  if (!params.userTurnAlreadyPersisted) {
     return false;
   }
   const idempotencyKey = (

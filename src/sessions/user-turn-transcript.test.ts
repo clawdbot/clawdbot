@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
-  buildPersistedUserTurnMediaInputsFromFields,
+  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
@@ -82,129 +82,6 @@ describe("user turn transcript persistence", () => {
       );
   }
 
-  describe("buildPersistedUserTurnMediaInputsFromFields", () => {
-    it("builds media inputs from structured context media fields", () => {
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPath: "/tmp/a.png",
-          MediaPaths: ["/tmp/a.png", "/tmp/b.jpg"],
-          MediaType: "image/png",
-          MediaTypes: ["image/png", "image/jpeg"],
-        }),
-      ).toEqual([
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "/tmp/b.jpg", contentType: "image/jpeg" },
-      ]);
-    });
-
-    it("uses url-backed media fields when no local path is present", () => {
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaUrl: "media://inbound/a.png",
-          MediaType: "image/png",
-        }),
-      ).toEqual([{ url: "media://inbound/a.png", contentType: "image/png" }]);
-    });
-
-    it("infers transcript media type from media path when explicit type is absent", () => {
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPaths: ["/tmp/a.png", "https://example.test/report.pdf"],
-        }),
-      ).toEqual([
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "https://example.test/report.pdf", contentType: "application/pdf" },
-      ]);
-    });
-
-    it("does not reuse singular media type for later media paths", () => {
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPath: "/tmp/a.png",
-          MediaPaths: ["/tmp/a.png", "/tmp/report.pdf"],
-          MediaType: "image/png",
-        }),
-      ).toEqual([
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "/tmp/report.pdf", contentType: "application/pdf" },
-      ]);
-    });
-
-    it("resolves staged relative media paths against the media workspace", () => {
-      const workspaceDir = createTempDir("openclaw-user-turn-media-");
-
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPath: "media/inbound/a.png",
-          MediaPaths: ["media/inbound/a.png", "media/inbound/b.jpg"],
-          MediaType: "image/png",
-          MediaTypes: ["image/png", "image/jpeg"],
-          MediaWorkspaceDir: workspaceDir,
-        }),
-      ).toEqual([
-        { path: path.join(workspaceDir, "media/inbound/a.png"), contentType: "image/png" },
-        { path: path.join(workspaceDir, "media/inbound/b.jpg"), contentType: "image/jpeg" },
-      ]);
-    });
-
-    it("does not rewrite absolute or URL-like media paths", () => {
-      const workspaceDir = createTempDir("openclaw-user-turn-media-");
-      const absolutePath = path.join(workspaceDir, "media/inbound/a.png");
-
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPaths: [absolutePath, "media://inbound/b.jpg", "https://example.test/c.png"],
-          MediaTypes: ["image/png", "image/jpeg", "image/png"],
-          MediaWorkspaceDir: workspaceDir,
-        }),
-      ).toEqual([
-        { path: absolutePath, contentType: "image/png" },
-        { path: "media://inbound/b.jpg", contentType: "image/jpeg" },
-        { path: "https://example.test/c.png", contentType: "image/png" },
-      ]);
-    });
-
-    it("does not infer media from absent structured fields", () => {
-      expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
-      expect(buildPersistedUserTurnMediaInputsFromFields({})).toEqual([]);
-    });
-
-    it("preserves index alignment when an earlier attachment lacks a content type", () => {
-      // Writer pads missing types with "" to keep MediaPaths/MediaTypes index-aligned.
-      // The reader must NOT compact those "" holes away before indexing or a later
-      // attachment's type lands on the wrong attachment.
-      const result = buildPersistedUserTurnMediaInputsFromFields({
-        MediaPaths: ["/media/a.bin", "/media/b.png"],
-        MediaTypes: ["", "image/png"],
-      });
-      expect(result).toHaveLength(2);
-      const [first, second] = result;
-      // a.bin has no explicit type in the "" hole. Its contentType must NOT be
-      // "image/png" — that belongs to b.png at index 1.
-      expect(first).toMatchObject({ path: "/media/a.bin" });
-      expect(first?.contentType).not.toBe("image/png");
-      // b.png at index 1 must keep its own type correctly aligned.
-      expect(second).toEqual({ path: "/media/b.png", contentType: "image/png" });
-    });
-
-    it("preserves index alignment when an earlier attachment lacks a url", () => {
-      // Same misalignment risk for MediaUrls: a "" hole for a path-only attachment
-      // must not shift a later attachment's URL to the wrong index.
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPaths: ["/media/local.bin", ""],
-          MediaUrls: ["", "https://example.test/remote.png"],
-          MediaTypes: ["application/octet-stream", "image/png"],
-        }),
-      ).toEqual([
-        // local.bin has a path but no url (the "" was a placeholder, not a real url).
-        { path: "/media/local.bin", contentType: "application/octet-stream" },
-        // remote.png has no path (the "" was a placeholder) but does have a url.
-        { url: "https://example.test/remote.png", contentType: "image/png" },
-      ]);
-    });
-  });
-
   describe("mergePreparedUserTurnMessageForRuntime", () => {
     it("adds prepared transcript metadata to runtime user messages", () => {
       const recorder = createUserTurnTranscriptRecorder({
@@ -230,8 +107,9 @@ describe("user turn transcript persistence", () => {
         content: "display prompt",
         provenance: { sourceChannel: "telegram" },
         timestamp: 123,
-        MediaPath: "/tmp/image.png",
-        MediaType: "image/png",
+        __openclaw: {
+          media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
+        },
       });
     });
 
@@ -324,16 +202,13 @@ describe("user turn transcript persistence", () => {
 
   describe("resolvePersistedUserTurnText", () => {
     it("normalizes the selected clean user-turn transcript text", () => {
-      expect(resolvePersistedUserTurnText("  What is in this image?  ", { hasMedia: true })).toBe(
+      expect(resolvePersistedUserTurnText("  What is in this image?  ")).toBe(
         "What is in this image?",
       );
     });
 
-    it("ignores exact channel media placeholders only when structured media is present", () => {
-      expect(resolvePersistedUserTurnText("<media:image> (2 images)", { hasMedia: true })).toBe(
-        undefined,
-      );
-      expect(resolvePersistedUserTurnText("<media:image> (2 images)", { hasMedia: false })).toBe(
+    it("preserves historical placeholder-like text as ordinary transcript content", () => {
+      expect(resolvePersistedUserTurnText("<media:image> (2 images)")).toBe(
         "<media:image> (2 images)",
       );
     });
@@ -366,7 +241,7 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      expect(persisted?.sessionFile).toBe(target.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(target.sessionKey);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -377,6 +252,28 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("createUserTurnTranscriptRecorder", () => {
+    it("accepts and normalizes provider-defined persisted media kinds", () => {
+      const input: UserTurnInput = {
+        text: "inspect this attachment",
+        media: [{ path: " /tmp/provider-media.bin ", kind: " provider/custom-media " }],
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        input,
+        target: unusedRecorderTarget,
+      });
+
+      expect(recorder.message).toMatchObject({
+        __openclaw: {
+          media: [
+            expect.objectContaining({
+              path: "/tmp/provider-media.bin",
+              contentType: "provider/custom-media",
+            }),
+          ],
+        },
+      });
+    });
+
     it("persists fallback user turns only once", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-fallback-");
       const target = createSqliteTranscriptTarget({ dir });
@@ -487,15 +384,22 @@ describe("user turn transcript persistence", () => {
       expect(persisted?.message).toMatchObject({
         role: "user",
         content: "describe this",
-        MediaPath: path.join(dir, "image.png"),
-        MediaType: "image/png",
+        __openclaw: {
+          media: [
+            expect.objectContaining({
+              path: path.join(dir, "image.png"),
+              contentType: "image/png",
+            }),
+          ],
+        },
       });
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
           content: "describe this",
-          MediaPath: path.join(dir, "image.png"),
-          MediaType: "image/png",
+          __openclaw: {
+            media: [expect.objectContaining({ path: path.join(dir, "image.png") })],
+          },
         }),
       ]);
     });
@@ -546,7 +450,8 @@ describe("user turn transcript persistence", () => {
 
       await persistence;
 
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
+      const messages = await readTranscriptMessages(target);
+      expect(messages).toEqual([
         expect.objectContaining({
           content: "describe this",
           idempotencyKey: "chat-run-late:user",
@@ -554,11 +459,20 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({
           content: "",
           idempotencyKey: "chat-run-late:user:late-media",
-          MediaPath: path.join(dir, "image.png"),
-          MediaPaths: [path.join(dir, "image.png")],
-          MediaType: "image/png",
-          MediaTypes: ["image/png"],
-          __openclaw: { hookOwned: true, lateMedia: true },
+          __openclaw: {
+            hookOwned: true,
+            lateMedia: true,
+            media: [expect.objectContaining({ path: path.join(dir, "image.png") })],
+          },
+        }),
+      ]);
+      const lateProjection = buildLateMediaAttachedProjection(castAgentMessage(messages[1]));
+      expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
+      expect(lateProjection.media).toEqual([
+        expect.objectContaining({
+          path: path.join(dir, "image.png"),
+          contentType: "image/png",
+          kind: "image",
         }),
       ]);
     });
@@ -603,8 +517,10 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({ content: "describe this" }),
         expect.objectContaining({
           content: "resolved subtitle",
-          MediaPath: path.join(dir, "image.png"),
-          __openclaw: { lateMedia: true },
+          __openclaw: {
+            lateMedia: true,
+            media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+          },
         }),
       ]);
     });
@@ -636,7 +552,9 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({
           content: "describe this",
           idempotencyKey: "chat-run-early:user",
-          MediaPath: path.join(dir, "image.png"),
+          __openclaw: {
+            media: [expect.objectContaining({ path: path.join(dir, "image.png") })],
+          },
         }),
       ]);
     });
@@ -804,12 +722,74 @@ describe("user turn transcript persistence", () => {
         },
       });
 
-      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(staleTarget)).resolves.toEqual([]);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
           content: "persist me in the admitted session",
+        }),
+      ]);
+    });
+
+    it("re-resolves the target after an explicitly retryable persistence miss", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-retry-");
+      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      let targetResolutionCount = 0;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "persist me after the target rotates",
+          timestamp: 123,
+        },
+        target: () => {
+          targetResolutionCount += 1;
+          return targetResolutionCount === 1 ? undefined : admittedTarget;
+        },
+        updateMode: "none",
+      });
+
+      await expect(recorder.persistApproved({ retryIfUnpersisted: true })).resolves.toBeUndefined();
+      const persisted = await recorder.persistApproved({ retryIfUnpersisted: true });
+
+      expect(targetResolutionCount).toBe(2);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
+      await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "persist me after the target rotates",
+        }),
+      ]);
+    });
+
+    it("keeps concurrent persistence retries single-flight", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-concurrent-retry-");
+      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      let targetResolutionCount = 0;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "persist me once after concurrent retries",
+          timestamp: 123,
+        },
+        target: () => {
+          targetResolutionCount += 1;
+          return targetResolutionCount === 1 ? undefined : admittedTarget;
+        },
+        updateMode: "none",
+      });
+
+      await expect(recorder.persistApproved({ retryIfUnpersisted: true })).resolves.toBeUndefined();
+      const [first, second] = await Promise.all([
+        recorder.persistApproved({ retryIfUnpersisted: true }),
+        recorder.persistApproved({ retryIfUnpersisted: true }),
+      ]);
+
+      expect(targetResolutionCount).toBe(2);
+      expect(first?.sessionFile).toBe(admittedTarget.sessionKey);
+      expect(second?.sessionFile).toBe(admittedTarget.sessionKey);
+      await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "persist me once after concurrent retries",
         }),
       ]);
     });

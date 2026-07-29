@@ -14,7 +14,7 @@ struct PermissionManagerTests {
 
     @Test func `status can query non interactive caps`() async {
         let caps: [Capability] = [.microphone, .speechRecognition, .screenRecording]
-        let status = await PermissionManager.status(caps)
+        let status = await PermissionManager.grantedStatus(caps)
         #expect(status.keys.count == caps.count)
     }
 
@@ -26,7 +26,7 @@ struct PermissionManagerTests {
 
     @Test func `location status matches authorization always`() async {
         let status = CLLocationManager().authorizationStatus
-        let results = await PermissionManager.status([.location])
+        let results = await PermissionManager.grantedStatus([.location])
         #expect(results[.location] == (status == .authorizedAlways))
     }
 

@@ -81,12 +81,21 @@ export function createMattermostReplyDeliveryBarrier(params: {
 }
 
 /**
- * Result of `deliverMattermostReplyPayload`. Callers in `monitor.ts` use this
+ * Result of `deliverMattermostReplyPayload`. Inbound delivery adapters use this
  * to distinguish a successful visible send from an intentionally suppressed
  * reasoning payload from a substantive payload that ended up sending nothing
  * (the silent-completion symptom in #80501).
  */
 export type MattermostReplyDeliveryOutcome = "reasoning_skipped" | "empty" | "text" | "media";
+
+export function toMattermostChannelDeliveryResult(outcome: MattermostReplyDeliveryOutcome) {
+  return outcome === "text" || outcome === "media"
+    ? { visibleReplySent: true as const }
+    : {
+        visibleReplySent: false as const,
+        suppression: { reason: "no_visible_result" as const },
+      };
+}
 
 export async function deliverMattermostReplyPayload(params: {
   core: PluginRuntime;

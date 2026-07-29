@@ -35,10 +35,12 @@ describe("release-check", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-tarball-test-"));
     try {
       writeFileSync(join(root, "openclaw-ai-2026.6.33.tgz"), "fixture");
+      writeFileSync(join(root, "openclaw-gateway-client-2026.6.33.tgz"), "fixture");
       writeFileSync(join(root, "openclaw-gateway-protocol-2026.6.33.tgz"), "fixture");
       writeFileSync(join(root, "SHA256SUMS"), "fixture");
       expect(resolveReleaseCheckLocalPackageTarballs(root)).toEqual([
         join(root, "openclaw-ai-2026.6.33.tgz"),
+        join(root, "openclaw-gateway-client-2026.6.33.tgz"),
         join(root, "openclaw-gateway-protocol-2026.6.33.tgz"),
       ]);
       expect(resolveReleaseCheckLocalPackageTarballs(undefined)).toEqual([]);
@@ -47,12 +49,17 @@ describe("release-check", () => {
     }
   });
 
-  it("accepts a gateway-only core package directory when the root does not require AI", () => {
+  it("accepts gateway core packages when the root does not require AI", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-tarball-test-"));
     try {
       const gatewayTarball = join(root, "openclaw-gateway-protocol-2026.7.2.tgz");
+      const gatewayClientTarball = join(root, "openclaw-gateway-client-2026.7.2.tgz");
       writeFileSync(gatewayTarball, "fixture");
-      expect(resolveReleaseCheckLocalPackageTarballs(root, false)).toEqual([gatewayTarball]);
+      writeFileSync(gatewayClientTarball, "fixture");
+      expect(resolveReleaseCheckLocalPackageTarballs(root, false)).toEqual([
+        gatewayClientTarball,
+        gatewayTarball,
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -63,6 +70,7 @@ describe("release-check", () => {
     try {
       writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", [
         "/tmp/openclaw-ai.tgz",
+        "/tmp/openclaw-gateway-client.tgz",
         "/tmp/openclaw-gateway-protocol.tgz",
       ]);
       const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
@@ -72,6 +80,7 @@ describe("release-check", () => {
       expect(manifest.private).toBe(true);
       expect(manifest.dependencies).toEqual({
         "@openclaw/ai": "file:///tmp/openclaw-ai.tgz",
+        "@openclaw/gateway-client": "file:///tmp/openclaw-gateway-client.tgz",
         "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
         openclaw: "file:///tmp/openclaw.tgz",
       });
@@ -80,19 +89,20 @@ describe("release-check", () => {
     }
   });
 
-  it("writes a gateway-only local project when the root does not require AI", () => {
+  it("writes a gateway-packages-only local project when the root does not require AI", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
     try {
       writePackedTarballInstallManifest(
         root,
         "/tmp/openclaw.tgz",
-        ["/tmp/openclaw-gateway-protocol.tgz"],
+        ["/tmp/openclaw-gateway-client.tgz", "/tmp/openclaw-gateway-protocol.tgz"],
         false,
       );
       const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
       };
       expect(manifest.dependencies).toEqual({
+        "@openclaw/gateway-client": "file:///tmp/openclaw-gateway-client.tgz",
         "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
         openclaw: "file:///tmp/openclaw.tgz",
       });
@@ -128,7 +138,9 @@ describe("release-check", () => {
         preparedDir,
         "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
       );
+      const gatewayClientTarball = join(preparedDir, "openclaw-gateway-client-2026.7.1-beta.3.tgz");
       writeFileSync(preparedTarball, "fixture");
+      writeFileSync(gatewayClientTarball, "fixture");
       writeFileSync(gatewayProtocolTarball, "fixture");
       const tarballs = prepareReleaseCheckLocalPackageTarballs({
         tmpRoot: root,
@@ -137,7 +149,7 @@ describe("release-check", () => {
           throw new Error("workspace pack should not run");
         },
       });
-      expect(tarballs).toEqual([preparedTarball, gatewayProtocolTarball]);
+      expect(tarballs).toEqual([preparedTarball, gatewayClientTarball, gatewayProtocolTarball]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

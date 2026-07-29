@@ -56,6 +56,8 @@ openclaw cron create "*/15 * * * *" \
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
 
+Agent-turn jobs default to the creating conversation when session context is available. Without a session key, including ordinary CLI calls and API calls that omit one, the target falls back to `isolated`.
+
 <AccordionGroup>
   <Accordion title="Session keys">
     - `main` binds to the agent's main session.
@@ -101,7 +103,7 @@ Reminders created from an active chat preserve the live chat delivery target for
 Failure notifications resolve in this order:
 
 1. `delivery.failureDestination` on the job.
-2. Global `cron.failureDestination`.
+2. The global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
 3. The job's primary announce target (when neither of the above resolves to a concrete destination).
 
 <Note>
@@ -298,13 +300,25 @@ openclaw cron runs --id <job-id> --limit 50
 openclaw cron runs --id <job-id> --run-id <run-id>
 ```
 
-`openclaw cron list` shows all matching jobs by default. Pass `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
+`openclaw cron list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 
 `openclaw cron get <job-id>` returns the stored job JSON directly. Use `cron show <job-id>` when you want the human-readable view with delivery-route preview.
 
 `cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated so external tooling can read job state without re-deriving it; human output may decorate repeated `error` statuses with a failure count.
 
 `cron runs` entries include delivery diagnostics with the intended cron target, the resolved target, message-tool sends, fallback use, and delivered state.
+
+Private per-job scratch (heartbeat checklists and similar monitor context):
+
+```bash
+openclaw cron scratch <job-id>                  # print current scratch content
+openclaw cron scratch <job-id> --json           # scratch plus revision metadata
+openclaw cron scratch <job-id> --set "text"     # replace scratch with exact text
+openclaw cron scratch <job-id> --file notes.md  # replace scratch from a file (- for stdin)
+openclaw cron scratch <job-id> --unset          # remove the scratch row
+```
+
+Scratch is stored in the shared state database, capped at 256 KiB, and never included in `cron list`/`cron get`/`cron runs` output. Writes are compare-and-swap guarded against the revision read at command start; pass `--expected-revision <n>` to pin an explicit revision instead. See [Heartbeat](/gateway/heartbeat#monitor-scratch-optional) for how heartbeat monitors use scratch.
 
 Agent and session retargeting:
 

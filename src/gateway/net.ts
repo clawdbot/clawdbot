@@ -57,6 +57,32 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
 }
 
+/** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
+export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
+  if (!req) {
+    return false;
+  }
+  const headers = req.headers ?? {};
+  return Boolean(
+    headers.forwarded ||
+    headers["x-real-ip"] ||
+    Object.keys(headers).some((header) =>
+      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
+    ),
+  );
+}
+
+/** Return whether a request is a clean loopback request without forwarded identity headers. */
+export function isLocalDirectRequest(
+  req?: IncomingMessage,
+  _trustedProxies?: string[],
+  _allowRealIpFallback = false,
+): boolean {
+  return Boolean(
+    req && !hasForwardedRequestHeaders(req) && isLoopbackAddress(req.socket?.remoteAddress),
+  );
+}
+
 export function resolveLocalInterfaceAddressMatch(
   ip: string | undefined,
   snapshot?: NetworkInterfacesSnapshot,

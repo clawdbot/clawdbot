@@ -42,7 +42,7 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
 }
 
 export function renderSessionState(session: SidebarRecentSession) {
-  if (session.hasActiveRun || (session.isChild && session.status === "running")) {
+  if (session.hasActiveRun || session.status === "running") {
     return html`<span
       class="session-run-spinner sidebar-recent-session__state"
       role="img"

@@ -12,8 +12,9 @@ import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
+type LaunchdHandoffMode = LaunchdRestartHandoffMode | "park";
 
-type LaunchdRestartHandoffResult = Result<number | undefined, string>;
+type LaunchdRestartHandoffResult = Result<Promise<boolean>, string>;
 
 type LaunchdRestartTarget = {
   domain: string;
@@ -21,8 +22,6 @@ type LaunchdRestartTarget = {
   serviceTarget: string;
 };
 
-const START_AFTER_EXIT_PRINT_RETRY_COUNT = 15;
-const START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS = 0.2;
 // The booted-out label stays registered until launchd finishes stopping the
 // old process. ExitTimeOut bounds that stop with SIGKILL, so the reload wait is
 // that ceiling plus teardown margin. A 3s poll could advance mid-stop and
@@ -97,7 +96,7 @@ function resolveLaunchdRestartTarget(
 }
 
 function buildLaunchdRestartScript(
-  mode: LaunchdRestartHandoffMode,
+  mode: LaunchdHandoffMode,
   restartLogEnv: LaunchdRestartLogEnv,
 ): string {
   // The detached shell waits for the caller before touching launchd so the
@@ -111,6 +110,26 @@ if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
   done
 fi
 `;
+
+  if (mode === "park") {
+    return `service_target="$1"
+domain="$2"
+plist_path="$3"
+${waitForCallerPid}
+status=0
+if launchctl bootout "$service_target"; then
+  status=0
+else
+  status=$?
+fi
+if [ "$status" -eq 0 ]; then
+  printf '[%s] openclaw service park done source=handoff interactive=0\\n' "$(date -u +%FT%TZ)" >&2
+else
+  printf '[%s] openclaw service park failed source=handoff status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
+fi
+exit "$status"
+`;
+  }
 
   if (mode === "kickstart") {
     // Restart is explicit operator intent; undo any previous `launchctl disable`.
@@ -204,31 +223,25 @@ exit "$status"
 `;
   }
 
-  const verifyLaunchdReload = `print_retry_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
-while [ "$print_retry_count" -gt 0 ]; do
-  if launchctl print "$service_target" >/dev/null 2>&1; then
-    printf '[%s] openclaw restart done source=handoff mode=${mode} reason=launchd-auto-reload interactive=0\\n' "$(date -u +%FT%TZ)" >&2
-    exit 0
-  fi
-  print_retry_count=$((print_retry_count - 1))
-  sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
-done
-`;
-
-  // Restart is explicit operator intent; undo any previous `launchctl disable`.
+  // Without -k, kickstart starts an inert service but leaves a KeepAlive
+  // replacement alone. This actively schedules relaunch without a second
+  // interruption when launchd wins the race after the caller exits.
   return `service_target="$1"
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
-${verifyLaunchdReload}
 status=0
 launchctl enable "$service_target"
-if launchctl bootstrap "$domain" "$plist_path"; then
+if launchctl kickstart "$service_target"; then
   status=0
 else
   status=$?
-  launchctl kickstart -k "$service_target"
-  status=$?
+  if launchctl bootstrap "$domain" "$plist_path"; then
+    status=0
+  else
+    launchctl kickstart "$service_target"
+    status=$?
+  fi
 fi
 if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
@@ -239,9 +252,9 @@ exit "$status"
 `;
 }
 
-export function scheduleDetachedLaunchdRestartHandoff(params: {
+function scheduleDetachedLaunchdHandoff(params: {
   env?: Record<string, string | undefined>;
-  mode: LaunchdRestartHandoffMode;
+  mode: LaunchdHandoffMode;
   waitForPid?: number;
 }): LaunchdRestartHandoffResult {
   const target = resolveLaunchdRestartTarget(params.env);
@@ -272,9 +285,30 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         env: restartEnv,
       },
     );
+    // Node reports OS-level spawn failures asynchronously. The caller must
+    // confirm this before exiting or a failed handoff can strand the gateway.
+    const spawned = new Promise<boolean>((resolve) => {
+      child.once("spawn", () => resolve(true));
+      child.once("error", () => resolve(false));
+    });
     child.unref();
-    return ok(child.pid ?? undefined);
+    return ok(spawned);
   } catch (error) {
     return err(formatErrorMessage(error));
   }
+}
+
+export function scheduleDetachedLaunchdRestartHandoff(params: {
+  env?: Record<string, string | undefined>;
+  mode: LaunchdRestartHandoffMode;
+  waitForPid?: number;
+}): LaunchdRestartHandoffResult {
+  return scheduleDetachedLaunchdHandoff(params);
+}
+
+export function scheduleDetachedLaunchdMaintenancePark(params: {
+  env?: Record<string, string | undefined>;
+  waitForPid?: number;
+}): LaunchdRestartHandoffResult {
+  return scheduleDetachedLaunchdHandoff({ ...params, mode: "park" });
 }

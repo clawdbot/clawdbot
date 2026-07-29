@@ -5,6 +5,8 @@
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
@@ -48,7 +50,7 @@ const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
 let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
 
 function isFastTestMode() {
-  return process.env.OPENCLAW_TEST_FAST === "1";
+  return isFastTestRuntimeEnv();
 }
 
 type SubagentOutputSnapshot = {
@@ -204,15 +206,12 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
 export async function readSubagentOutput(
   sessionKey: string,
   _outcome?: SubagentRunOutcome,
-  options?: { sessionFile?: string },
+  options?: { sessionTarget?: SessionTranscriptRuntimeTarget },
 ): Promise<string | undefined> {
   let messages: unknown[] | undefined;
-  if (options?.sessionFile) {
+  if (options?.sessionTarget) {
     const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
-      {
-        sessionFile: options.sessionFile,
-        sessionId: sessionKey,
-      },
+      options.sessionTarget,
       {
         mode: "recent",
         maxMessages: 100,
@@ -307,7 +306,11 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
-  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome; sessionFile?: string },
+  options?: {
+    waitForReply?: boolean;
+    outcome?: SubagentRunOutcome;
+    sessionTarget?: SessionTranscriptRuntimeTarget;
+  },
 ): Promise<string | undefined> {
   return await captureSubagentCompletionReplyUsing({
     sessionKey,
@@ -316,7 +319,7 @@ export async function captureSubagentCompletionReply(
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput: async (nextSessionKey) =>
       await readSubagentOutput(nextSessionKey, options?.outcome, {
-        sessionFile: options?.sessionFile,
+        sessionTarget: options?.sessionTarget,
       }),
   });
 }

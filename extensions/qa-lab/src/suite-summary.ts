@@ -22,6 +22,7 @@ export type QaSuiteSummaryJson = {
     total: number;
     passed: number;
     failed: number;
+    skipped: number;
   };
   metrics?: {
     wallMs: number;
@@ -67,6 +68,11 @@ export type QaSuiteSummaryJson = {
 };
 
 type QaSuiteScenarioStatus = Pick<QaSuiteSummaryScenario, "status">;
+type QaSuiteReportOnlyScenario = {
+  name?: unknown;
+  status?: unknown;
+  details?: unknown;
+};
 type QaEvidenceEntryStatus = {
   result?: {
     status?: unknown;
@@ -103,6 +109,19 @@ function readNonNegativeCount(value: unknown): number | null {
 
 function isQaSuiteBlockingStatus(status: unknown): boolean {
   return status !== "pass";
+}
+
+export function isQaSuiteReportOnlyOptionalScenario(
+  scenario: QaSuiteReportOnlyScenario,
+  optionalScenarioNames: ReadonlySet<string> | undefined,
+): boolean {
+  return (
+    (scenario.status === "skip" || scenario.status === "skipped") &&
+    typeof scenario.name === "string" &&
+    optionalScenarioNames?.has(scenario.name) === true &&
+    typeof scenario.details === "string" &&
+    scenario.details.includes("report-only")
+  );
 }
 
 export function countQaSuiteFailedScenarios(
@@ -215,11 +234,34 @@ export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string
 
 export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   summaryPath: string,
+  options?: { optionalScenarioNames?: ReadonlySet<string> },
 ): Promise<number> {
   const payload = await readQaSuiteSummaryFile(summaryPath);
   const blockingScenarioCount = readQaSuiteFailedOrSkippedScenarioCountFromSummary(payload);
   if (blockingScenarioCount !== null) {
-    return blockingScenarioCount;
+    const optionalScenarioNames = options?.optionalScenarioNames;
+    if (!optionalScenarioNames?.size || !payload || typeof payload !== "object") {
+      return blockingScenarioCount;
+    }
+    const { scenarios, entries } = payload as {
+      scenarios?: QaSuiteReportOnlyScenario[];
+      entries?: QaEvidenceEntryStatus[];
+    };
+    const reportOnlyOptionalSkips = Array.isArray(scenarios)
+      ? scenarios.filter((scenario) =>
+          isQaSuiteReportOnlyOptionalScenario(scenario, optionalScenarioNames),
+        ).length
+      : 0;
+    const evidenceBlocking = Array.isArray(entries)
+      ? entries.filter((entry) => isQaSuiteBlockingStatus(entry.result?.status)).length
+      : 0;
+    // Optional skips may offset only their independently verified scenario results.
+    // Declared failures, unknown evidence, and count disagreements stay fail-closed.
+    return Math.max(
+      readQaSuiteFailedScenarioCountFromSummary(payload) ?? 0,
+      blockingScenarioCount - reportOnlyOptionalSkips,
+      evidenceBlocking,
+    );
   }
   throw new QaSuiteArtifactError(
     "summary_blocking_count_missing",

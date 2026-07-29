@@ -128,6 +128,7 @@ export async function recoverEmbeddedRunTimeout(input: {
         workspaceDir: input.workspaceDir,
         agentDir: input.agentDir,
         config: runParams.config,
+        toolOverrides: runParams.toolOverrides,
         skillsSnapshot: runParams.skillsSnapshot,
         senderId: runParams.senderId,
         provider: input.provider,

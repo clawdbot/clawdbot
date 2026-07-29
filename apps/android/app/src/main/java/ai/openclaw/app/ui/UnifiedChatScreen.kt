@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 internal fun UnifiedChatShellScreen(
   viewModel: MainViewModel,
   onOpenSessions: () -> Unit,
+  onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
 ) {
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
@@ -40,6 +41,7 @@ internal fun UnifiedChatShellScreen(
         }
       },
       onOpenSessions = onOpenSessions,
+      onOpenDashboard = onOpenDashboard,
       onOpenGatewaySettings = onOpenGatewaySettings,
     )
   }

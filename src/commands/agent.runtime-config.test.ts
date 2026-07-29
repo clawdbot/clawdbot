@@ -410,6 +410,81 @@ describe("agentCommand runtime config", () => {
     });
   });
 
+  it.each([
+    {
+      name: "global memory headers",
+      apply: (config: OpenClawConfig) => {
+        config.memory = {
+          search: {
+            remote: {
+              headers: {
+                Authorization: { source: "env", provider: "default", id: "MEMORY_HEADER" },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig["memory"];
+      },
+    },
+    {
+      name: "per-agent memory headers",
+      apply: (config: OpenClawConfig) => {
+        config.agents = {
+          ...config.agents,
+          entries: {
+            personal: {
+              memory: {
+                search: {
+                  remote: {
+                    headers: {
+                      Authorization: {
+                        source: "env",
+                        provider: "default",
+                        id: "AGENT_MEMORY_HEADER",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig["agents"];
+      },
+    },
+    {
+      name: "per-agent TTS provider",
+      apply: (config: OpenClawConfig) => {
+        config.agents = {
+          ...config.agents,
+          entries: {
+            personal: {
+              tts: {
+                providers: {
+                  elevenlabs: {
+                    apiKey: { source: "env", provider: "default", id: "AGENT_TTS_KEY" },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig["agents"];
+      },
+    },
+  ])("resolves command secrets for $name", async ({ apply }) => {
+    await withTempHome(async (home) => {
+      const loadedConfig = mockConfig(home, path.join(home, "sessions.json"));
+      apply(loadedConfig);
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime);
+
+      expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("derives a fresh session from --to", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

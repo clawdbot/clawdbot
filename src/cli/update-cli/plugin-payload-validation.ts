@@ -246,12 +246,14 @@ async function validatePackagePayload(params: {
         detail: `Plugin extension entry validation failed: ${extensionValidation.error}`,
       });
     }
+
+    // Native plugin loading follows the declared extensions, not npm's main.
+    // Checking both would quarantine a loadable plugin or duplicate its real entry failure.
+    return failures;
   }
 
-  // Only fail on `missing-main-entry` when `main` is *explicitly declared*
-  // and absent on disk. Fully resolving `exports` conditional sub-keys is
-  // out of scope for a static smoke check, so packages with only `exports`
-  // remain intentionally permissive.
+  // Without native extension metadata, only check an explicitly declared npm
+  // main. Conditional exports remain outside this static smoke-check contract.
   if (typeof params.manifest.main !== "string" || !params.manifest.main.trim()) {
     return failures;
   }

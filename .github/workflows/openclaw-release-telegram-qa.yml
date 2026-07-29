@@ -218,7 +218,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -242,7 +242,7 @@ jobs:
           use-actions-cache: "false"
 
       - name: Checkout candidate runtime
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -437,6 +437,7 @@ jobs:
       - name: Install candidate dependencies without runner credentials
         id: install_candidate
         shell: bash
+        working-directory: .candidate
         run: |
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
@@ -449,7 +450,7 @@ jobs:
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm --dir .candidate install \
+            pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
@@ -462,6 +463,7 @@ jobs:
       - name: Build candidate runtime without runner credentials
         id: build_candidate
         shell: bash
+        working-directory: .candidate
         run: |
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
@@ -472,9 +474,10 @@ jobs:
             LANG=C.UTF-8 \
             NODE_OPTIONS=--max-old-space-size=8192 \
             NPM_CONFIG_USERCONFIG=/dev/null \
+            OPENCLAW_BUILD_PRIVATE_QA=1 \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm --dir .candidate exec node scripts/build-all.mjs qaRuntime
+            pnpm exec node scripts/build-all.mjs qaRuntime
 
       - name: Move built candidate outside trusted workspace
         id: move_candidate
@@ -499,7 +502,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Restore trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -652,7 +655,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" && "$BUILD_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA verifier
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -752,7 +755,7 @@ jobs:
           echo "archive_path=$archive_path" >>"$GITHUB_OUTPUT"
 
       - name: Checkout independent candidate source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -821,7 +824,7 @@ jobs:
 
       - name: Attest exact candidate archive bytes
         id: attest
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: ${{ steps.verify_candidate.outputs.archive_path }}
 
@@ -877,7 +880,7 @@ jobs:
              "$ATTESTATION_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -1227,6 +1230,12 @@ jobs:
           sudo chown -R root:root "$CANDIDATE_ROOT"
           sudo chmod -R go-w "$CANDIDATE_ROOT"
           sudo chmod -R a+rX "$CANDIDATE_ROOT"
+          # QA plugin runtime staging uses .artifacts/qa-runtime below its repo root.
+          # Preserve the frozen tree while granting the isolated SUT this one scratch directory.
+          candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"
+          sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"
+          [[ "$(stat -c '%F:%a:%u:%g' "$candidate_artifacts_dir")" == "directory:700:${sut_uid}:${sut_gid}" ]]
+          sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "${candidate_artifacts_dir}/qa-runtime"
           evidence_relative=".trusted-qa-evidence/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           evidence_root="${CANDIDATE_ROOT}/${evidence_relative}"
           boundary_evidence_dir="${evidence_root}/process-boundary"
@@ -1274,6 +1283,7 @@ jobs:
             printf 'RUNNER_HOME=%q\n' "$runner_home"
             printf 'RUNNER_TEMP_DIR=%q\n' "$runner_temp"
             printf 'CANDIDATE_ROOT=%q\n' "$CANDIDATE_ROOT"
+            printf 'CANDIDATE_ARTIFACTS_DIR=%q\n' "$candidate_artifacts_dir"
             printf 'RUNTIME_ROOT=%q\n' "$runtime_root"
             printf 'NODE_BIN=%q\n' "$node_bin"
             printf 'PRELOAD_PATH=%q\n' "$preload"
@@ -1330,10 +1340,12 @@ jobs:
             OPENAI_API_KEY
             OPENAI_BASE_URL
             OPENCLAW_ALLOW_SLOW_REPLY_TESTS
+            OPENCLAW_BUILD_PRIVATE_QA
             OPENCLAW_BUNDLED_PLUGINS_DIR
             OPENCLAW_COMPATIBILITY_HOST_VERSION
             OPENCLAW_CONFIG_PATH
             OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI
             OPENCLAW_GATEWAY_TOKEN
             OPENCLAW_HOME
             OPENCLAW_LOG_LEVEL
@@ -1883,7 +1895,7 @@ jobs:
             unset "$key"
           done
           export SUT_UID SUT_GID RUNNER_UID RUNNER_GID RUNNER_HOME RUNNER_TEMP_DIR
-          export CANDIDATE_ROOT RUNTIME_ROOT NODE_BIN
+          export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN
           export PRELOAD_PATH RUNNER_SENTINEL TRUSTED_WORKSPACE EVIDENCE_ROOT
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
@@ -2040,6 +2052,7 @@ jobs:
                           ! -w "$CANDIDATE_ROOT/dist/index.js" &&
                           -r "${OPENCLAW_CONFIG_PATH:?}" &&
                           ! -w "$OPENCLAW_CONFIG_PATH" ]]
+                    [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \
                       "${OPENCLAW_QA_TEMP_ROOT:?}/workspace" \
                       "${OPENCLAW_HOME:?}" \
@@ -2072,6 +2085,7 @@ jobs:
                     runtime_sandbox_payload_b64="$sandbox_payload_b64"
                     unset \
                       CANDIDATE_ROOT \
+                      CANDIDATE_ARTIFACTS_DIR \
                       EVIDENCE_ROOT \
                       NODE_BIN \
                       PRELOAD_PATH \
@@ -2222,6 +2236,13 @@ jobs:
           } >"${output_dir}/source-attestation.txt"
           echo "output_dir=$output_dir" >>"$GITHUB_OUTPUT"
 
+          # The frozen archive is mounted read-only for the isolated SUT. Invoke
+          # its built CLI directly so pnpm cannot attempt an implicit install.
+          run_candidate_telegram_qa() (
+            cd "$CANDIDATE_ROOT"
+            exec node ./dist/index.js qa telegram "$@"
+          )
+
           run_qa_attempt() (
             set -euo pipefail
             exec 2>&1
@@ -2232,7 +2253,7 @@ jobs:
             trap 'printf "::%s::\n" "$workflow_command_token"' EXIT
             set +e
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              pnpm openclaw qa telegram \
+              run_candidate_telegram_qa \
                 --repo-root "$CANDIDATE_ROOT" \
                 --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
                 --provider-mode mock-openai \
@@ -2247,25 +2268,37 @@ jobs:
             exit "$status"
           )
 
-          if ! run_qa_attempt preflight --scenario channel-canary; then
-            echo "Telegram channel canary failed; skipping the remaining scenarios." >&2
-            exit 1
-          fi
-          terminate_sut_uid
-
           remaining_scenarios=()
+          has_channel_canary=false
           while IFS=$'\t' read -r scenario_id default_label _; do
-            if [[ "$default_label" == "default" && "$scenario_id" != "channel-canary" ]]; then
-              remaining_scenarios+=(--scenario "$scenario_id")
+            if [[ "$default_label" == "default" ]]; then
+              if [[ "$scenario_id" == "channel-canary" ]]; then
+                has_channel_canary=true
+              else
+                remaining_scenarios+=(--scenario "$scenario_id")
+              fi
             fi
           done < <(
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              pnpm openclaw qa telegram \
+              run_candidate_telegram_qa \
                 --repo-root "$CANDIDATE_ROOT" \
                 --provider-mode mock-openai \
                 --list-scenarios
           )
-          ((${#remaining_scenarios[@]} > 0))
+          if [[ "$has_channel_canary" == "true" ]]; then
+            if ! run_qa_attempt preflight --scenario channel-canary; then
+              echo "Telegram channel canary failed; skipping the remaining scenarios." >&2
+              exit 1
+            fi
+            terminate_sut_uid
+          fi
+          if ((${#remaining_scenarios[@]} == 0)); then
+            if [[ "$has_channel_canary" == "true" ]]; then
+              exit 0
+            fi
+            echo "Candidate Telegram QA catalog has no default scenarios." >&2
+            exit 1
+          fi
 
           for attempt in 1 2; do
             if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then
@@ -2740,6 +2773,16 @@ jobs:
       actions: read
       contents: read
     steps:
+      # Identity binds this checkout to the workflow definition that received
+      # the OIDC token. Do not execute status code from the release candidate.
+      - name: Checkout trusted Telegram status helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
+          ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Record advisory status
         id: record_status
         env:
@@ -2764,119 +2807,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          status=failure
-          if [[ "$IDENTITY_RESULT" == "cancelled" ||
-                "$BUILD_RESULT" == "cancelled" ||
-                "$ATTESTATION_RESULT" == "cancelled" ||
-                "$RUN_RESULT" == "cancelled" ]]; then
-            status=cancelled
-          elif [[ "$IDENTITY_STATUS" == "success" &&
-                  "$BUILD_STATUS" == "success" &&
-                  "$ATTESTATION_STATUS" == "success" &&
-                  "$EXECUTION_STATUS" == "success" ]]; then
-            status=success
-          fi
-
-          candidate_artifact=null
-          if [[ "$CANDIDATE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-                "$CANDIDATE_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
-                "$ARCHIVE_NAME" == "release-telegram-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}.tar.zst" &&
-                "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ &&
-                -n "$CANDIDATE_VERSION" ]]; then
-            candidate_artifact="$(
-              jq -cn \
-                --arg id "$CANDIDATE_ARTIFACT_ID" \
-                --arg name "$ARCHIVE_NAME" \
-                --arg digest "$CANDIDATE_ARTIFACT_DIGEST" \
-                --arg runId "$GITHUB_RUN_ID" \
-                --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-                --arg fileName "$ARCHIVE_NAME" \
-                --arg sha256 "$ARCHIVE_SHA256" \
-                --arg sourceSha "$TARGET_SHA" \
-                --arg version "$CANDIDATE_VERSION" \
-                '{
-                  id: $id,
-                  name: $name,
-                  digest: $digest,
-                  runId: $runId,
-                  runAttempt: $runAttempt,
-                  fileName: $fileName,
-                  sha256: $sha256,
-                  sourceSha: $sourceSha,
-                  version: $version
-                }'
-            )"
-          fi
-          if [[ "$status" == "success" ]]; then
-            [[ "$candidate_artifact" != "null" &&
-                  "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ &&
-                  "$TARGET_SHA" =~ ^[a-f0-9]{40}$ &&
-                  "$EVIDENCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-                  "$EVIDENCE_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
-                  "$EVIDENCE_ARTIFACT_NAME" == "release-qa-live-telegram-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}" ]]
-          fi
-
-          status_dir=".artifacts/release-check-status"
-          status_file="${status_dir}/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
-          evidence_file="${status_dir}/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
-          mkdir -p "$status_dir"
-          step_outcomes="identity:${IDENTITY_STATUS} build:${BUILD_STATUS} attest:${ATTESTATION_STATUS} execute:${EXECUTION_STATUS}"
-          {
-            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
-            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
-            printf 'target_sha=%s\n' "$TARGET_SHA"
-            printf 'workflow_sha=%s\n' "$WORKFLOW_SHA"
-            printf 'job=%s\n' "qa_live_telegram_release_checks"
-            printf 'variant=\n'
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "$RUN_RESULT"
-            printf 'step_outcomes=%s\n' "$step_outcomes"
-          } >"$status_file"
-          jq -n \
-            --arg status "$status" \
-            --arg jobStatus "$RUN_RESULT" \
-            --arg identityOutcome "identity:${IDENTITY_STATUS}" \
-            --arg buildOutcome "build:${BUILD_STATUS}" \
-            --arg attestOutcome "attest:${ATTESTATION_STATUS}" \
-            --arg executeOutcome "execute:${EXECUTION_STATUS}" \
-            --arg runId "$GITHUB_RUN_ID" \
-            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-            --arg workflowSha "$WORKFLOW_SHA" \
-            --arg targetSha "$TARGET_SHA" \
-            --arg evidenceId "$EVIDENCE_ARTIFACT_ID" \
-            --arg evidenceName "$EVIDENCE_ARTIFACT_NAME" \
-            --arg evidenceDigest "$EVIDENCE_ARTIFACT_DIGEST" \
-            --argjson candidateArtifact "$candidate_artifact" \
-            '{
-              version: 1,
-              kind: "release-check-status",
-              job: "qa_live_telegram_release_checks",
-              status: $status,
-              jobStatus: $jobStatus,
-              stepOutcomes: [
-                $identityOutcome,
-                $buildOutcome,
-                $attestOutcome,
-                $executeOutcome
-              ],
-              runId: $runId,
-              runAttempt: $runAttempt,
-              workflowSha: $workflowSha,
-              targetSha: $targetSha,
-              evidenceArtifact: {
-                id: $evidenceId,
-                name: $evidenceName,
-                digest: $evidenceDigest,
-                runId: $runId,
-                runAttempt: $runAttempt
-              },
-              candidateArtifact: $candidateArtifact
-            }' >"$evidence_file"
-          {
-            echo "status=$status"
-            echo "status_file=$status_file"
-            echo "evidence_file=$evidence_file"
-          } >>"$GITHUB_OUTPUT"
+          node scripts/release-telegram-qa.mjs advisory-status
 
       - name: Upload advisory status
         if: always()

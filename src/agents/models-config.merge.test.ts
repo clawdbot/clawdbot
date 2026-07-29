@@ -145,6 +145,45 @@ describe("models-config merge helpers", () => {
     ]);
   });
 
+  it("keeps compat catalog-owned for a configured model on the catalog route", () => {
+    const implicit = createConfigProvider({
+      baseUrl: "https://catalog.example/v1/",
+      models: [
+        createModel({
+          compat: { supportsTools: true, supportsTemperature: false },
+        }),
+      ],
+    });
+    const explicit = createConfigProvider({
+      baseUrl: "https://catalog.example/v1",
+      models: [
+        createModel({
+          compat: { supportsTools: false, supportsTemperature: true },
+        }),
+      ],
+    });
+
+    expect(mergeProviderModels(implicit, explicit).models?.[0]?.compat).toEqual({
+      supportsTools: true,
+      supportsTemperature: false,
+    });
+  });
+
+  it("preserves custom compat when config changes the catalog route", () => {
+    const implicit = createConfigProvider({
+      baseUrl: "https://catalog.example/v1",
+      models: [createModel({ compat: { supportsTools: true } })],
+    });
+    const explicit = createConfigProvider({
+      baseUrl: "http://127.0.0.1:9000/v1",
+      models: [createModel({ compat: { supportsTools: false } })],
+    });
+
+    expect(mergeProviderModels(implicit, explicit).models?.[0]?.compat).toEqual({
+      supportsTools: false,
+    });
+  });
+
   it("merges explicit providers onto trimmed keys", () => {
     const merged = mergeProviders({
       explicit: {

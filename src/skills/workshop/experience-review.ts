@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { SessionManager } from "../../agents/sessions/index.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLane } from "../../process/lanes.js";
+import { autoApplySkillProposal } from "./auto-apply.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   buildSkillExperienceReviewPrompt,
   formatSkillExperienceReviewTranscript,
 } from "./experience-review-prompt.js";
+import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
 const EXPERIENCE_REVIEW_IDLE_MS = 30_000;
@@ -42,6 +42,7 @@ type ExperienceReviewAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   authProfileId?: string;
+  modelIterations?: number;
   skillWorkshopAvailable?: boolean;
   compacted?: boolean;
   trigger?: string;
@@ -72,6 +73,10 @@ export type ExperienceReviewCandidate = {
   config?: OpenClawConfig;
   transcript: string;
   modelIterations: number;
+};
+
+type ExperienceReviewRunDeps = {
+  getCurrentConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
 type ExperienceReviewTimer = ReturnType<typeof setTimeout>;
@@ -144,7 +149,7 @@ export async function prepareSkillExperienceReviewCandidate(
   candidate: ExperienceReviewCandidate,
   config: OpenClawConfig,
 ): Promise<ExperienceReviewCandidate | undefined> {
-  if (!resolveSkillWorkshopConfig(config).autonomous.enabled) {
+  if (resolveSkillWorkshopConfig(config).autonomous.mode === "off") {
     return undefined;
   }
   const { resolveConversationCapabilityProfile } =
@@ -288,7 +293,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       if (existing) {
         arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
-      if (!resolveSkillWorkshopConfig(params.config).autonomous.enabled) {
+      if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off") {
         return;
       }
       if (!isEligibleContext(params.ctx)) {
@@ -300,7 +305,15 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
 
       const turnMessages = currentTurnMessages(params.event.messages);
-      const modelIterations = countModelIterations(turnMessages);
+      // Native harnesses can report exact provider iterations even when their
+      // transcript projection has a different assistant-message cardinality.
+      const reportedModelIterations = params.ctx.modelIterations;
+      const modelIterations =
+        reportedModelIterations === undefined
+          ? countModelIterations(turnMessages)
+          : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
+            ? reportedModelIterations
+            : 0;
       if (params.event.success && modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
           const oldest = pendingBySession.entries().next().value as
@@ -364,6 +377,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
 
 export async function runSkillExperienceReview(
   candidate: ExperienceReviewCandidate,
+  deps: ExperienceReviewRunDeps = {},
 ): Promise<void> {
   const workspaceDir = candidate.ctx.workspaceDir;
   const sessionKey = candidate.ctx.sessionKey;
@@ -373,65 +387,95 @@ export async function runSkillExperienceReview(
     return;
   }
 
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-review-"));
-  try {
-    const sessionId = randomUUID();
-    const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:${sessionId}`;
-    const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-    await runEmbeddedAgent({
-      sessionId,
-      sessionKey: reviewSessionKey,
-      sandboxSessionKey: sessionKey,
-      sessionFile: path.join(tempDir, "session.jsonl"),
+  const sessionId = randomUUID();
+  const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+  const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
+  const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
+  await runEmbeddedAgent({
+    sessionId,
+    sessionKey: reviewSessionKey,
+    sandboxSessionKey: sessionKey,
+    sessionManager: SessionManager.inMemory(workspaceDir),
+    ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
+    trigger: "manual",
+    // Never occupy the foreground agent lane after the idle gate opens.
+    lane: CommandLane.SkillWorkshopReview,
+    messageChannel: candidate.ctx.messageChannel ?? undefined,
+    messageProvider: candidate.ctx.messageProvider ?? undefined,
+    ...(candidate.ctx.chatType ? { chatType: candidate.ctx.chatType } : {}),
+    ...(candidate.ctx.agentAccountId ? { agentAccountId: candidate.ctx.agentAccountId } : {}),
+    groupId: candidate.ctx.groupId,
+    groupChannel: candidate.ctx.groupChannel,
+    groupSpace: candidate.ctx.groupSpace,
+    memberRoleIds: candidate.ctx.memberRoleIds ? [...candidate.ctx.memberRoleIds] : undefined,
+    spawnedBy: candidate.ctx.spawnedBy,
+    senderId: candidate.ctx.senderId,
+    senderName: candidate.ctx.senderName,
+    senderUsername: candidate.ctx.senderUsername,
+    senderE164: candidate.ctx.senderE164,
+    senderIsOwner: candidate.ctx.senderIsOwner,
+    agentHarnessId: "openclaw",
+    agentHarnessRuntimeOverride: "openclaw",
+    workspaceDir,
+    ...(candidate.config ? { config: candidate.config } : {}),
+    prompt: buildSkillExperienceReviewPrompt(candidate),
+    provider: modelProviderId,
+    model: modelId,
+    modelSelectionLocked: true,
+    modelFallbacksOverride: [],
+    ...(candidate.ctx.authProfileId
+      ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
+      : {}),
+    timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
+    runId: `skill-workshop-review:${randomUUID()}`,
+    toolsAllow: ["skill_workshop"],
+    disableMessageTool: true,
+    disableTrajectory: true,
+    skillWorkshopProposalOnly: true,
+    skillWorkshopAutonomousCapture: true,
+    skillWorkshopProposalMutationBudget: proposalMutationBudget,
+    skillWorkshopOrigin: {
       ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-      trigger: "manual",
-      // Never occupy the foreground agent lane after the idle gate opens.
-      lane: CommandLane.SkillWorkshopReview,
-      messageChannel: candidate.ctx.messageChannel ?? undefined,
-      messageProvider: candidate.ctx.messageProvider ?? undefined,
-      ...(candidate.ctx.chatType ? { chatType: candidate.ctx.chatType } : {}),
-      ...(candidate.ctx.agentAccountId ? { agentAccountId: candidate.ctx.agentAccountId } : {}),
-      groupId: candidate.ctx.groupId,
-      groupChannel: candidate.ctx.groupChannel,
-      groupSpace: candidate.ctx.groupSpace,
-      memberRoleIds: candidate.ctx.memberRoleIds ? [...candidate.ctx.memberRoleIds] : undefined,
-      spawnedBy: candidate.ctx.spawnedBy,
-      senderId: candidate.ctx.senderId,
-      senderName: candidate.ctx.senderName,
-      senderUsername: candidate.ctx.senderUsername,
-      senderE164: candidate.ctx.senderE164,
-      senderIsOwner: candidate.ctx.senderIsOwner,
-      agentHarnessId: "openclaw",
-      agentHarnessRuntimeOverride: "openclaw",
+      sessionKey,
+      ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
+    },
+    cleanupBundleMcpOnRunEnd: true,
+    bootstrapContextMode: "lightweight",
+    skillsSnapshot: { prompt: "", skills: [] },
+    verboseLevel: "off",
+    reasoningLevel: "off",
+    suppressToolErrorWarnings: true,
+  });
+
+  const currentConfig = deps.getCurrentConfig
+    ? await deps.getCurrentConfig()
+    : (await import("../../config/config.js")).getRuntimeConfig();
+  if (resolveSkillWorkshopConfig(currentConfig).autonomous.mode !== "auto") {
+    return;
+  }
+  const proposalIds = [...(proposalMutationBudget.mutatedProposalIds ?? [])];
+  if (proposalIds.length === 0) {
+    return;
+  }
+  const { inspectSkillProposal } = await import("./service.js");
+  for (const proposalId of proposalIds) {
+    const proposal = await inspectSkillProposal(proposalId, {
       workspaceDir,
-      ...(candidate.config ? { config: candidate.config } : {}),
-      prompt: buildSkillExperienceReviewPrompt(candidate),
-      provider: modelProviderId,
-      model: modelId,
-      modelSelectionLocked: true,
-      modelFallbacksOverride: [],
-      ...(candidate.ctx.authProfileId
-        ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
-        : {}),
-      timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
-      runId: `skill-workshop-review:${randomUUID()}`,
-      toolsAllow: ["skill_workshop"],
-      disableMessageTool: true,
-      disableTrajectory: true,
-      skillWorkshopProposalOnly: true,
-      skillWorkshopOrigin: {
-        ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-        sessionKey,
-        ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
-      },
-      cleanupBundleMcpOnRunEnd: true,
-      bootstrapContextMode: "lightweight",
-      skillsSnapshot: { prompt: "", skills: [] },
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      suppressToolErrorWarnings: true,
+      ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
     });
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (
+      !proposal ||
+      proposal.record.status !== "pending" ||
+      proposal.record.autonomousCapture !== true
+    ) {
+      continue;
+    }
+    await autoApplySkillProposal({
+      workspaceDir,
+      ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
+      config: currentConfig,
+      proposalId,
+      skillName: proposal.record.target.skillName,
+    });
   }
 }

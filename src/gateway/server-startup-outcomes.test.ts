@@ -69,7 +69,7 @@ describe("gateway startup outcomes", () => {
             internal: { enabled: true },
             gmail: { account: "operator@example.com", model: "openai/gpt-5.5" },
           },
-          memory: { backend: "qmd", qmd: { update: { startup: "immediate" } } },
+          memory: { backend: "qmd" },
         },
         gatewayStartHooks: true,
         memoryStartupMode: "immediate",
