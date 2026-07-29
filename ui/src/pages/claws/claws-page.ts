@@ -50,6 +50,12 @@ import { renderClaws } from "./view.ts";
 
 type ClawsMode = "installed" | "discover";
 
+type ClawOperationScope = {
+  client: GatewayBrowserClient;
+  gateway: ApplicationContext["gateway"];
+  generation: number;
+};
+
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim() ? error.message : String(error);
 }
@@ -91,6 +97,7 @@ class ClawsPage extends OpenClawLightDomElement {
   private gatewaySource?: ApplicationContext["gateway"];
   private client: GatewayBrowserClient | null = null;
   private generation = 0;
+  private operationGeneration = 0;
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
     (gateway) => {
@@ -106,6 +113,7 @@ class ClawsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.generation += 1;
+    this.operationGeneration += 1;
     this.gatewaySource = undefined;
     this.client = null;
     this.subscriptions.clear();
@@ -136,6 +144,7 @@ class ClawsPage extends OpenClawLightDomElement {
     this.configureMutationAvailable = clawMutationAvailable(snapshot, ["claws.configure.apply"]);
     if (clientChanged || !this.connected || !this.available) {
       this.generation += 1;
+      this.operationGeneration += 1;
       this.loading = false;
       this.operationBusy = false;
       if (clientChanged) {
@@ -212,18 +221,33 @@ class ClawsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async runOperation(operation: () => Promise<void>) {
-    if (!this.client || this.operationBusy) {
+  private isCurrentOperation(scope: ClawOperationScope): boolean {
+    return (
+      this.operationGeneration === scope.generation &&
+      this.gatewaySource === scope.gateway &&
+      this.client === scope.client
+    );
+  }
+
+  private async runOperation(operation: (scope: ClawOperationScope) => Promise<void>) {
+    const gateway = this.gatewaySource;
+    const client = this.client;
+    if (!gateway || !client || this.operationBusy) {
       return;
     }
+    const scope = { client, gateway, generation: this.operationGeneration };
     this.operationBusy = true;
     this.error = null;
     try {
-      await operation();
+      await operation(scope);
     } catch (error) {
-      this.error = errorMessage(error);
+      if (this.isCurrentOperation(scope)) {
+        this.error = errorMessage(error);
+      }
     } finally {
-      this.operationBusy = false;
+      if (this.isCurrentOperation(scope)) {
+        this.operationBusy = false;
+      }
     }
   }
 
@@ -232,10 +256,13 @@ class ClawsPage extends OpenClawLightDomElement {
     if (!query || !this.catalogAvailable) {
       return;
     }
-    await this.runOperation(async () => {
-      const payload = await this.client!.request<ClawsCatalogSearchResult>("claws.catalog.search", {
+    await this.runOperation(async (scope) => {
+      const payload = await scope.client.request<ClawsCatalogSearchResult>("claws.catalog.search", {
         query,
       });
+      if (!this.isCurrentOperation(scope)) {
+        return;
+      }
       if (!validateClawsCatalogSearchResult(payload)) {
         throw new Error(t("clawsPage.errors.invalidCatalog"));
       }
@@ -246,11 +273,14 @@ class ClawsPage extends OpenClawLightDomElement {
   }
 
   private async selectCatalogEntry(entry: ClawCatalogEntry) {
-    await this.runOperation(async () => {
-      const payload = await this.client!.request<ClawsCatalogDetailResult>("claws.catalog.detail", {
+    await this.runOperation(async (scope) => {
+      const payload = await scope.client.request<ClawsCatalogDetailResult>("claws.catalog.detail", {
         packageName: entry.packageName,
         ...(entry.latestVersion ? { version: entry.latestVersion } : {}),
       });
+      if (!this.isCurrentOperation(scope)) {
+        return;
+      }
       if (!validateClawsCatalogDetailResult(payload)) {
         throw new Error(t("clawsPage.errors.invalidCatalog"));
       }
@@ -311,10 +341,10 @@ class ClawsPage extends OpenClawLightDomElement {
   }
 
   private async loadPlan(pending: PendingClawOperation) {
-    if (!this.lifecycleAvailable) {
+    if (pending.operation === "configure" ? !this.configureAvailable : !this.lifecycleAvailable) {
       return;
     }
-    await this.runOperation(async () => {
+    await this.runOperation(async (scope) => {
       const method = `claws.${pending.operation}.plan`;
       const setup =
         pending.operation !== "remove" && Object.keys(this.submittedAnswers).length > 0
@@ -345,7 +375,10 @@ class ClawsPage extends OpenClawLightDomElement {
                     : {}),
                 }
               : { target: pending.target, removeUnused: this.removeUnused };
-      const payload = await this.client!.request<ClawLifecyclePlanResult>(method, params);
+      const payload = await scope.client.request<ClawLifecyclePlanResult>(method, params);
+      if (!this.isCurrentOperation(scope)) {
+        return;
+      }
       if (!validateClawLifecyclePlanResult(payload)) {
         throw new Error(t("clawsPage.errors.invalidPlan"));
       }
@@ -454,11 +487,14 @@ class ClawsPage extends OpenClawLightDomElement {
     if (!request) {
       return;
     }
-    await this.runOperation(async () => {
-      const payload = await this.client!.request<ClawLifecycleApplyResult>(
+    await this.runOperation(async (scope) => {
+      const payload = await scope.client.request<ClawLifecycleApplyResult>(
         request.method,
         request.request,
       );
+      if (!this.isCurrentOperation(scope)) {
+        return;
+      }
       if (!validateClawLifecycleApplyResult(payload)) {
         throw new Error(t("clawsPage.errors.invalidOutcome"));
       }

@@ -120,7 +120,11 @@ const ClawReadinessPreviewSchema = closedObject({
   ready: Type.Boolean(),
   requirements: Type.Array(
     closedObject({
-      kind: Type.Union([Type.Literal("environment"), Type.Literal("oauth")]),
+      kind: Type.Union([
+        Type.Literal("environment"),
+        Type.Literal("oauth"),
+        Type.Literal("plugin-setup"),
+      ]),
       owner: NonEmptyString,
     }),
   ),

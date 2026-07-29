@@ -34,6 +34,13 @@ describe("sealClawLifecyclePlan", () => {
         requirements: [
           { kind: "environment", mcpServer: "markets", name: "PRIVATE_MARKETS_TOKEN" },
           { kind: "oauth", mcpServer: "mail" },
+          {
+            kind: "plugin-setup",
+            plugin: "diffs",
+            provider: "github",
+            envVars: ["PRIVATE_GITHUB_TOKEN"],
+            authMethods: ["oauth"],
+          },
         ],
       },
       setup: {
@@ -62,9 +69,11 @@ describe("sealClawLifecyclePlan", () => {
     expect(result.readiness?.requirements).toEqual([
       { kind: "environment", owner: "markets" },
       { kind: "oauth", owner: "mail" },
+      { kind: "plugin-setup", owner: "diffs/github" },
     ]);
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain("PRIVATE_MARKETS_TOKEN");
+    expect(serialized).not.toContain("PRIVATE_GITHUB_TOKEN");
     expect(serialized).not.toContain("rendered-secret");
     expect(serialized).not.toContain("answerDigest");
   });

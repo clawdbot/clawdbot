@@ -23,6 +23,7 @@ import {
   CLAW_SETUP_SCHEMA_VERSION,
   type ClawAddPlan,
   type ClawDiagnostic,
+  type ClawLocalPrerequisite,
   type ClawReadResult,
   type ClawSetupPlan,
 } from "./types.js";
@@ -142,6 +143,12 @@ function safeCapability(change: { kind: string; id: string; action: string; reas
   return { kind: change.kind, id: change.id, action: change.action, reason: change.reason };
 }
 
+function projectReadinessRequirement(requirement: ClawLocalPrerequisite) {
+  return requirement.kind === "plugin-setup"
+    ? { kind: requirement.kind, owner: `${requirement.plugin}/${requirement.provider}` }
+    : { kind: requirement.kind, owner: requirement.mcpServer };
+}
+
 export function sealClawLifecyclePlan(
   plan: Omit<ClawLifecyclePlanResult, "schemaVersion" | "planIntegrity">,
   canonicalPlanIntegrity: string,
@@ -168,10 +175,7 @@ export function projectClawAddPlan(plan: ClawAddPlan): ClawLifecyclePlanResult {
       ...(plan.setup ? { setup: projectSetup(plan.setup) } : {}),
       readiness: {
         ready: plan.readiness.ready,
-        requirements: plan.readiness.requirements.map((requirement) => ({
-          kind: requirement.kind,
-          owner: requirement.mcpServer,
-        })),
+        requirements: plan.readiness.requirements.map(projectReadinessRequirement),
       },
     },
     plan.planIntegrity,
