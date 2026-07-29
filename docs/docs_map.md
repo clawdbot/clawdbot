@@ -1282,6 +1282,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw agent
   - H2: agent exec
+  - H3: Code Mode model matrix
   - H3: agent exec options
   - H2: Options
   - H2: Examples
