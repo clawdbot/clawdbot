@@ -51,6 +51,7 @@ export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
 
 type ReloadRule = {
   prefix: string;
+  match?: "prefix" | "exact";
   kind: "restart" | "hot" | "none";
   actions?: ReloadAction[];
   accountScopedPlugin?: ChannelPlugin;
@@ -179,30 +180,34 @@ function listReloadRules(): ReloadRule[] {
     const restartAction = plugin.reload?.accountScopedRestart
       ? (`restart-channel-account:${plugin.id}` as ReloadAction)
       : (`restart-channel:${plugin.id}` as ReloadAction);
-    const hotPrefixes = [
-      ...(plugin.reload?.configPrefixes ?? []),
-      ...(plugin.reload?.accountIndexReloadPaths ?? []),
-    ];
-    return hotPrefixes
-      .map((prefix): ReloadRule => {
-        const rule: ReloadRule = {
+    const hotPrefixRules = (plugin.reload?.configPrefixes ?? []).map((prefix): ReloadRule => {
+      const rule: ReloadRule = {
+        prefix,
+        kind: "hot",
+        actions: [restartAction],
+      };
+      if (plugin.reload?.accountScopedRestart) {
+        rule.accountScopedPlugin = plugin;
+      }
+      return rule;
+    });
+    const accountIndexRules = (plugin.reload?.accountIndexReloadPaths ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        match: "exact",
+        kind: "hot",
+        actions: [restartAction],
+        ...(plugin.reload?.accountScopedRestart ? { accountScopedPlugin: plugin } : {}),
+      }),
+    );
+    return hotPrefixRules.concat(accountIndexRules).concat(
+      (plugin.reload?.noopPrefixes ?? []).map(
+        (prefix): ReloadRule => ({
           prefix,
-          kind: "hot",
-          actions: [restartAction],
-        };
-        if (plugin.reload?.accountScopedRestart) {
-          rule.accountScopedPlugin = plugin;
-        }
-        return rule;
-      })
-      .concat(
-        (plugin.reload?.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
-      );
+          kind: "none",
+        }),
+      ),
+    );
   });
   const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
     {
@@ -254,7 +259,8 @@ function listReloadRules(): ReloadRule[] {
 
 function matchRule(path: string): ReloadRule | null {
   for (const rule of listReloadRules()) {
-    if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
+    const exactOnly = rule.match === "exact";
+    if (path === rule.prefix || (!exactOnly && path.startsWith(`${rule.prefix}.`))) {
       return rule;
     }
   }

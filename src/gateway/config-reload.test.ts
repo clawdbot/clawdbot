@@ -535,7 +535,7 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toEqual([path]);
   });
 
-  it("uses plugin-declared account-index reload paths as channel hot reloads", () => {
+  it("uses plugin-declared account-index reload paths as exact channel hot reloads", () => {
     const path = "channels.whatsapp.channelConfigUpdatedAt";
     const plan = buildGatewayReloadPlan([path]);
 
@@ -543,6 +543,18 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
     expect(plan.hotReasons).toEqual([path]);
     expect(plan.noopPaths).toStrictEqual([]);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it("does not treat descendants of account-index reload paths as channel hot reloads", () => {
+    const path = "channels.whatsapp.channelConfigUpdatedAt.revision";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.noopPaths).toEqual([path]);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("none");
   });
 
   it("refreshes channel rules when the tracked channel registry changes", () => {
