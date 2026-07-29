@@ -117,6 +117,7 @@ type GatewayProtocolClientOptions<TPlan> = {
   reconnect: { initialMs: number; multiplier: number; maxMs: number };
   requestTimeoutMs?: number;
   nowMs?: () => number;
+  shouldRetrySocketFactoryError?: (error: Error) => boolean;
   rethrowSocketFactoryError?: (error: Error) => boolean;
 };
 export class GatewayProtocolRequestError extends Error {
@@ -380,6 +381,10 @@ export class GatewayProtocolClient<TPlan> {
       this.opts.onConnectError?.(normalized);
       if (this.opts.rethrowSocketFactoryError?.(normalized)) {
         throw normalized;
+      }
+      // Construction has no close event; only the transport owner can classify retry safety.
+      if (this.opts.shouldRetrySocketFactoryError?.(normalized) && !this.stopped) {
+        this.scheduleReconnect();
       }
       return;
     }
