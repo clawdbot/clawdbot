@@ -51,6 +51,7 @@ import {
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
+import { hasExplicitRouteParam } from "../../infra/outbound/internal-source-reply.js";
 import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
@@ -191,7 +192,8 @@ function normalizeEscapedLineBreaksForVisibleText(text: string): string {
 type VisibleTextSuppressionReason =
   | "internal_runtime_context_echo"
   | "inbound_metadata_echo"
-  | "poll_vote_echo";
+  | "poll_vote_echo"
+  | "duplicate_source_send_this_run";
 
 const POLL_VOTE_ECHO_TTL_MS = 30_000;
 
@@ -206,6 +208,75 @@ const recentPollVoteBySession = new Map<
   string,
   { option: string; route: string; recordedAt: number }
 >();
+
+// Per-run outbound gate for message-tool-only group-channel source replies.
+// Repeated explicit message(action="send") calls in one message-tool-only
+// group run (e.g. a model narrating several near-identical status updates
+// during a single retrieval/benchmark turn) produced visible message bursts
+// in the destination group. Cap implicit-source-route substantive-text sends
+// at one per runId. Explicit cross-channel sends (channel/target/to/
+// channelId/targets params), attachment-only sends, and explicit thread
+// replies (an explicit replyTo/threadId supplied by the caller) are never
+// gated — only the ambient "reply into the current source conversation" path
+// is capped. Module-scoped (not per tool instance) so a run that recreates
+// the tool mid-turn (recovery/retry) still shares the same claim, and
+// TTL-bounded so a long-lived gateway process cannot leak entries forever.
+const SOURCE_SEND_GATE_TTL_MS = 15 * 60_000;
+const claimedSourceTextSendsByRun = new Map<string, { recordedAt: number }>();
+
+function pruneExpiredSourceSendClaims(now: number): void {
+  for (const [key, entry] of claimedSourceTextSendsByRun) {
+    if (now - entry.recordedAt > SOURCE_SEND_GATE_TTL_MS) {
+      claimedSourceTextSendsByRun.delete(key);
+    }
+  }
+}
+
+/** Claims the run's single implicit-source-route text send; false if already spent. */
+function claimImplicitSourceTextSendForRun(runId: string): boolean {
+  const now = Date.now();
+  pruneExpiredSourceSendClaims(now);
+  if (claimedSourceTextSendsByRun.has(runId)) {
+    return false;
+  }
+  claimedSourceTextSendsByRun.set(runId, { recordedAt: now });
+  return true;
+}
+
+/** Releases a claim after a failed dispatch so a legitimate retry is not gated. */
+function releaseImplicitSourceTextSendClaimForRun(runId: string): void {
+  claimedSourceTextSendsByRun.delete(runId);
+}
+
+/** Test-only reset so suites don't leak per-run claims across unrelated tests. */
+export function resetMessageToolSourceSendGateForTest(): void {
+  claimedSourceTextSendsByRun.clear();
+}
+
+function hasAnySubstantiveOutboundTextParam(params: Record<string, unknown>): boolean {
+  const fields = ["message", "text", "content", "caption", "SendMessage"];
+  return fields.some((field) => {
+    const value = params[field];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+/**
+ * True when this send is an implicit reply into the current source
+ * conversation (no explicit channel/target/to/channelId/targets, no explicit
+ * replyTo, and no explicit threadId) carrying substantive text. Only this
+ * shape is eligible for the per-run burst gate; explicit routing or threading
+ * decisions the model makes deliberately are always honored.
+ */
+function isGateableImplicitSourceTextSend(params: Record<string, unknown>): boolean {
+  if (hasExplicitRouteParam(params)) {
+    return false;
+  }
+  if (normalizeOptionalString(params.replyTo) || normalizeOptionalString(params.threadId)) {
+    return false;
+  }
+  return hasAnySubstantiveOutboundTextParam(params);
+}
 
 function resolvePollVoteEchoRoute(params: {
   action: ChannelMessageActionName;
@@ -1647,6 +1718,39 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
+      // Per-run outbound gate: cap implicit-source-route substantive-text sends
+      // at one per runId for message-tool-only group/channel source replies.
+      // Scope is deliberately narrow so it cannot regress legitimate multi-send
+      // flows: explicit cross-channel targets, attachment-only sends, and
+      // explicit thread replies always bypass the gate (see
+      // isGateableImplicitSourceTextSend). Direct/DM conversations are not
+      // gated — the burst pattern this guards against is group-channel status
+      // narration, and DM turns legitimately send multiple distinct messages.
+      const runIdForSourceSendGate = normalizeOptionalString(options?.runId);
+      const currentChatTypeForSourceSendGate = effectiveCurrentChannel.currentChatType;
+      const isGroupOrChannelSourceRoute =
+        currentChatTypeForSourceSendGate === "group" ||
+        currentChatTypeForSourceSendGate === "channel";
+      const shouldApplySourceSendGate =
+        action === "send" &&
+        sourceReplySinkDeliveryMode === "message_tool_only" &&
+        isGroupOrChannelSourceRoute &&
+        Boolean(runIdForSourceSendGate) &&
+        isGateableImplicitSourceTextSend(params);
+      let claimedSourceSendGateForRun = false;
+      if (shouldApplySourceSendGate) {
+        claimedSourceSendGateForRun = claimImplicitSourceTextSendForRun(runIdForSourceSendGate!);
+        if (!claimedSourceSendGateForRun) {
+          return jsonResult({
+            status: "suppressed",
+            reason: "duplicate_source_send_this_run" satisfies VisibleTextSuppressionReason,
+            message:
+              "Suppressed outbound text: this run already sent one implicit-source-route message. " +
+              "Use an explicit target/thread reply, or combine remaining content into a single send.",
+          });
+        }
+      }
+
       const gatewayResolved = resolveGatewayOptions(gatewayOpts);
       const callerOwnsTerminalReceipt =
         gatewayResolved.target === "remote" ||
@@ -1775,6 +1879,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             autogeneratedDeliveryFingerprint,
             actionIdempotencyKey,
           );
+        }
+        if (claimedSourceSendGateForRun && runIdForSourceSendGate) {
+          // The dispatch never reached the provider; release the claim so a
+          // legitimate retry of the same run is not gated as a duplicate.
+          releaseImplicitSourceTextSendClaimForRun(runIdForSourceSendGate);
         }
         throw error;
       }

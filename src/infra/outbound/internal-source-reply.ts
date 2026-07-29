@@ -28,7 +28,14 @@ function hasExternalSessionDeliveryRoute(sessionKey: string | undefined): boolea
   return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL);
 }
 
-function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
+/**
+ * True when the caller supplied an explicit route param (channel/target/to/
+ * channelId/targets). Shared with the message tool's per-run outbound gate:
+ * an explicit route is a distinct, intentional destination and must never be
+ * folded into implicit-source-route send tracking (internal sink selection
+ * or burst suppression).
+ */
+export function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   for (const key of ["channel", "target", "to", "channelId"]) {
     if (normalizeOptionalString(params[key])) {
       return true;

@@ -768,6 +768,214 @@ describe("poll vote echo guard", () => {
   });
 });
 
+describe("message tool per-run outbound send gate", () => {
+  const groupChat = "discord:group:9999";
+
+  beforeEach(async () => {
+    const { resetMessageToolSourceSendGateForTest } = await import("./message-tool.js");
+    resetMessageToolSourceSendGateForTest();
+  });
+
+  function createGateTool(overrides: Partial<Parameters<CreateMessageTool>[0]> = {}) {
+    mockSendResult({ channel: "discord", to: groupChat });
+    return createMessageTool({
+      currentChannelProvider: "discord",
+      currentChannelId: groupChat,
+      currentMessagingTarget: groupChat,
+      currentChatType: "group",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-gate-1",
+      runMessageAction: mocks.runMessageAction as never,
+      ...overrides,
+    });
+  }
+
+  it("allows one implicit source-route text send per run", async () => {
+    const tool = createGateTool();
+
+    const result = await tool.execute("call-1", {
+      action: "send",
+      message: "Status update one.",
+    });
+
+    expect(result.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses a duplicate implicit source-route text send in the same run", async () => {
+    const tool = createGateTool();
+
+    await tool.execute("call-1", {
+      action: "send",
+      message: "Status update one.",
+    });
+    const second = await tool.execute("call-2", {
+      action: "send",
+      message: "Status update two.",
+    });
+
+    expect(second.details).toMatchObject({
+      status: "suppressed",
+      reason: "duplicate_source_send_this_run",
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not gate explicit cross-channel sends with a target", async () => {
+    const tool = createGateTool();
+
+    await tool.execute("call-1", {
+      action: "send",
+      message: "Status update one.",
+    });
+    const second = await tool.execute("call-2", {
+      action: "send",
+      channel: "discord",
+      target: "discord:group:other-room",
+      message: "Explicit routed message.",
+    });
+
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not gate attachment-only sends", async () => {
+    const tool = createGateTool();
+
+    await tool.execute("call-1", {
+      action: "send",
+      message: "Status update one.",
+    });
+    const second = await tool.execute("call-2", {
+      action: "send",
+      media: "https://example.com/chart.png",
+    });
+
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not gate an explicit thread reply (replyTo)", async () => {
+    const tool = createGateTool();
+
+    await tool.execute("call-1", {
+      action: "send",
+      message: "Status update one.",
+    });
+    const second = await tool.execute("call-2", {
+      action: "send",
+      replyTo: "msg-123",
+      message: "Explicit thread reply.",
+    });
+
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not gate an explicit thread reply (threadId)", async () => {
+    const tool = createGateTool();
+
+    await tool.execute("call-1", {
+      action: "send",
+      message: "Status update one.",
+    });
+    const second = await tool.execute("call-2", {
+      action: "send",
+      threadId: "thread-123",
+      message: "Explicit thread reply.",
+    });
+
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not gate direct/DM conversations", async () => {
+    const tool = createGateTool({
+      currentChatType: "direct",
+      currentChannelId: "discord:direct:1234",
+      currentMessagingTarget: "discord:direct:1234",
+    });
+
+    await tool.execute("call-1", {
+      action: "send",
+      message: "First direct message.",
+    });
+    const second = await tool.execute("call-2", {
+      action: "send",
+      message: "Second direct message.",
+    });
+
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("tracks separate runs independently", async () => {
+    const firstRunTool = createGateTool({ runId: "run-gate-a" });
+    await firstRunTool.execute("call-1", {
+      action: "send",
+      message: "Run A message.",
+    });
+
+    const secondRunTool = createGateTool({ runId: "run-gate-b" });
+    const result = await secondRunTool.execute("call-1", {
+      action: "send",
+      message: "Run B message.",
+    });
+
+    expect(result.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not gate sends outside message_tool_only delivery mode", async () => {
+    const tool = createGateTool({ sourceReplyDeliveryMode: "automatic" });
+
+    await tool.execute("call-1", {
+      action: "send",
+      message: "First automatic message.",
+    });
+    const second = await tool.execute("call-2", {
+      action: "send",
+      message: "Second automatic message.",
+    });
+
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases the claim when the first dispatch fails, so the retry is not gated", async () => {
+    mocks.runMessageAction.mockReset();
+    mocks.runMessageAction.mockRejectedValueOnce(new Error("transient gateway failure"));
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "send",
+      action: "send",
+      channel: "discord",
+      to: groupChat,
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({
+      currentChannelProvider: "discord",
+      currentChannelId: groupChat,
+      currentMessagingTarget: groupChat,
+      currentChatType: "group",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runId: "run-gate-retry",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await expect(
+      tool.execute("call-1", { action: "send", message: "First attempt." }),
+    ).rejects.toThrow("transient gateway failure");
+
+    const retry = await tool.execute("call-2", { action: "send", message: "First attempt." });
+
+    expect(retry.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("message tool secret scoping", () => {
   it("marks message-tool-only source replies in the tool description", () => {
     const scopedTool = createMessageTool({
