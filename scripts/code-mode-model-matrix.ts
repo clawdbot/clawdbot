@@ -18,6 +18,8 @@ import {
 import type { AgentExecEnvelope } from "../src/commands/agent-exec.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
 
+export { validateQaEvidenceSummaryJson };
+
 const execFileAsync = promisify(execFile);
 const SOURCE_PATH = "scripts/code-mode-model-matrix.ts";
 const MATRIX_SCHEMA_VERSION = 1;

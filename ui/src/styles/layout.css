@@ -3716,6 +3716,14 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   color: var(--accent);
 }
 
+.page-subtitle {
+  max-width: 52ch;
+  margin-top: 2px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .page-meta {
   display: flex;
   gap: 8px;

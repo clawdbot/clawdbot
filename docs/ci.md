@@ -568,8 +568,6 @@ QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic pa
 
 Scheduled, manual, and release Matrix checks use the deterministic mock provider so the live transport contract is isolated from model latency and normal provider-plugin startup. Telegram release checks use the same deterministic model boundary. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
 
-Scheduled, manual, and release Matrix gates use the shared QA Lab suite host and live adapter. Default membership comes from flow scenarios that explicitly declare Matrix channel eligibility; the runner and workflow keep no curated profile or scenario-id list. CI distributes that catalog-derived selection across five deterministic balanced shards so membership is order-independent and each job stays within its timeout. Focused local runs repeat `--scenario <id>`.
-
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 
 For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.

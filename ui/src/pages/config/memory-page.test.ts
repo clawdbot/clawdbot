@@ -619,6 +619,31 @@ describe("MemorySettingsPage tab routing", () => {
 });
 
 describe("MemorySettingsPage dreaming support", () => {
+  it("links the dreaming intro to its guide", async () => {
+    const { element } = createPage({
+      configObject: {},
+      routeData: memoryTabRoute("settings"),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() =>
+        expect(
+          element.querySelector(
+            '.settings-page__intro a[href="https://docs.openclaw.ai/concepts/dreaming"]',
+          ),
+        ).not.toBeNull(),
+      );
+      const link = element.querySelector<HTMLAnchorElement>(
+        '.settings-page__intro a[href="https://docs.openclaw.ai/concepts/dreaming"]',
+      );
+
+      expect(link?.textContent?.trim()).toBe("Learn more");
+      expect(link?.href).toBe("https://docs.openclaw.ai/concepts/dreaming");
+    } finally {
+      element.remove();
+    }
+  });
+
   it("re-probes after reconnect and drops the abandoned capability result", async () => {
     const first = deferred<unknown>();
     const second = deferred<unknown>();

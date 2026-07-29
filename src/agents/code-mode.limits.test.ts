@@ -234,6 +234,8 @@ describe("Code Mode runtime and output limits", () => {
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("Error: boom");
     expect(details.output).toEqual([{ type: "text", text: "before" }]);
+    expect(details.failurePhase).toBe("guest");
+    expect(details.bridgeDispatchStarted).toBe(false);
   });
 
   it("classifies snapshot limit failures", async () => {
@@ -305,6 +307,8 @@ describe("Code Mode runtime and output limits", () => {
         status: "failed",
         code: "timeout",
         error: "interrupted",
+        failurePhase: "guest",
+        bridgeDispatchStarted: false,
         output: [],
       }),
     ).toMatchObject({
@@ -317,6 +321,8 @@ describe("Code Mode runtime and output limits", () => {
         status: "failed",
         code: "internal_error",
         error: "interrupted",
+        failurePhase: "guest",
+        bridgeDispatchStarted: false,
         output: [],
       }),
     ).toMatchObject({

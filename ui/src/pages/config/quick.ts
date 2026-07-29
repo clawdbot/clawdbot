@@ -8,6 +8,7 @@
 
 import { html, nothing } from "lit";
 import {
+  renderDocsLink,
   renderSettingsNavRow,
   renderSettingsPage,
   renderSettingsRow,
@@ -17,6 +18,8 @@ import { t, type Locale } from "../../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { renderLanguageSelect } from "./language-select.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
+
+const GENERAL_DOCS_URL = "https://docs.openclaw.ai/gateway/configuration";
 
 // ── Types ──
 
@@ -94,6 +97,9 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       connected: props.connected,
       onApply: () => props.onApplyConfig?.(),
     })}
+    <p class="settings-page__intro">
+      ${t("quickSettings.intro")} ${renderDocsLink(GENERAL_DOCS_URL, t("common.learnMore"))}
+    </p>
     ${renderGeneralSection(props)}
   `);
 }

@@ -14,6 +14,7 @@ import type {
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
+import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -851,7 +852,9 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
       uiHints: applySharedChannelFieldHelp(
         applyResolvedConfigTierHints(
           schema,
-          applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+          // Seed with base hints so the mock carries the gateway's labels,
+          // help, and docsUrl metadata instead of bare tier scaffolding.
+          applyConfigTierHints(buildBaseHints(), { includePluginOwnedChannels: true }),
         ),
       ),
       version: "mock-config-schema",
