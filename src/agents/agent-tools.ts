@@ -609,6 +609,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const runtimeRoot = capabilityProfile.workspace.runtimeRoot;
   const codingRoot = sandboxRoot ?? runtimeRoot;
   const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
+  // Flush runs expose one append-only target and record it after success with inherited taint.
   const memoryWriteProvenance = isMemoryFlushRun
     ? undefined
     : createMemoryWriteProvenanceObserver({
