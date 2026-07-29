@@ -9,6 +9,7 @@ export type HubTabOption<T extends string> = {
   badge?: unknown;
   count?: number | null;
   disabled?: boolean;
+  testId?: string;
 };
 
 type HubTabsProps<T extends string> = {
@@ -74,6 +75,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             ?disabled=${tab.disabled}
             .tabIndex=${selected || tab.value === fallbackFocusValue ? 0 : -1}
             aria-selected=${selected ? "true" : "false"}
+            data-test-id=${tab.testId ?? nothing}
             @click=${(event: MouseEvent) => {
               if (
                 !tab.disabled &&
