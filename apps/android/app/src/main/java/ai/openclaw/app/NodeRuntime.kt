@@ -4919,7 +4919,8 @@ class NodeRuntime private constructor(
   internal suspend fun loadChatMediaArtifact(
     artifactId: String,
     kind: GatewayMediaKind,
-  ) = chat.loadMediaArtifact(artifactId, kind)
+    playbackRendition: Boolean,
+  ) = chat.loadMediaArtifact(artifactId, kind, playbackRendition)
 
   fun loadChat(
     sessionKey: String,
