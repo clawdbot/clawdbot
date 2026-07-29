@@ -56,6 +56,7 @@ function detectResult() {
     candidates: [
       {
         kind: "claude-cli",
+        brandId: "claude",
         label: "Claude Code",
         detail: "logged in",
         modelRef: "claude-cli/opus",
@@ -64,6 +65,7 @@ function detectResult() {
       },
       {
         kind: "codex-cli",
+        brandId: "openai",
         label: "Codex",
         detail: "logged in",
         modelRef: "openai/gpt-5.5",
@@ -100,6 +102,9 @@ function exerciseGuidedAdapters(): RunGuidedOnboarding {
     const selected = detection.candidates[0];
     if (!selected) {
       throw new Error("remote detection returned no candidate");
+    }
+    if (selected.brandId !== "claude") {
+      throw new Error("remote detection dropped bundled brand identity");
     }
     const activation = await guidedDeps.activate({
       kind: selected.kind,
@@ -179,6 +184,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             sessionId: (options.params as { sessionId: string }).sessionId,
             reply: "Inference is ready. I can configure the rest.",
             action: "open-agent",
+            agentDraft: "hatch",
           };
         }
         throw new Error(`unexpected Gateway method ${options.method}`);
@@ -192,6 +198,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             }),
           }),
           deliver: false,
+          message: "Wake up, my friend!",
           boundGateway: {
             url: "wss://selected.example/ws",
             ...auth,

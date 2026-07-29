@@ -104,7 +104,7 @@ describe("stageBundledPluginRuntime", () => {
       recursive: true,
     });
     setupRepoFiles(repoRoot, {
-      "dist/plugin-sdk/index.js": "export const sdk = true;\n",
+      "dist/plugin-sdk/core.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js":
         "export { contract } from '../channel-entry-contract-abc.js';\n",
       "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
@@ -144,7 +144,7 @@ describe("stageBundledPluginRuntime", () => {
         ),
       ).exports,
     ).toMatchObject({
-      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/core": "./plugin-sdk/core.js",
       "./plugin-sdk/channel-entry-contract": "./plugin-sdk/channel-entry-contract.js",
     });
     expect(
@@ -192,14 +192,14 @@ describe("stageBundledPluginRuntime", () => {
           name: "openclaw",
           type: "module",
           exports: {
-            "./plugin-sdk": "./dist/plugin-sdk/index.js",
+            "./plugin-sdk/core": "./dist/plugin-sdk/core.js",
             "./plugin-sdk/channel-entry-contract": "./dist/plugin-sdk/channel-entry-contract.js",
           },
         },
         null,
         2,
       ),
-      "dist/plugin-sdk/index.js": "export const sdk = true;\n",
+      "dist/plugin-sdk/core.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js": "export const contract = true;\n",
       "dist/plugin-sdk/source-only.js": "export const sourceOnly = true;\n",
       "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
@@ -213,10 +213,10 @@ describe("stageBundledPluginRuntime", () => {
       fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
     ) as { exports: Record<string, string> };
     expect(packageJson.exports).toEqual({
-      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/core": "./plugin-sdk/core.js",
       "./plugin-sdk/channel-entry-contract": "./plugin-sdk/channel-entry-contract.js",
     });
-    expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "core.js"))).toBe(true);
     expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "channel-entry-contract.js"))).toBe(
       true,
     );

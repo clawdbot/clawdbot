@@ -22,6 +22,8 @@ export const GATEWAY_CLIENT_IDS = {
   CLI: "cli",
   GATEWAY_CLIENT: "gateway-client",
   MACOS_APP: "openclaw-macos",
+  // Native Linux UI uses the same trusted-client admission class as the macOS app.
+  LINUX_APP: "openclaw-linux",
   IOS_APP: "openclaw-ios",
   WATCHOS_APP: "openclaw-watchos",
   ANDROID_APP: "openclaw-android",
@@ -77,6 +79,7 @@ export type GatewayClientInfo = {
 
 /** Capability flags a client may advertise during the gateway handshake. */
 export const GATEWAY_CLIENT_CAPS = {
+  AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",

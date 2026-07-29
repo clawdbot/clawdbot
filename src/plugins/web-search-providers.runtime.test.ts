@@ -38,7 +38,6 @@ let loaderModule: typeof import("./loader.js");
 let pluginAutoEnableModule: PluginAutoEnableModule;
 let applyPluginAutoEnableSpy: ReturnType<typeof vi.fn>;
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
-let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 const DEFAULT_WEB_SEARCH_WORKSPACE = "/tmp/workspace";
 const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
@@ -325,12 +324,10 @@ describe("resolvePluginWebSearchProviders", () => {
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
     ({ resolvePluginWebSearchProviders } = await import("./web-search-providers.runtime.js"));
   });
 
   beforeEach(() => {
-    clearLoadPluginMetadataSnapshotMemo();
     applyPluginAutoEnableSpy?.mockRestore();
     applyPluginAutoEnableSpy = vi
       .spyOn(pluginAutoEnableModule, "applyPluginAutoEnable")
@@ -359,7 +356,6 @@ describe("resolvePluginWebSearchProviders", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
-    clearLoadPluginMetadataSnapshotMemo();
     vi.restoreAllMocks();
   });
 

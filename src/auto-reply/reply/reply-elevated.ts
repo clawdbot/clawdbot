@@ -198,7 +198,7 @@ export function resolveElevatedPermissions(params: {
   if (!agentEnabled) {
     failures.push({
       gate: "enabled",
-      key: "agents.list[].tools.elevated.enabled",
+      key: "agents.entries.*.tools.elevated.enabled",
     });
   }
   if (!enabled) {
@@ -248,7 +248,7 @@ export function resolveElevatedPermissions(params: {
   if (!agentAllowed) {
     failures.push({
       gate: "allowFrom",
-      key: `agents.list[].tools.elevated.allowFrom.${params.provider}`,
+      key: `agents.entries.*.tools.elevated.allowFrom.${params.provider}`,
     });
   }
   return { enabled, allowed: globalAllowed && agentAllowed, failures };

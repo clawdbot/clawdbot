@@ -1,18 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { render, type ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { loadLocalUserIdentity } from "../../app/settings.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
+import * as chatModels from "../chat/models.ts";
+import * as realtimeTalk from "../chat/realtime-talk.ts";
+import { ConfigPage, configSelectionFromSearch } from "./config-page.ts";
+import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
+
+const switchActiveRealtimeTalkCameras =
+  vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -25,8 +29,14 @@ function deferred<T>() {
 let localStorageMock: Storage;
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/");
+  vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
+    switchActiveRealtimeTalkCameras,
+  );
   localStorageMock = createStorageMock();
   vi.stubGlobal("localStorage", localStorageMock);
+  switchActiveRealtimeTalkCameras.mockReset();
+  switchActiveRealtimeTalkCameras.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -35,29 +45,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("ConfigPage local user identity", () => {
-  it("persists avatar selections while preserving the local display name", () => {
-    localStorageMock.setItem(
-      "openclaw.control.user.v1",
-      JSON.stringify({ name: "Buns", avatar: "old" }),
-    );
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      userAvatar: string | null;
-      setLocalUserAvatar: (avatar: string | null) => void;
-    };
-
-    state.setLocalUserAvatar("🦞");
-
-    expect(state.userAvatar).toBe("🦞");
-    expect(loadLocalUserIdentity()).toEqual({ name: "Buns", avatar: "🦞" });
-  });
-});
-
 describe("configSelectionFromSearch", () => {
   it("opens a valid linked Settings section", () => {
-    expect(configSelectionFromSearch("communications", "?section=talk")).toEqual({
-      activeSection: "talk",
+    expect(configSelectionFromSearch("communications", "?section=tts")).toEqual({
+      activeSection: "tts",
       activeSubsection: null,
     });
   });
@@ -68,131 +59,289 @@ describe("configSelectionFromSearch", () => {
       activeSubsection: null,
     });
   });
-});
 
-describe("supportsSystemInfo", () => {
-  it("requires the Gateway to advertise system.info", () => {
-    const hello = {
-      features: { methods: ["health", "system.info"] },
-    } as ApplicationGatewaySnapshot["hello"];
-    const unsupportedHello = {
-      features: { methods: ["health"] },
-    } as ApplicationGatewaySnapshot["hello"];
+  it("keeps MCP separate from Infrastructure", () => {
+    expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
+    expect(configSectionKeysForPage("infrastructure")).toEqual([
+      "gateway",
+      "browser",
+      "nodeHost",
+      "discovery",
+      "acp",
+    ]);
+    expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
+      activeSection: "mcp",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("infrastructure", "?section=mcp")).toEqual({
+      activeSection: "gateway",
+      activeSubsection: null,
+    });
+  });
 
-    expect(supportsSystemInfo(hello)).toBe(true);
-    expect(supportsSystemInfo(unsupportedHello)).toBe(false);
-    expect(supportsSystemInfo(null)).toBe(false);
+  it("keeps Communications focused on messages and text-to-speech", () => {
+    expect(configSectionKeysForPage("communications")).toEqual(["messages", "tts"]);
+  });
+
+  it("gives Talk its own curated page", () => {
+    expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
+  });
+
+  it("keeps provider models off Agent Defaults", () => {
+    expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
   });
 });
 
-describe("ConfigPage settings mode control", () => {
-  it("uses the shared settings segmented control to switch modes", () => {
+describe("ConfigPage moved section routes", () => {
+  it.each([
+    ["channels", "channels", ""],
+    ["broadcast", "advanced", "?section=broadcast"],
+    ["talk", "talk", "?section=talk"],
+  ])("redirects the former Communications %s section", (section, routeId, search) => {
+    const navigate = vi.fn();
     const page = new ConfigPage();
     const state = page as unknown as {
-      pageId: string;
-      settingsMode: "quick" | "advanced";
-      renderSettingsModeToggle: () => unknown;
+      context: { navigate: typeof navigate };
+      pageId: "communications";
+      routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
+        section: string;
+        advanced: boolean;
+        tab: string | null;
+        targetBlockId: string | null;
+      };
+      syncRouteData: () => void;
     };
-    state.pageId = "config";
-    state.settingsMode = "quick";
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(state.renderSettingsModeToggle(), container);
-    const group = container.querySelector<HTMLElement & { value: string }>("wa-radio-group");
-    const [quick, advanced] = Array.from(
-      container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-radio"),
-    );
+    state.context = { navigate };
+    state.pageId = "communications";
+    state.routeData = {
+      pathname: "/settings/communications",
+      search: `?section=${section}`,
+      hash: "",
+      section,
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
 
-    expect(group?.classList.contains("settings-segmented")).toBe(true);
-    expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Settings view");
-    expect(quick?.classList.contains("settings-segmented__btn--active")).toBe(true);
-    expect(quick?.checked).toBe(true);
-    expect(advanced?.checked).toBe(false);
-    if (group) {
-      group.value = "advanced";
-      group.dispatchEvent(new Event("change", { bubbles: true }));
+    state.syncRouteData();
+
+    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
+  });
+
+  it("redirects the former Agent Defaults models section", () => {
+    const navigate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: { navigate: typeof navigate };
+      pageId: "ai-agents";
+      routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
+        section: string;
+        advanced: boolean;
+        tab: string | null;
+        targetBlockId: string | null;
+      };
+      syncRouteData: () => void;
+    };
+    state.context = { navigate };
+    state.pageId = "ai-agents";
+    state.routeData = {
+      pathname: "/settings/ai-agents",
+      search: "?section=models",
+      hash: "",
+      section: "models",
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
+
+    state.syncRouteData();
+
+    expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
+  });
+});
+
+describe("ConfigPage advanced selection guard", () => {
+  it("keeps curated sections off the Advanced page", () => {
+    expect(configSelectionFromSearch("advanced", "?section=messages")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=env")).toEqual({
+      activeSection: "env",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=mcp")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=tts")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=broadcast")).toEqual({
+      activeSection: "broadcast",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=models")).toEqual({
+      activeSection: "models",
+      activeSubsection: null,
+    });
+  });
+});
+
+describe("ConfigPage media discovery", () => {
+  it("coalesces refreshes while discovery is in flight", async () => {
+    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+      const discovery = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi.fn(() => discovery.promise);
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+      const page = new ConfigPage();
+      const state = page as unknown as Record<
+        typeof method,
+        (requestPermission: boolean) => Promise<void>
+      >;
+
+      const first = state[method](true);
+      await state[method](true);
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+
+      discovery.resolve([]);
+      await first;
     }
+  });
 
-    expect(state.settingsMode).toBe("advanced");
+  it("upgrades passive discovery when the user requests permission", async () => {
+    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+      const passiveDiscovery = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi
+        .fn()
+        .mockImplementationOnce(() => passiveDiscovery.promise)
+        .mockResolvedValueOnce([]);
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+      const page = new ConfigPage();
+      const state = page as unknown as Record<
+        typeof method,
+        (requestPermission: boolean) => Promise<void>
+      >;
+
+      const passive = state[method](false);
+      await state[method](true);
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+
+      passiveDiscovery.resolve([]);
+      await passive;
+      expect(enumerateDevices).toHaveBeenCalledTimes(2);
+    }
   });
 });
 
-describe("ConfigPage system info", () => {
-  it("clears stale host info when the Gateway disconnects", () => {
-    const client = {} as GatewayBrowserClient;
-    const snapshot = {
-      client,
-      connected: false,
-      hello: null,
-    } as ApplicationGatewaySnapshot;
+describe("ConfigPage camera selection", () => {
+  it("clears recovered errors and ignores failures from superseded selections", async () => {
+    let rejectFirst: (error: Error) => void = () => undefined;
+    const first = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    switchActiveRealtimeTalkCameras
+      .mockRejectedValueOnce(new Error("The selected camera is unavailable"))
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
     const page = new ConfigPage();
     const state = page as unknown as {
-      context: { gateway: { snapshot: ApplicationGatewaySnapshot } };
-      systemInfo: SystemInfoResult | null;
-      systemInfoClient: GatewayBrowserClient | null;
-      handleSystemInfoGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+      cameraError: string | null;
+      selectCamera: (deviceId: string) => Promise<void>;
+      applySettings: () => void;
     };
-    state.context = { gateway: { snapshot } };
-    state.systemInfoClient = client;
-    state.systemInfo = {} as SystemInfoResult;
+    state.applySettings = () => undefined;
 
-    state.handleSystemInfoGatewaySnapshot(snapshot);
+    await state.selectCamera("missing-camera");
+    expect(state.cameraError).toBe("The selected camera is unavailable");
 
-    expect(state.systemInfo).toBeNull();
+    const staleSelection = state.selectCamera("slow-camera");
+    expect(state.cameraError).toBeNull();
+    await state.selectCamera("back-camera");
+    rejectFirst(new Error("The selected camera is unavailable"));
+    await staleSelection;
+    expect(state.cameraError).toBeNull();
+
+    state.cameraError = "Another camera error";
+    await state.selectCamera("");
+    expect(state.cameraError).toBeNull();
   });
+});
 
-  it("rejects an old Gateway source response when the replacement reuses its client", async () => {
-    const firstResponse = deferred<SystemInfoResult>();
-    const secondResponse = deferred<SystemInfoResult>();
-    const client = {
-      request: vi
-        .fn()
-        .mockImplementationOnce(() => firstResponse.promise)
-        .mockImplementationOnce(() => secondResponse.promise),
-    } as unknown as GatewayBrowserClient;
-    const snapshot = {
-      client,
-      connected: true,
-      hello: { features: { methods: ["system.info"] } },
-    } as ApplicationGatewaySnapshot;
-    const firstGateway = { snapshot } as ApplicationGateway;
-    const secondGateway = { snapshot } as ApplicationGateway;
+describe("ConfigPage session observer models", () => {
+  it("lets a replacement Gateway load while the stale client is still pending", async () => {
+    const first = deferred<ModelCatalogEntry[]>();
+    const second = deferred<ModelCatalogEntry[]>();
+    vi.spyOn(chatModels, "loadModels")
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const firstClient = {} as GatewayBrowserClient;
+    const secondClient = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client: firstClient, phase: "connected" },
+    } as unknown as ApplicationGateway;
     const page = new ConfigPage();
     const state = page as unknown as {
       context: ApplicationContext;
-      subscriptions: ReactiveController;
-      shouldUpdate: () => boolean;
-      syncSystemInfoPolling: () => void;
-      synchronizeSystemInfoGateway: (gateway: ApplicationGateway) => void;
-      loadSystemInfo: () => Promise<void>;
-      systemInfo: SystemInfoResult | null;
-      systemInfoUnavailable: boolean;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsClient: GatewayBrowserClient | null;
+      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
     };
-    page.removeController(state.subscriptions);
-    state.shouldUpdate = () => false;
-    state.syncSystemInfoPolling = () => undefined;
-    state.context = { gateway: firstGateway } as ApplicationContext;
-    document.body.append(page);
-    state.synchronizeSystemInfoGateway(firstGateway);
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = { gateway } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
 
-    const firstLoad = state.loadSystemInfo();
-    state.systemInfo = {} as SystemInfoResult;
-    state.systemInfoUnavailable = true;
-    state.context = { gateway: secondGateway } as ApplicationContext;
-    state.synchronizeSystemInfoGateway(secondGateway);
-    const secondLoad = state.loadSystemInfo();
-
-    const stale = { platform: "stale" } as unknown as SystemInfoResult;
-    firstResponse.resolve(stale);
-    await firstLoad;
-    expect(state.systemInfo).toBeNull();
-    expect(state.systemInfoUnavailable).toBe(false);
-
-    const current = { platform: "current" } as unknown as SystemInfoResult;
-    secondResponse.resolve(current);
+    const firstLoad = state.ensureSessionObserverModels(firstClient);
+    (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
+      client: secondClient,
+      phase: "connected",
+    } as ApplicationGatewaySnapshot;
+    const secondLoad = state.ensureSessionObserverModels(secondClient);
+    const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
+    second.resolve(currentModels);
     await secondLoad;
-    expect(state.systemInfo).toBe(current);
-    page.remove();
+    expect(state.sessionObserverModels).toEqual(currentModels);
+    expect(state.sessionObserverModelsClient).toBe(secondClient);
+
+    first.resolve([{ id: "stale", name: "Stale", provider: "old" }]);
+    await firstLoad;
+    expect(state.sessionObserverModels).toEqual(currentModels);
+    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks a failed client unavailable without polling it again", async () => {
+    vi.spyOn(chatModels, "loadModels").mockRejectedValue(new Error("catalog unavailable"));
+    const client = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client, phase: "connected" },
+    } as unknown as ApplicationGateway;
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
+      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = { gateway } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client);
+
+    expect(state.sessionObserverModels).toEqual([]);
+    expect(state.sessionObserverModelsUnavailable).toBe(true);
+    expect(chatModels.loadModels).toHaveBeenCalledOnce();
   });
 });
 

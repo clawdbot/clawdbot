@@ -21,7 +21,6 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
@@ -52,6 +51,10 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
 import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
@@ -86,8 +89,8 @@ function resolveStatusChannelFeatureLine(params: {
   const telegramConfig = params.cfg.channels?.telegram;
   const accountId = normalizeAccountId(
     params.statusAccountId ??
-      params.sessionEntry?.lastAccountId ??
-      params.sessionEntry?.origin?.accountId ??
+      deliveryContextFromSession(params.sessionEntry)?.accountId ??
+      sessionDeliveryOrigin(params.sessionEntry)?.accountId ??
       telegramConfig?.defaultAccount,
   );
   const accountConfig = resolveNormalizedAccountEntry(
@@ -180,11 +183,7 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
     if (!credential) {
       return undefined;
     }
-    const credentialProvider = normalizeOptionalLowercaseString(credential.provider);
-    const resolvedProvider = resolveProviderIdForAuth(credential.provider, { config: params.cfg });
-    return resolvedProvider === "openai" ||
-      credentialProvider === "openai-codex" ||
-      credentialProvider === "codex-cli"
+    return normalizeOptionalLowercaseString(credential.provider) === "openai"
       ? normalizedProfileId
       : undefined;
   } catch {
@@ -317,6 +316,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider,
     model,
     contextTokens,
+    thinkingCatalog,
     resolvedThinkLevel,
     resolvedFastMode,
     resolvedVerboseLevel,
@@ -646,6 +646,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           provider: selectedLookupProvider,
           model: selectedLookupModel,
           level: requestedThinkLevel,
+          catalog: thinkingCatalog,
           agentRuntime: effectiveHarness,
           // Status uses loaded provider facts unless Codex needs OpenAI's static thinking contract.
           providerPolicySource:

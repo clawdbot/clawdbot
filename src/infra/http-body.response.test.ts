@@ -265,6 +265,49 @@ describe("readResponseWithLimit", () => {
     }
   });
 
+  it("resolves a lazy overall timeout immediately before reading", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const timeoutMs = vi.fn(() => 75);
+      const response = new Response(makeTricklingStream(40, cancel));
+      const assertion = expect(
+        readResponseWithLimit(response, 1024, {
+          timeoutMs,
+          onTimeout: ({ timeoutMs: resolved }) => new Error(`lazy overall ${resolved}`),
+        }),
+      ).rejects.toThrow("lazy overall 75");
+
+      expect(timeoutMs).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(80);
+      await assertion;
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the body when a lazy timeout resolver reports an expired deadline", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          return new Promise<void>(() => {});
+        },
+        cancel,
+      }),
+    );
+
+    await expect(
+      readResponseWithLimit(response, 1024, {
+        timeoutMs: () => {
+          throw new Error("deadline expired");
+        },
+      }),
+    ).rejects.toThrow("deadline expired");
+    expect(cancel).toHaveBeenCalledWith(expect.objectContaining({ message: "deadline expired" }));
+  });
+
   it("cancels a getReader-less body when its overall timeout expires", async () => {
     vi.useFakeTimers();
     try {

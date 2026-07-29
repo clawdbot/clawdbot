@@ -282,6 +282,9 @@ export function buildSlackQaConfig(
             allowFrom: params.overrides?.allowFrom ?? [params.driverBotUserId],
             groupPolicy: "allowlist",
             allowBots: true,
+            ...(params.overrides?.groupDmEnabled
+              ? { dm: { enabled: true, groupEnabled: true } }
+              : {}),
             replyToMode: params.overrides?.replyToMode ?? "off",
             ...(progressOverrides
               ? {

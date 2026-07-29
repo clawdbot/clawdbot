@@ -7,3 +7,10 @@ export type TelegramSpooledUpdatePayload = {
 };
 
 export const TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION = 1;
+
+export class TelegramIngressPayloadError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "TelegramIngressPayloadError";
+  }
+}

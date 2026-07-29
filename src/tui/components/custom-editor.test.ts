@@ -26,6 +26,22 @@ describe("CustomEditor", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    { name: "Kitty Shift+Enter", input: "\u001b[13;2u" },
+    { name: "Ctrl+J", input: "\n" },
+  ])("inserts a newline without submitting on $name", ({ input }) => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText("first line");
+
+    editor.handleInput(input);
+
+    expect(editor.getText()).toBe("first line\n");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("routes alt+enter to the follow-up handler", () => {
     const tui = { requestRender: vi.fn() } as unknown as TUI;
     const editor = new CustomEditor(tui, editorTheme);
@@ -46,6 +62,91 @@ describe("CustomEditor", () => {
     editor.handleInput("\u001bp");
 
     expect(onAltUp).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses Ctrl+D to delete the character after a nonempty input cursor", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onCtrlD = vi.fn();
+    editor.onCtrlD = onCtrlD;
+    editor.setText("keepXword");
+
+    for (let index = 0; index < 5; index += 1) {
+      editor.handleInput("\u001b[D");
+    }
+    editor.handleInput("\u0004");
+
+    expect(editor.getText()).toBe("keepword");
+    expect(onCtrlD).not.toHaveBeenCalled();
+  });
+
+  it("uses Ctrl+D to request exit only when the editor is empty", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onCtrlD = vi.fn();
+    editor.onCtrlD = onCtrlD;
+
+    editor.handleInput("\u0004");
+
+    expect(onCtrlD).toHaveBeenCalledTimes(1);
+    expect(editor.getText()).toBe("");
+  });
+
+  it("uses Ctrl+D to join multiline input at the end of a nonempty line", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onCtrlD = vi.fn();
+    editor.onCtrlD = onCtrlD;
+    editor.setText("first\nsecond");
+
+    editor.handleInput("\u001b[A");
+    editor.handleInput("\u0004");
+
+    expect(editor.getText()).toBe("firstsecond");
+    expect(onCtrlD).not.toHaveBeenCalled();
+  });
+
+  it("uses Ctrl+D to delete one complete grapheme from nonempty input", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onCtrlD = vi.fn();
+    editor.onCtrlD = onCtrlD;
+    editor.setText("a👨‍👩‍👧‍👦b");
+
+    editor.handleInput("\u001b[D");
+    editor.handleInput("\u001b[D");
+    editor.handleInput("\u0004");
+
+    expect(editor.getText()).toBe("ab");
+    expect(onCtrlD).not.toHaveBeenCalled();
+  });
+
+  it("does not exit or change nonempty input when Ctrl+D is at its final cursor", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onCtrlD = vi.fn();
+    editor.onCtrlD = onCtrlD;
+    editor.setText("keepword");
+
+    editor.handleInput("\u0004");
+
+    expect(editor.getText()).toBe("keepword");
+    expect(onCtrlD).not.toHaveBeenCalled();
+  });
+
+  it("uses Ctrl+D to edit recalled input history without requesting exit", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onCtrlD = vi.fn();
+    editor.onCtrlD = onCtrlD;
+    editor.addToHistory("history");
+
+    editor.handleInput("\u001b[A");
+    editor.handleInput("\u0001");
+    editor.handleInput("\u0004");
+
+    expect(editor.getText()).toBe("istory");
+    expect(onCtrlD).not.toHaveBeenCalled();
   });
 
   it("inserts German AltGr printable Kitty CSI-u input", () => {

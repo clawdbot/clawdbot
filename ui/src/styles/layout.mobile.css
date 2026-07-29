@@ -121,6 +121,45 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     opacity var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+/* A session dashboard keeps the board primary on narrow shells. Every desktop
+   edge becomes one bounded bottom sheet; the stored tab preference is left
+   untouched and returns when the viewport widens. */
+.shell--mobile-nav .board-session-surface--dock-bottom {
+  flex-direction: column;
+}
+
+.shell--mobile-nav .board-session-surface__board {
+  order: 1;
+}
+
+.shell--mobile-nav .board-session-surface__divider {
+  display: none;
+}
+
+.shell--mobile-nav .board-session-surface__chat {
+  order: 2;
+  width: 100% !important;
+  height: min(42dvh, 360px) !important;
+  min-width: 0;
+  min-height: 180px;
+  max-width: none;
+  max-height: 48dvh;
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
+}
+
+.shell--mobile-nav .board-session-surface__reopen {
+  top: auto;
+  right: 12px;
+  bottom: 8px;
+  left: auto;
+  transform: none;
+}
+
+.shell--mobile-nav .board-session-surface__reopen span {
+  writing-mode: horizontal-tb;
+}
+
 .shell--mobile-nav .sidebar-resizer {
   display: none;
 }
@@ -128,23 +167,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
   transform: translateX(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.shell--mobile-nav .shell-nav-backdrop {
-  display: block;
-  position: fixed;
-  inset: 0;
-  z-index: 65;
-  border: 0;
-  background: color-mix(in srgb, black 52%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
-}
-
-.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
   opacity: 1;
   pointer-events: auto;
 }
@@ -192,10 +214,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   height: 38px;
   min-height: 38px;
   padding: 0;
-}
-
-.shell--mobile-nav .sidebar-brand__actions {
-  display: none;
 }
 
 .shell--mobile-nav .sidebar {

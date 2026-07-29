@@ -24,7 +24,32 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
       return { kind: "work", key: threadId };
     }
     if (hostname === "teams.live.com") {
-      const match = parsed.pathname.match(/^\/meet\/([^/]+)\/?$/i);
+      const launcherTarget =
+        parsed.pathname.toLowerCase() === "/dl/launcher/launcher.html"
+          ? parsed.searchParams.get("url")
+          : undefined;
+      const launcherMatch = launcherTarget?.match(/^\/_#\/meet\/([^/?#]+)(?:\?(.+))?$/i);
+      let lightMeeting: { meetingCode?: unknown; passcode?: unknown } | undefined;
+      if (parsed.pathname.toLowerCase() === "/light-meetings/launch") {
+        try {
+          const coordinates = parsed.searchParams.get("coords");
+          const decoded =
+            coordinates && coordinates.length <= 16_384
+              ? JSON.parse(Buffer.from(coordinates, "base64").toString("utf8"))
+              : undefined;
+          if (decoded && typeof decoded === "object") {
+            lightMeeting = decoded as { meetingCode?: unknown; passcode?: unknown };
+          }
+        } catch {
+          return undefined;
+        }
+      }
+      const match =
+        parsed.pathname.match(/^\/meet\/([^/]+)\/?$/i) ??
+        launcherMatch ??
+        (typeof lightMeeting?.meetingCode === "string"
+          ? ([undefined, lightMeeting.meetingCode] as const)
+          : undefined);
       if (!match?.[1]) {
         return undefined;
       }
@@ -32,10 +57,14 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
       if (!/^[a-z0-9_-]+$/i.test(meetCode)) {
         return undefined;
       }
-      const password = parsed.searchParams.get("p");
+      const passcode = launcherMatch
+        ? new URLSearchParams(launcherMatch[2] ?? "").get("p")
+        : typeof lightMeeting?.passcode === "string"
+          ? lightMeeting.passcode
+          : parsed.searchParams.get("p");
       return {
         kind: "consumer",
-        key: `${meetCode.toLowerCase()}:p:${encodeURIComponent(password ?? "")}`,
+        key: `${meetCode.toLowerCase()}:p:${encodeURIComponent(passcode ?? "")}`,
       };
     }
   } catch {

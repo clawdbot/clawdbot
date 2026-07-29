@@ -70,6 +70,7 @@ export type StatusSummary = {
     ownerKind: "account" | "capability" | "gateway" | "provider" | "route";
     ownerId: string;
     state: "unavailable";
+    degradationState?: "cold" | "stale";
     paths: string[];
     reason: string;
   }>;

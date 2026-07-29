@@ -47,6 +47,7 @@ function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReload
     restartHealthMonitor: overrides?.restartHealthMonitor ?? false,
     reloadPlugins: overrides?.reloadPlugins ?? false,
     restartChannels: overrides?.restartChannels ?? new Set(),
+    restartChannelAccounts: overrides?.restartChannelAccounts,
     disposeMcpRuntimes: overrides?.disposeMcpRuntimes ?? false,
     noopPaths: overrides?.noopPaths ?? [],
   };
@@ -304,6 +305,31 @@ describe("gateway aux handlers", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
+  it("restarts the whole channel when a secret change is scoped to one account", async () => {
+    // secrets.reload has no per-account restart path — account-scoped plan
+    // entries must still produce a channel restart so rotated credentials
+    // are applied.
+    const buildReloadPlan = () =>
+      createReloadPlan({
+        restartChannels: new Set(),
+        restartChannelAccounts: new Map([["slack", new Set(["ops"])]]),
+      });
+    activateSnapshot(slackConfig("old-slack-secret"));
+    const prepared = createSnapshot(slackConfig("new-slack-secret"));
+    const activateRuntimeSecrets = vi.fn().mockResolvedValue(prepared);
+    const { reload, respond, startChannel, stopChannel } =
+      createSecretsReloadHarnessWithChannelMocks({
+        activateRuntimeSecrets,
+        buildReloadPlan,
+      });
+
+    await reload();
+
+    expect(stopChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack"]);
+    expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack"]);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
+  });
+
   it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
     const buildReloadPlan = buildRestartChannelsPlan("slack");
     activateSnapshot(slackConfig("old-slack-secret"));
@@ -387,8 +413,18 @@ describe("gateway aux handlers", () => {
       canonicalConfig,
     ]);
     expect(activateRuntimeSecrets.mock.calls.map(([, activation]) => activation)).toEqual([
-      { reason: "reload", activate: false },
-      { reason: "reload", activate: false },
+      {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
+      },
+      {
+        reason: "reload",
+        activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
+      },
     ]);
     expect(activatePreparedSnapshotIfCurrent).toHaveBeenCalledTimes(2);
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(canonicalConfig);

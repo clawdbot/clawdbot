@@ -16,6 +16,16 @@ const qaFlowExecutionShape = {
 type QaScenarioModuleFlow = z.infer<typeof qaFlowModuleSchema>;
 type QaScenarioFlowShape = { steps: unknown[] };
 
+function resolveRequiredChannelDriver(
+  flow: QaScenarioFlowShape | QaScenarioModuleFlow | undefined,
+): "live" | undefined {
+  // Modules under live-transports consume adapter-prepared runtime context.
+  // Crabline implements normalized transport only and cannot supply that context.
+  return flow && "module" in flow && flow.module.startsWith("./live-transports/")
+    ? "live"
+    : undefined;
+}
+
 function normalizeQaScenarioFileMetadata<
   T extends { objective?: string; successCriteria?: string[] },
 >(scenario: T, title: string) {
@@ -71,5 +81,6 @@ export const qaScenarioModuleFlow = {
   moduleSchema: qaFlowModuleSchema,
   executionShape: qaFlowExecutionShape,
   normalizeMetadata: normalizeQaScenarioFileMetadata,
+  resolveRequiredChannelDriver,
   resolveFlow: resolveQaScenarioFileFlow,
 };

@@ -3,6 +3,10 @@ import OpenClawKit
 
 extension GatewayConnectionController {
     static func migrateLegacyDeviceAuth() {
+        guard
+            let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted(),
+            let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension)
+        else { return }
         let migrationGatewayID = self.legacyDeviceAuthMigrationGatewayID()
         let relay = ShareGatewayRelaySettings.loadConfig()
         let instanceID = GatewaySettingsStore.currentInstanceID()
@@ -15,8 +19,6 @@ extension GatewayConnectionController {
         } else {
             GatewaySettingsStore.discardUnscopedGatewayCredentials(instanceId: instanceID)
         }
-        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
-        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
         // The extension connects independently, so the host's last route cannot prove who
         // issued its legacy token. Require one extension re-pair instead of guessing an owner.
         DeviceAuthStore.discardUnscopedTokens(

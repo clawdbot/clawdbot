@@ -53,7 +53,9 @@ extension OnboardingView {
     }
 
     func prepareSystemAgentHandoff() {
-        systemAgentState.chat.onAgentHandoff = { [self] in self.finish() }
+        systemAgentState.chat.onAgentHandoff = { [self] agentDraft in
+            self.finish(agentDraft: agentDraft)
+        }
         aiSetup.onPendingActivationDeadline = { [self] deadline, routeIdentity in
             let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard currentRouteIdentity == routeIdentity else { return }

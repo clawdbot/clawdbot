@@ -98,6 +98,7 @@ internal data class ReplayHistoryMessage(
   val text: String,
   val timestampMs: Long,
   val idempotencyKey: String? = null,
+  val entryId: String? = null,
 )
 
 internal fun historyResponse(
@@ -168,6 +169,9 @@ internal fun historyResponse(
             put("timestamp", JsonPrimitive(message.timestampMs))
             if (message.idempotencyKey != null) {
               put("idempotencyKey", JsonPrimitive(message.idempotencyKey))
+            }
+            if (message.entryId != null) {
+              put("__openclaw", buildJsonObject { put("id", JsonPrimitive(message.entryId)) })
             }
           }
         },

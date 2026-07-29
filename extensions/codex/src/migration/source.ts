@@ -11,7 +11,11 @@ import {
   pluginReadParams,
   type CodexPluginMarketplaceRef,
 } from "../app-server/plugin-inventory.js";
-import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
+import type {
+  CodexAppServerRequestResult,
+  CodexGetAccountResponse,
+  v2,
+} from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import { exists, isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
 import {
@@ -40,11 +44,8 @@ export type CodexSource = {
   codexHome: string;
   codexSkillsDir?: string;
   personalAgentsSkillsDir?: string;
-  configPath?: string;
   authPath?: string;
   modelsCachePath?: string;
-  hooksPath?: string;
-  memoriesDir?: string;
   memoryFiles: CodexMemorySource[];
   skills: CodexSkillSource[];
   plugins: CodexPluginSource[];
@@ -175,7 +176,6 @@ function buildInstalledPluginSource(plugin: v2.PluginSummary): CodexPluginSource
     pluginName,
     marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     source: `${CODEX_PLUGINS_MARKETPLACE_NAME}/${pluginName}`,
-    sourceKind: "app-server",
     migratable: true,
     installed: plugin.installed,
     enabled: plugin.enabled,
@@ -363,7 +363,7 @@ async function refreshSourceAppInventory(
     appServer: { start: options.startOptions },
   });
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    await requestSourceCodexAppServerJson<v2.AppsListResponse>(options, {
+    await requestSourceCodexAppServerJson<CodexAppServerRequestResult<typeof method>>(options, {
       method,
       requestParams,
     });
@@ -458,12 +458,8 @@ function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
 }
 
 export async function discoverCodexSource(
-  inputOrOptions?: string | CodexSourceDiscoveryOptions,
+  options: CodexSourceDiscoveryOptions = {},
 ): Promise<CodexSource> {
-  const options =
-    typeof inputOrOptions === "string" || inputOrOptions === undefined
-      ? { input: inputOrOptions }
-      : inputOrOptions;
   const codexHome = resolveHomePath(options.input?.trim() || defaultCodexHome());
   const codexSkillsDir = path.join(codexHome, "skills");
   const agentsSkillsDir = personalAgentsSkillsDir();
@@ -471,7 +467,7 @@ export async function discoverCodexSource(
   const authPath = path.join(codexHome, "auth.json");
   const modelsCachePath = path.join(codexHome, "models_cache.json");
   const hooksPath = path.join(codexHome, "hooks", "hooks.json");
-  const { memoriesDir, memoryFiles } = await discoverCodexMemorySources(codexHome);
+  const memoryFiles = await discoverCodexMemorySources(codexHome);
   const codexSkills = options.memoryOnly
     ? []
     : await discoverSkillDirs({
@@ -534,11 +530,8 @@ export async function discoverCodexSource(
     codexHome,
     ...((await isDirectory(codexSkillsDir)) ? { codexSkillsDir } : {}),
     ...((await isDirectory(agentsSkillsDir)) ? { personalAgentsSkillsDir: agentsSkillsDir } : {}),
-    ...((await exists(configPath)) ? { configPath } : {}),
     ...(hasAuth ? { authPath } : {}),
     ...((await exists(modelsCachePath)) ? { modelsCachePath } : {}),
-    ...((await exists(hooksPath)) ? { hooksPath } : {}),
-    ...(memoriesDir ? { memoriesDir } : {}),
     memoryFiles,
     skills,
     plugins,

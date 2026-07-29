@@ -19,36 +19,87 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
   const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
-  const resolveTimeoutMs = (timeoutMs: unknown): number =>
-    typeof timeoutMs === "function" ? (timeoutMs() as number) : ((timeoutMs as number) ?? 60_000);
   return {
     // REAL byte-bounded JSON reader under test — not stubbed.
     readProviderJsonResponse: actual.readProviderJsonResponse,
     postJsonRequest: postJsonRequestMock,
-    fetchProviderOperationResponse: async (params: {
+    pollProviderOperationJson: async (params: {
       url: string;
-      init?: RequestInit;
-      timeoutMs?: unknown;
-      fetchFn: typeof fetch;
-    }) => fetchWithTimeoutMock(params.url, params.init ?? {}, resolveTimeoutMs(params.timeoutMs)),
+      headers: Headers;
+      defaultTimeoutMs: number;
+      maxAttempts: number;
+      requestFailedMessage: string;
+      timeoutMessage: string;
+      isComplete: (payload: unknown) => boolean;
+      getFailureMessage?: (payload: unknown) => string | undefined;
+    }) => {
+      for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+        const response = await fetchWithTimeoutMock(
+          params.url,
+          { method: "GET", headers: params.headers },
+          params.defaultTimeoutMs,
+        );
+        const payload = await actual.readProviderJsonResponse(
+          response,
+          params.requestFailedMessage,
+        );
+        if (params.isComplete(payload)) {
+          return payload;
+        }
+        const failureMessage = params.getFailureMessage?.(payload);
+        if (failureMessage) {
+          throw new Error(failureMessage);
+        }
+      }
+      throw new Error(params.timeoutMessage);
+    },
     fetchProviderDownloadResponse: async (params: {
       url: string;
       init?: RequestInit;
-      timeoutMs?: unknown;
+      deadline: { deadlineAtMs?: number; timeoutMs?: number };
       fetchFn: typeof fetch;
-    }) => fetchWithTimeoutMock(params.url, params.init ?? {}, resolveTimeoutMs(params.timeoutMs)),
+    }) =>
+      fetchWithTimeoutMock(
+        params.url,
+        params.init ?? {},
+        params.deadline.deadlineAtMs === undefined
+          ? (params.deadline.timeoutMs ?? 60_000)
+          : Math.max(1, params.deadline.deadlineAtMs - Date.now()),
+      ),
     assertOkOrThrowHttpError: async () => {},
     createProviderOperationDeadline: ({
       label,
       timeoutMs,
     }: {
       label: string;
-      timeoutMs?: number;
-    }) => ({ label, timeoutMs }),
+      timeoutMs?: number | (() => number);
+    }) => {
+      const resolvedTimeoutMs = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+      return {
+        label,
+        timeoutMs: resolvedTimeoutMs,
+        deadlineAtMs:
+          typeof resolvedTimeoutMs === "number" ? Date.now() + resolvedTimeoutMs : undefined,
+      };
+    },
     createProviderOperationTimeoutResolver:
-      ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-      () =>
+      ({
+        deadline,
         defaultTimeoutMs,
+      }: {
+        deadline: { deadlineAtMs?: number; label: string; timeoutMs?: number };
+        defaultTimeoutMs: number;
+      }) =>
+      () => {
+        if (typeof deadline.deadlineAtMs !== "number") {
+          return defaultTimeoutMs;
+        }
+        const remainingMs = deadline.deadlineAtMs - Date.now();
+        if (remainingMs <= 0) {
+          throw new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`);
+        }
+        return Math.min(defaultTimeoutMs, remainingMs);
+      },
     resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       defaultTimeoutMs,
     resolveProviderHttpRequestConfig: (params: {
@@ -62,7 +113,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       headers: new Headers(params.defaultHeaders),
       dispatcherPolicy: undefined,
     }),
-    waitProviderOperationPollInterval: async () => {},
   };
 });
 
@@ -76,6 +126,7 @@ afterEach(() => {
   postJsonRequestMock.mockReset();
   fetchWithTimeoutMock.mockReset();
   resolveApiKeyForProviderMock.mockClear();
+  vi.useRealTimers();
 });
 
 function mockSuccessfulBytePlusTask(params?: { model?: string }) {
@@ -244,6 +295,51 @@ describe("byteplus video generation provider", () => {
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
     ).rejects.toThrow("BytePlus generated video download exceeds 1 bytes");
+  });
+
+  it("shares one wall-clock deadline across download headers and body", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task_slow_download" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task_slow_download",
+          status: "succeeded",
+          content: { video_url: "https://example.com/slow.mp4" },
+        }),
+      )
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(1_090);
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            async pull(controller) {
+              controller.enqueue(new Uint8Array([1]));
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 20);
+              });
+            },
+          }),
+          { headers: { "content-type": "video/mp4" } },
+        );
+      });
+
+    const result = buildBytePlusVideoGenerationProvider().generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-pro-250528",
+      prompt: "slow download",
+      timeoutMs: 100,
+      cfg: {},
+    });
+    const assertion = expect(result).rejects.toThrow(
+      "BytePlus generated video download timed out after 100ms",
+    );
+
+    await vi.advanceTimersByTimeAsync(11);
+    await assertion;
   });
 
   it("keeps the unified model for image requests and lowercases resolution", async () => {

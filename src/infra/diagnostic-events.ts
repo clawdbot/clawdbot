@@ -1,5 +1,6 @@
 // Defines and sanitizes runtime diagnostic event payloads.
 import { randomUUID } from "node:crypto";
+import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
@@ -365,6 +366,29 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
   reason: string;
 };
 
+/**
+ * Session-correlated embedded-runner execution milestone. Emitted for every
+ * phase transition so external status surfaces can render turn startup
+ * without a control-UI subscription. `phase` is the closed
+ * EmbeddedAgentExecutionPhase contract (type-only import keeps this module
+ * runtime-independent of the agents layer).
+ */
+type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
+  type: "run.execution_phase";
+  sessionKey?: string;
+  sessionId: string;
+  runId: string;
+  phase: EmbeddedAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  firstModelCallStarted?: boolean;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -428,6 +452,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   action: "warn" | "block";
   detector:
     | "generic_repeat"
+    | "argument_churn"
     | "unknown_tool_repeat"
     | "known_poll_no_progress"
     | "global_circuit_breaker"
@@ -458,6 +483,8 @@ type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
   toolOwner?: string;
   toolCallId?: string;
   paramsSummary?: DiagnosticToolParamsSummary;
+  /** Deterministic mutation classification computed before tool execution. */
+  mutatingAction?: boolean;
 };
 
 export type DiagnosticToolExecutionStartedEvent = DiagnosticToolExecutionBaseEvent & {
@@ -774,6 +801,7 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
+  | DiagnosticRunExecutionPhaseEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
@@ -917,6 +945,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.completed",
   "model.call.error",
   "run.progress",
+  "run.execution_phase",
   "harness.run.completed",
   "harness.run.error",
   "context.assembled",

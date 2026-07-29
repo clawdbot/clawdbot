@@ -10,7 +10,7 @@ import {
   hasSessionAutoModelFallbackProvenance,
 } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
@@ -21,7 +21,10 @@ import {
   toPublicPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { listActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
+import {
+  listActiveDegradedSecretOwners,
+  redactSecretDegradationReason,
+} from "../secrets/runtime-degraded-state.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
@@ -210,7 +213,7 @@ function selectRecentSessionCandidates(
 
 function listSessionCandidates(storePath: string, agentId?: string) {
   return (
-    listSessionEntries({
+    listSessionEntriesReadOnly({
       ...(agentId ? { agentId } : {}),
       storePath,
     })
@@ -570,13 +573,17 @@ export async function getStatusSummary(
     channelSummary,
     queuedSystemEvents,
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
-      ({ ownerKind, ownerId, state, paths: ownerPaths, reason }) => ({
-        ownerKind,
-        ownerId,
-        state,
-        paths: ownerPaths,
-        reason,
-      }),
+      ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
+        const redactedReason: string = redactSecretDegradationReason(reason);
+        return {
+          ownerKind,
+          ownerId,
+          state,
+          degradationState: degradationState ?? "cold",
+          paths: ownerPaths,
+          reason: redactedReason,
+        };
+      },
     ),
     degradedPlugins: listActiveDegradedPlugins().map(({ pluginId, state, diagnostic }) => ({
       pluginId,

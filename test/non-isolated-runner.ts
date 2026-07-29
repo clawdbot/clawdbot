@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
+import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -363,6 +364,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     vi.clearAllMocks();
     resetOpenClawGlobalRunState();
     resetOpenClawGlobalDiagnosticState();
+    // Named plugin runtimes intentionally survive duplicate module evaluation in production.
+    // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
+    clearNamedPluginRuntimeStoresForTest();
     vi.resetModules();
     const internals = this as unknown as TestRunnerInternals;
     internals.moduleRunner?.mocker?.reset?.();

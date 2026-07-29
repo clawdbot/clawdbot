@@ -15,10 +15,11 @@ function completedRun(
     success?: boolean;
     sessionKey?: string;
     runId?: string;
-    enabled?: boolean;
+    mode?: "off" | "propose" | "auto";
     skillWorkshopAvailable?: boolean;
     compacted?: boolean;
     modelMetadata?: boolean;
+    modelIterations?: number;
   } = {},
 ): SkillExperienceReviewParams {
   const iterations = options.iterations ?? 10;
@@ -53,13 +54,16 @@ function completedRun(
             authProfileId: "openai:work",
           }),
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
+      ...(options.modelIterations === undefined
+        ? {}
+        : { modelIterations: options.modelIterations }),
       compacted: options.compacted,
       trigger: "user",
     },
     config: {
       skills: {
         workshop: {
-          autonomous: { enabled: options.enabled ?? true },
+          autonomous: { mode: options.mode ?? "propose" },
         },
       },
     },
@@ -92,12 +96,42 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
+  it("uses exact harness iterations for a Codex-style projected trajectory", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ iterations: 1, modelIterations: 10 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
+    scheduler.clear();
+  });
+
+  it("does not infer iterations when a harness explicitly reports none", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ iterations: 10, modelIterations: 0 }));
+    await vi.runAllTimersAsync();
+
+    expect(runReview).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
   it("rechecks current autonomy and tool policy before a delayed review", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
     const prepareReview = vi.fn(async (candidate) =>
       prepareSkillExperienceReviewCandidate(candidate, {
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
         tools: { deny: ["skill_workshop"] },
       }),
     );
@@ -126,7 +160,7 @@ describe("skill experience review scheduler", () => {
     };
     await expect(
       prepareSkillExperienceReviewCandidate(candidate, {
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
         channels: {
           whatsapp: {
             groups: { "safe-room": { tools: { deny: ["skill_workshop"] } } },
@@ -145,7 +179,7 @@ describe("skill experience review scheduler", () => {
           modelIterations: 10,
         },
         {
-          skills: { workshop: { autonomous: { enabled: true } } },
+          skills: { workshop: { autonomous: { mode: "propose" } } },
           agents: { defaults: { sandbox: { mode: "non-main" } } },
         },
       ),
@@ -163,7 +197,7 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun({ iterations: 9 }));
     scheduler.schedule(completedRun({ success: false }));
     scheduler.schedule(completedRun({ compacted: true, sessionKey: "agent:main:compacted" }));
-    scheduler.schedule(completedRun({ enabled: false }));
+    scheduler.schedule(completedRun({ mode: "off" }));
     scheduler.schedule(
       completedRun({ modelMetadata: false, sessionKey: "agent:main:missing-model" }),
     );

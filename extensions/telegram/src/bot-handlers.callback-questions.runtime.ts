@@ -1,24 +1,22 @@
 // Telegram ask_user callback resolution and toast feedback.
-import {
-  resolveQuestionOverGateway,
-  type ResolveQuestionOverGatewayParams,
-} from "openclaw/plugin-sdk/question-gateway-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
 
+type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
 type QuestionResolver = (
-  params: ResolveQuestionOverGatewayParams,
-) => ReturnType<typeof resolveQuestionOverGateway>;
+  params: ResolveQuestionParams,
+) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
 
 export async function handleTelegramQuestionCallback(params: {
   callback: TelegramQuestionCallback;
-  cfg: ResolveQuestionOverGatewayParams["cfg"];
+  cfg: ResolveQuestionParams["cfg"];
   senderId: string;
   feedback: (text: string, terminal: boolean) => Promise<unknown>;
   resolveQuestion?: QuestionResolver;
 }): Promise<void> {
   let result: Awaited<ReturnType<QuestionResolver>>;
   try {
-    result = await (params.resolveQuestion ?? resolveQuestionOverGateway)({
+    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
       cfg: params.cfg,
       questionId: params.callback.questionId,
       optionIndex: params.callback.optionIndex,

@@ -28,6 +28,7 @@ import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-ap
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
+  isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
@@ -254,7 +255,10 @@ export async function resolveApprovalDecisionOrUndefined(params: {
       approvalId: params.approvalId,
       preResolvedDecision: params.preResolvedDecision,
     });
-  } catch {
+  } catch (error) {
+    if (isExecApprovalRunAbortedError(error)) {
+      throw error;
+    }
     params.onFailure();
     return undefined;
   }

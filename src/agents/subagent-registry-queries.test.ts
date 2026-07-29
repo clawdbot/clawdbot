@@ -116,6 +116,45 @@ describe("subagent registry query regressions", () => {
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
   });
 
+  it("counts collectors against their stable spawning-session owner", () => {
+    const stableOwner = "agent:main:telegram:default:direct:456";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-routed-collector",
+        childSessionKey: "agent:worker:subagent:routed",
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        collect: true,
+        swarmRequesterSessionKey: stableOwner,
+        createdAt: Date.now(),
+        execution: { status: "queued" },
+      }),
+    ]);
+
+    expect(countActiveRunsForSessionFromRuns(runs, stableOwner)).toBe(1);
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(0);
+  });
+
+  it("filters collector children out of announce admission counts", () => {
+    const owner = "agent:main:main";
+    const runs = toRunMap(
+      Array.from({ length: 50 }, (_, index) =>
+        makeRun({
+          runId: `collector-${index}`,
+          childSessionKey: `agent:worker:subagent:collector-${index}`,
+          requesterSessionKey: owner,
+          collect: true,
+          swarmRequesterSessionKey: owner,
+          createdAt: Date.now(),
+          execution: { status: "running", startedAt: Date.now() },
+        }),
+      ),
+    );
+
+    expect(countActiveRunsForSessionFromRuns(runs, owner)).toBe(50);
+    expect(countActiveRunsForSessionFromRuns(runs, owner, { collect: false })).toBe(0);
+  });
+
   it("does not count stale unended descendants as pending work", () => {
     const now = Date.now();
     const parentSessionKey = "agent:main:subagent:parent-stale-desc";

@@ -123,6 +123,13 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
     ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
     ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
+    ...(states.some((state) => state.requesterYieldBatch === true)
+      ? { requesterYieldBatch: true }
+      : {}),
+    ...(states.some((state) => state.afterRequesterYield === true)
+      ? { afterRequesterYield: true }
+      : {}),
+    ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
   };
 }
@@ -141,8 +148,25 @@ function deferRequesterSettleWakeBatch(params: {
       Date.now() + REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0],
     ),
     batchRunIds: [...params.batchRunIds],
+    ...(params.state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+    ...(params.state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+    ...(params.state.rearmGeneration !== undefined
+      ? { rearmGeneration: params.state.rearmGeneration }
+      : {}),
     ...(params.state.lastError !== undefined ? { lastError: params.state.lastError } : {}),
   });
+}
+
+function completeRequesterSettleWakeBatch(params: {
+  runIds: readonly string[];
+  state: RequesterSettleWakeBatchState;
+  completeBatch(runIds: readonly string[], rearmGeneration?: number): void;
+}): void {
+  if (params.state.rearmGeneration === undefined) {
+    params.completeBatch(params.runIds);
+    return;
+  }
+  params.completeBatch(params.runIds, params.state.rearmGeneration);
 }
 
 /**
@@ -155,19 +179,30 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   requesterOrigin?: DeliveryContext;
   settledEntry: SubagentRunRecord;
   transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
-  completeBatch(runIds: readonly string[]): void;
+  completeBatch(runIds: readonly string[], rearmGeneration?: number): void;
   signal?: AbortSignal;
 }): Promise<boolean> {
   if (params.signal?.aborted) {
     return false;
   }
+  const completeBatch = (runIds: readonly string[], rearmGeneration?: number): void => {
+    if (rearmGeneration === undefined) {
+      params.completeBatch(runIds);
+      return;
+    }
+    params.completeBatch(runIds, rearmGeneration);
+  };
   const requesterSessionKey = params.requesterSessionKey.trim();
   const initialState = params.settledEntry.requesterSettleWake;
   if (!requesterSessionKey || !initialState) {
     return false;
   }
   if (isCronSessionKey(requesterSessionKey)) {
-    params.completeBatch([params.settledEntry.runId]);
+    completeRequesterSettleWakeBatch({
+      runIds: [params.settledEntry.runId],
+      state: initialState,
+      completeBatch,
+    });
     return false;
   }
 
@@ -183,12 +218,17 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     registryRuntime.hasDescendantRunAwaitingSettle(requesterSessionKey, currentSettledEntry.runId);
 
   const frozenBatchRunIds = currentSettledEntry.requesterSettleWake.batchRunIds;
+  const currentRearmGeneration = currentSettledEntry.requesterSettleWake.rearmGeneration;
   let settledBatch: SubagentRunRecord[];
   if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
     settledBatch = frozenBatchRunIds
       .map((runId) => runsById.get(runId))
-      .filter((entry): entry is SubagentRunRecord => Boolean(entry?.requesterSettleWake));
+      .filter(
+        (entry): entry is SubagentRunRecord =>
+          Boolean(entry?.requesterSettleWake) &&
+          entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
+      );
   } else {
     settledBatch = buildConnectedSettledWave(
       requesterRuns.filter((entry) => entry.requesterSettleWake && hasSubagentRunEnded(entry)),
@@ -200,11 +240,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   }
 
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
+  const selectedState = readSharedBatchState(settledBatch);
   if (requesterHasUnsettledDescendants()) {
     if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
       deferRequesterSettleWakeBatch({
         batchRunIds,
-        state: readSharedBatchState(settledBatch),
+        state: selectedState,
         transitionBatch: params.transitionBatch,
       });
     }
@@ -214,18 +255,33 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const hasUndeliveredRequiredCompletion = requiredSettled.some(
     (entry) => entry.delivery?.status !== "delivered",
   );
+  // A yielded batch owns a rearm generation even when its child settles later.
+  // Otherwise a delivered single child clears the batch before its requester wakes.
+  const requesterYieldedAfterDelivery =
+    selectedState.afterRequesterYield === true ||
+    (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
   if (
     requiredSettled.length === 0 ||
-    (requiredSettled.length < 2 && !hasUndeliveredRequiredCompletion) ||
+    (requiredSettled.length < 2 &&
+      !hasUndeliveredRequiredCompletion &&
+      !requesterYieldedAfterDelivery) ||
     getSubagentDepthFromSessionStore(requesterSessionKey) >= 1
   ) {
-    params.completeBatch(batchRunIds);
+    completeRequesterSettleWakeBatch({
+      runIds: batchRunIds,
+      state: selectedState,
+      completeBatch,
+    });
     return false;
   }
 
   const { entry: requesterEntry } = loadRequesterSessionEntry(requesterSessionKey);
   if (!hasUsableSessionEntry(requesterEntry)) {
-    params.completeBatch(batchRunIds);
+    completeRequesterSettleWakeBatch({
+      runIds: batchRunIds,
+      state: selectedState,
+      completeBatch,
+    });
     return false;
   }
 
@@ -241,7 +297,14 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const wakeMessage = buildRequesterSettleWakeMessage({ findings });
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
-  const wakeKeyBase = `requester-settle:${requesterSessionKey}:${batchRunIds.join(",")}`;
+  const wakeKeyBase = [
+    `requester-settle:${requesterSessionKey}:${batchRunIds.join(",")}`,
+    selectedState.rearmGeneration === undefined
+      ? undefined
+      : `yield-${selectedState.rearmGeneration}`,
+  ]
+    .filter(Boolean)
+    .join(":");
   if (activeRequesterSettleWakeBatches.has(wakeKeyBase)) {
     return false;
   }
@@ -278,7 +341,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       attemptIndex = Math.max(0, state.attemptCount - 1);
     } else {
       if (state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
-        params.completeBatch(batchRunIds);
+        completeRequesterSettleWakeBatch({
+          runIds: batchRunIds,
+          state,
+          completeBatch,
+        });
         return false;
       }
       attemptIndex = state.attemptCount;
@@ -286,6 +353,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         status: "dispatching",
         attemptCount: state.attemptCount + 1,
         batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
       };
       params.transitionBatch(batchRunIds, state);
     }
@@ -321,7 +391,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
         retryDelayMs === undefined
       ) {
-        params.completeBatch(batchRunIds);
+        completeRequesterSettleWakeBatch({
+          runIds: batchRunIds,
+          state,
+          completeBatch,
+        });
         return false;
       }
       const nextAttemptAt = Date.now() + retryDelayMs;
@@ -331,6 +405,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         replayCount,
         nextAttemptAt,
         batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
         lastError,
       };
       params.transitionBatch(batchRunIds, state);
@@ -340,18 +417,30 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       return false;
     }
     if (delivery.delivered) {
-      params.completeBatch(batchRunIds);
+      completeRequesterSettleWakeBatch({
+        runIds: batchRunIds,
+        state,
+        completeBatch,
+      });
       return true;
     }
     if (delivery.terminal === true || delivery.reason === "requester_abandoned") {
-      params.completeBatch(batchRunIds);
+      completeRequesterSettleWakeBatch({
+        runIds: batchRunIds,
+        state,
+        completeBatch,
+      });
       return false;
     }
 
     const attemptCount = attemptIndex + 1;
     const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptIndex];
     if (attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS || retryDelayMs === undefined) {
-      params.completeBatch(batchRunIds);
+      completeRequesterSettleWakeBatch({
+        runIds: batchRunIds,
+        state,
+        completeBatch,
+      });
       return false;
     }
     const lastError = delivery.error ?? delivery.reason ?? "undelivered";
@@ -361,6 +450,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       attemptCount,
       nextAttemptAt,
       batchRunIds,
+      ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+      ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+      ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
       lastError,
     });
     logWarn(

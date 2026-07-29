@@ -12,6 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -375,16 +376,10 @@ export type RefreshMemoryWikiIndexesResult = {
 };
 
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
-  const dirPath = path.join(rootDir, relativeDir);
-  const entries = await fs
-    .readdir(dirPath, { withFileTypes: true, recursive: true })
-    .catch(() => []);
+  const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => {
-      const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
-      return path.relative(rootDir, absPath).split(path.sep).join("/");
-    })
+    .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
+    .map((entry) => entry.relativePath.split(path.sep).join("/"))
     .filter((relativePath) => path.basename(relativePath) !== "index.md")
     .toSorted((left, right) => left.localeCompare(right));
 }

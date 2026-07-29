@@ -6,7 +6,8 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
+import type { BedrockOptions } from "./bedrock-options.js";
+import { streamSimpleBedrock } from "./stream.runtime.js";
 import { streamTesting as testing } from "./test-support.js";
 
 function bedrockModel(overrides: Record<string, unknown>) {
@@ -52,9 +53,17 @@ async function* streamEvents(events: unknown[]) {
   }
 }
 
+function streamBedrockForTest(
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  context: Parameters<typeof streamSimpleBedrock>[1],
+  options: BedrockOptions = {},
+) {
+  return streamSimpleBedrock(model, context, options as never);
+}
+
 async function captureClientRegion(
-  model: Parameters<typeof streamBedrock>[0],
-  options: Parameters<typeof streamBedrock>[2] = {},
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  options: BedrockOptions = {},
 ): Promise<string> {
   const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
     $metadata: { httpStatusCode: 200 },
@@ -64,7 +73,7 @@ async function captureClientRegion(
     ]),
   } as never);
 
-  await streamBedrock(
+  await streamBedrockForTest(
     model,
     { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
     options,
@@ -77,6 +86,40 @@ async function captureClientRegion(
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+describe("Bedrock inbound image base64", () => {
+  const model = () => bedrockModel({ input: ["text", "image"] });
+  const userImage = (data: string) =>
+    ({
+      messages: [{ role: "user", content: [{ type: "image", mimeType: "image/png", data }] }],
+    }) as never;
+
+  it("rejects malformed base64 and decodes a valid PNG without Node Buffer", () => {
+    expect(() => testing.convertMessages(userImage("!!!not-base64!!!"), model(), "none")).toThrow(
+      /Amazon Bedrock image content has malformed base64/,
+    );
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const messages = (() => {
+      const nodeBuffer = globalThis.Buffer;
+      try {
+        Reflect.deleteProperty(globalThis, "Buffer");
+        return testing.convertMessages(userImage(png), model(), "none");
+      } finally {
+        Reflect.set(globalThis, "Buffer", nodeBuffer);
+      }
+    })();
+    const firstMessage = messages[0];
+    expect(firstMessage).toBeDefined();
+    if (!firstMessage) {
+      throw new Error("expected at least one message");
+    }
+    const content = firstMessage.content as Array<{
+      image?: { source?: { bytes?: Uint8Array } };
+    }>;
+    expect(content[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
+  });
 });
 
 describe("Bedrock tool-result replay", () => {
@@ -239,6 +282,20 @@ describe("Bedrock profile endpoint resolution", () => {
       expectedRegion: "eu-west-1",
     },
     {
+      name: "blank primary region with a fallback env",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: "   ",
+      fallbackRegion: "eu-west-1",
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "blank region env vars",
+      modelId: "amazon.nova-micro-v1:0",
+      ambientRegion: " ",
+      fallbackRegion: "\t",
+      expectedRegion: "us-east-1",
+    },
+    {
       name: "application inference-profile ARN",
       modelId: "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/profile-abc",
       ambientRegion: "us-east-1",
@@ -260,8 +317,12 @@ describe("Bedrock profile endpoint resolution", () => {
     },
   ])(
     "resolves $name to $expectedRegion",
-    async ({ modelId, ambientRegion, explicitRegion, expectedRegion }) => {
+    async ({ modelId, ambientRegion, fallbackRegion, explicitRegion, expectedRegion }) => {
+      vi.stubEnv("AWS_PROFILE", "");
       vi.stubEnv("AWS_REGION", ambientRegion);
+      if (fallbackRegion !== undefined) {
+        vi.stubEnv("AWS_DEFAULT_REGION", fallbackRegion);
+      }
 
       await expect(
         captureClientRegion(
@@ -288,7 +349,7 @@ describe("Bedrock stop reasons", () => {
       ]),
     } as never);
 
-    const result = await streamBedrock(bedrockModel({}), {
+    const result = await streamBedrockForTest(bedrockModel({}), {
       messages: [{ role: "user", content: "Hello", timestamp: 0 }],
     } as never).result();
 
@@ -298,6 +359,34 @@ describe("Bedrock stop reasons", () => {
 });
 
 describe("Bedrock thinking effort mapping", () => {
+  it.each([
+    { reasoning: undefined, expected: "high", maxTokens: 128_000, fields: true },
+    { reasoning: "off" as const, expected: "off", maxTokens: undefined, fields: false },
+  ])(
+    "uses the Opus 5 default for reasoning=$reasoning",
+    ({ reasoning, expected, maxTokens, fields }) => {
+      const model = bedrockModel({
+        id: "global.anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      });
+      const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
+
+      expect(options).toMatchObject({ maxTokens, reasoning: expected });
+      expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual(
+        fields
+          ? {
+              thinking: { type: "adaptive", display: "summarized" },
+              output_config: { effort: "high" },
+            }
+          : undefined,
+      );
+    },
+  );
+
   it.each([
     { reasoning: undefined, expected: "high" },
     { reasoning: "off" as const, expected: "low" },
@@ -562,7 +651,7 @@ describe("Bedrock Fable contract", () => {
       ]),
     } as never);
 
-    const stream = streamBedrock(fableModel(), context(), {
+    const stream = streamBedrockForTest(fableModel(), context(), {
       reasoning: "high",
       temperature: 0.2,
       toolChoice: "any",
@@ -597,7 +686,7 @@ describe("Bedrock Fable contract", () => {
       ]),
     } as never);
 
-    const stream = streamBedrock(fableModel(), context(), {
+    const stream = streamBedrockForTest(fableModel(), context(), {
       reasoning: "high",
       toolChoice: "none",
     });

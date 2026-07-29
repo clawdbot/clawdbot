@@ -1,5 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -249,11 +251,62 @@ class ChatControllerCommandControlsTest {
       assertTrue(create.second.orEmpty().contains("\"agentId\":\"main\""))
       assertTrue(create.second.orEmpty().contains("\"parentSessionKey\":\"main\""))
       assertTrue(create.second.orEmpty().contains("\"emitCommandHooks\":true"))
+      assertTrue(create.second.orEmpty().contains("\"succeedsParent\":false"))
       assertTrue(create.second.orEmpty().contains("\"label\":\"New chat\""))
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
       assertEquals("fresh-session", controller.sessionId.value)
       assertTrue(requests.any { it.first == "chat.history" })
       assertTrue(requests.any { it.first == "sessions.list" })
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun startNewChatRetriesWithoutParentLifecycleAgainstOlderGateway() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      var createCalls = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.create" -> {
+                createCalls += 1
+                if (createCalls == 1) {
+                  throw GatewayRequestRejected(
+                    GatewaySession.ErrorShape(
+                      code = "INVALID_REQUEST",
+                      message =
+                        "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
+                    ),
+                  )
+                }
+                """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
+              }
+              "chat.history" -> """{"sessionId":"fresh-session","messages":[]}"""
+              "health" -> "{}"
+              "sessions.list" -> """{"sessions":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertTrue(controller.startNewChatAwait())
+
+      val creates = requests.filter { it.first == "sessions.create" }
+      assertEquals(2, creates.size)
+      assertTrue(creates[0].second.orEmpty().contains("\"succeedsParent\":false"))
+      assertEquals(false, creates[1].second.orEmpty().contains("\"succeedsParent\""))
+      assertEquals(false, creates[1].second.orEmpty().contains("\"parentSessionKey\""))
+      assertEquals(false, creates[1].second.orEmpty().contains("\"emitCommandHooks\""))
+      assertTrue(creates[1].second.orEmpty().contains("\"agentId\":\"main\""))
+      assertTrue(creates[1].second.orEmpty().contains("\"label\":\"New chat\""))
+      assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
     }
 
   @OptIn(ExperimentalCoroutinesApi::class)

@@ -2,14 +2,27 @@
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 
-export function resolveNextcloudTalkApiCredentials(params: {
+export type NextcloudTalkCredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
+type CredentialResult<T> =
+  | { status: "available"; value: T }
+  | {
+      status: "configured_unavailable";
+      diagnostic: NextcloudTalkCredentialUnavailableDiagnostic;
+    }
+  | { status: "missing" };
+
+export function resolveNextcloudTalkApiCredentialsResult(params: {
   apiUser?: string;
   apiPassword?: unknown;
   apiPasswordFile?: string;
-}): { apiUser: string; apiPassword: string } | undefined {
+  configPath?: string;
+}): CredentialResult<{ apiUser: string; apiPassword: string }> {
   const apiUser = params.apiUser?.trim();
   if (!apiUser) {
-    return undefined;
+    return { status: "missing" };
   }
 
   const inlinePassword = normalizeResolvedSecretInputString({
@@ -17,22 +30,33 @@ export function resolveNextcloudTalkApiCredentials(params: {
     path: "channels.nextcloud-talk.apiPassword",
   });
   if (inlinePassword) {
-    return { apiUser, apiPassword: inlinePassword };
+    return { status: "available", value: { apiUser, apiPassword: inlinePassword } };
   }
 
-  if (!params.apiPasswordFile) {
-    return undefined;
+  if (!params.apiPasswordFile?.trim()) {
+    return { status: "missing" };
   }
-  try {
-    const fileValue = tryReadSecretFileSync(
-      params.apiPasswordFile,
-      "Nextcloud Talk API password",
-      // Existing apiPasswordFile paths may be symlinks or hardlinks. Keep that
-      // contract while gaining the shared credential size and pinned-read checks.
-      { rejectHardlinks: false },
-    );
-    return fileValue ? { apiUser, apiPassword: fileValue } : undefined;
-  } catch {
-    return undefined;
+  const result = tryReadSecretFileSync(
+    params.apiPasswordFile,
+    "Nextcloud Talk API password",
+    // Existing apiPasswordFile paths may be symlinks or hardlinks. Keep that
+    // contract while gaining the shared credential size and pinned-read checks.
+    { rejectHardlinks: false },
+    { configPath: params.configPath ?? "channels.nextcloud-talk.apiPasswordFile" },
+  );
+  if (result.status === "available") {
+    return result.value
+      ? { status: "available", value: { apiUser, apiPassword: result.value } }
+      : { status: "missing" };
   }
+  return result;
+}
+
+export function resolveNextcloudTalkApiCredentials(params: {
+  apiUser?: string;
+  apiPassword?: unknown;
+  apiPasswordFile?: string;
+}): { apiUser: string; apiPassword: string } | undefined {
+  const result = resolveNextcloudTalkApiCredentialsResult(params);
+  return result.status === "available" ? result.value : undefined;
 }

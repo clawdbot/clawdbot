@@ -3,6 +3,7 @@ import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { getProviderPromptState } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { createEmbeddedAttemptExternalAbortController } from "./attempt-abort.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
@@ -38,6 +39,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   activeContextEngine?: SessionManagerInput["activeContextEngine"];
   agentDir: string;
   effectiveCwd: string;
+  effectiveFsWorkspaceOnly: boolean;
   effectiveWorkspace: string;
   initialSystemPrompt: string;
   isRawModelRun: boolean;
@@ -166,6 +168,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     attempt,
     computerContextEpoch: input.contextGuards.computerContextEpoch,
     effectiveCwd: input.effectiveCwd,
+    effectiveFsWorkspaceOnly: input.effectiveFsWorkspaceOnly,
     effectiveWorkspace: input.effectiveWorkspace,
     getPrePromptMessageCount: () => state.prePromptMessageCount,
     getPromptCache: () => state.promptCache,
@@ -176,6 +179,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId: input.sessionManager.sessionAgentId,
     sessionManager,
     settingsManager,
+    sandbox: input.transport.sandbox,
   });
   input.lifecycle.onContextGuardsInstalled(contextGuards.remove);
 
@@ -227,6 +231,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey: input.transport.sandboxSessionKey,
     ...(input.transport.sandbox !== undefined ? { sandbox: input.transport.sandbox } : {}),
     codeModeControlsEnabled: input.transport.codeModeControlsEnabled,
+    providerPromptState: {
+      state: getProviderPromptState(attempt.runId),
+      effectiveContextTokenBudget: Math.max(
+        1,
+        Math.floor(attempt.contextTokenBudget ?? attempt.model.contextWindow),
+      ),
+    },
   });
   promptCacheRetentionRef.current = transport.effectivePromptCacheRetention;
 

@@ -1,16 +1,20 @@
-import { Type, type TProperties, type TSchema } from "typebox";
+import { Type, type Static, type TProperties } from "typebox";
 import { Value } from "typebox/value";
 import { closedObject } from "./closed-object.js";
 import {
-  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
-  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
-  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
-  type WorkerErrorShape,
-  WorkerErrorShapeSchema,
-  type WorkerTranscriptMessage,
 } from "./worker-admission.js";
+import {
+  LiveIntegerSchema,
+  LiveSequenceSchema,
+  LiveTextSchema,
+  WorkerErrorResponseFrameSchema,
+  WorkerFrameIdSchema,
+  WorkerIdentifierSchema,
+  WorkerTranscriptAssistantDiagnosticSchema,
+  WorkerTranscriptUsageSchema,
+} from "./worker-protocol-primitives.js";
 
 export const WORKER_INFERENCE_PROTOCOL_FEATURE = "worker-inference-v1";
 export const WORKER_INFERENCE_METHODS = [
@@ -19,87 +23,17 @@ export const WORKER_INFERENCE_METHODS = [
 ] as const;
 export const WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES = 25 * 1024 * 1024;
 export const WORKER_INFERENCE_MAX_CONTEXT_MESSAGES = 1_024;
-export const WORKER_INFERENCE_MAX_TOOLS = 256;
+const WORKER_INFERENCE_MAX_TOOLS = 256;
 export const WORKER_INFERENCE_MAX_OUTPUT_TOKENS = 1_000_000;
-
-const WorkerIdentifierSchema = Type.String({
-  minLength: 1,
-  maxLength: WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
-  pattern: "^\\S(?:.*\\S)?$",
-});
-const WorkerFrameIdSchema = Type.String({
-  minLength: 1,
-  maxLength: WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
-});
-const WorkerErrorResponseFrameSchema = closedObject({
-  type: Type.Literal("res"),
-  id: WorkerFrameIdSchema,
-  ok: Type.Literal(false),
-  error: WorkerErrorShapeSchema,
-});
 
 function workerInferenceObject<const Properties extends TProperties>(properties: Properties) {
   return closedObject(properties);
 }
 
-const LiveTextSchema = Type.String({
-  maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-});
 const InferenceTextSchema = Type.String({
   maxLength: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 });
 const OptionalInferenceTextSchema = Type.Optional(InferenceTextSchema);
-const LiveIntegerSchema = Type.Integer({
-  minimum: 0,
-  maximum: Number.MAX_SAFE_INTEGER,
-});
-const LiveSequenceSchema = Type.Integer({
-  minimum: 1,
-  maximum: Number.MAX_SAFE_INTEGER,
-});
-
-const WorkerTranscriptUsageSchema = closedObject({
-  input: Type.Number({ minimum: 0 }),
-  output: Type.Number({ minimum: 0 }),
-  cacheRead: Type.Number({ minimum: 0 }),
-  cacheWrite: Type.Number({ minimum: 0 }),
-  contextUsage: Type.Optional(
-    Type.Union([
-      closedObject({
-        state: Type.Literal("available"),
-        promptTokens: Type.Number({ minimum: 0 }),
-        totalTokens: Type.Number({ minimum: 0 }),
-      }),
-      closedObject({ state: Type.Literal("unavailable") }),
-    ]),
-  ),
-  totalTokens: Type.Number({ minimum: 0 }),
-  cost: closedObject({
-    input: Type.Number({ minimum: 0 }),
-    output: Type.Number({ minimum: 0 }),
-    cacheRead: Type.Number({ minimum: 0 }),
-    cacheWrite: Type.Number({ minimum: 0 }),
-    total: Type.Number({ minimum: 0 }),
-    totalOrigin: Type.Optional(Type.Literal("provider-billed")),
-  }),
-});
-
-const WorkerTranscriptAssistantDiagnosticSchema = closedObject({
-  type: WorkerIdentifierSchema,
-  timestamp: Type.Integer({ minimum: 0 }),
-  error: Type.Optional(
-    closedObject({
-      name: Type.Optional(Type.String({ maxLength: 256 })),
-      message: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-      stack: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-      code: Type.Optional(Type.Union([Type.String({ maxLength: 256 }), Type.Number()])),
-    }),
-  ),
-  details: Type.Optional(
-    Type.Record(Type.String({ minLength: 1, maxLength: 256 }), Type.Unknown()),
-  ),
-});
-
 const WorkerInferenceTextContentSchema = workerInferenceObject({
   type: Type.Literal("text"),
   text: InferenceTextSchema,
@@ -211,12 +145,12 @@ const WorkerInferenceToolSchema = workerInferenceObject({
   parameters: Type.Unknown(),
 });
 
-export const WorkerInferenceModelRefSchema: TSchema = workerInferenceObject({
+export const WorkerInferenceModelRefSchema = workerInferenceObject({
   provider: WorkerIdentifierSchema,
   model: WorkerIdentifierSchema,
 });
 
-export const WorkerInferenceContextSchema: TSchema = workerInferenceObject({
+const WorkerInferenceContextSchema = workerInferenceObject({
   systemPrompt: Type.Optional(InferenceTextSchema),
   messages: Type.Array(WorkerInferenceMessageSchema, {
     maxItems: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
@@ -250,7 +184,7 @@ const WorkerInferenceThinkingBudgetsSchema = workerInferenceObject({
   max: Type.Optional(WorkerInferenceThinkingBudgetSchema),
 });
 
-export const WorkerInferenceOptionsSchema: TSchema = workerInferenceObject({
+export const WorkerInferenceOptionsSchema = workerInferenceObject({
   temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
   maxTokens: Type.Optional(
     Type.Integer({ minimum: 1, maximum: WORKER_INFERENCE_MAX_OUTPUT_TOKENS }),
@@ -266,18 +200,18 @@ const WorkerInferenceIdentityProperties = {
   turnId: WorkerIdentifierSchema,
 };
 
-export const WorkerInferenceStartParamsSchema: TSchema = workerInferenceObject({
+const WorkerInferenceStartParamsSchema = workerInferenceObject({
   ...WorkerInferenceIdentityProperties,
   modelRef: WorkerInferenceModelRefSchema,
   context: WorkerInferenceContextSchema,
   options: WorkerInferenceOptionsSchema,
 });
 
-export const WorkerInferenceStartResultSchema: TSchema = workerInferenceObject({
+const WorkerInferenceStartResultSchema = workerInferenceObject({
   status: Type.Union([Type.Literal("accepted"), Type.Literal("replayed")]),
 });
 
-export const WorkerInferenceErrorReasonSchema: TSchema = Type.Union([
+const WorkerInferenceErrorReasonSchema = Type.Union([
   Type.Literal("model-not-approved"),
   Type.Literal("invalid-context"),
   Type.Literal("epoch-mismatch"),
@@ -286,13 +220,13 @@ export const WorkerInferenceErrorReasonSchema: TSchema = Type.Union([
   Type.Literal("cancelled"),
 ]);
 
-export const WorkerInferenceErrorShapeSchema: TSchema = workerInferenceObject({
+const WorkerInferenceErrorShapeSchema = workerInferenceObject({
   code: Type.Union([Type.Literal("INVALID_REQUEST"), Type.Literal("UNAVAILABLE")]),
   message: Type.String({ minLength: 1, maxLength: 256 }),
   details: workerInferenceObject({ reason: WorkerInferenceErrorReasonSchema }),
 });
 
-export const WorkerInferenceStartRequestFrameSchema: TSchema = workerInferenceObject({
+export const WorkerInferenceStartRequestFrameSchema = workerInferenceObject({
   type: Type.Literal("req"),
   id: WorkerFrameIdSchema,
   method: Type.Literal(WORKER_INFERENCE_METHODS[0]),
@@ -313,21 +247,21 @@ const WorkerInferenceErrorResponseFrameSchema = workerInferenceObject({
   error: WorkerInferenceErrorShapeSchema,
 });
 
-export const WorkerInferenceStartResponseFrameSchema: TSchema = Type.Union([
+export const WorkerInferenceStartResponseFrameSchema = Type.Union([
   WorkerInferenceStartSuccessResponseFrameSchema,
   WorkerInferenceErrorResponseFrameSchema,
   WorkerErrorResponseFrameSchema,
 ]);
 
-export const WorkerInferenceCancelParamsSchema: TSchema = workerInferenceObject({
+const WorkerInferenceCancelParamsSchema = workerInferenceObject({
   ...WorkerInferenceIdentityProperties,
 });
 
-export const WorkerInferenceCancelResultSchema: TSchema = workerInferenceObject({
+const WorkerInferenceCancelResultSchema = workerInferenceObject({
   status: Type.Literal("cancelled"),
 });
 
-export const WorkerInferenceCancelRequestFrameSchema: TSchema = workerInferenceObject({
+export const WorkerInferenceCancelRequestFrameSchema = workerInferenceObject({
   type: Type.Literal("req"),
   id: WorkerFrameIdSchema,
   method: Type.Literal(WORKER_INFERENCE_METHODS[1]),
@@ -341,13 +275,13 @@ const WorkerInferenceCancelSuccessResponseFrameSchema = workerInferenceObject({
   payload: WorkerInferenceCancelResultSchema,
 });
 
-export const WorkerInferenceCancelResponseFrameSchema: TSchema = Type.Union([
+export const WorkerInferenceCancelResponseFrameSchema = Type.Union([
   WorkerInferenceCancelSuccessResponseFrameSchema,
   WorkerInferenceErrorResponseFrameSchema,
   WorkerErrorResponseFrameSchema,
 ]);
 
-export const WorkerInferenceResolvedModelSchema: TSchema = workerInferenceObject({
+const WorkerInferenceResolvedModelSchema = workerInferenceObject({
   api: WorkerIdentifierSchema,
   provider: WorkerIdentifierSchema,
   model: WorkerIdentifierSchema,
@@ -399,13 +333,13 @@ const WorkerInferenceStreamEventSchema = Type.Union([
   workerInferenceObject({ type: Type.Literal("toolcall_end"), contentIndex: LiveIntegerSchema }),
 ]);
 
-export const WorkerInferenceEventParamsSchema: TSchema = workerInferenceObject({
+const WorkerInferenceEventParamsSchema = workerInferenceObject({
   ...WorkerInferenceIdentityProperties,
   seq: LiveSequenceSchema,
   event: WorkerInferenceStreamEventSchema,
 });
 
-export const WorkerInferenceEventFrameSchema: TSchema = workerInferenceObject({
+const WorkerInferenceEventFrameSchema = workerInferenceObject({
   type: Type.Literal("event"),
   event: Type.Literal("worker.inference.event"),
   payload: WorkerInferenceEventParamsSchema,
@@ -423,147 +357,49 @@ const WorkerInferenceTerminalErrorSchema = workerInferenceObject({
   usage: Type.Optional(WorkerTranscriptUsageSchema),
 });
 
-export const WorkerInferenceTerminalOutcomeSchema: TSchema = Type.Union([
+const WorkerInferenceTerminalOutcomeSchema = Type.Union([
   WorkerInferenceTerminalDoneSchema,
   WorkerInferenceTerminalErrorSchema,
 ]);
 
-export const WorkerInferenceTerminalParamsSchema: TSchema = workerInferenceObject({
+const WorkerInferenceTerminalParamsSchema = workerInferenceObject({
   ...WorkerInferenceIdentityProperties,
   seq: LiveSequenceSchema,
   outcome: WorkerInferenceTerminalOutcomeSchema,
 });
 
-export const WorkerInferenceTerminalFrameSchema: TSchema = workerInferenceObject({
+const WorkerInferenceTerminalFrameSchema = workerInferenceObject({
   type: Type.Literal("event"),
   event: Type.Literal("worker.inference.terminal"),
   payload: WorkerInferenceTerminalParamsSchema,
 });
 
-type WorkerInferenceUserMessage = Omit<
-  Extract<WorkerTranscriptMessage, { role: "user" }>,
-  "content"
-> & {
-  content: string | Extract<WorkerTranscriptMessage, { role: "user" }>["content"];
-  runtimeContextCarrier?: boolean;
-};
-type WorkerInferenceContextMessage =
-  | WorkerInferenceUserMessage
-  | Extract<WorkerTranscriptMessage, { role: "assistant" | "toolResult" }>;
-type WorkerInferenceTool = { name: string; description: string; parameters: unknown };
-type WorkerInferenceIdentity = {
-  runEpoch: number;
-  sessionId: string;
-  runId: string;
-  turnId: string;
-};
-type WorkerInferenceThinkingBudgets = {
-  minimal?: number;
-  low?: number;
-  medium?: number;
-  high?: number;
-  max?: number;
-};
-type WorkerInferenceUsage = Extract<WorkerTranscriptMessage, { role: "assistant" }>["usage"];
-type WorkerInferenceAssistantMessage = Omit<
-  Extract<WorkerTranscriptMessage, { role: "assistant" }>,
-  "diagnostics" | "stopReason" | "errorMessage" | "errorCode" | "errorType" | "errorBody"
-> & { stopReason: "stop" | "length" | "toolUse" };
-
-export type WorkerInferenceModelRef = { provider: string; model: string };
-export type WorkerInferenceContext = {
-  systemPrompt?: string;
-  messages: WorkerInferenceContextMessage[];
-  tools?: WorkerInferenceTool[];
-};
-export type WorkerInferenceOptions = {
-  temperature?: number;
-  maxTokens?: number;
-  reasoning?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
-  thinkingBudgets?: WorkerInferenceThinkingBudgets;
-};
-export type WorkerInferenceStartParams = WorkerInferenceIdentity & {
-  modelRef: WorkerInferenceModelRef;
-  context: WorkerInferenceContext;
-  options: WorkerInferenceOptions;
-};
-export type WorkerInferenceStartResult = { status: "accepted" | "replayed" };
-export type WorkerInferenceErrorReason =
-  | "model-not-approved"
-  | "invalid-context"
-  | "epoch-mismatch"
-  | "session-not-attached"
-  | "provider-error"
-  | "cancelled";
-export type WorkerInferenceErrorShape = {
-  code: "INVALID_REQUEST" | "UNAVAILABLE";
-  message: string;
-  details: { reason: WorkerInferenceErrorReason };
-};
-export type WorkerInferenceStartRequestFrame = {
-  type: "req";
-  id: string;
-  method: "worker.inference.start";
-  params: WorkerInferenceStartParams;
-};
-type WorkerInferenceResponseErrorFrame = {
-  type: "res";
-  id: string;
-  ok: false;
-  error: WorkerInferenceErrorShape | WorkerErrorShape;
-};
-export type WorkerInferenceStartResponseFrame =
-  | { type: "res"; id: string; ok: true; payload: WorkerInferenceStartResult }
-  | WorkerInferenceResponseErrorFrame;
-export type WorkerInferenceCancelParams = WorkerInferenceIdentity;
-export type WorkerInferenceCancelResult = { status: "cancelled" };
-export type WorkerInferenceCancelRequestFrame = {
-  type: "req";
-  id: string;
-  method: "worker.inference.cancel";
-  params: WorkerInferenceCancelParams;
-};
-export type WorkerInferenceCancelResponseFrame =
-  | { type: "res"; id: string; ok: true; payload: WorkerInferenceCancelResult }
-  | WorkerInferenceResponseErrorFrame;
-export type WorkerInferenceResolvedModel = { api: string; provider: string; model: string };
-type WorkerInferenceStreamEvent =
-  | { type: "start"; resolvedModel: WorkerInferenceResolvedModel; timestamp: number }
-  | { type: "text_start"; contentIndex: number; contentSignature?: string }
-  | { type: "text_delta"; contentIndex: number; delta: string }
-  | { type: "text_end"; contentIndex: number; contentSignature?: string }
-  | { type: "thinking_start"; contentIndex: number }
-  | { type: "thinking_delta"; contentIndex: number; delta: string }
-  | { type: "thinking_end"; contentIndex: number; contentSignature?: string }
-  | { type: "toolcall_start"; contentIndex: number; id: string; toolName: string }
-  | { type: "toolcall_delta"; contentIndex: number; delta: string }
-  | { type: "toolcall_end"; contentIndex: number };
-export type WorkerInferenceEventParams = WorkerInferenceIdentity & {
-  seq: number;
-  event: WorkerInferenceStreamEvent;
-};
-export type WorkerInferenceEventFrame = {
-  type: "event";
-  event: "worker.inference.event";
-  payload: WorkerInferenceEventParams;
-};
-export type WorkerInferenceTerminalOutcome =
-  | { type: "done"; message: WorkerInferenceAssistantMessage }
-  | {
-      type: "error";
-      reason: WorkerInferenceErrorReason;
-      message: string;
-      usage?: WorkerInferenceUsage;
-    };
-export type WorkerInferenceTerminalParams = WorkerInferenceIdentity & {
-  seq: number;
-  outcome: WorkerInferenceTerminalOutcome;
-};
-export type WorkerInferenceTerminalFrame = {
-  type: "event";
-  event: "worker.inference.terminal";
-  payload: WorkerInferenceTerminalParams;
-};
+export type WorkerInferenceModelRef = Static<typeof WorkerInferenceModelRefSchema>;
+export type WorkerInferenceContext = Static<typeof WorkerInferenceContextSchema>;
+export type WorkerInferenceOptions = Static<typeof WorkerInferenceOptionsSchema>;
+export type WorkerInferenceStartParams = Static<typeof WorkerInferenceStartParamsSchema>;
+export type WorkerInferenceStartResult = Static<typeof WorkerInferenceStartResultSchema>;
+export type WorkerInferenceErrorReason = Static<typeof WorkerInferenceErrorReasonSchema>;
+export type WorkerInferenceErrorShape = Static<typeof WorkerInferenceErrorShapeSchema>;
+export type WorkerInferenceStartRequestFrame = Static<
+  typeof WorkerInferenceStartRequestFrameSchema
+>;
+export type WorkerInferenceStartResponseFrame = Static<
+  typeof WorkerInferenceStartResponseFrameSchema
+>;
+export type WorkerInferenceCancelParams = Static<typeof WorkerInferenceCancelParamsSchema>;
+export type WorkerInferenceCancelResult = Static<typeof WorkerInferenceCancelResultSchema>;
+export type WorkerInferenceCancelRequestFrame = Static<
+  typeof WorkerInferenceCancelRequestFrameSchema
+>;
+export type WorkerInferenceCancelResponseFrame = Static<
+  typeof WorkerInferenceCancelResponseFrameSchema
+>;
+export type WorkerInferenceEventParams = Static<typeof WorkerInferenceEventParamsSchema>;
+export type WorkerInferenceEventFrame = Static<typeof WorkerInferenceEventFrameSchema>;
+export type WorkerInferenceTerminalOutcome = Static<typeof WorkerInferenceTerminalOutcomeSchema>;
+export type WorkerInferenceTerminalParams = Static<typeof WorkerInferenceTerminalParamsSchema>;
+export type WorkerInferenceTerminalFrame = Static<typeof WorkerInferenceTerminalFrameSchema>;
 
 function isSafeWorkerInferenceJson(data: unknown): boolean {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];

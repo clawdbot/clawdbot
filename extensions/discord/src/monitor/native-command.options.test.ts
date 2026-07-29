@@ -35,7 +35,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+  getPreparedModelCatalogSnapshot: loadModelCatalogMock,
+  resolveAgentDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/agents/${agentId}/agent`,
+  resolveAgentWorkspaceDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/workspaces/${agentId}`,
   resolveHumanDelayConfig: () => undefined,
 }));
 
@@ -231,7 +233,7 @@ describe("createDiscordNativeCommand option wiring", () => {
 
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
-    loadModelCatalogMock.mockReset().mockResolvedValue([]);
+    loadModelCatalogMock.mockReset().mockReturnValue({ entries: [], routeVariants: [] });
     logVerboseMock.mockReset();
     loggerWarnMock.mockReset();
   });
@@ -266,7 +268,9 @@ describe("createDiscordNativeCommand option wiring", () => {
     const cfg = {
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     } as OpenClawConfig;
@@ -282,7 +286,6 @@ describe("createDiscordNativeCommand option wiring", () => {
       focusedValue: "",
     });
 
-    expect(loadModelCatalogMock).toHaveBeenCalledWith({ cacheOnly: true });
     expect(loadModelCatalogMock).toHaveBeenCalledWith({ config: cfg });
   });
 
@@ -316,6 +319,7 @@ describe("createDiscordNativeCommand option wiring", () => {
       resolveChoiceContext: async () => ({
         provider: "openai",
         model: "gpt-5.6-luna",
+        agentId: "agent-a",
         agentRuntime,
       }),
     });
@@ -334,6 +338,11 @@ describe("createDiscordNativeCommand option wiring", () => {
 
     const codexRespond = await runAutocomplete(autocomplete, params);
     expect(codexRespond).toHaveBeenCalledWith([{ name: "max", value: "max" }]);
+    expect(loadModelCatalogMock).toHaveBeenCalledWith({
+      config: {},
+      agentId: "agent-a",
+      agentDir: "/tmp/agents/agent-a/agent",
+    });
 
     agentRuntime = "openclaw";
     const openclawRespond = await runAutocomplete(autocomplete, params);
@@ -502,7 +511,8 @@ describe("createDiscordNativeCommand option wiring", () => {
       session: { dmScope: "main" },
       channels: {
         discord: {
-          dm: { enabled: true, policy: "disabled" },
+          dm: { enabled: true },
+          dmPolicy: "disabled",
         },
       },
     } as OpenClawConfig;
@@ -510,7 +520,9 @@ describe("createDiscordNativeCommand option wiring", () => {
       session: { dmScope: "per-channel-peer" },
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     } as OpenClawConfig;
@@ -607,9 +619,9 @@ describe("createDiscordNativeCommand option wiring", () => {
 
   it("returns no autocomplete choices for group DMs outside dm.groupChannels", async () => {
     const discordConfig = {
+      dmPolicy: "open",
       dm: {
         enabled: true,
-        policy: "open",
         groupEnabled: true,
         groupChannels: ["allowed-group"],
       },

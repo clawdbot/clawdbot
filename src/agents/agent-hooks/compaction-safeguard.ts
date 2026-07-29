@@ -41,6 +41,10 @@ import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "../sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  readWorkspaceBootstrapFile,
+} from "../workspace-bootstrap-read.js";
+import {
   composeSplitTurnInstructions,
   resolveCompactionInstructions,
 } from "./compaction-instructions.js";
@@ -392,6 +396,8 @@ async function summarizeViaLLM(params: {
   customInstructions?: string;
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
+  thinkingLevel?: Parameters<typeof summarizeInStages>[0]["thinkingLevel"];
+  streamFn?: Parameters<typeof summarizeInStages>[0]["streamFn"];
 }): Promise<string> {
   const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
@@ -409,6 +415,8 @@ async function summarizeViaLLM(params: {
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
+    thinkingLevel: params.thinkingLevel,
+    streamFn: params.streamFn,
   });
   if (result.kind === "summary") {
     return result.text;
@@ -1012,13 +1020,20 @@ async function readWorkspaceContextForSummary(
       return "";
     }
 
-    const content = (() => {
-      try {
-        return fs.readFileSync(opened.fd, "utf-8");
-      } finally {
-        fs.closeSync(opened.fd);
+    let content: string;
+    try {
+      content = await readWorkspaceBootstrapFile(opened.fd);
+    } catch (err) {
+      if (err instanceof RangeError) {
+        log.warn(
+          `Ignoring oversized AGENTS.md ${agentsPath}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
+        );
+        return "";
       }
-    })();
+      throw err;
+    } finally {
+      fs.closeSync(opened.fd);
+    }
     let sections = extractSections(content, sectionNames);
     if (
       sections.length === 0 &&
@@ -1048,7 +1063,13 @@ async function readWorkspaceContextForSummary(
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
-    const { preparation, customInstructions: eventInstructions, signal } = event;
+    const {
+      preparation,
+      customInstructions: eventInstructions,
+      signal,
+      thinkingLevel,
+      streamFn,
+    } = event;
     const rawTurnPrefixMessages = preparation.turnPrefixMessages ?? [];
     let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
       preparation.messagesToSummarize,
@@ -1297,13 +1318,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: structuredInstructions,
                   summarizationInstructions,
                   previousSummary: preparation.previousSummary,
+                  thinkingLevel,
+                  streamFn,
                 });
               } catch (droppedError) {
-                log.warn(
-                  `Compaction safeguard: failed to summarize dropped messages, continuing without: ${formatErrorMessage(
-                    droppedError,
-                  )}`,
-                );
+                if (signal?.aborted) {
+                  signal.throwIfAborted();
+                }
+                throw new Error("Failed to summarize dropped messages.", {
+                  cause: droppedError,
+                });
               }
             }
           }
@@ -1373,6 +1397,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
+                  thinkingLevel,
+                  streamFn,
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
@@ -1393,6 +1419,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ),
               summarizationInstructions,
               previousSummary: undefined,
+              thinkingLevel,
+              streamFn,
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
@@ -1474,6 +1502,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
+      // Caller cancellation is terminal, not a safeguard failure. Preserve the
+      // original abort so the runner can classify it without a false data-loss warning.
+      if (signal?.aborted) {
+        signal.throwIfAborted();
+      }
       const message = formatErrorMessage(error);
       log.warn(
         `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,

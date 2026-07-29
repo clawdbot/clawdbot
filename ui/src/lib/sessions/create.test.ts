@@ -1,5 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { requestSessionCreate } from "./create.ts";
+import { requestSessionCreate, resolveSessionCreateParams } from "./create.ts";
+
+describe("resolveSessionCreateParams", () => {
+  it("marks a Control UI child as parallel to its selected parent", () => {
+    expect(resolveSessionCreateParams(" agent:main:signal:direct:42 ", " main ")).toEqual({
+      agentId: "main",
+      parentSessionKey: "agent:main:signal:direct:42",
+      emitCommandHooks: true,
+      succeedsParent: false,
+    });
+  });
+});
 
 describe("requestSessionCreate", () => {
   it("returns the started initial-run outcome", async () => {
@@ -7,12 +18,14 @@ describe("requestSessionCreate", () => {
       request: vi.fn(async () => ({
         key: " agent:main:dashboard:new ",
         runStarted: true,
+        runId: "initial-send-id",
+        messageSeq: 7,
       })),
     };
 
     await expect(requestSessionCreate(client as never, { message: "hello" })).resolves.toEqual({
       key: "agent:main:dashboard:new",
-      initialRun: { status: "started" },
+      initialRun: { status: "started", messageId: "initial-send-id", messageSeq: 7 },
     });
   });
 
@@ -52,7 +65,7 @@ describe("requestSessionCreate", () => {
       key: "agent:main:dashboard:rejected",
       initialRun: {
         status: "rejected",
-        error: "The session was created, but its first message could not be sent.",
+        error: "The thread was created, but its first message could not be sent.",
       },
     });
   });

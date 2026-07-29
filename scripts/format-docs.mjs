@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
@@ -124,7 +125,7 @@ export function resolveOxfmtInvocation(args, params = {}) {
   const platform = params.platform ?? process.platform;
   const existsSync = params.existsSync ?? fs.existsSync;
   const shimName = platform === "win32" ? "oxfmt.cmd" : "oxfmt";
-  const shimPath = path.join(repoRoot, "node_modules", ".bin", shimName);
+  const shimPath = resolveRepoToolBinPath(shimName, { cwd: repoRoot, fileExists: existsSync });
 
   if (existsSync(shimPath)) {
     if (platform === "win32") {

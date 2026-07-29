@@ -16,6 +16,7 @@
     "url": "https://github.com/openclaw/openclaw/issues"
   },
   "license": "MIT",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/openclaw.git",
@@ -23,7 +24,6 @@
   },
   "files": [
     "dist",
-    "npm-shrinkwrap.json",
     "LICENSE",
     "README.md"
   ],
@@ -40,6 +40,11 @@
       "types": "./dist/providers.d.mts",
       "import": "./dist/providers.mjs",
       "default": "./dist/providers.mjs"
+    },
+    "./transports": {
+      "types": "./dist/transports.d.mts",
+      "import": "./dist/transports.mjs",
+      "default": "./dist/transports.mjs"
     },
     "./diagnostics": {
       "types": "./dist/diagnostics.d.mts",
@@ -61,19 +66,39 @@
       "import": "./dist/validation.mjs",
       "default": "./dist/validation.mjs"
     },
-    "./internal/*": {
-      "types": "./dist/internal/*.d.mts",
-      "import": "./dist/internal/*.mjs",
-      "default": "./dist/internal/*.mjs"
+    "./internal/anthropic": {
+      "types": "./dist/internal/anthropic.d.mts",
+      "import": "./dist/internal/anthropic.mjs",
+      "default": "./dist/internal/anthropic.mjs"
+    },
+    "./internal/openai": {
+      "types": "./dist/internal/openai.d.mts",
+      "import": "./dist/internal/openai.mjs",
+      "default": "./dist/internal/openai.mjs"
+    },
+    "./internal/retry-after": {
+      "types": "./dist/internal/retry-after.d.mts",
+      "import": "./dist/internal/retry-after.mjs",
+      "default": "./dist/internal/retry-after.mjs"
+    },
+    "./internal/runtime": {
+      "types": "./dist/internal/runtime.d.mts",
+      "import": "./dist/internal/runtime.mjs",
+      "default": "./dist/internal/runtime.mjs"
+    },
+    "./internal/shared": {
+      "types": "./dist/internal/shared.d.mts",
+      "import": "./dist/internal/shared.mjs",
+      "default": "./dist/internal/shared.mjs"
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.109.1",
-    "@google/genai": "2.10.0",
-    "@mistralai/mistralai": "2.4.0",
-    "openai": "6.45.0",
+    "@anthropic-ai/sdk": "0.115.0",
+    "@google/genai": "2.13.0",
+    "@mistralai/mistralai": "2.5.0",
+    "openai": "6.49.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.3"
+    "typebox": "1.3.8"
   },
   "engines": {
     "node": ">=22.19.0"

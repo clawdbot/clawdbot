@@ -430,6 +430,20 @@ public actor GatewayChannelActor {
         }
     }
 
+    private static func loadDeviceIdentityForConnect(
+        includeDeviceIdentity: Bool,
+        profile: GatewayDeviceIdentityProfile) throws -> DeviceIdentity?
+    {
+        guard includeDeviceIdentity else { return nil }
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile) else {
+            throw NSError(
+                domain: "Gateway",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
+        }
+        return identity
+    }
+
     private func sendConnect(
         task: WebSocketTaskBox,
         attemptID: UUID,
@@ -460,7 +474,9 @@ public actor GatewayChannelActor {
         let includeDeviceIdentity = options.includeDeviceIdentity
         let allowStoredDeviceAuth = options.allowStoredDeviceAuth
         let deviceAuthGatewayID = options.deviceAuthGatewayID
-        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate(profile: deviceIdentityProfile) : nil
+        let identity = try Self.loadDeviceIdentityForConnect(
+            includeDeviceIdentity: includeDeviceIdentity,
+            profile: deviceIdentityProfile)
         let selectedAuth = self.selectConnectAuth(
             role: role,
             includeDeviceIdentity: includeDeviceIdentity,
@@ -801,6 +817,7 @@ extension GatewayChannelActor {
             let allowedOperatorScopes: Set = [
                 "operator.admin",
                 "operator.approvals",
+                "operator.questions",
                 "operator.read",
                 "operator.talk.secrets",
                 "operator.write",

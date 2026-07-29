@@ -1,5 +1,5 @@
 // Public auth-choice barrel used by onboarding and agent setup commands.
-export { applyAuthChoice } from "./auth-choice.apply.js";
+export { applyAuthChoice, prepareAuthChoice } from "./auth-choice.apply.js";
 export {
   resolveDefaultModelCatalogFacts,
   resolveDefaultModelAuthStatus,
