@@ -43,15 +43,14 @@ import {
   isPendingUpdateHandoffSentinel,
   readUpdateAvailable,
   requestUpdateRestartStatus,
+  resolveAmbiguousUpdateOutcomeBanner,
   resolvePendingUpdateHandoffTimeoutBanner,
   resolvePostRestartUpdateBanner,
+  resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
+  resolveUpdateVerificationWindow,
   resolveUpdateVerificationBanner,
-  UPDATE_HANDOFF_POLL_MS,
   UPDATE_HANDOFF_STARTED_REASON,
-  UPDATE_HANDOFF_TIMEOUT_MS,
-  UPDATE_RESTART_VERIFICATION_POLL_MS,
-  UPDATE_RESTART_VERIFICATION_TIMEOUT_MS,
   type ApplicationStatusBanner,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
@@ -98,8 +97,6 @@ type UpdateVerificationWait = {
 };
 
 type PendingUpdate = { expected: string | null; kind: "ambiguous" | "handoff" | "restart" };
-
-const unknownUpdateBanner = () => ({ tone: "danger", text: t("updates.outcomeUnknown") }) as const;
 
 export function createApplicationOverlays(
   gateway: ApplicationGateway,
@@ -263,7 +260,14 @@ export function createApplicationOverlays(
       return;
     }
     const expectedVersion = reconciliation.expected?.trim() || null;
-    const startsAsHandoff = reconciliation.kind === "handoff";
+    if (reconciliation.kind === "ambiguous") {
+      // Only the replacement Gateway version can prove a response-lost request; status is cached.
+      pendingUpdate = null;
+      publishUpdateBanner(
+        resolveAmbiguousUpdateOutcomeBanner(expectedVersion, gateway.snapshot.hello),
+      );
+      return;
+    }
     const isCurrentVerification = () =>
       generation === updateVerificationGeneration &&
       epoch === connectedEpoch &&
@@ -271,10 +275,7 @@ export function createApplicationOverlays(
       activeClient === client &&
       gateway.snapshot.client === client &&
       gateway.snapshot.phase === "connected";
-    let deadline =
-      Date.now() +
-      (startsAsHandoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
-    let pollMs = startsAsHandoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS;
+    let { deadline, pollMs } = resolveUpdateVerificationWindow(reconciliation.kind);
     while (isCurrentVerification() && Date.now() < deadline) {
       const response = await requestUpdateRestartStatus(client, Math.max(0, deadline - Date.now()));
       if (!isCurrentVerification()) {
@@ -282,15 +283,10 @@ export function createApplicationOverlays(
       }
       const sentinel = response?.sentinel;
       if (isPendingUpdateHandoffSentinel(sentinel)) {
-        if (
-          reconciliation.kind === "ambiguous" &&
-          sentinel?.stats?.reason === UPDATE_HANDOFF_STARTED_REASON
-        ) {
-          // The response was lost, but update.status now proves the long-lived
-          // managed handoff. Preserve that authoritative lifecycle and budget.
+        if (reconciliation.kind !== "handoff") {
+          // Confirmed updates can become managed handoffs; preserve the longer lifecycle budget.
           reconciliation.kind = "handoff";
-          deadline = Date.now() + UPDATE_HANDOFF_TIMEOUT_MS;
-          pollMs = UPDATE_HANDOFF_POLL_MS;
+          ({ deadline, pollMs } = resolveUpdateVerificationWindow("handoff"));
           publish();
         }
         const remainingMs = deadline - Date.now();
@@ -341,13 +337,11 @@ export function createApplicationOverlays(
     const currentVersion = gateway.snapshot.hello?.server?.version?.trim() || null;
     pendingUpdate = null;
     publishUpdateBanner(
-      reconciliation.kind === "ambiguous"
-        ? unknownUpdateBanner()
-        : expectedVersion && currentVersion !== expectedVersion
-          ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion: currentVersion })
-          : reconciliation.kind === "handoff"
-            ? resolvePendingUpdateHandoffTimeoutBanner()
-            : null,
+      expectedVersion && currentVersion !== expectedVersion
+        ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion: currentVersion })
+        : reconciliation.kind === "handoff"
+          ? resolvePendingUpdateHandoffTimeoutBanner()
+          : null,
     );
   };
 
@@ -379,7 +373,7 @@ export function createApplicationOverlays(
         updateRunGeneration += 1;
         cancelUpdateVerification();
         const updateStatusBanner = pendingUpdate
-          ? unknownUpdateBanner()
+          ? resolveUnknownUpdateOutcomeBanner()
           : snapshot.updateStatusBanner;
         pendingUpdate = null;
         snapshot = { ...snapshot, updateRunning: false, updateStatusBanner };

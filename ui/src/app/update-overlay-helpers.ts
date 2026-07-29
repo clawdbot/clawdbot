@@ -68,6 +68,18 @@ export async function requestUpdateRestartStatus(
   }
 }
 
+export function resolveUpdateVerificationWindow(
+  kind: "handoff" | "restart",
+  nowMs = Date.now(),
+): { deadline: number; pollMs: number } {
+  const handoff = kind === "handoff";
+  return {
+    deadline:
+      nowMs + (handoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS),
+    pollMs: handoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS,
+  };
+}
+
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
   const snapshot = hello?.snapshot;
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
@@ -147,6 +159,23 @@ export function resolvePendingUpdateHandoffTimeoutBanner(): ApplicationStatusBan
     tone: "danger",
     text: t("updates.handoffTimeout"),
   };
+}
+
+export function resolveUnknownUpdateOutcomeBanner(): ApplicationStatusBanner {
+  return {
+    tone: "danger",
+    text: t("updates.outcomeUnknown"),
+  };
+}
+
+export function resolveAmbiguousUpdateOutcomeBanner(
+  expectedVersion: string | null,
+  hello: GatewayHelloOk | null,
+): ApplicationStatusBanner | null {
+  const currentVersion = hello?.server?.version?.trim() || null;
+  return expectedVersion && currentVersion === expectedVersion
+    ? null
+    : resolveUnknownUpdateOutcomeBanner();
 }
 
 export function isPendingUpdateHandoffSentinel(
