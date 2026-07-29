@@ -28,6 +28,16 @@ const SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS = [
 ];
 
 /**
+ * Returns whether a header name is unambiguously credential material by exact name.
+ * Callers that refuse rather than audit need this narrower answer, because the
+ * fragment matching below is deliberately loose enough to flag innocent names.
+ */
+export function isAlwaysCredentialHeaderName(value: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized ? ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES.has(normalized) : false;
+}
+
+/**
  * Returns whether a model-provider header name should be treated as secret-bearing.
  * This is intentionally conservative: false positives are audit noise, false negatives leak keys.
  */
@@ -36,7 +46,7 @@ export function isLikelySensitiveModelProviderHeaderName(value: string): boolean
   if (!normalized) {
     return false;
   }
-  if (ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES.has(normalized)) {
+  if (isAlwaysCredentialHeaderName(normalized)) {
     return true;
   }
   return SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS.some((fragment) =>
