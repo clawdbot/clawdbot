@@ -632,10 +632,10 @@ describe("qa cli runtime", () => {
       runQaProfileCommand({
         repoRoot: "/tmp/openclaw-repo",
         profile: "smoke-ci",
-        scenarioIds: ["control-ui-qa-channel-image-roundtrip"],
+        scenarioIds: ["a2a-message-tool-mirror-dedupe"],
       }),
     ).rejects.toThrow(
-      "qa run --qa-profile smoke-ci cannot run explicitly selected scenario(s): control-ui-qa-channel-image-roundtrip (channelDriver=qa-channel).",
+      "qa run --qa-profile smoke-ci cannot run explicitly selected scenario(s): a2a-message-tool-mirror-dedupe (channelDriver=qa-channel).",
     );
 
     expect(runQaSuite).not.toHaveBeenCalled();
