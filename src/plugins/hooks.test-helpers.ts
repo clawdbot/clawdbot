@@ -11,6 +11,7 @@ export function createMockPluginRegistry(
     handler: (...args: unknown[]) => unknown;
     pluginId?: string;
     priority?: number;
+    registrationId?: string;
     timeoutMs?: number;
   }>,
 ): PluginRegistry {
@@ -34,6 +35,7 @@ export function createMockPluginRegistry(
       hookName: h.hookName,
       handler: h.handler,
       priority: h.priority ?? 0,
+      ...(h.registrationId ? { registrationId: h.registrationId } : {}),
       ...(h.timeoutMs !== undefined ? { timeoutMs: h.timeoutMs } : {}),
       source: "test",
     })) as PluginRegistry["typedHooks"],
@@ -45,6 +47,7 @@ export function addTestHook(params: {
   hookName: PluginHookRegistration["hookName"];
   handler: PluginHookRegistration["handler"];
   priority?: number;
+  registrationId?: string;
   timeoutMs?: number;
 }) {
   params.registry.typedHooks.push({
@@ -52,6 +55,7 @@ export function addTestHook(params: {
     hookName: params.hookName,
     handler: params.handler,
     priority: params.priority ?? 0,
+    ...(params.registrationId ? { registrationId: params.registrationId } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     source: "test",
   } as PluginHookRegistration);

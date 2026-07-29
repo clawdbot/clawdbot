@@ -44,16 +44,14 @@ import {
   resolveOpenAIProviderConfigRecord,
   trimToUndefined,
 } from "./realtime-provider-shared.js";
+import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_CAPABILITIES,
   resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
-import {
-  isOpenAIGptLiveModel,
-  OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE,
-} from "./realtime-quicksilver.js";
+import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 
 type OpenAIRealtimeVoice =
   | "alloy"
@@ -1811,8 +1809,28 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     },
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      if (isOpenAIGptLiveModel(config.model)) {
-        throw new Error(OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE);
+      const model = config.model;
+      if (model && isOpenAIGptLiveModel(model)) {
+        if (config.azureEndpoint || config.azureDeployment) {
+          throw new Error(
+            "GPT-Live backend WebSocket sessions do not support Azure endpoints or deployments",
+          );
+        }
+        return new OpenAIQuicksilverVoiceBridge({
+          ...req,
+          model,
+          voice: config.voice,
+          instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+          resolveAuth: async () => ({
+            type: "api-key",
+            token: (
+              await requireOpenAIRealtimePlatformAuth({
+                configuredApiKey: config.apiKey,
+                cfg: req.cfg,
+              })
+            ).value,
+          }),
+        });
       }
       return new OpenAIRealtimeVoiceBridge({
         ...req,

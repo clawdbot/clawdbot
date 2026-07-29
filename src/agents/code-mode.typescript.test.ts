@@ -144,6 +144,8 @@ describe("Code Mode TypeScript execution", () => {
       status: "failed",
       code: "timeout",
       error: "code mode timeout exceeded",
+      failurePhase: "host",
+      bridgeDispatchStarted: false,
       output: [],
     });
     expect(testing.activeRuns.size).toBe(0);
@@ -173,6 +175,8 @@ describe("Code Mode TypeScript execution", () => {
       status: "failed",
       code: "aborted",
       error: "code mode execution aborted",
+      failurePhase: "host",
+      bridgeDispatchStarted: false,
       output: [],
     });
     expect(testing.activeRuns.size).toBe(0);

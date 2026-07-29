@@ -10,16 +10,15 @@ import {
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
+  appendConsolidationSkippedSummary,
+  appendConsolidationSummary,
+  storeMemoryPreimage,
+} from "./dreaming-consolidation-artifacts.js";
+import {
   isConsolidationCandidateEligible,
   isPromotionOriginBlocked,
 } from "./dreaming-consolidation-candidates.js";
-import {
-  applyMemoryConsolidationPlan,
-  appendConsolidationSkippedSummary,
-  appendConsolidationSummary,
-  consolidateMemory,
-  storeMemoryPreimage,
-} from "./dreaming-consolidation.js";
+import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
 import {
   DREAMING_DAILY_PROVENANCE_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
@@ -33,7 +32,10 @@ import {
   resolveMemoryWritePath,
   writeMemoryContent,
 } from "./short-term-promotion-memory-write.js";
-import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
+import {
+  buildPromotionRecallAnnotations,
+  groupPromotionCandidatesByProjectKey,
+} from "./short-term-promotion-metadata.js";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import { rehydratePromotionCandidate } from "./short-term-promotion-rehydrate.js";
 import { readStore, withShortTermLock, writeStore } from "./short-term-promotion-store.js";
@@ -70,15 +72,10 @@ function buildPromotionSection(
 ): string {
   const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
   const lines = ["", `## Promoted From Short-Term Memory (${sectionDate})`, ""];
-  const projectGroups = new Map<string, PromotionCandidate[]>();
-  for (const candidate of candidates) {
-    const group =
-      candidate.projectKey && !/[\r\n<>]/u.test(candidate.projectKey) ? candidate.projectKey : "";
-    projectGroups.set(group, [...(projectGroups.get(group) ?? []), candidate]);
-  }
+  const projectGroups = groupPromotionCandidatesByProjectKey(candidates);
 
-  for (const [projectKey, groupCandidates] of projectGroups) {
-    if (projectGroups.size > 1) {
+  for (const { projectKey, candidates: groupCandidates } of projectGroups) {
+    if (projectGroups.length > 1) {
       lines.push(projectKey ? `### Project: ${projectKey}` : "### Global", "");
     }
     for (const candidate of groupCandidates) {
@@ -92,7 +89,7 @@ function buildPromotionSection(
         `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata} ${buildPromotionRecallAnnotations(candidate)}`,
       );
     }
-    if (projectGroups.size > 1) {
+    if (projectGroups.length > 1) {
       lines.push("");
     }
   }

@@ -1,5 +1,6 @@
 // Workshop types define generated skill draft, policy, and config contracts.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginHookSkillProposalEvaluationOutcome } from "../../plugins/hook-types.js";
 import type { SkillScanFinding } from "../security/scanner.js";
 
 /** Schema id for persisted skill workshop proposal records. */
@@ -13,6 +14,46 @@ type SkillProposalKind = "create" | "update";
 export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
 type SkillProposalScannerState = "pending" | "clean" | "failed" | "quarantined";
 type SkillProposalSource = "skill-workshop" | "cli" | "gateway";
+type SkillProposalEvaluationTrigger = "manual" | "apply";
+export type SkillProposalEventType =
+  | "created"
+  | "revised"
+  | "evaluation_completed"
+  | "applied"
+  | "rejected"
+  | "quarantined"
+  | "stale";
+
+export type SkillProposalEvaluation = {
+  id: string;
+  proposedVersion: string;
+  revisionHash: string;
+  trigger: SkillProposalEvaluationTrigger;
+  startedAt: string;
+  completedAt: string;
+  correlationId?: string;
+  targetTreeSha256?: string;
+  outcomes: PluginHookSkillProposalEvaluationOutcome[];
+};
+
+export type SkillProposalEventActor = {
+  type: "agent" | "gateway" | "plugin" | "system";
+  id?: string;
+};
+
+export type SkillProposalEvent = {
+  sequence: number;
+  eventId: string;
+  proposalId: string;
+  proposedVersion: string;
+  revisionHash: string;
+  type: SkillProposalEventType;
+  occurredAt: string;
+  actor: SkillProposalEventActor;
+  correlationId?: string;
+  payload?: Record<string, string | number | boolean | null>;
+  evaluation?: SkillProposalEvaluation;
+};
 
 export type SkillProposalOrigin = {
   agentId?: string;
@@ -107,6 +148,7 @@ export type SkillProposalRecord = {
   supportFiles?: SkillProposalSupportFile[];
   target: SkillProposalTarget;
   scan: SkillProposalScan;
+  evaluation?: SkillProposalEvaluation;
   goal?: string;
   evidence?: string;
   appliedAt?: string;
@@ -161,6 +203,7 @@ export type SkillProposalSupportFileInput = {
 export type SkillProposalCreateInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   name: string;
@@ -177,6 +220,7 @@ export type SkillProposalCreateInput = {
 export type SkillProposalUpdateInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   skillName: string;
@@ -193,10 +237,13 @@ export type SkillProposalUpdateInput = {
 export type SkillProposalReviseInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
-  content: string;
+  expectedRevisionHash?: string;
+  correlationId?: string;
+  content?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   description?: string;
   origin?: SkillProposalOrigin;
@@ -207,14 +254,43 @@ export type SkillProposalReviseInput = {
 export type SkillProposalActionInput = {
   workspaceDir: string;
   agentId?: string;
+  eventActor?: SkillProposalEventActor;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
+  expectedRevisionHash?: string;
+  correlationId?: string;
   reason?: string;
+};
+
+export type SkillProposalEvaluateInput = {
+  workspaceDir: string;
+  agentId?: string;
+  eventActor?: SkillProposalEventActor;
+  env?: NodeJS.ProcessEnv;
+  proposalId: string;
+  expectedRevisionHash?: string;
+  correlationId?: string;
+  trigger?: SkillProposalEvaluationTrigger;
+};
+
+export type SkillProposalEventsListInput = {
+  workspaceDir?: string;
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  proposalId?: string;
+  afterSequence?: number;
+  limit?: number;
+};
+
+export type SkillProposalEventsListResult = {
+  events: SkillProposalEvent[];
+  nextSequence?: number;
 };
 
 export type SkillProposalReadResult = {
   record: SkillProposalRecord;
+  revisionHash: string;
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
 };
@@ -222,4 +298,9 @@ export type SkillProposalReadResult = {
 export type SkillProposalApplyResult = {
   record: SkillProposalRecord;
   targetSkillFile: string;
+};
+
+export type SkillProposalEvaluateResult = {
+  record: SkillProposalRecord;
+  evaluation: SkillProposalEvaluation;
 };
