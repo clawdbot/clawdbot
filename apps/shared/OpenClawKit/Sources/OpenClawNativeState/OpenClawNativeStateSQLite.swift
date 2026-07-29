@@ -14,6 +14,7 @@ public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
 }
 
 public enum OpenClawNativeStateCanonicalTable: Sendable {
+    case deviceAuthProfileTokens
     case deviceAuthTokens
     case deviceIdentities
     case execApprovalsConfig
@@ -132,6 +133,38 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             IndexColumn(name: "role", descending: false),
         ])
 
+    private static let deviceAuthProfileTokens = CanonicalTable(
+        name: "device_auth_profile_tokens",
+        indexName: "idx_device_auth_profile_tokens_updated",
+        createSQL: """
+        CREATE TABLE IF NOT EXISTS device_auth_profile_tokens (
+          profile TEXT NOT NULL,
+          device_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          token TEXT NOT NULL,
+          scopes_json TEXT NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          PRIMARY KEY (profile, device_id, role)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_device_auth_profile_tokens_updated
+          ON device_auth_profile_tokens(updated_at_ms DESC, profile, device_id, role);
+        """,
+        columns: [
+            Column(name: "profile", type: "TEXT", notNull: true, primaryKeyPosition: 1, hidden: 0),
+            Column(name: "device_id", type: "TEXT", notNull: true, primaryKeyPosition: 2, hidden: 0),
+            Column(name: "role", type: "TEXT", notNull: true, primaryKeyPosition: 3, hidden: 0),
+            Column(name: "token", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "scopes_json", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "updated_at_ms", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
+        ],
+        indexColumns: [
+            IndexColumn(name: "updated_at_ms", descending: true),
+            IndexColumn(name: "profile", descending: false),
+            IndexColumn(name: "device_id", descending: false),
+            IndexColumn(name: "role", descending: false),
+        ])
+
     private static let macosPortGuardianRecords = CanonicalTable(
         name: "macos_port_guardian_records",
         indexName: "idx_macos_port_guardian_records_port",
@@ -193,6 +226,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         indexColumns: [])
 
     private static let canonicalTables = [
+        OpenClawNativeStateSQLite.deviceAuthProfileTokens,
         OpenClawNativeStateSQLite.deviceAuthTokens,
         OpenClawNativeStateSQLite.deviceIdentities,
         OpenClawNativeStateSQLite.execApprovalsConfig,
@@ -264,7 +298,8 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     /// Node-owned versioned databases must already contain the canonical table.
     public func ensureCanonicalTable(
         _ table: OpenClawNativeStateCanonicalTable,
-        allowVersionZeroCreation: Bool = true) throws
+        allowVersionZeroCreation: Bool = true,
+        allowVersionedCreation: Bool = false) throws
     {
         try self.withConnectionLock {
             let descriptor = Self.descriptor(table)
@@ -287,9 +322,12 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
                 try self.validateVersionZeroOwnership()
             } else {
                 try self.validateSharedDatabaseMetadata(userVersion: userVersion)
-                guard try self.schemaObjectExists(type: "table", name: descriptor.name) else {
-                    throw OpenClawNativeStateError(
-                        "Versioned OpenClaw state database is missing \(descriptor.name)")
+                if try !self.schemaObjectExists(type: "table", name: descriptor.name) {
+                    guard allowVersionedCreation else {
+                        throw OpenClawNativeStateError(
+                            "Versioned OpenClaw state database is missing \(descriptor.name)")
+                    }
+                    try self.execute(descriptor.createSQL)
                 }
             }
             try self.validateCanonicalTable(table)
@@ -384,6 +422,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
 
     private static func descriptor(_ table: OpenClawNativeStateCanonicalTable) -> CanonicalTable {
         switch table {
+        case .deviceAuthProfileTokens: self.deviceAuthProfileTokens
         case .deviceAuthTokens: self.deviceAuthTokens
         case .deviceIdentities: self.deviceIdentities
         case .execApprovalsConfig: self.execApprovalsConfig
