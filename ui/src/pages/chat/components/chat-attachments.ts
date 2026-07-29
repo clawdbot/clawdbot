@@ -15,7 +15,7 @@ import {
 } from "../attachment-payload-store.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
-  "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
+  "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
@@ -98,13 +98,6 @@ export function isEditableDropTarget(event: DragEvent): boolean {
 
 function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
   return props.getAttachments?.() ?? props.attachments ?? [];
-}
-
-function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boolean {
-  if (file.type.startsWith("video/")) {
-    return false;
-  }
-  return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
 }
 
 function clickComposerInput(target: HTMLElement, selector: string) {
@@ -229,9 +222,6 @@ function dataImageClipboardFile(
   if (!mimeType || !base64Source) {
     return null;
   }
-  if (!isSupportedChatAttachmentFile({ name: baseName, type: mimeType })) {
-    return null;
-  }
   const base64 = base64Source.replace(/\s+/g, "");
   try {
     const binary = atob(base64);
@@ -299,14 +289,13 @@ function readAttachmentFile(
 }
 
 async function appendAttachmentFiles(files: readonly File[], props: ChatAttachmentControlsProps) {
-  const supported = files.filter(isSupportedChatAttachmentFile);
-  if (!props.onAttachmentsChange || supported.length === 0) {
+  if (!props.onAttachmentsChange || files.length === 0) {
     return;
   }
   props.onPendingReadsChange?.(1);
   try {
     const additions = (
-      await Promise.all(supported.map((file) => readAttachmentFile(file, props)))
+      await Promise.all(files.map((file) => readAttachmentFile(file, props)))
     ).filter((attachment): attachment is ChatAttachment => attachment !== null);
     if (props.readSignal?.aborted) {
       for (const attachment of additions) {

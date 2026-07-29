@@ -10,7 +10,7 @@ type UserChatMessageContentBlock = {
   source?: unknown;
   attachment?: {
     url: string;
-    kind: Extract<MediaKind, "audio" | "document">;
+    kind: Extract<MediaKind, "audio" | "video" | "document">;
     label: string;
     mimeType?: string;
   };
@@ -60,7 +60,11 @@ export function buildUserChatMessageContentBlocks(
       type: "attachment",
       attachment: {
         url: previewUrl,
-        kind: attachment.mimeType.startsWith("audio/") ? "audio" : "document",
+        kind: attachment.mimeType.startsWith("audio/")
+          ? "audio"
+          : attachment.mimeType.startsWith("video/")
+            ? "video"
+            : "document",
         label: attachment.fileName?.trim() || "Attached file",
         mimeType: attachment.mimeType,
       },

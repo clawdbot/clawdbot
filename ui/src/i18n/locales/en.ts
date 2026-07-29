@@ -4814,6 +4814,13 @@ export const en: TranslationMap = {
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
     },
+    mediaPlayer: {
+      play: "Play",
+      pause: "Pause",
+      seek: "Seek media",
+      download: "Download {filename}",
+      videoUnavailable: "Can't play this format — download instead.",
+    },
     modelControls: {
       current: "Current",
       default: "Default",
