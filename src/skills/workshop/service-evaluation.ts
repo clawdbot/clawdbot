@@ -8,6 +8,8 @@ import type {
 import {
   createSkillProposalEvent,
   dispatchSkillProposalChanged,
+  hasSkillProposalEvaluators,
+  normalizeSkillProposalCorrelationId,
   runSkillProposalEvaluators,
 } from "./plugin-hooks.js";
 import { buildSkillProposalEvaluationBundles } from "./proposal-bundle.js";
@@ -33,6 +35,8 @@ const MAX_EVALUATION_METRICS = 64;
 export async function evaluateSkillProposal(
   input: SkillProposalEvaluateInput,
 ): Promise<SkillProposalEvaluateResult> {
+  const correlationId = normalizeSkillProposalCorrelationId(input.correlationId);
+  const shouldRunEvaluators = hasSkillProposalEvaluators();
   const initial = await readRequiredProposal(
     input.proposalId,
     input.workspaceDir,
@@ -60,43 +64,46 @@ export async function evaluateSkillProposal(
       const supportFiles = await readProposalSupportFiles(read.record, storeOptions(input.env));
       return {
         read,
-        bundles: await buildSkillProposalEvaluationBundles({
-          proposal: read,
-          supportFiles,
-        }),
+        bundles: shouldRunEvaluators
+          ? await buildSkillProposalEvaluationBundles({
+              proposal: read,
+              supportFiles,
+            })
+          : undefined,
       };
     },
     storeOptions(input.env),
   );
   const { read, bundles } = snapshot;
   const startedAt = new Date().toISOString();
-  const correlationId = normalizeOptionalString(input.correlationId);
-  const rawOutcomes = await runSkillProposalEvaluators(
-    {
-      proposal: {
-        id: read.record.id,
-        kind: read.record.kind,
-        revision: read.record.proposedVersion,
-        revisionSha256: read.revisionHash,
-        ...(read.record.target.currentContentHash
-          ? { targetCurrentSha256: read.record.target.currentContentHash }
-          : {}),
-      },
-      skill: {
-        name: read.record.target.skillName,
-        skillKey: read.record.target.skillKey,
-        description: read.record.description,
-        ...(read.record.target.source ? { source: read.record.target.source } : {}),
-      },
-      candidate: bundles.candidate,
-      ...(bundles.baseline ? { baseline: bundles.baseline } : {}),
-      reason: input.trigger === "apply" ? "apply" : "manual",
-    },
-    {
-      workspaceDir: input.workspaceDir,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-    },
-  );
+  const rawOutcomes = bundles
+    ? await runSkillProposalEvaluators(
+        {
+          proposal: {
+            id: read.record.id,
+            kind: read.record.kind,
+            revision: read.record.proposedVersion,
+            revisionSha256: read.revisionHash,
+            ...(read.record.target.currentContentHash
+              ? { targetCurrentSha256: read.record.target.currentContentHash }
+              : {}),
+          },
+          skill: {
+            name: read.record.target.skillName,
+            skillKey: read.record.target.skillKey,
+            description: read.record.description,
+            ...(read.record.target.source ? { source: read.record.target.source } : {}),
+          },
+          candidate: bundles.candidate,
+          ...(bundles.baseline ? { baseline: bundles.baseline } : {}),
+          reason: input.trigger === "apply" ? "apply" : "manual",
+        },
+        {
+          workspaceDir: input.workspaceDir,
+          ...(input.agentId ? { agentId: input.agentId } : {}),
+        },
+      )
+    : [];
   const completedAt = new Date().toISOString();
   const evaluation = {
     id: randomUUID(),
@@ -182,7 +189,12 @@ export function assertExpectedRevisionHash(actual: string, expected?: string): v
 function normalizeEvaluationOutcomes(
   outcomes: readonly PluginHookSkillProposalEvaluationOutcome[],
 ): PluginHookSkillProposalEvaluationOutcome[] {
-  return outcomes.slice(0, MAX_EVALUATION_OUTCOMES).map((outcome) => {
+  if (outcomes.length > MAX_EVALUATION_OUTCOMES) {
+    throw new Error(
+      `Skill proposal evaluation returned more than ${MAX_EVALUATION_OUTCOMES} outcomes.`,
+    );
+  }
+  return outcomes.map((outcome) => {
     const evaluatorId = boundedRequired(outcome.evaluatorId, 128, outcome.pluginId);
     const pluginId = boundedRequired(outcome.pluginId, 128, "unknown-plugin");
     const attribution = {

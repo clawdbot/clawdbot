@@ -166,6 +166,7 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       ),
       correlation_id: Type.Optional(
         Type.String({
+          maxLength: 256,
           description:
             "Optional orchestration or experiment correlation id carried into lifecycle events.",
         }),

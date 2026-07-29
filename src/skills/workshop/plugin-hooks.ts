@@ -13,6 +13,21 @@ import type {
   SkillProposalRecord,
 } from "./types.js";
 
+export const MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH = 256;
+
+export function normalizeSkillProposalCorrelationId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if ([...normalized].length > MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH) {
+    throw new Error(
+      `Skill proposal correlation id exceeds ${MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH} characters.`,
+    );
+  }
+  return normalized;
+}
+
 export function createSkillProposalEvent(params: {
   record: SkillProposalRecord;
   type: SkillProposalEventType;
@@ -21,6 +36,7 @@ export function createSkillProposalEvent(params: {
   occurredAt?: string;
   payload?: NewSkillProposalEvent["payload"];
 }): NewSkillProposalEvent {
+  const correlationId = normalizeSkillProposalCorrelationId(params.correlationId);
   return {
     eventId: randomUUID(),
     proposalId: params.record.id,
@@ -29,9 +45,13 @@ export function createSkillProposalEvent(params: {
     type: params.type,
     occurredAt: params.occurredAt ?? new Date().toISOString(),
     actor: params.actor ?? { type: "system" },
-    ...(params.correlationId ? { correlationId: params.correlationId } : {}),
+    ...(correlationId ? { correlationId } : {}),
     ...(params.payload ? { payload: params.payload } : {}),
   };
+}
+
+export function hasSkillProposalEvaluators(): boolean {
+  return getGlobalHookRunner()?.hasHooks("skill_proposal_evaluate") ?? false;
 }
 
 export async function runSkillProposalEvaluators(

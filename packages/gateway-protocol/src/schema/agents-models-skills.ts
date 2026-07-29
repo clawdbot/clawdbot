@@ -748,7 +748,7 @@ export const SkillsProposalReviseParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
   expectedRevisionHash: Type.Optional(Sha256String),
-  correlationId: Type.Optional(NonEmptyString),
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   content: Type.Optional(SkillProposalContentString),
   supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
   description: Type.Optional(NonEmptyString),
@@ -788,7 +788,7 @@ export const SkillsProposalActionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
   expectedRevisionHash: Type.Optional(Sha256String),
-  correlationId: Type.Optional(NonEmptyString),
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   reason: Type.Optional(Type.String()),
 });
 
@@ -797,7 +797,7 @@ export const SkillsProposalEvaluateParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
   expectedRevisionHash: Type.Optional(Sha256String),
-  correlationId: Type.Optional(NonEmptyString),
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 });
 
 /** Updated proposal record and completed evaluator run returned by manual evaluation. */

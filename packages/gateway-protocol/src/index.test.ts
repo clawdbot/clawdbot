@@ -470,6 +470,18 @@ describe("lazy protocol validators", () => {
       }),
     ).toBe(false);
     expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "x".repeat(257),
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "😀".repeat(200),
+      }),
+    ).toBe(true);
+    expect(
       protocol.validateSkillsProposalEventsListParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
         afterSequence: 41,

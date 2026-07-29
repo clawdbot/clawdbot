@@ -74,7 +74,9 @@ function isValidEvaluation(value: SkillProposalRecord["evaluation"]): boolean {
     typeof value.startedAt === "string" &&
     typeof value.completedAt === "string" &&
     (value.correlationId === undefined ||
-      (typeof value.correlationId === "string" && value.correlationId.length <= 256)) &&
+      (typeof value.correlationId === "string" &&
+        value.correlationId.length > 0 &&
+        [...value.correlationId].length <= 256)) &&
     Array.isArray(value.outcomes) &&
     value.outcomes.length <= 64 &&
     value.outcomes.every(isValidEvaluationOutcome)

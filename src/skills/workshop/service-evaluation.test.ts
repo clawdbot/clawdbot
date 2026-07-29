@@ -10,16 +10,19 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const hookMocks = vi.hoisted(() => ({
   evaluate: vi.fn(),
+  hasEvaluators: true,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
-    hasHooks: (hookName: string) => hookName === "skill_proposal_evaluate",
+    hasHooks: (hookName: string) =>
+      hookName === "skill_proposal_evaluate" && hookMocks.hasEvaluators,
     runSkillProposalEvaluate: hookMocks.evaluate,
   }),
 }));
 
 import {
+  applySkillProposal,
   evaluateSkillProposal,
   inspectSkillProposal,
   listSkillProposalEvents,
@@ -37,6 +40,7 @@ beforeEach(async () => {
     prefix: "openclaw-skill-evaluation-state-",
   });
   hookMocks.evaluate.mockReset();
+  hookMocks.hasEvaluators = true;
 });
 
 afterEach(async () => {
@@ -349,5 +353,101 @@ describe("Skill Workshop proposal evaluation", () => {
         (event) => event.type,
       ),
     ).toEqual(["created"]);
+  });
+
+  it("rejects evaluator overflow instead of dropping blocking decisions", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-overflow-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Evaluation Overflow",
+      description: "Reject evaluator outcome truncation",
+      content: "# Evaluation Overflow\n",
+    });
+    hookMocks.evaluate.mockResolvedValue(
+      Array.from({ length: 65 }, (_, index) => ({
+        evaluatorId: `evaluator-${index}`,
+        pluginId: `plugin-${index}`,
+        status: "completed" as const,
+        result: {
+          decision: index === 64 ? ("block" as const) : ("pass" as const),
+        },
+      })),
+    );
+
+    await expect(
+      applySkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).rejects.toThrow("more than 64 outcomes");
+    await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
+  });
+
+  it("rejects oversized correlation ids before running evaluators", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-correlation-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Evaluation Correlation",
+      description: "Bound persisted orchestration identifiers",
+      content: "# Evaluation Correlation\n",
+    });
+
+    await expect(
+      evaluateSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+        correlationId: "x".repeat(257),
+      }),
+    ).rejects.toThrow("exceeds 256 characters");
+    expect(hookMocks.evaluate).not.toHaveBeenCalled();
+
+    hookMocks.evaluate.mockResolvedValue([]);
+    await expect(
+      evaluateSkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+        correlationId: "😀".repeat(200),
+      }),
+    ).resolves.toMatchObject({
+      evaluation: { correlationId: "😀".repeat(200) },
+    });
+  });
+
+  it("applies large existing skills without evaluator bundle limits when no evaluator exists", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-no-hooks-");
+    const skillDir = path.join(workspaceDir, "skills", "large-existing");
+    const largeAsset = path.join(skillDir, "assets", "large.bin");
+    await fs.mkdir(path.dirname(largeAsset), { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: large-existing\ndescription: Existing large skill\n---\n\n# Existing\n",
+    );
+    await fs.writeFile(largeAsset, Buffer.alloc(1024 * 1024 + 1));
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      agentId: "main",
+      skillName: "large-existing",
+      content: "# Existing\n\nUpdated without evaluators.\n",
+    });
+    hookMocks.hasEvaluators = false;
+
+    await expect(
+      applySkillProposal({
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+      }),
+    ).resolves.toMatchObject({ record: { status: "applied" } });
+    await expect(fs.stat(largeAsset)).resolves.toMatchObject({ size: 1024 * 1024 + 1 });
+    expect(hookMocks.evaluate).not.toHaveBeenCalled();
   });
 });
