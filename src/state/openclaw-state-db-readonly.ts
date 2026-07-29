@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
@@ -7,6 +8,7 @@ import {
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
 import {
+  assertOpenClawStateDatabaseFreshOpenAllowed,
   evictOpenClawStateDatabaseAfterCorruption,
   getOpenClawStateDatabaseIfOpen,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -19,6 +21,22 @@ type OpenClawStateReadOnlyDatabase = {
   db: DatabaseSync;
   path: string;
 };
+
+function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
+  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+}
+
+function existingPathOrUndefined(pathname: string): string | undefined {
+  try {
+    statSync(pathname);
+    return pathname;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
@@ -42,9 +60,7 @@ export function withOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T {
-  const pathname = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
+  const pathname = resolveReadOnlyPath(options);
   // Reusing a handle this process already holds keeps row loops cheap: opening
   // and closing a connection per call made shared-state reads scale with row
   // count. An in-flight transaction is skipped so callers never observe
@@ -52,6 +68,8 @@ export function withOpenClawStateDatabaseReadOnly<T>(
   const opened = getOpenClawStateDatabaseIfOpen(options);
   if (opened && !opened.db.isTransaction) {
     try {
+      // Process-local terminal failures evict this handle. Persisted quarantine
+      // is checked on the next physical open so hot reads do not poll metadata.
       // A newer build can migrate this file while the handle stays open, so the
       // forward-compatibility gate still runs before any reused read.
       assertSupportedSchemaVersion(opened.db, pathname);
@@ -61,6 +79,7 @@ export function withOpenClawStateDatabaseReadOnly<T>(
       throw error;
     }
   }
+  assertOpenClawStateDatabaseFreshOpenAllowed(options);
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -70,4 +89,15 @@ export function withOpenClawStateDatabaseReadOnly<T>(
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
   }
+}
+
+/** Read existing shared state while preserving non-missing filesystem failures. */
+export function withExistingOpenClawStateDatabaseReadOnly<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  const pathname = existingPathOrUndefined(resolveReadOnlyPath(options));
+  return pathname === undefined
+    ? undefined
+    : withOpenClawStateDatabaseReadOnly(operation, { ...options, path: pathname });
 }
