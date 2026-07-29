@@ -1,4 +1,5 @@
 from openai import OpenAI
+import sys
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import pandas as pd
@@ -56,24 +57,28 @@ def fetch_sample_listings(city: str, limit: int = 5) -> pd.DataFrame:
     return pd.read_sql(query, engine, params=(city, limit))
 
 #test
+# if __name__ == "__main__":
+#     TEST_CITY = "San Jose"
+#     df = fetch_sample_listings(TEST_CITY, limit=5)
+ 
+#     if df.empty:
+#         print(f"No active listings found for {TEST_CITY!r} — try a different city.")
+#         raise SystemExit(0)
+ 
+#     print(f"Fetched {len(df)} listings for {TEST_CITY}. Building embeddings...")
+ 
+#     listing_embeddings = []
+#     for _, row in df.iterrows():
+#         emb = build_listing_embedding(row.to_dict())
+#         listing_embeddings.append((row["L_ListingID"], emb))
+#         print(f"  embedded listing {row['L_ListingID']}")
+ 
+#     test_query = "modern 3 bedroom home with a large backyard, move-in ready"
+#     print(f"\nQuery: {test_query!r}")
+ 
+#     top_matches = find_similar_listings(test_query, listing_embeddings, top_k=3)
+#     print("Top matching listing IDs:", top_matches)
+
 if __name__ == "__main__":
-    TEST_CITY = "San Jose"
-    df = fetch_sample_listings(TEST_CITY, limit=5)
- 
-    if df.empty:
-        print(f"No active listings found for {TEST_CITY!r} — try a different city.")
-        raise SystemExit(0)
- 
-    print(f"Fetched {len(df)} listings for {TEST_CITY}. Building embeddings...")
- 
-    listing_embeddings = []
-    for _, row in df.iterrows():
-        emb = build_listing_embedding(row.to_dict())
-        listing_embeddings.append((row["L_ListingID"], emb))
-        print(f"  embedded listing {row['L_ListingID']}")
- 
-    test_query = "modern 3 bedroom home with a large backyard, move-in ready"
-    print(f"\nQuery: {test_query!r}")
- 
-    top_matches = find_similar_listings(test_query, listing_embeddings, top_k=3)
-    print("Top matching listing IDs:", top_matches)
+     user_input = sys.argv[1]
+     df = fetch_sample_listings(user_input, limit=5)
