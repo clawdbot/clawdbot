@@ -4,8 +4,17 @@
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 
-/** Persist the highest observed compaction count after a successful subscribed run. */
-export default async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+/**
+ * Persist the highest observed compaction count after a successful subscribed run.
+ *
+ * Exported as a named binding rather than `default`: the unified dist emits this
+ * lazy runtime as its own chunk, and the stable-name re-export shim rolldown
+ * generates uses `export *`, which per ESM does not forward `default`. Any
+ * dynamic importer would then see `default: undefined` and silently skip
+ * reconciliation. Named exports are forwarded by `export *`, so this keeps the
+ * shim correct without a bundler-side workaround.
+ */
+export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
   configStore?: string;

@@ -13,7 +13,7 @@ import {
   handleCompactionEnd,
   handleCompactionStart,
 } from "./embedded-agent-subscribe.handlers.compaction.js";
-import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
+import { reconcileSessionStoreCompactionCountAfterSuccess } from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";
@@ -174,6 +174,18 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
 
     expect(nextCount).toBe(3);
     expect(await readCompactionCount(storePath, sessionKey)).toBe(3);
+  });
+
+  it("exposes the reconcile function as a named export so dist re-export shims can forward it", async () => {
+    // The unified dist emits this runtime as its own chunk with a stable-name
+    // re-export shim generated as `export * from "./<hashed>.js"`. Per ESM,
+    // `export *` forwards named bindings but never `default`. Keeping the
+    // reconcile symbol as a named export guarantees the production dynamic
+    // import in embedded-agent-subscribe.handlers.compaction.ts resolves it,
+    // and blocks a silent regression to `export default` that would land the
+    // "reconcile is not a function" WARN on every compaction (issue #115548).
+    const runtimeModule = await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
+    expect(typeof runtimeModule.reconcileSessionStoreCompactionCountAfterSuccess).toBe("function");
   });
 });
 
