@@ -885,4 +885,18 @@ describe("setupWizardCommand", () => {
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
     expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
   });
+
+  it("rejects conflicting TUI and non-interactive modes", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ tui: true, nonInteractive: true, acceptRisk: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
 });

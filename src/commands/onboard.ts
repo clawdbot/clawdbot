@@ -473,6 +473,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
+    );
+    runtime.exit(1);
+    return;
+  }
   if (
     normalizedOpts.secretInputMode &&
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
