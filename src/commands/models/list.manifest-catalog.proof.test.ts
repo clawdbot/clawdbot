@@ -14,7 +14,7 @@ const novitaLikePlugin = {
     providers: {
       novita: {
         baseUrl: "https://api.novita.ai/openai/v1",
-        api: "openai-completions",
+        api: "openai-completions" as const,
         models: [
           { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" },
           { id: "moonshotai/kimi-k3", name: "Kimi K3" },
