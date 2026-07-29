@@ -572,6 +572,15 @@ function rewriteModelRefMapKeys(
   return { value: changed ? next : record, changed };
 }
 
+type ProviderCatalogModelRow = {
+  index: number;
+  model: unknown;
+  modelRecord?: Record<string, unknown>;
+  originalId?: string;
+  normalizedId?: string;
+  changed?: boolean;
+};
+
 function rewriteProviderCatalogModelIds(
   providers: Record<string, unknown>,
   path: string,
@@ -584,26 +593,87 @@ function rewriteProviderCatalogModelIds(
     if (!provider || !Array.isArray(provider.models)) {
       continue;
     }
-    let modelsChanged = false;
-    const models = provider.models.map((model, index) => {
+    const rows: ProviderCatalogModelRow[] = provider.models.map((model, index) => {
       const modelRecord = getRecord(model);
       if (!modelRecord || typeof modelRecord.id !== "string") {
-        return model;
+        return { index, model };
       }
       const normalizedId = normalizeProviderCatalogModelId(providerId, modelRecord.id);
-      if (normalizedId === modelRecord.id) {
-        return model;
-      }
-      modelsChanged = true;
-      changes.push(
-        `Upgraded ${path}.${providerId}.models.${index}.id from ${JSON.stringify(modelRecord.id)} to ${JSON.stringify(normalizedId)}.`,
-      );
-      return { ...modelRecord, id: normalizedId };
+      return {
+        index,
+        model,
+        modelRecord,
+        originalId: modelRecord.id,
+        normalizedId,
+        changed: normalizedId !== modelRecord.id,
+      };
     });
-    if (modelsChanged) {
-      next[providerId] = { ...provider, models };
-      changed = true;
+    if (!rows.some((row) => row.changed)) {
+      continue;
     }
+
+    const rowsById = new Map<string, typeof rows>();
+    for (const row of rows) {
+      if (row.normalizedId === undefined) {
+        continue;
+      }
+      const grouped = rowsById.get(row.normalizedId) ?? [];
+      grouped.push(row);
+      rowsById.set(row.normalizedId, grouped);
+    }
+    const emittedIds = new Set<string>();
+    const models: unknown[] = [];
+    for (const row of rows) {
+      if (row.normalizedId === undefined || row.modelRecord === undefined) {
+        models.push(row.model);
+        continue;
+      }
+      const grouped = rowsById.get(row.normalizedId) ?? [row];
+      if (!grouped.some((candidate) => candidate.changed)) {
+        models.push(row.model);
+        continue;
+      }
+      if (emittedIds.has(row.normalizedId)) {
+        continue;
+      }
+      emittedIds.add(row.normalizedId);
+
+      const preferred =
+        grouped.find((candidate) => candidate.originalId === candidate.normalizedId) ?? grouped[0];
+      const preferredRecord = preferred?.modelRecord;
+      if (!preferred || !preferredRecord) {
+        models.push(row.model);
+        continue;
+      }
+      let merged: Record<string, unknown> = { ...preferredRecord, id: row.normalizedId };
+      for (const candidate of grouped) {
+        if (candidate === preferred || !candidate.modelRecord) {
+          continue;
+        }
+        const result = mergeModelRefMapEntries(
+          merged,
+          { ...candidate.modelRecord, id: row.normalizedId },
+          `${path}.${providerId}.models.${preferred.index}`,
+        );
+        merged = getRecord(result.value) ?? merged;
+        changes.push(
+          result.conflicts.length > 0
+            ? `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}; kept canonical values for conflicting fields: ${result.conflicts.toSorted().join(", ")}.`
+            : `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}.`,
+        );
+      }
+      for (const candidate of grouped) {
+        if (!candidate.changed) {
+          continue;
+        }
+        changes.push(
+          `Upgraded ${path}.${providerId}.models.${candidate.index}.id from ${JSON.stringify(candidate.originalId)} to ${JSON.stringify(candidate.normalizedId)}.`,
+        );
+      }
+      models.push(merged);
+    }
+    next[providerId] = { ...provider, models };
+    changed = true;
   }
   return { value: changed ? next : providers, changed };
 }

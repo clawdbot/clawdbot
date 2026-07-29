@@ -541,7 +541,7 @@ describe("config.patch model input normalization", () => {
           },
         },
       ],
-    } as PluginMetadataSnapshot;
+    } as unknown as PluginMetadataSnapshot;
     storedConfig = {
       models: {
         providers: {

@@ -29,10 +29,11 @@ function normalizeModelSelection(value: unknown): unknown {
     assign("primary", normalizeAgentModelRefForConfig(value.primary));
   }
   if (Array.isArray(value.fallbacks)) {
-    const fallbacks = value.fallbacks.map((fallback) =>
+    const originalFallbacks = value.fallbacks;
+    const fallbacks = originalFallbacks.map((fallback) =>
       typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
     );
-    if (fallbacks.some((fallback, index) => fallback !== value.fallbacks?.[index])) {
+    if (fallbacks.some((fallback, index) => fallback !== originalFallbacks[index])) {
       assign("fallbacks", fallbacks);
     }
   }
@@ -76,18 +77,23 @@ function normalizeAgentModelScope(value: unknown): unknown {
   if (Object.hasOwn(value, "utilityModel")) {
     assign("utilityModel", normalizeStringModelRef(value.utilityModel));
   }
-  if (isRecord(value.mediaModels)) {
-    let mediaModels = value.mediaModels;
+  const originalMediaModels = value.mediaModels;
+  if (isRecord(originalMediaModels)) {
+    let mediaModelsChanged = false;
+    const mediaModels = { ...originalMediaModels };
     for (const key of MEDIA_MODEL_KEYS) {
-      if (!Object.hasOwn(value.mediaModels, key)) {
+      if (!Object.hasOwn(originalMediaModels, key)) {
         continue;
       }
-      const normalized = normalizeModelSelection(value.mediaModels[key]);
+      const normalized = normalizeModelSelection(originalMediaModels[key]);
       if (normalized !== mediaModels[key]) {
-        mediaModels = { ...mediaModels, [key]: normalized };
+        mediaModels[key] = normalized;
+        mediaModelsChanged = true;
       }
     }
-    assign("mediaModels", mediaModels);
+    if (mediaModelsChanged) {
+      assign("mediaModels", mediaModels);
+    }
   }
   assign("heartbeat", normalizeNestedModelField(value.heartbeat, "model", normalizeStringModelRef));
   assign("subagents", normalizeNestedModelField(value.subagents, "model", normalizeModelSelection));
@@ -128,18 +134,22 @@ function normalizeAgentScopes(agents: unknown): unknown {
     assign("defaults", normalizeAgentModelScope(agents.defaults));
   }
   if (isRecord(agents.entries)) {
-    let entries = agents.entries;
-    for (const [agentId, entry] of Object.entries(agents.entries)) {
-      const normalized = normalizeAgentModelScope(entry);
-      if (normalized !== entries[agentId]) {
-        entries = { ...entries, [agentId]: normalized };
-      }
+    let entriesChanged = false;
+    const entries = Object.fromEntries(
+      Object.entries(agents.entries).map(([agentId, entry]) => {
+        const normalized = normalizeAgentModelScope(entry);
+        entriesChanged ||= normalized !== entry;
+        return [agentId, normalized];
+      }),
+    );
+    if (entriesChanged) {
+      assign("entries", entries);
     }
-    assign("entries", entries);
   }
   if (Array.isArray(agents.list)) {
-    const list = agents.list.map(normalizeAgentModelScope);
-    if (list.some((entry, index) => entry !== agents.list?.[index])) {
+    const originalList = agents.list;
+    const list = originalList.map(normalizeAgentModelScope);
+    if (list.some((entry, index) => entry !== originalList[index])) {
       assign("list", list);
     }
   }
@@ -154,31 +164,36 @@ function normalizeProviderCatalogs(
     return models;
   }
 
-  let providers = models.providers;
-  for (const [providerId, providerValue] of Object.entries(models.providers)) {
-    if (!isRecord(providerValue) || !Array.isArray(providerValue.models)) {
-      continue;
-    }
-    const providerModels = providerValue.models.map((model) => {
-      if (!isRecord(model) || typeof model.id !== "string") {
-        return model;
+  let providersChanged = false;
+  const providers = Object.fromEntries(
+    Object.entries(models.providers).map(([providerId, providerValue]) => {
+      if (!isRecord(providerValue) || !Array.isArray(providerValue.models)) {
+        return [providerId, providerValue];
       }
-      const trimmed = model.id.trim();
-      if (!trimmed) {
-        return model;
+      const originalModels = providerValue.models;
+      const providerModels = originalModels.map((model) => {
+        if (!isRecord(model) || typeof model.id !== "string") {
+          return model;
+        }
+        const trimmed = model.id.trim();
+        if (!trimmed) {
+          return model;
+        }
+        const id = normalizeConfiguredProviderCatalogModelId(
+          providerId,
+          trimmed,
+          modelIdNormalizationPolicies,
+        );
+        return id === model.id ? model : { ...model, id };
+      });
+      if (providerModels.every((model, index) => model === originalModels[index])) {
+        return [providerId, providerValue];
       }
-      const id = normalizeConfiguredProviderCatalogModelId(
-        providerId,
-        trimmed,
-        modelIdNormalizationPolicies,
-      );
-      return id === model.id ? model : { ...model, id };
-    });
-    if (providerModels.some((model, index) => model !== providerValue.models?.[index])) {
-      providers = { ...providers, [providerId]: { ...providerValue, models: providerModels } };
-    }
-  }
-  return providers === models.providers ? models : { ...models, providers };
+      providersChanged = true;
+      return [providerId, { ...providerValue, models: providerModels }];
+    }),
+  );
+  return providersChanged ? { ...models, providers } : models;
 }
 
 /** Canonicalize model refs submitted through a config mutation API before persistence. */

@@ -3441,6 +3441,46 @@ describe("legacy model compat migrate", () => {
     expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
   });
 
+  it("merges provider catalog rows that normalize to an explicitly canonical id", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          google: {
+            models: [
+              {
+                id: "gemini-3-pro-preview",
+                name: "Retired alias",
+                maxTokens: 65_536,
+                cost: { input: 1 },
+              },
+              {
+                id: "gemini-3.1-pro-preview",
+                name: "Canonical",
+                cost: { output: 2 },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.google?.models).toEqual([
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Canonical",
+        maxTokens: 65_536,
+        cost: { output: 2, input: 1 },
+      },
+    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'Merged config.models.providers.google.models.0 into model id "gemini-3.1-pro-preview"; kept canonical values for conflicting fields: name.',
+        ),
+      ]),
+    );
+  });
+
   it("deep-merges colliding retired model refs and reports only unequal fields", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
