@@ -73,6 +73,8 @@ export type SqliteSchemaCompatibility = {
    * canonical shape.
    */
   allowedMissingTables?: readonly string[];
+  /** Additive columns that may be absent until their owning feature lazily ensures them. */
+  allowedMissingColumns?: readonly string[];
   /**
    * Exact definitions produced by supported additive migrations when SQLite
    * requires a temporary default that the clean schema does not retain.
@@ -80,9 +82,12 @@ export type SqliteSchemaCompatibility = {
   allowedColumnDefinitions?: Readonly<Record<string, readonly string[]>>;
   /**
    * Exact owner-defined trigger groups that may be absent when their derived
-   * schema is disabled, but must be complete and canonical when present.
+   * or lazily ensured schema is absent, but must be complete and canonical
+   * when present.
    */
   optionalCanonicalTriggerGroups?: readonly {
+    /** The trigger group is optional only while this canonical table is absent. */
+    optionalWhenTableMissing?: string;
     tableName: string;
     triggers: readonly {
       name: string;
@@ -140,23 +145,39 @@ export function assertSqliteSchemaContains(
         mismatches.push(`unexpected unique index ${actualIndex.name ?? `on ${tableName}`}`);
       }
     }
+    const optionalCanonicalTriggerGroups = collectOptionalCanonicalTriggerGroups(
+      database,
+      compatibility,
+      tableName,
+    );
+    const optionalCanonicalTriggers = optionalCanonicalTriggerGroups.flatMap(
+      (group) => group.triggers,
+    );
+    const allowedMissingCanonicalTriggers = optionalCanonicalTriggerGroups
+      .filter((group) => group.optional)
+      .flatMap((group) => group.triggers);
     for (const expectedTrigger of expectedTable.triggers) {
+      if (
+        allowedMissingCanonicalTriggers.some(
+          (canonicalTrigger) => canonicalTrigger.name === expectedTrigger.name,
+        )
+      ) {
+        continue;
+      }
       if (!actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, expectedTrigger))) {
         mismatches.push(`missing or drifted trigger ${expectedTrigger.name}`);
       }
     }
-    const optionalCanonicalTriggerGroups = collectOptionalCanonicalTriggerGroups(
-      compatibility,
-      tableName,
-    );
     for (const triggerGroup of optionalCanonicalTriggerGroups) {
       const isPresent = actualTable.triggers.some((actualTrigger) =>
-        triggerGroup.some((canonicalTrigger) => actualTrigger.name === canonicalTrigger.name),
+        triggerGroup.triggers.some(
+          (canonicalTrigger) => actualTrigger.name === canonicalTrigger.name,
+        ),
       );
-      if (!isPresent) {
+      if (triggerGroup.optional && !isPresent) {
         continue;
       }
-      for (const canonicalTrigger of triggerGroup) {
+      for (const canonicalTrigger of triggerGroup.triggers) {
         if (
           !actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, canonicalTrigger))
         ) {
@@ -164,7 +185,6 @@ export function assertSqliteSchemaContains(
         }
       }
     }
-    const optionalCanonicalTriggers = optionalCanonicalTriggerGroups.flat();
     for (const actualTrigger of actualTable.triggers) {
       if (
         !expectedTable.triggers.some((expectedTrigger) =>
@@ -273,17 +293,26 @@ export function collectSqliteNamedIndexContract(
 }
 
 function collectOptionalCanonicalTriggerGroups(
+  database: DatabaseSync,
   compatibility: SqliteSchemaCompatibility,
   tableName: string,
-): Array<Array<{ name: string; sql: string | null }>> {
+): Array<{
+  optional: boolean;
+  triggers: Array<{ name: string; sql: string | null }>;
+}> {
   return (compatibility.optionalCanonicalTriggerGroups ?? [])
     .filter((group) => group.tableName === tableName)
-    .map((group) =>
-      group.triggers.map((trigger) => ({
+    .map((group) => ({
+      optional:
+        !group.optionalWhenTableMissing ||
+        !database
+          .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ? LIMIT 1")
+          .get(group.optionalWhenTableMissing),
+      triggers: group.triggers.map((trigger) => ({
         name: trigger.name,
         sql: normalizeOptionalCanonicalTriggerSql(trigger.sql),
       })),
-    );
+    }));
 }
 
 function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
@@ -411,11 +440,22 @@ function compareTableDefinitions(
   if (!actual || !expected) {
     return actual === expected ? null : "table definition";
   }
-  if (actual.columns.size !== expected.columns.size) {
+  const allowedMissingColumns = new Set(compatibility.allowedMissingColumns ?? []);
+  const allowedMissingCount = [...expected.columns].filter(
+    ([columnName]) =>
+      !actual.columns.has(columnName) && allowedMissingColumns.has(`${tableName}.${columnName}`),
+  ).length;
+  if (actual.columns.size + allowedMissingCount !== expected.columns.size) {
+    return "column definitions";
+  }
+  if ([...actual.columns].some(([columnName]) => !expected.columns.has(columnName))) {
     return "column definitions";
   }
   for (const [columnName, expectedDefinition] of expected.columns) {
     const actualDefinition = actual.columns.get(columnName);
+    if (actualDefinition === undefined && allowedMissingColumns.has(`${tableName}.${columnName}`)) {
+      continue;
+    }
     if (actualDefinition === expectedDefinition) {
       continue;
     }

@@ -8344,6 +8344,31 @@
       "translated": "Max."
     },
     {
+      "id": "native.android.0ad9a3b0df19e18c",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.android.21915533b17bafea",
+      "source": "$running Running · $done Done · $failed Failed",
+      "translated": "$running läuft · $done fertig · $failed fehlgeschlagen"
+    },
+    {
+      "id": "native.android.41ba16bea6545210",
+      "source": "Unphased",
+      "translated": "Unphased"
+    },
+    {
+      "id": "native.android.38327b46c006c14c",
+      "source": "1 more worker",
+      "translated": "1 weiterer Worker"
+    },
+    {
+      "id": "native.android.d7afc539a21261eb",
+      "source": "$count more workers",
+      "translated": "$count weitere Worker"
+    },
+    {
       "id": "native.android.c2dc3a65302976c0",
       "source": "1 token",
       "translated": "1 Token"
@@ -8709,11 +8734,6 @@
       "translated": "Spracherkennung nicht verfügbar"
     },
     {
-      "id": "native.android.47a59f8798682ea0",
-      "source": "Ready",
-      "translated": "Bereit"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "Start fehlgeschlagen: $message"
@@ -8769,6 +8789,11 @@
       "translated": "Sprechen fehlgeschlagen: $message"
     },
     {
+      "id": "native.android.47a59f8798682ea0",
+      "source": "Ready",
+      "translated": "Bereit"
+    },
+    {
       "id": "native.android.bd863d5e8979cd79",
       "source": "Generating voice…",
       "translated": "Stimme wird generiert…"
@@ -8782,11 +8807,6 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "Spricht…"
-    },
-    {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "Hört zu (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -8814,6 +8834,16 @@
       "translated": "Netzwerk-Zeitüberschreitung"
     },
     {
+      "id": "native.android.7b4dacae0686d138",
+      "source": "Listening",
+      "translated": "Hört zu"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "Hört zu (PTT)"
+    },
+    {
       "id": "native.android.a445b7696f9b431c",
       "source": "Recognizer busy",
       "translated": "Spracherkennung ausgelastet"
@@ -8822,11 +8852,6 @@
       "id": "native.android.297438db6f5fe8d7",
       "source": "Server error",
       "translated": "Serverfehler"
-    },
-    {
-      "id": "native.android.7b4dacae0686d138",
-      "source": "Listening",
-      "translated": "Hört zu"
     },
     {
       "id": "native.android.ea5d9621ef0f0482",
@@ -19724,6 +19749,36 @@
       "translated": "\\(toolBudget) Tools"
     },
     {
+      "id": "native.apple.905508b749e99f2a",
+      "source": "OpenClaw Not Configured",
+      "translated": "OpenClaw nicht konfiguriert"
+    },
+    {
+      "id": "native.apple.293bf9a6e721036d",
+      "source": "Remote OpenClaw Active",
+      "translated": "Remote-OpenClaw aktiv"
+    },
+    {
+      "id": "native.apple.a7b0d4e6bf5796c0",
+      "source": "OpenClaw Active",
+      "translated": "OpenClaw aktiv"
+    },
+    {
+      "id": "native.apple.b36a54d8fef80333",
+      "source": "OpenClaw Not Configured — \\(primaryName)",
+      "translated": "OpenClaw nicht konfiguriert — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.adee4bfd71731d2d",
+      "source": "Remote OpenClaw Active — \\(primaryName)",
+      "translated": "Remote-OpenClaw aktiv — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.2be6d3dd1a0d2699",
+      "source": "OpenClaw Active — \\(primaryName)",
+      "translated": "OpenClaw aktiv — \\(primaryName)"
+    },
+    {
       "id": "native.apple.5eea57b14cab3876",
       "source": "Dashboard reconnecting",
       "translated": "Dashboard wird neu verbunden"
@@ -19747,6 +19802,26 @@
       "id": "native.apple.3ed077c15e06c140",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "translated": "Prüfen Sie Einstellungen → Verbindung oder verwenden Sie Debug → Remote-Tunnel zurücksetzen und versuchen Sie es erneut."
+    },
+    {
+      "id": "native.apple.224e2db353f3a459",
+      "source": "Could Not Switch Gateway",
+      "translated": "Gateway konnte nicht gewechselt werden"
+    },
+    {
+      "id": "native.apple.213d824f2205d071",
+      "source": "Could Not Open Gateway Window",
+      "translated": "Gateway-Fenster konnte nicht geöffnet werden"
+    },
+    {
+      "id": "native.apple.11ffe8832b728acd",
+      "source": "\\(base)-\\(UUID().uuidString)",
+      "translated": "\\(base)-\\(UUID().uuidString)"
+    },
+    {
+      "id": "native.apple.f821306f90ed7692",
+      "source": "Could Not Set Primary Gateway",
+      "translated": "Primäres Gateway konnte nicht festgelegt werden"
     },
     {
       "id": "native.apple.226341f8c8b5d459",
@@ -21219,21 +21294,6 @@
       "translated": "Beenden"
     },
     {
-      "id": "native.apple.5021ed413c045620",
-      "source": "OpenClaw Not Configured",
-      "translated": "OpenClaw nicht konfiguriert"
-    },
-    {
-      "id": "native.apple.4d10ab5feb4add3f",
-      "source": "Remote OpenClaw Active",
-      "translated": "Remote-OpenClaw aktiv"
-    },
-    {
-      "id": "native.apple.b49dea5c1fdb3dd3",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw aktiv"
-    },
-    {
       "id": "native.apple.1df24a30d7963640",
       "source": "Debug",
       "translated": "Debug"
@@ -21367,6 +21427,31 @@
       "id": "native.apple.3e248379359c7593",
       "source": "Disconnected (using System default)",
       "translated": "Getrennt (Systemstandard wird verwendet)"
+    },
+    {
+      "id": "native.apple.ceb653c5fa582beb",
+      "source": "Gateways",
+      "translated": "Gateways"
+    },
+    {
+      "id": "native.apple.cce28f94dfe25e14",
+      "source": "Set \\(gateway.name) as Primary…",
+      "translated": "\\(gateway.name) als primär festlegen…"
+    },
+    {
+      "id": "native.apple.86861746f8e1c38c",
+      "source": "\\(name), healthy",
+      "translated": "\\(name), fehlerfrei"
+    },
+    {
+      "id": "native.apple.184a5dddee2c5794",
+      "source": "\\(name), health error",
+      "translated": "\\(name), Zustandsfehler"
+    },
+    {
+      "id": "native.apple.d34b1a73300c51f2",
+      "source": "\\(name), health unknown",
+      "translated": "\\(name), Zustand unbekannt"
     },
     {
       "id": "native.apple.5a99e1ae62fe0ab9",
@@ -22119,9 +22204,49 @@
       "translated": "Erweitert…"
     },
     {
-      "id": "native.apple.22947c17e44f76af",
-      "source": "Hide Advanced",
-      "translated": "Erweitert ausblenden"
+      "id": "native.apple.2e11404d7539301e",
+      "source": "Remote connection",
+      "translated": "Remote-Verbindung"
+    },
+    {
+      "id": "native.apple.f6332654911cb2e2",
+      "source": "Verify OpenClaw can reach this gateway.",
+      "translated": "Überprüfen Sie, ob OpenClaw dieses Gateway erreichen kann."
+    },
+    {
+      "id": "native.apple.6e5d3a3c3022e8c8",
+      "source": "Check connection",
+      "translated": "Verbindung prüfen"
+    },
+    {
+      "id": "native.apple.23254b5b9707c581",
+      "source": "Advanced options",
+      "translated": "Erweiterte Optionen"
+    },
+    {
+      "id": "native.apple.dfc5606a4813ecfc",
+      "source": "Hide advanced options",
+      "translated": "Erweiterte Optionen ausblenden"
+    },
+    {
+      "id": "native.apple.1907a86a6cc2165b",
+      "source": "Gateway token",
+      "translated": "Gateway-Token"
+    },
+    {
+      "id": "native.apple.14a6b8d735579fae",
+      "source": "Paste the token from your gateway",
+      "translated": "Fügen Sie das Token aus Ihrem Gateway ein"
+    },
+    {
+      "id": "native.apple.143603a153dd0100",
+      "source": "Only needed when the gateway requires token auth.",
+      "translated": "Nur erforderlich, wenn das Gateway eine Token-Authentifizierung verlangt."
+    },
+    {
+      "id": "native.apple.2a50c3ee94dde35d",
+      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "Der aktuelle Wert von gateway.remote.token ist kein Klartext. OpenClaw für macOS kann ihn nicht direkt verwenden; geben Sie hier ein Klartext-Token ein, um ihn zu ersetzen."
     },
     {
       "id": "native.apple.7881cec64b177026",
@@ -22192,41 +22317,6 @@
       "id": "native.apple.ab88df30f426b434",
       "source": "Tip: keep Tailscale enabled so your gateway stays reachable.",
       "translated": "Tipp: Lassen Sie Tailscale aktiviert, damit Ihre Gateway erreichbar bleibt."
-    },
-    {
-      "id": "native.apple.2e11404d7539301e",
-      "source": "Remote connection",
-      "translated": "Remote-Verbindung"
-    },
-    {
-      "id": "native.apple.bee162bb681696a3",
-      "source": "Checks the real remote websocket and auth handshake.",
-      "translated": "Prüft den echten Remote-Websocket und den Auth-Handshake."
-    },
-    {
-      "id": "native.apple.6e5d3a3c3022e8c8",
-      "source": "Check connection",
-      "translated": "Verbindung prüfen"
-    },
-    {
-      "id": "native.apple.1907a86a6cc2165b",
-      "source": "Gateway token",
-      "translated": "Gateway-Token"
-    },
-    {
-      "id": "native.apple.014d9fcbd97f6c48",
-      "source": "remote gateway auth token (gateway.remote.token)",
-      "translated": "Remote-Gateway-Authentifizierungstoken (gateway.remote.token)"
-    },
-    {
-      "id": "native.apple.cc14b91d20cc33ba",
-      "source": "Used when the remote gateway requires token auth.",
-      "translated": "Wird verwendet, wenn das Remote-Gateway Token-Authentifizierung erfordert."
-    },
-    {
-      "id": "native.apple.2a50c3ee94dde35d",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "Der aktuelle Wert von gateway.remote.token ist kein Klartext. OpenClaw für macOS kann ihn nicht direkt verwenden; geben Sie hier ein Klartext-Token ein, um ihn zu ersetzen."
     },
     {
       "id": "native.apple.ef011af3c0e22127",
@@ -26307,6 +26397,51 @@
       "id": "native.apple.f74d150ce05205dd",
       "source": "z",
       "translated": "z"
+    },
+    {
+      "id": "native.apple.d093ee119bfd5ab4",
+      "source": "Running",
+      "translated": "Läuft"
+    },
+    {
+      "id": "native.apple.b8a4e570b04c8a5f",
+      "source": "Queued",
+      "translated": "In Warteschlange"
+    },
+    {
+      "id": "native.apple.caf64b5a59885ec0",
+      "source": "Failed",
+      "translated": "Fehlgeschlagen"
+    },
+    {
+      "id": "native.apple.4819936ea780db96",
+      "source": "Done",
+      "translated": "Fertig"
+    },
+    {
+      "id": "native.apple.1f8ce4f7dc387a62",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.apple.e8b9db6108d47853",
+      "source": "%1$lld Running · %2$lld Done · %3$lld Failed",
+      "translated": "%1$lld Läuft · %2$lld Fertig · %3$lld Fehlgeschlagen"
+    },
+    {
+      "id": "native.apple.966f8d2b0b475f7c",
+      "source": "Unphased",
+      "translated": "Unphased"
+    },
+    {
+      "id": "native.apple.3b5805940eb33a47",
+      "source": "1 more worker",
+      "translated": "1 weiterer Worker"
+    },
+    {
+      "id": "native.apple.4278155768134e27",
+      "source": "%1$lld more workers",
+      "translated": "%1$lld weitere Worker"
     },
     {
       "id": "native.apple.71e0219d1501de06",

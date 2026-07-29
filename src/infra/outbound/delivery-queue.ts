@@ -7,14 +7,9 @@ export {
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
-  markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
-  markDeliveryPlatformSendAttemptStarted,
 } from "./delivery-queue-storage.js";
-export type {
-  QueuedReplyPayloadSendingHook,
-  QueuedRenderedMessageBatchPlan,
-} from "./delivery-queue-storage.js";
+export type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
 export {
   drainPendingDeliveries,
   recoverPendingDeliveries,

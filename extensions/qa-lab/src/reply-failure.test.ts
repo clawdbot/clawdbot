@@ -17,6 +17,13 @@ describe("extractQaFailureReplyText", () => {
     ).toContain("Something went wrong while processing your request.");
   });
 
+  it.each([
+    "⚠️ Agent couldn't generate a response. Please try again.",
+    "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+  ])("classifies the canonical incomplete-turn warning as a failure: %s", (reply) => {
+    expect(extractQaFailureReplyText(reply)).toBe(reply);
+  });
+
   it("classifies explicit provider auth guidance as a failure", () => {
     expect(
       extractQaFailureReplyText(

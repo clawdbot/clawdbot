@@ -151,7 +151,7 @@ export async function runEmbeddedAttempt(
       sessionAgentId,
     });
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
-    const { skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
+    const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
@@ -196,6 +196,7 @@ export async function runEmbeddedAttempt(
       sessionAgentId,
       skillUsagePaths,
       skillsSnapshot: skillsSnapshotForRun,
+      codeModeSkills,
       toolSearchCatalogExecutor: (toolParams) => {
         if (!toolSearchCatalogExecutor) {
           throw new Error("Tool Search catalog executor is unavailable for this run.");
@@ -251,6 +252,9 @@ export async function runEmbeddedAttempt(
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
     const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
+    // Catalog preparation registers global run state before tool projection and
+    // diagnostics, so arm cleanup before either can fail and leak the catalog.
+    toolSearchCatalogApplied = toolSearchCatalogRef !== undefined;
     const preparedToolCatalog = prepareEmbeddedAttemptToolCatalog({
       attempt: params,
       preparedToolBase,
@@ -277,9 +281,6 @@ export async function runEmbeddedAttempt(
       toolSearch,
       toolSearchRunPlan,
     } = preparedToolCatalog;
-    // Arms the early-exit catalog clear: the run-scoped catalog is registered in
-    // a process-global map that only clearToolSearchCatalog deletes from, so a
-    // prep-phase abort after registration leaks the entry without this.
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
     const preparedSystemPrompt = await prepareEmbeddedAttemptSystemPrompt({
       activeContextEngine,
@@ -298,6 +299,7 @@ export async function runEmbeddedAttempt(
       sandboxSessionKey,
       sessionAgentId,
       skillsPrompt,
+      codeModeActive: codeModeControlsEnabledForRun,
       toolSearchCatalogRef,
       toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
       toolSearchRuntimeConfig,
@@ -406,7 +408,7 @@ export async function runEmbeddedAttempt(
           },
         },
       });
-      return await runEmbeddedAttemptExecutionPhase({
+      const executionResult = await runEmbeddedAttemptExecutionPhase({
         attempt: params,
         ...(activeContextEngine ? { activeContextEngine } : {}),
         agentDir,
@@ -447,6 +449,22 @@ export async function runEmbeddedAttempt(
           },
         },
       });
+      // Read catalog counters before the finally-phase cleanup clears the
+      // run-scoped catalog session; afterwards the counts are gone.
+      const catalogSession = toolSearchCatalogRef?.current;
+      return {
+        ...executionResult,
+        codeModeEngaged: codeModeControlsEnabledForRun,
+        ...(catalogSession
+          ? {
+              bridgeCalls: {
+                search: catalogSession.searchCount,
+                describe: catalogSession.describeCount,
+                call: catalogSession.callCount,
+              },
+            }
+          : {}),
+      };
     } finally {
       const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
       await cleanupEmbeddedAttemptSessionPhase({

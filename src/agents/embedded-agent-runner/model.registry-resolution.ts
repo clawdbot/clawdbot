@@ -17,6 +17,7 @@ import {
   shouldSuppressConfiguredModel,
   type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
+import type { InlineModelEntry } from "./model.inline-provider.js";
 import {
   DEFAULT_PROVIDER_RUNTIME_HOOKS,
   normalizeResolvedModel,
@@ -43,11 +44,13 @@ export function resolveExplicitModelWithRegistry(params: {
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  preparedInlineProviderModels?: readonly InlineModelEntry[];
 }): ExplicitModelResolution | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const inlineMatch = findInlineModelMatch({
     providers: cfg?.models?.providers ?? {},
+    preparedModels: params.preparedInlineProviderModels,
     provider,
     modelId,
   });

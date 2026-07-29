@@ -1,5 +1,5 @@
 [versions]
-agp = "9.3.0"
+agp = "9.3.1"
 androidx-activity = "1.13.0"
 androidx-appcompat = "1.7.1"
 androidx-benchmark = "1.4.1"
@@ -24,10 +24,10 @@ coroutines = "1.11.0"
 dnsjava = "3.6.5"
 junit = "4.13.2"
 junit-vintage = "6.1.2"
-kotest = "6.2.2"
+kotest = "6.2.3"
 ksp = "2.3.10"
 ktlint-gradle = "14.2.0"
-kotlin = "2.4.10"
+kotlin = "2.4.0"
 material = "1.14.0"
 okhttp = "5.4.0"
 play-services-wearable = "20.0.1"
@@ -49,6 +49,7 @@ androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = 
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }

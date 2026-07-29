@@ -20,6 +20,7 @@ import {
 } from "./model.compat.js";
 import {
   buildInlineProviderModels,
+  type InlineModelEntry,
   type InlineProviderConfig,
   normalizeResolvedTransportApi,
   resolveProviderModelInput,
@@ -125,6 +126,7 @@ function matchesProviderScopedModelId(params: {
 
 export function findInlineModelMatch(params: {
   providers: Record<string, InlineProviderConfig>;
+  preparedModels?: readonly InlineModelEntry[];
   provider: string;
   modelId: string;
 }) {
@@ -134,7 +136,7 @@ export function findInlineModelMatch(params: {
       provider: entry.provider,
       modelId: params.modelId,
     });
-  const inlineModels = buildInlineProviderModels(params.providers);
+  const inlineModels = params.preparedModels ?? buildInlineProviderModels(params.providers);
   const exact = inlineModels.find(
     (entry) => entry.provider === params.provider && matchesModelId(entry),
   );
@@ -305,6 +307,18 @@ function markDiscoveredMaxTokensSource(model: ProviderRuntimeModel): ProviderRun
     return model;
   }
   return { ...model, maxTokensSource: "discovered" };
+}
+
+export function clampModelMaxTokensToContextWindow(
+  maxTokens: number | undefined,
+  contextWindow: number | undefined,
+): number | undefined {
+  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens)) {
+    return undefined;
+  }
+  return typeof contextWindow === "number" && Number.isFinite(contextWindow)
+    ? Math.min(maxTokens, contextWindow)
+    : maxTokens;
 }
 
 export function applyConfiguredProviderOverrides(params: {
@@ -503,12 +517,10 @@ export function applyConfiguredProviderOverrides(params: {
     metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
-  const normalizedResolvedMaxTokens =
-    typeof resolvedMaxTokens === "number" && Number.isFinite(resolvedMaxTokens)
-      ? typeof resolvedContextWindow === "number" && Number.isFinite(resolvedContextWindow)
-        ? Math.min(resolvedMaxTokens, resolvedContextWindow)
-        : resolvedMaxTokens
-      : undefined;
+  const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
+    resolvedMaxTokens,
+    resolvedContextWindow,
+  );
   const catalogCompat = mergeModelCompat(
     configuredStaticCatalogModel?.compat,
     discoveredModel.compat,

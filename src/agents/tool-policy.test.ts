@@ -12,6 +12,7 @@ import {
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
+  hasRestrictiveAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
@@ -78,6 +79,19 @@ describe("tool-policy", () => {
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
       "*",
     ]);
+  });
+
+  it("does not treat additive allow-all policies as restrictive", () => {
+    expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ alsoAllow: ["optional-demo"] }))).toBe(
+      false,
+    );
+    expect(
+      hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: [], alsoAllow: ["optional-demo"] })),
+    ).toBe(false);
+  });
+
+  it("still treats explicit bounded allowlists as restrictive", () => {
+    expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: ["read"] }))).toBe(true);
   });
 });
 

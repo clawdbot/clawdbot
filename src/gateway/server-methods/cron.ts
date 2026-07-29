@@ -438,6 +438,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir?: "asc" | "desc";
       agentId?: string;
       compact?: boolean;
+      includeDeliveryPreviews?: boolean;
     };
     const callerScope = readCronCallerScope(client);
     const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
@@ -468,12 +469,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(true, { ...page, jobs: page.jobs.map(compactCronListJob) }, undefined);
       return;
     }
+    const jobs = page.jobs.map(cronJobReadView);
+    if (p.includeDeliveryPreviews === false) {
+      // Full job rows are the default because editors need their payloads. Delivery
+      // previews are independently suppressible so list-only callers avoid per-job I/O
+      // without weakening the shipped full-response default.
+      respond(true, { ...page, jobs }, undefined);
+      return;
+    }
     const deliveryPreviews = await resolveCronDeliveryPreviews({
       cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),
       jobs: page.jobs,
     });
-    respond(true, { ...page, jobs: page.jobs.map(cronJobReadView), deliveryPreviews }, undefined);
+    respond(true, { ...page, jobs, deliveryPreviews }, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateCronStatusParams, "cron.status", respond)) {
@@ -1060,21 +1069,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const jobs = filterCronRunLogJobsByAgent(
-        await context.cron.list({ includeDisabled: true }),
-        p.agentId,
-        context.cron.getDefaultAgentId(),
-      );
-      const matchedJob = jobs.find(
-        (job) =>
-          job.id === jobId &&
-          cronJobMatchesCallerScope({
-            job,
-            callerScope,
-            defaultAgentId: context.cron.getDefaultAgentId(),
-            allowCurrentJob: true,
-          }),
-      );
+      const job = await context.cron.readJob(jobId as string);
+      const defaultAgentId = context.cron.getDefaultAgentId();
+      const matchedJob =
+        job &&
+        filterCronRunLogJobsByAgent([job], p.agentId, defaultAgentId).length > 0 &&
+        cronJobMatchesCallerScope({
+          job,
+          callerScope,
+          defaultAgentId,
+          allowCurrentJob: true,
+        })
+          ? job
+          : undefined;
+      // Operator history survives job deletion; scoped reads still need a live, matching owner.
       if ((callerScope || p.agentId) && !matchedJob) {
         respondInvalidCronParams(respond, "cron.runs", "id not found");
         return;

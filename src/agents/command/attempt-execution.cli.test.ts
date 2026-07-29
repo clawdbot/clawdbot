@@ -5,16 +5,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/legacy-sqlite-marker.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   listSessionEntries,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../../config/sessions/sqlite-marker.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -162,8 +162,12 @@ async function persistCliTranscriptEntry(
   return result.sessionEntry;
 }
 
-async function readSessionMessages(sessionFile: string) {
-  return (await readTranscriptEntries(sessionFile))
+type TranscriptReadTarget =
+  | string
+  | { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+
+async function readSessionMessages(target: TranscriptReadTarget) {
+  return (await readTranscriptEntries(target))
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
@@ -171,19 +175,23 @@ async function readSessionMessages(sessionFile: string) {
     );
 }
 
-async function readSessionFileEntries(sessionFile: string) {
+async function readSessionFileEntries(target: TranscriptReadTarget) {
   return await readTranscriptEntries<{
     type?: string;
     id?: string;
     parentId?: string | null;
     cwd?: string;
     message?: { role?: string };
-  }>(sessionFile);
+  }>(target);
 }
 
 async function readTranscriptEntries<T extends { type?: string; message?: unknown }>(
-  sessionFile: string,
+  target: TranscriptReadTarget,
 ): Promise<T[]> {
+  if (typeof target !== "string") {
+    return (await loadTranscriptEvents(target)) as T[];
+  }
+  const sessionFile = target;
   const marker = parseSqliteSessionFileMarker(sessionFile);
   if (marker) {
     return (await loadTranscriptEvents({
@@ -543,6 +551,37 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("clears a fork-marked Claude CLI session after terminal failover", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-expired";
+    const cliSessionId = "expired-fork-source";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-fork-expired", cliSessionId);
+    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("fork source expired", {
+        reason: "session_expired",
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "fork from an expired source",
+        runId: "run-cli-fork-expired",
+      }),
+    ).rejects.toMatchObject({ name: "FailoverError", reason: "session_expired" });
+
+    expect(firstRunCliAgentArg().forkCliSessionOnResume).toBe(true);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
   });
 
   it("preserves a reused Claude CLI session after detached media starts", async () => {
@@ -1683,16 +1722,14 @@ describe("CLI attempt execution", () => {
       nowSpy.mockRestore();
     }
 
-    const updatedSessionFile = updatedEntry?.sessionFile;
-    if (!updatedSessionFile) {
-      throw new Error("expected CLI transcript persistence to create a session file");
-    }
-    expect(parseSqliteSessionFileMarker(updatedSessionFile)).toMatchObject({
+    expect(updatedEntry).not.toHaveProperty("sessionFile");
+    const target = {
       agentId: "main",
       sessionId: sessionEntry.sessionId,
+      sessionKey,
       storePath,
-    });
-    const entries = await readSessionFileEntries(updatedSessionFile);
+    };
+    const entries = await readSessionFileEntries(target);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
       id: sessionEntry.sessionId,
@@ -1706,7 +1743,7 @@ describe("CLI attempt execution", () => {
       type: "message",
       parentId: entries[1]?.id,
     });
-    const messages = await readSessionMessages(updatedSessionFile);
+    const messages = await readSessionMessages(target);
     expect(messages).toHaveLength(2);
     expectRecordFields(requireRecord(messages[0], "user message"), {
       role: "user",
@@ -1721,7 +1758,7 @@ describe("CLI attempt execution", () => {
     });
 
     const persisted = readSessionStore();
-    expect(persisted[sessionKey]?.sessionFile).toBe(updatedSessionFile);
+    expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
     expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(nowCalls.at(-1) ?? 0);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
@@ -1777,6 +1814,52 @@ describe("CLI attempt execution", () => {
         content: [{ type: "text", text: "hello from cli" }],
       }),
     );
+  });
+
+  it("does not gap-fill an assistant already owned by the runtime", async () => {
+    const sessionKey = "agent:main:direct:runtime-owned-assistant";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-runtime-owned-assistant",
+      updatedAt: Date.now(),
+    };
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "runtime answer" }],
+          timestamp: Date.now(),
+        },
+        cwd: tmpDir,
+      },
+    );
+
+    await persistCliTurnTranscript({
+      body: "ignored prompt",
+      result: makeCliResult("runtime answer"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+      skipAssistantTurn: true,
+    });
+
+    const messages = await readSessionMessages(
+      formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: sessionEntry.sessionId,
+        storePath,
+      }),
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "runtime answer" }],
+    });
   });
 
   it("persists a media-only ACP user turn when the reply is empty", async () => {
@@ -1894,7 +1977,13 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    let messages = await readSessionMessages(updatedFirst?.sessionFile ?? "");
+    const target = {
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    };
+    let messages = await readSessionMessages(target);
     expect(messages).toHaveLength(1);
     expectRecordFields(requireRecord(messages[0], "assistant message"), {
       role: "assistant",
@@ -1915,7 +2004,7 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    messages = await readSessionMessages(updatedFirst?.sessionFile ?? "");
+    messages = await readSessionMessages(target);
     expect(messages).toHaveLength(1);
   });
 
@@ -1949,11 +2038,6 @@ describe("CLI attempt execution", () => {
       config: {},
       embeddedAssistantGapFill: true,
     });
-    const sessionFile = updatedFirst?.sessionFile;
-    if (typeof sessionFile !== "string") {
-      throw new Error("Expected CLI transcript session file.");
-    }
-
     await appendTranscriptEvent(
       { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
       {
@@ -1981,7 +2065,12 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    const messages = await readSessionMessages(sessionFile);
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
     expect(messages).toHaveLength(1);
     expectRecordFields(requireRecord(messages[0], "assistant message"), {
       role: "assistant",
@@ -2019,12 +2108,7 @@ describe("CLI attempt execution", () => {
       config: {},
       embeddedAssistantGapFill: true,
     });
-    const sessionFile = updatedFirst?.sessionFile;
-    if (typeof sessionFile !== "string") {
-      throw new Error("Expected CLI transcript session file.");
-    }
-    const persistedFirst = readSessionStore();
-    expect(persistedFirst[sessionKey]?.sessionFile).toBe(sessionFile);
+    expect(updatedFirst).not.toHaveProperty("sessionFile");
 
     await appendTranscriptMessage(
       { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
@@ -2052,9 +2136,14 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    const messages = await readSessionMessages(sessionFile);
-    expect(messages).toHaveLength(3);
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
     expect(messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
+    expect(messages).toHaveLength(3);
     expectRecordFields(requireRecord(messages[2], "deduped assistant message"), {
       content: [{ type: "text", text: "same answer" }],
     });
@@ -2069,7 +2158,7 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
 
-    const updatedEntry = await persistCliTranscriptEntry({
+    await persistCliTranscriptEntry({
       body: [
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "secret runtime context",
@@ -2089,7 +2178,12 @@ describe("CLI attempt execution", () => {
       config: {},
     });
 
-    const messages = await readSessionMessages(updatedEntry?.sessionFile ?? "");
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
     expectRecordFields(requireRecord(messages[0], "transcript user message"), {
       role: "user",
       content: "visible ask",

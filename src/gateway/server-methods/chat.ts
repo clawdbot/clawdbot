@@ -179,7 +179,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               label: p.label,
               sessionId,
               storePath,
-              sessionFile: entry.sessionFile,
               agentId,
               createIfMissing: true,
               cfg,

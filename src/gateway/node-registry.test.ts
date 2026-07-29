@@ -7,6 +7,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -834,7 +835,7 @@ describe("gateway/node-registry", () => {
     });
   });
 
-  it("keeps a reconnected node when the old connection unregisters", async () => {
+  it("settles zero-timeout invokes when a node reconnects before its old connection closes", async () => {
     const registry = createTestNodeRegistry();
     const oldFrames: string[] = [];
     const newClient = makeClient("conn-new", "node-1");
@@ -843,7 +844,7 @@ describe("gateway/node-registry", () => {
     const oldInvoke = registry.invoke({
       nodeId: "node-1",
       command: "system.run",
-      timeoutMs: 1_000,
+      timeoutMs: 0,
     });
     const oldDisconnected = oldInvoke.catch((err: unknown) => err);
     const oldRequest = JSON.parse(oldFrames[0] ?? "{}") as { payload?: { id?: string } };
@@ -857,9 +858,33 @@ describe("gateway/node-registry", () => {
         ok: true,
       }),
     ).toBe(false);
+    await expect(oldDisconnected).resolves.toEqual(new Error("node disconnected (system.run)"));
+    expect(registry.get("node-1")).toBe(newSession);
     expect(registry.unregister("conn-old")).toBeNull();
     expect(registry.get("node-1")).toBe(newSession);
-    await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
+  });
+
+  it("settles zero-timeout MCP calls without disconnecting the replacement node", async () => {
+    const registry = createNodeRegistry();
+    registerNodeSession(registry, makeClient("conn-old", "node-1"));
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "mcp.tools.call.v1",
+      timeoutMs: 0,
+    });
+
+    const replacement = registerNodeSession(registry, makeClient("conn-new", "node-1"));
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "MCP_SERVER_UNAVAILABLE",
+        message: "node host disconnected during MCP tool call",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+    expect(registry.unregister("conn-old")).toBeNull();
+    expect(registry.get("node-1")).toBe(replacement);
   });
 
   it("rejects invoke when the node connection changed before dispatch", async () => {
@@ -1364,6 +1389,79 @@ describe("gateway/node-registry", () => {
         chunk: "late",
       }),
     ).toBe(false);
+  });
+
+  it.each(["mcp.tools.call.v1", "system.run"])(
+    "forwards cancellation of first-party non-streaming %s calls",
+    async (command) => {
+      const registry = createNodeRegistry();
+      const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+      const controller = new AbortController();
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command,
+        timeoutMs: 1_000,
+        signal: controller.signal,
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+      controller.abort();
+
+      await expect(invoke).resolves.toMatchObject({
+        ok: false,
+        error: { code: "ABORTED" },
+      });
+      expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+        event: "node.invoke.cancel",
+        payload: { invokeId: request.payload?.id, nodeId: "node-1" },
+      });
+    },
+  );
+
+  it.each(["mcp.tools.call.v1", "system.run"])(
+    "forwards timeouts of first-party non-streaming %s calls",
+    async (command) => {
+      vi.useFakeTimers();
+      try {
+        const registry = createNodeRegistry();
+        const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+        const invoke = registry.invoke({ nodeId: "node-1", command, timeoutMs: 100 });
+        const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        await expect(invoke).resolves.toMatchObject({
+          ok: false,
+          error: { code: "TIMEOUT" },
+        });
+        expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+          event: "node.invoke.cancel",
+          payload: { invokeId: request.payload?.id, nodeId: "node-1" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves legacy non-streaming node cancellation behavior", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      timeoutMs: 1_000,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(invoke).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ABORTED" },
+    });
+    expect(frames).toHaveLength(1);
   });
 
   it("cancels the node when a streamed progress consumer fails", async () => {

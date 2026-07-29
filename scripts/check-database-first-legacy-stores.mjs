@@ -256,8 +256,12 @@ function visibleSet(scopes) {
   return new Set(scopes.flatMap((scope) => [...scope]));
 }
 
+function scopeForRead(scopes, name) {
+  return scopes.findLast((scope) => scope.has(name));
+}
+
 function scopeForWrite(scopes, name) {
-  return scopes.findLast((scope) => scope.has(name)) ?? lastScope(scopes);
+  return scopeForRead(scopes, name) ?? lastScope(scopes);
 }
 
 function currentLegacyWriteViolationAllowances(relativePath = null) {
@@ -766,6 +770,38 @@ export function collectDatabaseFirstLegacyStoreViolations(
   const wrapperFunctionScopes = [new Map()];
   const conditionalExecutionScopes = [false];
   const branchEffectScopes = [];
+  const lexicalScopeStacks = [
+    [fsWriteAliasScopes, Map],
+    [fsSafeStoreFactoryAliasScopes, Map],
+    [fsSafeStoreScopes, Map],
+    [fsSafeJsonStoreScopes, Map],
+    [fsModuleBindingScopes, Map],
+    [fsModulePropertyScopes, Map],
+    [requireAliasScopes, Map],
+    [requireShadowScopes, Set],
+    [createRequireShadowScopes, Set],
+    [legacyPathScopes, Map],
+    [literalTextScopes, Map],
+    [knownUndefinedScopes, Map],
+    [legacyKnownObjectLiteralScopes, Map],
+    [legacyObjectPropertyScopes, Map],
+    [wrapperFunctionScopes, Map],
+  ];
+
+  function withLexicalScope(isConditional, visitScope) {
+    for (const [scopes, Scope] of lexicalScopeStacks) {
+      scopes.push(new Scope());
+    }
+    conditionalExecutionScopes.push(isConditional);
+    try {
+      return visitScope();
+    } finally {
+      conditionalExecutionScopes.pop();
+      for (let index = lexicalScopeStacks.length - 1; index >= 0; index--) {
+        lexicalScopeStacks[index][0].pop();
+      }
+    }
+  }
 
   function addViolation(node, kind, fingerprintNode = node) {
     const line = toLine(sourceFile, node);
@@ -789,13 +825,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function resolveRequireAlias(name) {
-    for (let index = requireAliasScopes.length - 1; index >= 0; index--) {
-      const scope = requireAliasScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) === true;
-      }
-    }
-    return false;
+    return scopeForRead(requireAliasScopes, name)?.get(name) === true;
   }
 
   function isNodeRequireName(name) {
@@ -825,13 +855,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function resolveFsModuleBinding(name) {
-    for (let index = fsModuleBindingScopes.length - 1; index >= 0; index--) {
-      const scope = fsModuleBindingScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) === true;
-      }
-    }
-    return false;
+    return scopeForRead(fsModuleBindingScopes, name)?.get(name) === true;
   }
 
   function resolveFsModuleProperty(pathParts) {
@@ -852,23 +876,11 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function resolveFsWriteAlias(name) {
-    for (let index = fsWriteAliasScopes.length - 1; index >= 0; index--) {
-      const scope = fsWriteAliasScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) ?? null;
-      }
-    }
-    return null;
+    return scopeForRead(fsWriteAliasScopes, name)?.get(name) ?? null;
   }
 
   function resolveFsSafeStoreFactoryAlias(name) {
-    for (let index = fsSafeStoreFactoryAliasScopes.length - 1; index >= 0; index--) {
-      const scope = fsSafeStoreFactoryAliasScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) ?? null;
-      }
-    }
-    return null;
+    return scopeForRead(fsSafeStoreFactoryAliasScopes, name)?.get(name) ?? null;
   }
 
   function resolveFsSafeStore(name) {
@@ -877,13 +889,8 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function lookupFsSafeStore(name) {
-    for (let index = fsSafeStoreScopes.length - 1; index >= 0; index--) {
-      const scope = fsSafeStoreScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) === true;
-      }
-    }
-    return null;
+    const scope = scopeForRead(fsSafeStoreScopes, name);
+    return scope ? scope.get(name) === true : null;
   }
 
   function resolveFsSafeJsonStore(name) {
@@ -892,13 +899,8 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function lookupFsSafeJsonStore(name) {
-    for (let index = fsSafeJsonStoreScopes.length - 1; index >= 0; index--) {
-      const scope = fsSafeJsonStoreScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) === true;
-      }
-    }
-    return null;
+    const scope = scopeForRead(fsSafeJsonStoreScopes, name);
+    return scope ? scope.get(name) === true : null;
   }
 
   function visibleRequireAliasSnapshot(maxScopeIndex = requireAliasScopes.length - 1) {
@@ -961,33 +963,15 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function resolveLegacyPathIdentifier(name) {
-    for (let index = legacyPathScopes.length - 1; index >= 0; index--) {
-      const scope = legacyPathScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) === true;
-      }
-    }
-    return false;
+    return scopeForRead(legacyPathScopes, name)?.get(name) === true;
   }
 
   function resolveLiteralTextIdentifier(name) {
-    for (let index = literalTextScopes.length - 1; index >= 0; index--) {
-      const scope = literalTextScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) ?? [];
-      }
-    }
-    return [];
+    return scopeForRead(literalTextScopes, name)?.get(name) ?? [];
   }
 
   function resolveKnownUndefinedIdentifier(name) {
-    for (let index = knownUndefinedScopes.length - 1; index >= 0; index--) {
-      const scope = knownUndefinedScopes[index];
-      if (scope.has(name)) {
-        return scope.get(name) === true;
-      }
-    }
-    return false;
+    return scopeForRead(knownUndefinedScopes, name)?.get(name) === true;
   }
 
   function requireAliasWriteTarget(name) {
@@ -1321,44 +1305,15 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function visitWithChildScope(node) {
-    fsWriteAliasScopes.push(new Map());
-    fsSafeStoreFactoryAliasScopes.push(new Map());
-    fsSafeStoreScopes.push(new Map());
-    fsSafeJsonStoreScopes.push(new Map());
-    fsModuleBindingScopes.push(new Map());
-    fsModulePropertyScopes.push(new Map());
-    requireAliasScopes.push(new Map());
-    requireShadowScopes.push(new Set());
-    createRequireShadowScopes.push(new Set());
-    legacyPathScopes.push(new Map());
-    literalTextScopes.push(new Map());
-    knownUndefinedScopes.push(new Map());
-    legacyKnownObjectLiteralScopes.push(new Map());
-    legacyObjectPropertyScopes.push(new Map());
-    wrapperFunctionScopes.push(new Map());
-    conditionalExecutionScopes.push(
+    withLexicalScope(
       lastScope(conditionalExecutionScopes) || isConditionallyExecutedScope(node),
+      () => {
+        if ("statements" in node) {
+          registerHoistedWrapperFunctions(node.statements);
+        }
+        ts.forEachChild(node, visit);
+      },
     );
-    if ("statements" in node) {
-      registerHoistedWrapperFunctions(node.statements);
-    }
-    ts.forEachChild(node, visit);
-    conditionalExecutionScopes.pop();
-    wrapperFunctionScopes.pop();
-    legacyObjectPropertyScopes.pop();
-    legacyKnownObjectLiteralScopes.pop();
-    knownUndefinedScopes.pop();
-    literalTextScopes.pop();
-    legacyPathScopes.pop();
-    fsModulePropertyScopes.pop();
-    fsModuleBindingScopes.pop();
-    fsSafeJsonStoreScopes.pop();
-    fsSafeStoreScopes.pop();
-    fsSafeStoreFactoryAliasScopes.pop();
-    fsWriteAliasScopes.pop();
-    createRequireShadowScopes.pop();
-    requireShadowScopes.pop();
-    requireAliasScopes.pop();
   }
 
   function registerFsBindingParameter(name) {
@@ -1408,59 +1363,29 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function visitFunctionLike(node, fsBindingParameterIndexes = new Set()) {
-    fsWriteAliasScopes.push(new Map());
-    fsSafeStoreFactoryAliasScopes.push(new Map());
-    fsSafeStoreScopes.push(new Map());
-    fsSafeJsonStoreScopes.push(new Map());
-    fsModuleBindingScopes.push(new Map());
-    fsModulePropertyScopes.push(new Map());
-    requireAliasScopes.push(new Map());
-    requireShadowScopes.push(new Set());
-    createRequireShadowScopes.push(new Set());
-    legacyPathScopes.push(new Map());
-    literalTextScopes.push(new Map());
-    knownUndefinedScopes.push(new Map());
-    legacyKnownObjectLiteralScopes.push(new Map());
-    legacyObjectPropertyScopes.push(new Map());
-    wrapperFunctionScopes.push(new Map());
-    conditionalExecutionScopes.push(false);
-    node.parameters.forEach((parameter, index) => {
-      for (const name of bindingPatternNames(parameter.name)) {
-        lastScope(legacyPathScopes).set(name, false);
-        lastScope(legacyKnownObjectLiteralScopes).set(name, false);
-        lastScope(knownUndefinedScopes).set(name, false);
-        lastScope(literalTextScopes).set(name, null);
-        lastScope(wrapperFunctionScopes).set(name, null);
-        lastScope(requireAliasScopes).set(name, false);
-      }
-      markFsWriteAliasShadows(parameter.name);
-      markFsSafeStoreShadows(parameter.name);
-      markFsModuleBindingShadows(parameter.name);
-      markFsModulePropertyShadows(parameter.name);
-      markRequireShadows(parameter.name);
-      markCreateRequireShadows(parameter.name);
-      registerFsModuleTypeProperties(parameter.name, parameter.type);
-      if (fsBindingParameterIndexes.has(index)) {
-        registerFsBindingParameter(parameter.name);
-      }
+    withLexicalScope(false, () => {
+      node.parameters.forEach((parameter, index) => {
+        for (const name of bindingPatternNames(parameter.name)) {
+          lastScope(legacyPathScopes).set(name, false);
+          lastScope(legacyKnownObjectLiteralScopes).set(name, false);
+          lastScope(knownUndefinedScopes).set(name, false);
+          lastScope(literalTextScopes).set(name, null);
+          lastScope(wrapperFunctionScopes).set(name, null);
+          lastScope(requireAliasScopes).set(name, false);
+        }
+        markFsWriteAliasShadows(parameter.name);
+        markFsSafeStoreShadows(parameter.name);
+        markFsModuleBindingShadows(parameter.name);
+        markFsModulePropertyShadows(parameter.name);
+        markRequireShadows(parameter.name);
+        markCreateRequireShadows(parameter.name);
+        registerFsModuleTypeProperties(parameter.name, parameter.type);
+        if (fsBindingParameterIndexes.has(index)) {
+          registerFsBindingParameter(parameter.name);
+        }
+      });
+      ts.forEachChild(node, visit);
     });
-    ts.forEachChild(node, visit);
-    conditionalExecutionScopes.pop();
-    wrapperFunctionScopes.pop();
-    legacyObjectPropertyScopes.pop();
-    legacyKnownObjectLiteralScopes.pop();
-    knownUndefinedScopes.pop();
-    literalTextScopes.pop();
-    legacyPathScopes.pop();
-    fsModulePropertyScopes.pop();
-    fsModuleBindingScopes.pop();
-    fsSafeJsonStoreScopes.pop();
-    fsSafeStoreScopes.pop();
-    fsSafeStoreFactoryAliasScopes.pop();
-    fsWriteAliasScopes.pop();
-    createRequireShadowScopes.pop();
-    requireShadowScopes.pop();
-    requireAliasScopes.pop();
   }
 
   function dynamicFsImportThenCallback(node) {
@@ -7120,41 +7045,14 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function visitInConditionalExecution(node, branchEffects = null) {
-    conditionalExecutionScopes.push(true);
-    fsWriteAliasScopes.push(new Map());
-    fsSafeStoreFactoryAliasScopes.push(new Map());
-    fsSafeStoreScopes.push(new Map());
-    fsSafeJsonStoreScopes.push(new Map());
-    fsModuleBindingScopes.push(new Map());
-    fsModulePropertyScopes.push(new Map());
-    requireAliasScopes.push(new Map());
-    requireShadowScopes.push(new Set());
-    createRequireShadowScopes.push(new Set());
-    legacyPathScopes.push(new Map());
-    literalTextScopes.push(new Map());
-    knownUndefinedScopes.push(new Map());
-    legacyKnownObjectLiteralScopes.push(new Map());
-    legacyObjectPropertyScopes.push(new Map());
-    wrapperFunctionScopes.push(new Map());
-    branchEffectScopes.push(branchEffects);
-    visit(node);
-    branchEffectScopes.pop();
-    wrapperFunctionScopes.pop();
-    legacyObjectPropertyScopes.pop();
-    legacyKnownObjectLiteralScopes.pop();
-    knownUndefinedScopes.pop();
-    literalTextScopes.pop();
-    legacyPathScopes.pop();
-    fsModulePropertyScopes.pop();
-    fsModuleBindingScopes.pop();
-    fsSafeJsonStoreScopes.pop();
-    fsSafeStoreScopes.pop();
-    fsSafeStoreFactoryAliasScopes.pop();
-    fsWriteAliasScopes.pop();
-    createRequireShadowScopes.pop();
-    requireShadowScopes.pop();
-    requireAliasScopes.pop();
-    conditionalExecutionScopes.pop();
+    withLexicalScope(true, () => {
+      branchEffectScopes.push(branchEffects);
+      try {
+        visit(node);
+      } finally {
+        branchEffectScopes.pop();
+      }
+    });
   }
 
   function visit(node) {
@@ -7190,90 +7088,30 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
 
     if (ts.isForStatement(node)) {
-      fsWriteAliasScopes.push(new Map());
-      fsSafeStoreFactoryAliasScopes.push(new Map());
-      fsSafeStoreScopes.push(new Map());
-      fsSafeJsonStoreScopes.push(new Map());
-      fsModuleBindingScopes.push(new Map());
-      fsModulePropertyScopes.push(new Map());
-      requireAliasScopes.push(new Map());
-      requireShadowScopes.push(new Set());
-      createRequireShadowScopes.push(new Set());
-      legacyPathScopes.push(new Map());
-      literalTextScopes.push(new Map());
-      knownUndefinedScopes.push(new Map());
-      legacyKnownObjectLiteralScopes.push(new Map());
-      legacyObjectPropertyScopes.push(new Map());
-      wrapperFunctionScopes.push(new Map());
-      conditionalExecutionScopes.push(false);
-      if (node.initializer) {
-        visit(node.initializer);
-      }
-      if (node.condition) {
-        visit(node.condition);
-      }
-      if (node.incrementor) {
-        visitInConditionalExecution(node.incrementor);
-      }
-      visitInConditionalExecution(node.statement);
-      conditionalExecutionScopes.pop();
-      wrapperFunctionScopes.pop();
-      legacyObjectPropertyScopes.pop();
-      legacyKnownObjectLiteralScopes.pop();
-      knownUndefinedScopes.pop();
-      literalTextScopes.pop();
-      legacyPathScopes.pop();
-      fsModulePropertyScopes.pop();
-      fsModuleBindingScopes.pop();
-      fsSafeJsonStoreScopes.pop();
-      fsSafeStoreScopes.pop();
-      fsSafeStoreFactoryAliasScopes.pop();
-      fsWriteAliasScopes.pop();
-      createRequireShadowScopes.pop();
-      requireShadowScopes.pop();
-      requireAliasScopes.pop();
+      withLexicalScope(false, () => {
+        if (node.initializer) {
+          visit(node.initializer);
+        }
+        if (node.condition) {
+          visit(node.condition);
+        }
+        if (node.incrementor) {
+          visitInConditionalExecution(node.incrementor);
+        }
+        visitInConditionalExecution(node.statement);
+      });
       return;
     }
 
     if (ts.isForInStatement(node) || ts.isForOfStatement(node)) {
       visit(node.expression);
-      fsWriteAliasScopes.push(new Map());
-      fsSafeStoreFactoryAliasScopes.push(new Map());
-      fsSafeStoreScopes.push(new Map());
-      fsSafeJsonStoreScopes.push(new Map());
-      fsModuleBindingScopes.push(new Map());
-      fsModulePropertyScopes.push(new Map());
-      requireAliasScopes.push(new Map());
-      requireShadowScopes.push(new Set());
-      createRequireShadowScopes.push(new Set());
-      legacyPathScopes.push(new Map());
-      literalTextScopes.push(new Map());
-      knownUndefinedScopes.push(new Map());
-      legacyKnownObjectLiteralScopes.push(new Map());
-      legacyObjectPropertyScopes.push(new Map());
-      wrapperFunctionScopes.push(new Map());
-      conditionalExecutionScopes.push(true);
-      visit(node.initializer);
-      if (ts.isForOfStatement(node)) {
-        markArrayBindingPatternFromForOf(node.initializer, node.expression);
-      }
-      visit(node.statement);
-      conditionalExecutionScopes.pop();
-      wrapperFunctionScopes.pop();
-      legacyObjectPropertyScopes.pop();
-      legacyKnownObjectLiteralScopes.pop();
-      knownUndefinedScopes.pop();
-      literalTextScopes.pop();
-      legacyPathScopes.pop();
-      fsModulePropertyScopes.pop();
-      fsModuleBindingScopes.pop();
-      fsSafeJsonStoreScopes.pop();
-      fsSafeStoreScopes.pop();
-      fsSafeStoreFactoryAliasScopes.pop();
-      fsWriteAliasScopes.pop();
-      createRequireShadowScopes.pop();
-      requireShadowScopes.pop();
-      requireAliasScopes.pop();
+      withLexicalScope(true, () => {
+        visit(node.initializer);
+        if (ts.isForOfStatement(node)) {
+          markArrayBindingPatternFromForOf(node.initializer, node.expression);
+        }
+        visit(node.statement);
+      });
       return;
     }
 

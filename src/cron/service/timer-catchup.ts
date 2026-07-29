@@ -385,7 +385,6 @@ async function runStartupCatchupCandidate(
     state,
     job: executionJob,
     startedAt,
-    runIdStartedAt: candidate.reservedAtMs,
   });
   const activeJobMarker = markCronJobActive(executionJob.id, {
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(executionJob),

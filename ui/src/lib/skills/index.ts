@@ -259,14 +259,6 @@ async function runStaleAwareRequest<T>(
   onFinally();
 }
 
-export function setClawHubSearchQuery(state: SkillsState, query: string) {
-  state.clawhubSearchQuery = query;
-  state.clawhubInstallMessage = null;
-  state.clawhubSearchResults = null;
-  state.clawhubSearchError = null;
-  state.clawhubSearchLoading = false;
-}
-
 export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   const nextAgentId = agentId?.trim() || null;
   if (state.skillsAgentId === nextAgentId) {
@@ -610,44 +602,20 @@ export async function installSkill(
   });
 }
 
-export async function searchClawHub(state: SkillsState, query: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
+export async function searchClawHub(
+  client: GatewayBrowserClient,
+  query: string,
+  signal?: AbortSignal,
+): Promise<ClawHubSearchResult[]> {
   if (!query.trim()) {
-    state.clawhubSearchResults = null;
-    state.clawhubSearchError = null;
-    state.clawhubSearchLoading = false;
-    return;
+    return [];
   }
-  const client = state.client;
-  const agentScope = captureSkillsAgentScope(state);
-  // Clear stale entries as soon as a new search begins so the UI cannot act on
-  // results that no longer match the current query while the next request is in flight.
-  state.clawhubSearchResults = null;
-  state.clawhubSearchLoading = true;
-  state.clawhubSearchError = null;
-  await runStaleAwareRequest(
-    () =>
-      state.connected &&
-      state.client === client &&
-      query === state.clawhubSearchQuery &&
-      isSkillsAgentScopeCurrent(state, agentScope),
-    () =>
-      client.request<{ results: ClawHubSearchResult[] }>("skills.search", {
-        query,
-        limit: 20,
-      }),
-    (res) => {
-      state.clawhubSearchResults = res?.results ?? [];
-    },
-    (err) => {
-      state.clawhubSearchError = getErrorMessage(err);
-    },
-    () => {
-      state.clawhubSearchLoading = false;
-    },
+  const response = await client.request<{ results: ClawHubSearchResult[] }>(
+    "skills.search",
+    { query, limit: 20 },
+    { signal },
   );
+  return response?.results ?? [];
 }
 
 export async function loadClawHubDetail(state: SkillsState, slug: string) {

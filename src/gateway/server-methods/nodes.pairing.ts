@@ -299,9 +299,9 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       // already admitted under the prior command surface before it can send.
       invalidateNodeWakeState(approvedNode.nodeId);
       const cfg = context.getRuntimeConfig();
-      // Pairing allowlist, matching connect-time reconciliation: approved
-      // dangerous surfaces (e.g. computer.act) stay on the live session so a
-      // later arming works without a reconnect; invoke policy still gates use.
+      // Pairing allowlist matches connect-time reconciliation: approved
+      // dangerous surfaces stay live so persistent enablement does not require
+      // another reconnect; invoke policy still gates use.
       const currentAllowlist = resolveNodePairingCommandAllowlist(cfg, {
         platform: approvedNode.platform,
         deviceFamily: approvedNode.deviceFamily,

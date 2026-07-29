@@ -335,6 +335,7 @@ async function runCommand(
   cwd: string | undefined,
   env: Record<string, string> | undefined,
   timeoutMs: number | undefined,
+  signal?: AbortSignal,
 ): Promise<RunResult> {
   try {
     const result = await runCommandWithTimeout(argv, {
@@ -345,6 +346,7 @@ async function runCommand(
       maxOutputBytes: OUTPUT_CAP,
       outputCapture: "head",
       input: Buffer.alloc(0),
+      signal,
       timeoutMs: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
     });
     const timedOut = result.termination === "timeout";
@@ -534,6 +536,36 @@ async function sendExecApprovalsStorageErrorResult(
   await sendErrorResult(client, frame, classifyExecApprovalsStorageError(err), String(err));
 }
 
+function createNodeHostInvocationClient(
+  client: NodeHostClient,
+  signal: AbortSignal | undefined,
+): NodeHostClient {
+  if (!signal) {
+    return client;
+  }
+  return {
+    async request<T = Record<string, unknown>>(
+      method: string,
+      params?: unknown,
+      opts?: Parameters<NodeHostClient["request"]>[2],
+    ): Promise<T> {
+      // Superseded invocations share their replacement's Gateway id, so late
+      // results, progress, and events must not outlive invocation ownership.
+      if (
+        signal.aborted &&
+        (method === "node.invoke.result" ||
+          method === "node.invoke.progress" ||
+          method === "node.event")
+      ) {
+        return {} as T;
+      }
+      return opts === undefined
+        ? await client.request<T>(method, params)
+        : await client.request<T>(method, params, opts);
+    },
+  };
+}
+
 /** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
@@ -542,8 +574,9 @@ export async function handleInvoke(
   mcpManager?: NodeHostMcpManager,
   runtime: NodeHostInvokeRuntime = {},
 ) {
+  const invocationClient = createNodeHostInvocationClient(client, runtime.signal);
   try {
-    await dispatchInvoke(frame, client, skillBins, mcpManager, runtime);
+    await dispatchInvoke(frame, invocationClient, skillBins, mcpManager, runtime);
   } catch (err) {
     // Gateway events launch this handler without awaiting it. Consume unexpected
     // failures here so one bad request cannot terminate the node-host process.
@@ -551,7 +584,7 @@ export async function handleInvoke(
       `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
     );
     try {
-      await sendErrorResult(client, frame, "UNAVAILABLE", "node invocation failed");
+      await sendErrorResult(invocationClient, frame, "UNAVAILABLE", "node invocation failed");
     } catch (sendErr) {
       // The caller intentionally detaches this promise. A failed result send is
       // terminal for this request and must not surface as an unhandled rejection.
@@ -687,7 +720,7 @@ async function dispatchInvoke(
   }
 
   if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
-    await handleMcpToolsCall(frame, client, mcpManager);
+    await handleMcpToolsCall(frame, client, mcpManager, runtime.signal);
     return;
   }
 
@@ -804,6 +837,7 @@ async function dispatchInvoke(
     client,
     params,
     skillBins,
+    signal: runtime.signal,
     execHostEnforced,
     execHostFallbackAllowed,
     resolveExecSecurity,
@@ -975,6 +1009,7 @@ async function handleMcpToolsCall(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
   mcpManager: NodeHostMcpManager | undefined,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!mcpManager) {
     await sendErrorResult(client, frame, "MCP_SERVER_UNAVAILABLE", "node host MCP is unavailable");
@@ -991,6 +1026,7 @@ async function handleMcpToolsCall(
     const result = await mcpManager.callMcpTool({
       ...params,
       timeoutMs: frame.timeoutMs ?? undefined,
+      ...(signal ? { signal } : {}),
     });
     if (result.isError) {
       await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));

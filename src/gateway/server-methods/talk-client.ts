@@ -14,7 +14,10 @@ import {
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { normalizeTalkSection } from "../../config/talk.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
+import { consultRealtimeVoiceAgent } from "../../talk/agent-consult-runtime.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -203,11 +206,18 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const launchOptions = buildRealtimeVoiceLaunchOptions({
+        requested: typedParams,
+        defaults: realtimeConfig,
+      });
+      const requestedAgentId = resolveTalkSessionAgentId(runtimeConfig, typedParams.sessionKey);
       const resolution = resolveConfiguredRealtimeVoiceProvider({
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
+        ...(launchOptions.model ? { providerConfigOverrides: { model: launchOptions.model } } : {}),
         cfg: runtimeConfig,
         cfgForResolve: runtimeConfig,
+        agentId: requestedAgentId,
         defaultModel: realtimeConfig.model,
         surface: "browser-session",
         noRegisteredProviderMessage: "No realtime voice provider registered",
@@ -216,6 +226,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         provider: resolution.provider,
         providerConfig: resolution.providerConfig,
         cfg: runtimeConfig,
+        model: launchOptions.model,
         surface: "browser-session",
       });
       if (wantsCameraFrames && providerCapabilities?.supportsVideoFrames !== true) {
@@ -229,10 +240,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const launchOptions = buildRealtimeVoiceLaunchOptions({
-        requested: typedParams,
-        defaults: realtimeConfig,
-      });
       const realtimeContext = await resolveTalkRealtimeProviderInstructions({
         config: runtimeConfig,
         configuredInstructions: realtimeConfig.instructions,
@@ -277,6 +284,31 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           providerCapabilities?.handlesAgentConsult === true
             ? normalizeOptionalString(realtimeContext.instructions)
             : buildRealtimeInstructions(realtimeContext.instructions);
+        let consultAgentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
+        const runAgentConsult: NonNullable<
+          InternalRealtimeVoiceBrowserSessionCreateRequest["runAgentConsult"]
+        > = async ({ prompt, signal }) => {
+          consultAgentRuntime ??= createPluginRuntime().agent;
+          const talkConfig = normalizeTalkSection(runtimeConfig.talk);
+          return await consultRealtimeVoiceAgent({
+            cfg: runtimeConfig,
+            agentRuntime: consultAgentRuntime,
+            logger: context.logGateway,
+            agentId,
+            sessionKey,
+            messageProvider: "webchat",
+            lane: "talk",
+            runIdPrefix: "talk-realtime-consult",
+            args: { question: prompt },
+            transcript: initialItems,
+            surface: "a browser Talk session",
+            userLabel: "User",
+            questionSourceLabel: "user",
+            thinkLevel: talkConfig?.consultThinkingLevel,
+            fastMode: talkConfig?.consultFastMode,
+            abortSignal: signal,
+          });
+        };
         const browserSessionRequest: InternalRealtimeVoiceBrowserSessionCreateRequest = {
           cfg: runtimeConfig,
           agentId,
@@ -284,6 +316,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           providerConfig: resolution.providerConfig,
           instructions,
           initialItems,
+          runAgentConsult,
           ...(tools.length > 0 ? { tools } : {}),
           ...launchOptions,
         };
@@ -566,7 +599,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         voiceSessionId: params.voiceSessionId,
       });
       if (origin === "relay") {
-        throw new Error("relay-owned voice sessions close through talk.session.stop");
+        throw new Error("relay-owned voice sessions close through talk.session.close");
       }
       await closeClientVoiceSession({
         agentId,

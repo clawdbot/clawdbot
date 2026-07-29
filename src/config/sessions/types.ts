@@ -22,7 +22,6 @@ import type {
   SessionCreatedVia,
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
-import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 
 export type SessionScope = "per-sender" | "global";
@@ -51,6 +50,27 @@ export type SessionDeliveryState =
       route: ChannelRouteRef;
       context: DeliveryContext;
       origin: SessionOrigin;
+    };
+
+type PendingFinalDeliveryState = {
+  createdAt: number;
+  context?: DeliveryContext;
+  intentId?: string;
+} & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
+
+type FallbackNoticeState = {
+  kind: "active";
+  selectedModel: string;
+  activeModel: string;
+  reason?: string;
+};
+
+type MemoryFlushState =
+  | { kind: "succeeded"; compactionCount: number }
+  | {
+      kind: "failed";
+      compactionCount?: number;
+      failureCount: number;
     };
 
 export type { AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpMeta };
@@ -250,7 +270,7 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = SessionRestartRecoveryState &
+type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
@@ -306,7 +326,6 @@ export type SessionEntry = SessionRestartRecoveryState &
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
     lastActivityAt?: number;
-    sessionFile?: string;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
     /** Immutable session key authorized to receive this child's completion handoff. */
@@ -475,18 +494,7 @@ export type SessionEntry = SessionRestartRecoveryState &
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
-    /** Durable marker that final user reply delivery still needs a retry/resume pass. */
-    pendingFinalDelivery?: boolean;
-    pendingFinalDeliveryCreatedAt?: number;
-    pendingFinalDeliveryLastAttemptAt?: number;
-    pendingFinalDeliveryAttemptCount?: number;
-    pendingFinalDeliveryLastError?: string | null;
-    /** Frozen reply text that needs delivery. */
-    pendingFinalDeliveryText?: string | null;
-    /** Original delivery context (channel, recipient, etc). */
-    pendingFinalDeliveryContext?: DeliveryContext;
-    /** Durable send intent backing pending final delivery, when already created. */
-    pendingFinalDeliveryIntentId?: string | null;
+    pendingFinalDelivery?: PendingFinalDeliveryState;
     /**
      * Whether totalTokens reflects a fresh context snapshot for the latest run.
      * Undefined means legacy/unknown freshness; false forces consumers to treat
@@ -509,26 +517,12 @@ export type SessionEntry = SessionRestartRecoveryState &
      * incompatible runtime harnesses.
      */
     agentHarnessId?: string;
-    /**
-     * Last selected/runtime model pair for which a fallback notice was emitted.
-     * Used to avoid repeating the same fallback notice every turn.
-     */
-    fallbackNoticeSelectedModel?: string;
-    fallbackNoticeActiveModel?: string;
-    fallbackNoticeReason?: string;
+    fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
-    memoryFlushAt?: number;
-    memoryFlushCompactionCount?: number;
-    memoryFlushContextHash?: string;
-    /** Consecutive memory flush failures since the last successful flush. */
-    memoryFlushFailureCount?: number;
-    /** Timestamp (ms) of the last failed memory flush attempt. */
-    memoryFlushLastFailedAt?: number;
-    /** Last memory flush failure error message, truncated for durable metadata. */
-    memoryFlushLastFailureError?: string;
+    memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
     /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */
@@ -558,10 +552,14 @@ export type SessionEntry = SessionRestartRecoveryState &
     acp?: SessionAcpMeta;
   };
 
+export interface SessionEntry extends SessionEntryCore {}
+
 /** Internal durable fields excluded from public/plugin session projections. */
-export type InternalSessionEntry = SessionEntry & {
+export type InternalSessionEntryCore = SessionEntryCore & {
   mainRestartRecovery?: MainRestartRecoveryState;
 };
+
+export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
 export function isTerminalSessionStatus(
   status: unknown,
@@ -694,12 +692,14 @@ function mergeSessionEntryWithPolicy(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({
-      ...patch,
-      sessionId,
-      updatedAt,
-      sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
-    });
+    return stripRetiredSessionEntryLocators(
+      normalizeSessionRuntimeModelFields({
+        ...patch,
+        sessionId,
+        updatedAt,
+        sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
+      }),
+    );
   }
   const next = {
     ...existing,
@@ -725,20 +725,6 @@ function mergeSessionEntryWithPolicy(
     next.forkSource = existing.forkSource;
   }
 
-  if (existing.sessionId !== sessionId) {
-    // Session id rotations should move transcript paths when they match known reset/fork shapes.
-    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
-    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
-    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-      sessionFile: candidateSessionFile,
-      previousSessionId: existing.sessionId,
-      nextSessionId: sessionId,
-    });
-    if (rewrittenSessionFile) {
-      next.sessionFile = rewrittenSessionFile;
-    }
-  }
-
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
   if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
@@ -748,7 +734,14 @@ function mergeSessionEntryWithPolicy(
       delete next.modelProvider;
     }
   }
-  return normalizeSessionRuntimeModelFields(next);
+  return stripRetiredSessionEntryLocators(normalizeSessionRuntimeModelFields(next));
+}
+
+function stripRetiredSessionEntryLocators(entry: SessionEntry): SessionEntry {
+  const mutable = entry as SessionEntry & { sessionFile?: unknown; transcriptPath?: unknown };
+  delete mutable.sessionFile;
+  delete mutable.transcriptPath;
+  return entry;
 }
 
 export function mergeSessionEntry(

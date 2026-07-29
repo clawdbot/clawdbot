@@ -85,6 +85,11 @@ export type EmbeddedAgentSubscribeState = {
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
+  /**
+   * Completed assistant round trips in this attempt. Survives compaction-retry
+   * presentation resets, matching how usage totals keep counting model calls.
+   */
+  assistantTurnCount: number;
   lastToolError?: ToolErrorSummary;
   latestMcpAppChannelView?: McpAppChannelView;
 

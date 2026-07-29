@@ -6,6 +6,19 @@ export function resolveRunConcurrency(): number {
   return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
 }
 
+function acquireCronRunSlot(state: CronServiceState): () => void {
+  state.runAdmission.active += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    state.runAdmission.active -= 1;
+    dispatchWaiters(state);
+  };
+}
+
 function dispatchWaiters(state: CronServiceState): void {
   const admission = state.runAdmission;
   if (state.stopped) {
@@ -18,16 +31,7 @@ function dispatchWaiters(state: CronServiceState): void {
     if (!waiter) {
       return;
     }
-    admission.active += 1;
-    let released = false;
-    waiter(() => {
-      if (released) {
-        return;
-      }
-      released = true;
-      admission.active -= 1;
-      dispatchWaiters(state);
-    });
+    waiter(acquireCronRunSlot(state));
   }
 }
 
@@ -37,16 +41,7 @@ async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => 
     return null;
   }
   if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency()) {
-    admission.active += 1;
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      admission.active -= 1;
-      dispatchWaiters(state);
-    };
+    return acquireCronRunSlot(state);
   }
   return await new Promise<(() => void) | null>((resolve) => {
     admission.waiters.push(resolve);

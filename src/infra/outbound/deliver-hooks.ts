@@ -17,6 +17,7 @@ import {
 import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
+import { normalizeEmptyPayloadForDelivery } from "./deliver-payload.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryFailureStage,
@@ -25,7 +26,10 @@ import {
   type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import type { QueuedReplyPayloadSendingHook } from "./delivery-queue.js";
-import type { NormalizedOutboundPayload } from "./payloads.js";
+import {
+  summarizeOutboundPayloadForTransport,
+  type NormalizedOutboundPayload,
+} from "./payloads.js";
 
 export { createMessageSentEmitter } from "./message-sent-hook.js";
 
@@ -93,6 +97,34 @@ export function buildLegacyInboundMessageSendingBeforeDeliver(
         : copyReplyPayloadMetadata(payload, { ...payload, text: result.content });
     },
   );
+}
+
+/** Run media-aware message policy before a core owner can capture projected output. */
+export function buildProjectedInboundMessageSendingBeforeDeliver(
+  ctx: MsgContext | FinalizedMsgContext,
+): ReplyDispatchBeforeDeliver {
+  const finalized = finalizeInboundContext(ctx);
+  const hookCtx = deriveInboundMessageHookContext(finalized);
+  const replyTarget = resolveInboundReplyHookTarget(finalized, hookCtx);
+  return markReplyDispatchBeforeDeliverDeadlineOwned(async (payload) => {
+    const hookRunner = getGlobalHookRunner();
+    const hookResult = await applyMessageSendingHook({
+      hookRunner,
+      enabled: hookRunner?.hasHooks("message_sending") ?? false,
+      payload,
+      payloadSummary: summarizeOutboundPayloadForTransport(payload),
+      to: replyTarget,
+      channel: hookCtx.channelId,
+      accountId: hookCtx.accountId,
+      replyToId: payload.replyToId ?? finalized.ReplyToIdFull ?? finalized.ReplyToId,
+      threadId: finalized.MessageThreadId,
+      sessionKey: finalized.SessionKey,
+    });
+    if (hookResult.cancelled) {
+      return null;
+    }
+    return normalizeEmptyPayloadForDelivery(hookResult.payload);
+  });
 }
 
 export async function applyMessageSendingHook(params: {

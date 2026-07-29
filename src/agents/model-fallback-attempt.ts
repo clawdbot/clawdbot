@@ -31,6 +31,7 @@ import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
 import { isCliProvider } from "./model-selection-cli.js";
 import { isAgentRunDirectAbortReason, isAgentRunRestartAbortReason } from "./run-termination.js";
+import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import {
   runWithDeferredSessionSuspension,
   suspendSession,
@@ -241,7 +242,11 @@ async function runFallbackCandidate<T>(params: {
       : await run();
     return { ok: true, result };
   } catch (err) {
-    if (isCommandLaneTaskTimeoutError(err) || isAgentHarnessPreflightError(err)) {
+    if (
+      isCommandLaneTaskTimeoutError(err) ||
+      isAgentHarnessPreflightError(err) ||
+      isSandboxProvisioningError(err)
+    ) {
       throw err;
     }
     const fallbackError = resolveModelFallbackError(err, {

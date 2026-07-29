@@ -385,7 +385,7 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.scopes`  | `feishu_app_scopes` app scope diagnostics     | `true`              |
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
-`tools.base` is an alias for `tools.bitable`; the explicit `bitable` value wins when both are set. Per-account gates live under `accounts.<id>.tools`.
+Per-account gates live under `accounts.<id>.tools`.
 
 Grant `drive:drive.metadata:readonly` for direct `feishu_drive info` lookups outside the root
 directory, unless the app already has the full `drive:drive` scope. Without either scope, `info`
@@ -677,9 +677,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.tools.perm`                             | Enable permission management tools                                                   | `false`                              |
 | `channels.feishu.tools.scopes`                           | Enable app scopes diagnostic tool                                                    | `true`                               |
 | `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                            | `true`                               |
-| `channels.feishu.tools.base`                             | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set     | `true`                               |
 | `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                                   | inherited                            |
-| `channels.feishu.accounts.<id>.tools.base`               | Per-account alias for `tools.bitable`                                                | inherited                            |
 
 ## Supported message types
 

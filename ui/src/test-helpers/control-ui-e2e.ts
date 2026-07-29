@@ -6,7 +6,7 @@ import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
@@ -35,6 +35,65 @@ export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+type ControlUiRouteTarget = {
+  hash?: string;
+  pathname?: string;
+  pathnamePrefix?: string;
+  routeId: string;
+  search?: string;
+};
+
+/**
+ * Wait for the browser router to commit a route, not merely update the URL.
+ * Browser-local polling keeps readiness independent of host-side CDP scheduling.
+ */
+export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTarget) {
+  const handle = await page.waitForFunction(
+    (expected) => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime?: {
+          router: {
+            getState: () => {
+              status: string;
+              resolvedLocation: { pathname: string } | null;
+              matches: { routeId: string }[];
+              pendingMatches: unknown[];
+            };
+          };
+        };
+      };
+      const state = app.runtime?.router.getState();
+      const pathname = window.location.pathname;
+      return (
+        state?.status === "success" &&
+        state.matches[0]?.routeId === expected.routeId &&
+        state.resolvedLocation?.pathname === pathname &&
+        state.pendingMatches.length === 0 &&
+        (expected.pathname === undefined || pathname === expected.pathname) &&
+        (expected.pathnamePrefix === undefined || pathname.startsWith(expected.pathnamePrefix)) &&
+        (expected.search === undefined || window.location.search === expected.search) &&
+        (expected.hash === undefined || window.location.hash === expected.hash)
+      );
+    },
+    target,
+    { timeout: 30_000 },
+  );
+  await handle.dispose();
+}
+
+export async function waitForControlUiSettingsTakeover(
+  page: Page,
+  pathname = "/settings/general",
+): Promise<{ search: Locator; sidebar: Locator }> {
+  await waitForControlUiRoute(page, { pathname, routeId: "config" });
+  const appSidebar = page.locator("openclaw-app-sidebar");
+  const sidebar = page.locator(".settings-sidebar");
+  const search = sidebar.getByRole("searchbox", { name: "Search settings" });
+  await appSidebar.waitFor({ state: "detached" });
+  await search.waitFor({ state: "visible" });
+  return { search, sidebar };
 }
 
 const require = createRequire(import.meta.url);
@@ -121,6 +180,8 @@ export type ControlUiMockGatewayScenario = {
     provider: string;
     available?: boolean;
   }>;
+  /** Operator scopes returned by the mocked connect handshake. */
+  operatorScopes?: string[];
   sessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
@@ -197,6 +258,16 @@ export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolea
     return false;
   }
   return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
+}
+
+// Pause an installed virtual clock slightly ahead of its current time so
+// elapsed time advances only through clock.runFor/fastForward. Without this,
+// page.clock.install() keeps ticking at real-time rate, and slow runners break
+// assertions that a virtual deadline has or has not elapsed yet (#115187). The
+// headroom keeps the pauseAt target ahead of the still-ticking clock between
+// the Date.now() read and the pause; jumping to it fires nothing relevant.
+export async function pauseVirtualClock(page: Page): Promise<void> {
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 5_000);
 }
 
 export async function startControlUiE2eServer(
@@ -324,6 +395,13 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    operatorScopes: scenario.operatorScopes ?? [
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+    ],
     repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
@@ -717,11 +795,19 @@ function installControlUiMockGateway(input: {
     sessionPatches.set(params.key, patch);
   }
 
-  function recordCreatedSession(params: unknown, response: unknown): void {
-    if (!isRecord(response) || typeof response.key !== "string" || !response.key.trim()) {
+  function recordMaterializedSession(params: unknown, response: unknown): void {
+    if (!isRecord(response)) {
       return;
     }
-    const key = response.key;
+    const key =
+      typeof response.key === "string"
+        ? response.key
+        : typeof response.sessionKey === "string"
+          ? response.sessionKey
+          : "";
+    if (!key.trim()) {
+      return;
+    }
     const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
     const {
       displayName: _defaultDisplayName,
@@ -752,8 +838,8 @@ function installControlUiMockGateway(input: {
         isRecord(row) && typeof row.key === "string" ? [row.key] : [],
       ),
     );
-    // A successful sessions.create commits before its response. Route
-    // resolution must see that same session in the next sessions.list.
+    // Successful session creation and catalog adoption commit before their
+    // responses. Route resolution must see either session in the next list.
     const sourceSessions = [
       ...response.sessions,
       ...[...createdSessions].flatMap(([key, row]) => (knownSessionKeys.has(key) ? [] : [row])),
@@ -964,8 +1050,8 @@ function installControlUiMockGateway(input: {
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
-      if (method === "sessions.create") {
-        recordCreatedSession(params, configured.value);
+      if (method === "sessions.create" || method === "sessions.catalog.continue") {
+        recordMaterializedSession(params, configured.value);
       }
       return method === "sessions.list"
         ? applySessionPatches(configured.value, params)
@@ -977,13 +1063,7 @@ function installControlUiMockGateway(input: {
           auth: {
             ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
             role: "operator",
-            scopes: [
-              "operator.admin",
-              "operator.read",
-              "operator.write",
-              "operator.approvals",
-              "operator.pairing",
-            ],
+            scopes: scenario.operatorScopes,
           },
           features: {
             capabilities: scenario.featureCapabilities,
@@ -1399,8 +1479,11 @@ function installControlUiMockGateway(input: {
         throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
       }
       const resolvedPayload = payload ?? buildResponse(response.method, response.params);
-      if (response.method === "sessions.create") {
-        recordCreatedSession(response.params, resolvedPayload);
+      if (
+        response.method === "sessions.create" ||
+        response.method === "sessions.catalog.continue"
+      ) {
+        recordMaterializedSession(response.params, resolvedPayload);
       }
       response.socket.deliver({
         id: response.id,

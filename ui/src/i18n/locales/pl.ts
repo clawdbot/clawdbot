@@ -41,6 +41,7 @@ export const pl: TranslationMap = {
     unselect: "Odznacz",
     enabled: "Włączone",
     disabled: "Wyłączone",
+    failed: "Niepowodzenie",
     none: "brak",
     na: "n/d",
     never: "never",
@@ -247,11 +248,6 @@ export const pl: TranslationMap = {
       schemaUnavailable: "Schemat niedostępny. Użyj trybu Raw.",
       channelSchemaUnavailable: "Schemat konfiguracji kanału niedostępny.",
       loadingSchema: "Ładowanie schematu konfiguracji…",
-    },
-    health: {
-      title: "Stan kanału",
-      subtitle: "Migawki stanu kanału z Gateway.",
-      noSnapshotYet: "Brak migawki.",
     },
     generic: {
       subtitle: "Stan kanału i konfiguracja.",
@@ -602,7 +598,8 @@ export const pl: TranslationMap = {
     worktreeNameInvalid: "Nazwy worktree używają małych liter, cyfr i myślników.",
     incognito: "Tryb incognito",
     incognitoDescription: "Zachowaj ten wątek tylko do ponownego uruchomienia Gateway",
-    startAsDraft: "Rozpocznij jako wersję roboczą",
+    draft: "Wersja robocza",
+    draftDescription: "Zachowaj ten wątek dla siebie, dopóki go nie opublikujesz",
     messagePlaceholder: "Nad czym ma pracować ta sesja?",
     readingAttachment: "Odczytywanie załącznika",
     start: "Rozpocznij sesję",
@@ -611,6 +608,11 @@ export const pl: TranslationMap = {
     createOutcomeUnknown:
       "Gateway zmienił się podczas uruchamiania tej sesji. Sprawdź ostatnie sesje, zanim ponownie rozpoczniesz to zadanie.",
     catalogUnavailable: "Wybrany cel sesji jest niedostępny.",
+  },
+  dashboardsPage: {
+    emptyTitle: "Brak paneli",
+    emptyDescription: "Otwórz wątek i przełącz na widok panelu, aby dodać go tutaj.",
+    loadError: "Nie udało się załadować paneli: {error}",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -734,6 +736,7 @@ export const pl: TranslationMap = {
     runErrorTimedOut: "Upłynął limit czasu",
     runErrorUnknown: "Nieznany błąd",
     attentionRequired: "Sesja wymaga uwagi",
+    openSession: "Otwórz wątek",
     model: "Model",
     provider: "Dostawca",
     runtime: "Środowisko uruchomieniowe",
@@ -993,6 +996,8 @@ export const pl: TranslationMap = {
       notCreatedYet: "Not Created Yet",
       updatedUnknown: "Updated Unknown",
       missingHint: "This file is missing. Saving will create it in the agent workspace.",
+      addFile: "Dodaj plik…",
+      createHint: "Ten plik jeszcze nie istnieje. Zapisanie utworzy go w obszarze roboczym agenta.",
       content: "Content",
       words: "{count} words",
       lines: "lines",
@@ -1134,9 +1139,9 @@ export const pl: TranslationMap = {
         label: "Rozgłaszanie",
         description: "Ustawienia rozgłaszania i powiadomień",
       },
-      audio: {
-        label: "Dźwięk",
-        description: "Ustawienia wejścia/wyjścia audio",
+      tts: {
+        label: "Głos",
+        description: "Odtwarzanie tekstu na mowę, głosy i persony",
       },
       session: {
         label: "Sesja",
@@ -1146,17 +1151,9 @@ export const pl: TranslationMap = {
         label: "Cron",
         description: "Zaplanowane zadania i automatyzacja",
       },
-      web: {
-        label: "Web",
-        description: "Ustawienia serwera WWW i API",
-      },
       discovery: {
         label: "Wykrywanie",
         description: "Wykrywanie usług i sieć",
-      },
-      canvasHost: {
-        label: "Host Canvas",
-        description: "Renderowanie i wyświetlanie Canvas",
       },
       talk: {
         label: "Rozmowa",
@@ -1222,6 +1219,8 @@ export const pl: TranslationMap = {
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "Odwiedzono {seen}/{total}",
       lobsterdexFirstVisited: "{name} · pierwsza wizyta {date}",
+      lobsterdexCardFirstVisited: "Pierwsza wizyta {date}",
+      lobsterdexOpen: "Otwórz Lobsterdex",
     },
     security: {
       title: "Bezpieczeństwo",
@@ -1319,7 +1318,7 @@ export const pl: TranslationMap = {
       broadcast: "Nadawanie",
       notifications: "Powiadomienia",
       talk: "Rozmowa",
-      audio: "Dźwięk",
+      tts: "Głos",
       commands: "Polecenia",
       hooks: "Zaczepy",
       bindings: "Powiązania",
@@ -1328,12 +1327,9 @@ export const pl: TranslationMap = {
       security: "Zasady bezpieczeństwa",
       plugins: "Wtyczki",
       gateway: "Gateway",
-      web: "Sieć",
       browser: "Przeglądarka",
       nodeHost: "Host węzła",
-      canvasHost: "Host Canvas",
       discovery: "Wykrywanie",
-      media: "Multimedia",
       acp: "ACP",
       mcp: "MCP",
       theme: "Motyw",
@@ -1465,7 +1461,6 @@ export const pl: TranslationMap = {
     open: "Otwarte",
     applying: "Stosowanie…",
     autoSaveSaving: "Zapisywanie…",
-    autoSaveSaved: "Zapisano",
     autoSaveFailed: "Nie udało się zapisać",
     autoSaveConflict: "Ustawienia zostały zmienione gdzie indziej",
     retry: "Ponów",
@@ -1848,13 +1843,16 @@ export const pl: TranslationMap = {
     skillWorkshop: "Warsztat Skills",
     nodes: "Węzły",
     chat: "Czat",
+    dashboards: "Panele",
     custodian: "OpenClaw",
     config: "Konfiguracja",
     profile: "Profil",
     communications: "Komunikacja",
     appearance: "Wygląd",
+    lobsterdex: "Lobsterdex",
     automation: "Automatyzacja",
     mcp: "MCP",
+    memory: "Pamięć",
     infrastructure: "Infrastruktura",
     labs: "Labs",
     about: "O aplikacji",
@@ -1884,13 +1882,16 @@ export const pl: TranslationMap = {
     skillWorkshop: "Przeglądaj, dopracowuj i stosuj propozycje, zanim staną się aktywnymi skills.",
     nodes: "Sparowane urządzenia i polecenia.",
     chat: "Czat Gateway do szybkich interwencji.",
+    dashboards: "Wątki, które otwierają się w widoku panelu.",
     custodian: "Konfiguracja i utrzymanie systemu.",
     config: "Edytuj openclaw.json.",
     profile: "Statystyki, serie i życie Twojego agenta na rafie.",
     communications: "Kanały, wiadomości i ustawienia audio.",
     appearance: "Motyw, UI i ustawienia kreatora konfiguracji.",
+    lobsterdex: "Każda paleta lobster, która odwiedziła tę przeglądarkę.",
     automation: "Polecenia, hooki, cron i pluginy.",
     mcp: "Serwery MCP, uwierzytelnianie, narzędzia i diagnostyka.",
+    memory: "Silnik pamięci, backend, wyszukiwanie i śnienie.",
     infrastructure: "Ustawienia Gateway, web, przeglądarki i multimediów.",
     labs: "Eksperymentalne funkcje agenta i narzędzi.",
     about: "Control UI i połączony Gateway tworzą tożsamość kompilacji.",
@@ -2166,6 +2167,161 @@ export const pl: TranslationMap = {
     tlsVerifyOff: "weryfikacja TLS wyłączona",
     mtls: "mTLS",
   },
+  memoryPage: {
+    tablistLabel: "Sekcje pamięci",
+    tabs: {
+      overview: "Przegląd",
+      search: "Szukaj",
+      dreaming: "Śnienie",
+    },
+    engine: {
+      title: "Silnik",
+      description:
+        "Dokładnie jedna wtyczka pamięci zajmuje slot pamięci. Wybór silnika włącza go i wyłącza pozostałe.",
+      rowTitle: "Silnik pamięci",
+      off: "Wyłączone",
+      autoHint:
+        "Żaden silnik nie jest przypięty w konfiguracji, więc slot wraca do domyślnego właściciela.",
+      explicitHint: "Ten silnik jest przypięty w konfiguracji w plugins.slots.memory.",
+      offHint: "Pamięć jest wyłączona w konfiguracji: plugins.slots.memory jest ustawione na none.",
+      catalogUnavailable: "Połącz się z gateway, aby zmienić silnik pamięci.",
+      changeFailed: "Nie udało się zmienić silnika pamięci",
+      disabledTitle: "Ten silnik jest wyłączony",
+      disabledHint:
+        "Slot pamięci wskazuje na ten plugin, ale sam plugin jest wyłączony, więc pamięć nie działa.",
+      enable: "Włącz",
+    },
+    backend: {
+      title: "Backend",
+      description: "Sposób przechowywania i pobierania pamięci dla wybranego silnika.",
+      rowTitle: "Backend pobierania",
+      builtin: "Wbudowany",
+      qmd: "QMD",
+      builtinHint: "Pliki pamięci są indeksowane i przeszukiwane przez samego OpenClaw.",
+      qmdHint: "Pobieranie jest delegowane do QMD. Jego ustawienia pojawiają się poniżej.",
+    },
+    addons: {
+      title: "Dodatki",
+      description:
+        "Te pluginy działają jako warstwa nad silnikiem, zamiast konkurować o slot, więc dowolna kombinacja może działać jednocześnie.",
+      activeMemory: {
+        title: "Aktywna pamięć",
+      },
+      memoryWiki: {
+        title: "Wiki pamięci",
+      },
+      stateUnknown: "Nieznany",
+      manage: "Włącz lub wyłącz dodatki",
+      manageLink: "Otwórz wtyczki",
+    },
+    import: {
+      title: "Import",
+      description: "Przenieś istniejącą pamięć z innych asystentów do przestrzeni roboczej agenta.",
+      link: "Otwórz Import pamięci",
+    },
+    search: {
+      intro:
+        "Domyślne ustawienia osadzania i pobierania współdzielone przez każdego agenta, który nie ma nadpisania pamięci.",
+    },
+    dreaming: {
+      intro:
+        "Dreaming działa jako jedno zarządzane zadanie cron we wszystkich obszarach roboczych agentów, więc te ustawienia są globalne. Są własnością wtyczki {plugin}.",
+      schedule: {
+        title: "Harmonogram",
+        description: "Kiedy uruchamia się pełne przetwarzanie i który model je opisuje.",
+      },
+      frequency: {
+        label: "Częstotliwość dreaming",
+        help: "Harmonogram cron dla pełnego przetwarzania dreaming (light, REM, następnie deep). Pozostaw puste, aby użyć domyślnych wartości wtyczki.",
+        placeholder: "0 3 * * *",
+      },
+      timezone: {
+        label: "Strefa czasowa",
+        help: "Strefa czasowa IANA używana do interpretacji harmonogramu cron.",
+        placeholder: "Europe/Vienna",
+      },
+      model: {
+        label: "Model dreaming",
+        help: "Nadpisanie dostawcy/modelu dla narracji dziennika snów. Wymaga zezwolenia na nadpisania modelu subagenta.",
+        placeholder: "anthropic/claude-sonnet-4-6",
+      },
+      verboseLogging: {
+        label: "Szczegółowe logowanie",
+        help: "Loguj szczegółowo każdą fazę dreaming. Przydatne przy dostrajaniu progów.",
+      },
+      storage: {
+        title: "Przechowywanie",
+        description: "Gdzie zapisywane są przeniesione wspomnienia i raporty dreaming.",
+        modeLabel: "Tryb przechowywania",
+        modeHelp: "Inline zapisuje do pliku pamięci; separate przechowuje dedykowany plik raportu.",
+        modes: {
+          inline: "Inline",
+          separate: "Oddzielnie",
+          both: "Oba",
+        },
+        separateReportsLabel: "Oddzielne raporty",
+        separateReportsHelp: "Trzymaj raporty ze śnienia poza głównym plikiem pamięci.",
+      },
+      phases: {
+        light: {
+          title: "Faza lekka",
+          description:
+            "Tani przegląd ostatniej aktywności, który przygotowuje kandydatów do odtworzenia.",
+        },
+        deep: {
+          title: "Faza głęboka",
+          description:
+            "Punktowany przegląd promujący, który przenosi wpisy krótkoterminowe do pamięci.",
+        },
+        rem: {
+          title: "Faza REM",
+          description:
+            "Przegląd wzorców szukający powtarzających się motywów w oknie retrospekcji.",
+        },
+      },
+      phaseFields: {
+        enabled: "Włączone",
+        enabledHelp: "Uruchamiaj tę fazę podczas przeglądu.",
+        lookbackDays: "Dni retrospekcji",
+        lookbackDaysHelp:
+          "Jak daleko wstecz sięga ta faza. Pozostaw puste, aby użyć domyślnej wartości wtyczki.",
+        limit: "Limit",
+        limitHelp: "Maksymalna liczba wpisów przetwarzanych przez tę fazę na jedno uruchomienie.",
+        dedupeSimilarity: "Podobieństwo deduplikacji",
+        dedupeSimilarityHelp:
+          "Podobieństwo, powyżej którego dwóch kandydatów jest traktowanych jako duplikaty.",
+        minScore: "Minimalny wynik",
+        minScoreHelp: "Wynik promocji, który musi osiągnąć wpis.",
+        minRecallCount: "Minimalna liczba przywołań",
+        minRecallCountHelp:
+          "Jak często wpis musi zostać przywołany, zanim będzie mógł zostać awansowany.",
+        minUniqueQueries: "Minimalna liczba unikalnych zapytań",
+        minUniqueQueriesHelp: "Ile odrębnych zapytań musiało wywołać wpis.",
+        recencyHalfLifeDays: "Okres półtrwania świeżości (dni)",
+        recencyHalfLifeDaysHelp: "Jak szybko starsze sygnały przywołania tracą na wadze.",
+        maxAgeDays: "Maksymalny wiek (dni)",
+        maxAgeDaysHelp: "Ignoruj wpisy krótkoterminowe starsze niż to.",
+        maxPromotedSnippetTokens: "Maks. tokenów awansowanego fragmentu",
+        maxPromotedSnippetTokensHelp:
+          "Budżet tokenów dla każdego awansowanego fragmentu. Informacje o pochodzeniu pozostają dołączone.",
+        minPatternStrength: "Minimalna siła wzorca",
+        minPatternStrengthHelp:
+          "Siła, jaką musi osiągnąć powtarzający się wzorzec, aby został zgłoszony.",
+      },
+      agentScope: {
+        title: "Widok agenta",
+        description:
+          "Powyższe ustawienia są globalne. Dziennik snów, liczniki krótkoterminowe i działania konserwacyjne poniżej należą do jednego agenta.",
+        rowTitle: "Agent",
+      },
+      unsupported: {
+        title: "Ustawienia snów",
+        rowTitle: "Niedostępne dla tego silnika",
+        description:
+          "Wtyczka {plugin} zajmuje slot pamięci, a jej schemat konfiguracji nie ma sekcji snów, więc tych ustawień nie można zapisać. Zmień silnik na karcie Przegląd, aby je edytować.",
+      },
+    },
+  },
   sessionsPage: {
     hubTablistLabel: "Sekcje wątków",
   },
@@ -2332,6 +2488,21 @@ export const pl: TranslationMap = {
       description: "Pozwól trybowi kodu koordynować grupy podagentów równolegle.",
       empty: "Brak aktywnych rojów.",
       defaultPhase: "Bez fazy",
+    },
+    toolSearch: {
+      title: "Wyszukiwanie narzędzi",
+      description:
+        "Utrzymuj widoczny ograniczony katalog narzędzi, a resztę odkładaj za wyszukiwarką, aby duże katalogi MCP i wtyczek przestały zaśmiecać prompt.",
+    },
+    localModelLean: {
+      title: "Odchudzone narzędzia dla modeli lokalnych",
+      description:
+        "Usuń ciężkie domyślne narzędzia, z którymi mniejsze modele lokalne słabo sobie radzą, pozostawiając krótszy zestaw, którego mogą używać niezawodnie.",
+    },
+    auditMessages: {
+      title: "Metadane audytu wiadomości",
+      description:
+        "Zapisuj w rejestrze audytu metadane bezpośrednich rozmów pozbawione treści. Treść wiadomości nigdy nie jest przechowywana.",
     },
   },
   aboutPage: {
@@ -3112,7 +3283,6 @@ export const pl: TranslationMap = {
       title: "Migawka",
       subtitle: "Najnowsze informacje o uzgadnianiu połączenia z Gateway.",
       status: "Status",
-      uptime: "Czas działania",
       tickInterval: "Interwał aktualizacji",
       lastChannelsRefresh: "Ostatnie odświeżenie kanałów",
       lastError: "Ostatni błąd",
@@ -3129,6 +3299,7 @@ export const pl: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "Nieznany błąd",
     cronFailed: "Nieudane zadania cron: {count}",
     cronOverdue: "Zaległe zadania cron: {count}",
     modelAuthExpired: "Uwierzytelnienie modelu wygasło: {providers}",
@@ -3224,14 +3395,18 @@ export const pl: TranslationMap = {
       on: "Dreaming włączone",
       off: "Dreaming wyłączone",
     },
-    restartConfirmation: {
-      title: "Restart Gateway to Apply Change",
-      subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
-      confirm: "Confirm Restart",
-      restarting: "Restarting…",
-      failed: "Could not apply change. Check your connection and try again.",
+    toggleConfirmation: {
+      subtitle: "Dreaming to ustawienie globalne; nie dotyczy tylko tego agenta.",
+      enableTitle: "Włącz Dreaming dla wszystkich agentów",
+      enableDetail:
+        "Nocne przeczesywanie w trybie dreaming będzie działać w każdej skonfigurowanej przestrzeni roboczej agenta, przenosząc krótkoterminowe wspomnienia do pamięci długoterminowej. Zmiana obowiązuje od razu.",
+      enableConfirm: "Włącz Dreaming",
+      disableTitle: "Wyłącz Dreaming dla wszystkich agentów",
+      disableDetail:
+        "Nocne przeczesywanie w trybie dreaming zostanie zatrzymane dla każdego skonfigurowanego agenta, nie tylko tego. Zapisane już wspomnienia pozostają; nic nowego nie zostanie przeniesione. Zmiana obowiązuje od razu.",
+      disableConfirm: "Wyłącz Dreaming",
+      saving: "Zapisywanie…",
+      failed: "Nie udało się zastosować zmiany. Sprawdź połączenie i spróbuj ponownie.",
     },
     status: {
       active: "Dreaming aktywne",
@@ -3885,6 +4060,11 @@ export const pl: TranslationMap = {
     },
     outputTokens: "{count} tokenów wyjściowych",
     archivedSessionDisabled: "Przywróć tę sesję, aby wysyłać wiadomości.",
+    sessionRoute: {
+      chooseTitle: "Wybierz sesję",
+      multipleMatches: "Więcej niż jedna sesja pasuje do {shortId}.",
+      additionalMatches: "Pozostają wyniki wyszukiwania. Użyj dłuższego prefiksu identyfikatora.",
+    },
     sessionSharing: {
       menu: "Udostępnianie wątku",
       current: "Widoczność wątku: {visibility}",
@@ -3936,6 +4116,15 @@ export const pl: TranslationMap = {
       oneMessage: "{count} wiadomość",
       messages: "{count} wiadomości",
       activeBranch: "Aktywna gałąź",
+      gatewayPicker: {
+        menuLabel: "Gateway: {gateway}",
+        primaryTag: "podstawowy",
+        setPrimary: "Ustaw jako podstawowy…",
+        openSettings: "Ustawienia Gateway…",
+        connected: "Połączono",
+        unreachable: "Nieosiągalny",
+        unknown: "Nieznany status",
+      },
     },
     board: {
       faceLabel: "Widok wątku",
@@ -4127,7 +4316,9 @@ export const pl: TranslationMap = {
       threads: "Wątki",
       groups: "Grupy",
       coding: "Kodowanie",
-      groupCatalogSessionsByProject: "Grupuj według projektu",
+      catalogViewOptions: "Opcje widoku",
+      catalogGroupByProject: "Projekt",
+      catalogGroupByPerson: "Osoba",
       openSessionMenu: "Open session menu",
       sortBy: "Sortuj według",
       sortCreated: "Utworzono",
@@ -4306,6 +4497,16 @@ export const pl: TranslationMap = {
       renderedMarkdownHint: "Oczyszczony podgląd tekstu sformatowanego do szybkiego czytania.",
       noPreviewableMarkdown: "Brak treści Markdown do podglądu.",
       noContent: "Brak dostępnej treści",
+    },
+    sidebarColumns: {
+      chat: "Czat",
+      discussion: "Dyskusja",
+      detail: "Szczegóły",
+      close: "Zamknij {panel}",
+      drag: "Przeciągnij {panel}",
+      dropOnEmptyLeft: "Przenieś {panel} na pusty lewy pasek boczny",
+      dropOnEmptyRight: "Przenieś {panel} na pusty prawy pasek boczny",
+      resize: "Zmień rozmiar {panel}",
     },
     thread: {
       search: "Szukaj wiadomości",

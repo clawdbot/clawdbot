@@ -911,6 +911,19 @@ export async function configureOllamaNonInteractive(params: {
     );
   }
 
+  if (!requestedCloudModel && !discoveredModelsByName.has(defaultModelId)) {
+    // Explicit and newly pulled models can fall outside the bounded catalog scan.
+    const selectedModel = expectDefined(
+      (
+        await enrichOllamaModelsWithContext(baseUrl, [
+          models.find((model) => model.name === defaultModelId) ?? { name: defaultModelId },
+        ])
+      )[0],
+      "selected Ollama setup model",
+    );
+    discoveredModelsByName.set(defaultModelId, selectedModel);
+  }
+
   // Failed setup must not leave a durable local profile behind.
   await storeOllamaCredential(params.agentDir);
 

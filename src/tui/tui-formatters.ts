@@ -3,6 +3,8 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
@@ -220,6 +222,11 @@ export function sanitizeRenderableText(text: string): string {
   return applyRtlIsolation(tokenSafe);
 }
 
+/** Render error causes without exposing secrets or terminal control sequences. */
+export function formatTuiErrorMessage(error: unknown): string {
+  return sanitizeRenderableText(formatErrorMessage(error));
+}
+
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
@@ -425,6 +432,37 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
   });
 }
 
+function extractUserAttachmentText(record: Record<string, unknown>): string {
+  const attachments: string[] = [];
+  if (Array.isArray(record.content)) {
+    for (const block of record.content) {
+      const entry = asMessageRecord(block);
+      if (entry?.type === "image") {
+        attachments.push("Attached image");
+      } else if (entry?.type === "attachment") {
+        const attachment = asMessageRecord(entry.attachment);
+        const label =
+          typeof attachment?.label === "string"
+            ? sanitizeRenderableText(attachment.label).trim()
+            : "";
+        attachments.push(
+          label && label !== "Attached file" ? `Attached file: ${label}` : "Attached file",
+        );
+      }
+    }
+  }
+  if (attachments.length > 0) {
+    return attachments.join("\n");
+  }
+
+  // Gateway-persisted attachment-only turns keep blank content and carry
+  // their authoritative attachments in __openclaw.media instead.
+  return (readPersistedMediaFacts(record) ?? [])
+    .filter((fact) => fact.path || fact.url || fact.contentType || fact.kind)
+    .map((fact) => (isImageMediaFact(fact) ? "Attached image" : "Attached file"))
+    .join("\n");
+}
+
 export function extractTextFromMessage(
   message: unknown,
   opts?: { includeThinking?: boolean },
@@ -446,6 +484,10 @@ export function extractTextFromMessage(
       return stripLeadingInboundMetadata(text);
     }
     return text;
+  }
+
+  if (record.role === "user") {
+    return extractUserAttachmentText(record);
   }
 
   const errorText = formatAssistantErrorFromRecord(record);

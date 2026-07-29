@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -241,7 +241,7 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      expect(persisted?.sessionFile).toBe(target.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(target.sessionKey);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -722,7 +722,7 @@ describe("user turn transcript persistence", () => {
         },
       });
 
-      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(staleTarget)).resolves.toEqual([]);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
@@ -752,7 +752,7 @@ describe("user turn transcript persistence", () => {
       const persisted = await recorder.persistApproved({ retryIfUnpersisted: true });
 
       expect(targetResolutionCount).toBe(2);
-      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -784,8 +784,8 @@ describe("user turn transcript persistence", () => {
       ]);
 
       expect(targetResolutionCount).toBe(2);
-      expect(first?.sessionFile).toBe(admittedTarget.sqliteMarker);
-      expect(second?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(first?.sessionFile).toBe(admittedTarget.sessionKey);
+      expect(second?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
           role: "user",

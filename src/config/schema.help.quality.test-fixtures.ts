@@ -340,7 +340,6 @@ export const TARGET_KEYS = [
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
-  "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",

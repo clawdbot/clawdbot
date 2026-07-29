@@ -634,16 +634,17 @@ describe("createTelegramBot", () => {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
-    const telegramDeps = {
-      ...telegramBotDepsForTest,
-      ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
-    };
-    createTelegramBot = (opts) =>
-      createTelegramBotBase({
+    createTelegramBot = (opts) => {
+      const telegramDeps = {
+        ...telegramBotDepsForTest,
+        ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
+      };
+      return createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
         telegramDeps,
       });
+    };
   });
 
   it("starts with retired includeGroupHistoryContext still present in raw config", async () => {
@@ -2861,6 +2862,16 @@ describe("createTelegramBot", () => {
         type: "chat_window",
       },
     ]);
+    // Media-less unmentioned messages must reach the canonical mention gate so
+    // the rolling group history window records them (not just the reply cache).
+    expect(payload.InboundHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          body: "Please run the maintenance step later.",
+          sender: "Requester id:111",
+        }),
+      ]),
+    );
   });
 
   it("excludes ambient transcript rows from live group conversation context", async () => {

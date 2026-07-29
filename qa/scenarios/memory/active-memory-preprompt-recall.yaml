@@ -18,6 +18,7 @@ scenario:
           enabled: true
           config:
             enabled: true
+            mode: always
             agents:
               - qa
             allowedChatTypes:

@@ -128,6 +128,8 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
+  /** Host-injected agent delegation runner for provider-owned browser control channels. */
+  runAgentConsult?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
 };
 
 export type RealtimeVoiceBrowserAudioContract = {

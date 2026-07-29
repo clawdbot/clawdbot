@@ -124,6 +124,8 @@ export type SkillProposalManifestEntry = {
   createdAt: string;
   updatedAt: string;
   scanState: SkillProposalScannerState;
+  /** The proposal remains bound to an earlier workspace for this agent. */
+  workspaceMismatch?: true;
 };
 
 export type SkillProposalManifest = {
@@ -155,6 +157,7 @@ export type SkillProposalSupportFileInput = {
 
 export type SkillProposalCreateInput = {
   workspaceDir: string;
+  agentId?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   name: string;
@@ -169,6 +172,7 @@ export type SkillProposalCreateInput = {
 
 export type SkillProposalUpdateInput = {
   workspaceDir: string;
+  agentId?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   skillName: string;
@@ -183,6 +187,7 @@ export type SkillProposalUpdateInput = {
 
 export type SkillProposalReviseInput = {
   workspaceDir: string;
+  agentId?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
@@ -196,6 +201,7 @@ export type SkillProposalReviseInput = {
 
 export type SkillProposalActionInput = {
   workspaceDir: string;
+  agentId?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;

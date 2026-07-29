@@ -1,0 +1,30 @@
+title: Ollama paired-node local inference regression
+
+scenario:
+  id: ollama-paired-node-inference
+  surface: models
+  category: agent-runtime.local-and-self-hosted-providers
+  coverage:
+    secondary:
+      - gateway.node-capabilities
+      - gateway.remote-host-commands
+      - agent-runtime.tool-capability-flags
+      - agent-runtime.local-smoke-checks
+      - agent-runtime.local-failure-handling
+  objective: Verify paired-node Ollama discovery and inference with the provider-owned deterministic local test server.
+  successCriteria:
+    - Embedding and cloud models are excluded from local chat discovery.
+    - A chat model after 200 embedding-only models remains discoverable.
+    - Loaded local chat models sort first.
+    - Only Gateway-authorized node commands are invoked.
+    - Bounded local chat returns the expected response and usage.
+  docsRefs:
+    - docs/providers/ollama.md
+    - docs/nodes/index.md
+  codeRefs:
+    - extensions/ollama/src/node-inference.ts
+    - extensions/ollama/src/node-inference.test.ts
+  execution:
+    kind: vitest
+    path: extensions/ollama/src/node-inference.test.ts
+    summary: Run deterministic fake-Ollama paired-node discovery, authorization, model-selection, and bounded-chat regression tests.

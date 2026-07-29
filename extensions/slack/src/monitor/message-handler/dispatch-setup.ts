@@ -13,16 +13,13 @@ import {
   resolveChannelStreamingNativeTransport,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
-import {
-  compileSlackInteractiveReplies,
-  isSlackInteractiveRepliesEnabled,
-} from "../../interactive-replies.js";
 import { resolveSlackStreamingConfig } from "../../stream-mode.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
@@ -200,9 +197,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       if (payload.isReasoning === true) {
         return null;
       }
-      return isSlackInteractiveRepliesEnabled({ cfg, accountId: route.accountId })
-        ? compileSlackInteractiveReplies(payload)
-        : payload;
+      return payload;
     },
     typing: {
       start: async () => {
@@ -275,7 +270,15 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       messageTs,
       isThreadReply,
     });
+  const hookRunner = getGlobalHookRunner();
+  const modifyingHooksRegistered =
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false);
+  // Portable previews and native progress cards exist before outbound modifiers accept the
+  // payload. Native answer streaming stays enabled because it begins after both hook gates.
+  const allowPreHookProviderStreaming = !modifyingHooksRegistered;
   const previewStreamingEnabled =
+    allowPreHookProviderStreaming &&
     !sourceRepliesAreToolOnly &&
     shouldEnableSlackPreviewStreaming({
       mode: slackStreaming.mode,
@@ -285,6 +288,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   );
   const streamingEnabled =
     !sourceRepliesAreToolOnly &&
+    (allowPreHookProviderStreaming || slackStreaming.mode !== "progress") &&
     isSlackStreamingEnabled({
       mode: slackStreaming.mode,
       nativeStreaming: slackStreaming.nativeStreaming,
@@ -294,14 +298,10 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     streamingEnabled,
     threadTs: streamThreadHint,
   });
-  // chat.update cannot preserve custom authorship. Use native streaming when
-  // possible; otherwise keep identity intact with one final postMessage.
-  const shouldUseDraftStream =
-    !hasSlackCustomIdentity &&
-    shouldInitializeSlackDraftStream({
-      previewStreamingEnabled,
-      useStreaming,
-    });
+  const shouldUseDraftStream = shouldInitializeSlackDraftStream({
+    previewStreamingEnabled,
+    useStreaming,
+  });
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true
@@ -349,6 +349,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     slackStreaming,
     streamThreadHint,
     previewStreamingEnabled,
+    hasSlackCustomIdentity,
     shouldUseDraftStream,
     disableBlockStreaming,
     useStreaming,
