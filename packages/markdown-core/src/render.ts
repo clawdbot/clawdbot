@@ -41,11 +41,13 @@ function getMarkdownLinkOrigin(link: MarkdownLinkSpan): MarkdownLinkOrigin {
   return isAutoLinkedMarkdownLink(link) ? "linkify" : "authored";
 }
 
+type EscapeTextContext = { inAutoLink?: boolean };
+
 /** Renderer hooks for converting Markdown IR into a marker-based target format. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   annotationMarkers?: RenderAnnotationMap;
-  escapeText: (text: string) => string;
+  escapeText: (text: string, context?: EscapeTextContext) => string;
   buildLink?: (
     link: MarkdownLinkSpan,
     text: string,
@@ -272,7 +274,7 @@ export function renderMarkdownWithMarkers(
     }
   }
 
-  const linkStarts = new Map<number, RenderLink[]>();
+  const linkStarts = new Map<number, Array<{ rendered: RenderLink; source: MarkdownLinkSpan }>>();
   if (options.buildLink) {
     const links = projected.links.flatMap((span) =>
       subtractRanges(span, dominantAnnotationRanges)
@@ -297,19 +299,26 @@ export function renderMarkdownWithMarkers(
       boundaries.add(rendered.end);
       const openBucket = linkStarts.get(rendered.start);
       if (openBucket) {
-        openBucket.push(rendered);
+        openBucket.push({ rendered, source: link });
       } else {
-        linkStarts.set(rendered.start, [rendered]);
+        linkStarts.set(rendered.start, [{ rendered, source: link }]);
       }
     }
   }
 
   const points = [...boundaries].toSorted((a, b) => a - b);
   // Links and styles share one stack so equal-end spans close in exact reverse open order.
-  const stack: { close: string; end: number }[] = [];
   type OpeningItem =
     | { end: number; open: string; close: string; kind: "annotation"; index: number }
-    | { end: number; open: string; close: string; kind: "link"; index: number }
+    | {
+        end: number;
+        open: string;
+        close: string;
+        kind: "link";
+        index: number;
+        link: MarkdownLinkSpan;
+        autoLinked: boolean;
+      }
     | {
         end: number;
         open: string;
@@ -318,6 +327,7 @@ export function renderMarkdownWithMarkers(
         style: MarkdownStyle;
         index: number;
       };
+  const stack: OpeningItem[] = [];
   let out = "";
 
   for (const [i, pos] of points.entries()) {
@@ -350,13 +360,15 @@ export function renderMarkdownWithMarkers(
 
     const openingLinks = linkStarts.get(pos);
     if (openingLinks && openingLinks.length > 0) {
-      for (const [index, link] of openingLinks.entries()) {
+      for (const [index, { rendered, source }] of openingLinks.entries()) {
         openingItems.push({
-          end: link.end,
-          open: link.open,
-          close: link.close,
+          end: rendered.end,
+          open: rendered.open,
+          close: rendered.close,
           kind: "link",
           index,
+          link: source,
+          autoLinked: isAutoLinkedMarkdownLink(source),
         });
       }
     }
@@ -401,7 +413,7 @@ export function renderMarkdownWithMarkers(
       // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.
       for (const item of openingItems) {
         out += item.open;
-        stack.push({ close: item.close, end: item.end });
+        stack.push(item);
       }
     }
 
@@ -410,7 +422,11 @@ export function renderMarkdownWithMarkers(
       break;
     }
     if (next > pos) {
-      out += options.escapeText(text.slice(pos, next));
+      const inAutoLink = stack.some((item) => item.kind === "link" && item.autoLinked);
+      out += options.escapeText(
+        text.slice(pos, next),
+        inAutoLink ? { inAutoLink: true } : undefined,
+      );
     }
   }
 

@@ -194,6 +194,18 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
+  it("does not HTML-escape ampersands in auto-linked bare URL visible text (#102162)", () => {
+    const res = markdownToTelegramHtml("https://example.com/post.php?post=100&action=edit");
+    expect(res).toBe(
+      '<a href="https://example.com/post.php?post=100&amp;action=edit">https://example.com/post.php?post=100&action=edit</a>',
+    );
+  });
+
+  it("still escapes ampersands in authored link labels (#102162)", () => {
+    const res = markdownToTelegramHtml("[A & B](https://example.com/?a=1&b=2)");
+    expect(res).toBe('<a href="https://example.com/?a=1&amp;b=2">A &amp; B</a>');
+  });
+
   it("properly nests link inside bold", () => {
     const res = markdownToTelegramHtml("**bold [link](https://example.com) text**");
     expect(res).toBe('<b>bold <a href="https://example.com">link</a> text</b>');

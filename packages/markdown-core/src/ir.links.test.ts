@@ -50,4 +50,51 @@ describe("markdownToIR link provenance", () => {
       origin: "linkify",
     });
   });
+
+  it("tells escapeText when it is inside an auto-link", () => {
+    const ir = markdownToIR("see https://example.com/?a=1&b=2 ok", { linkify: true });
+    const calls: Array<{ text: string; inAutoLink?: boolean }> = [];
+    renderMarkdownWithMarkers(ir, {
+      styleMarkers: {},
+      escapeText: (text, context) => {
+        calls.push({ text, inAutoLink: context?.inAutoLink });
+        return text;
+      },
+      buildLink: (link, text, context) => ({
+        start: link.start,
+        end: link.end,
+        open: `<a href="${link.href}">`,
+        close: "</a>",
+      }),
+    });
+
+    expect(calls).toEqual([
+      { text: "see ", inAutoLink: undefined },
+      { text: "https://example.com/?a=1&b=2", inAutoLink: true },
+      { text: " ok", inAutoLink: undefined },
+    ]);
+  });
+
+  it("does not mark authored link text as inAutoLink", () => {
+    const ir = markdownToIR("[A & B](https://example.com/?a=1&b=2)");
+    const calls: Array<{ text: string; inAutoLink?: boolean }> = [];
+    renderMarkdownWithMarkers(ir, {
+      styleMarkers: {},
+      escapeText: (text, context) => {
+        calls.push({ text, inAutoLink: context?.inAutoLink });
+        return text;
+      },
+      buildLink: (link, text) => ({
+        start: link.start,
+        end: link.end,
+        open: `<a href="${link.href}">`,
+        close: "</a>",
+      }),
+    });
+
+    expect(calls).toContainEqual({
+      text: "A & B",
+      inAutoLink: undefined,
+    });
+  });
 });

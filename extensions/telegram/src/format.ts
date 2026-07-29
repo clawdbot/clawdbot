@@ -26,7 +26,15 @@ export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function escapeHtml(text: string): string {
+type EscapeContext = { inAutoLink?: boolean };
+
+function escapeHtml(text: string, context?: EscapeContext): string {
+  if (context?.inAutoLink) {
+    // Auto-linked bare URLs are already wrapped in <a>. Telegram clients show
+    // this visible text in the link-tap prompt, so we keep the raw '&'
+    // separator; only angle brackets need escaping to stay valid inside HTML.
+    return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
   return escapeTelegramHtml(text);
 }
 
