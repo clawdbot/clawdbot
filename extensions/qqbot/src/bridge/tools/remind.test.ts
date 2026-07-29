@@ -33,19 +33,21 @@ function createRegisteredRemindTool(context: OpenClawPluginToolContext = {}): An
 }
 
 type CronAddToolPayload = {
-  job?: {
-    sessionTarget?: string;
-    payload?: {
-      kind?: string;
-      message?: string;
-      toolsAllow?: string[];
-    };
-    delivery?: {
-      mode?: string;
-      channel?: string;
-      to?: string;
-      accountId?: string;
-    };
+  name?: string;
+  schedule?: unknown;
+  sessionTarget?: string;
+  wakeMode?: string;
+  deleteAfterRun?: boolean;
+  payload?: {
+    kind?: string;
+    message?: string;
+    toolsAllow?: string[];
+  };
+  delivery?: {
+    mode?: string;
+    channel?: string;
+    to?: string;
+    accountId?: string;
   };
 };
 
@@ -71,16 +73,19 @@ describe("bridge/tools/remind", () => {
     const addPayload = addCall?.[2] as CronAddToolPayload | undefined;
     expect(addCall?.[0]).toBe("cron.add");
     expect(addCall?.[1]).toEqual({ timeoutMs: 60_000 });
-    expect(addPayload?.job?.sessionTarget).toBe("isolated");
-    expect(addPayload?.job?.payload?.kind).toBe("agentTurn");
-    expect(addPayload?.job?.payload?.message).toContain("drink water");
-    expect(addPayload?.job?.payload?.toolsAllow).toEqual([]);
-    expect(addPayload?.job?.delivery).toEqual({
+    expect(addPayload?.name).toBe("Reminder: drink water");
+    expect(addPayload?.sessionTarget).toBe("isolated");
+    expect(addPayload?.payload?.kind).toBe("agentTurn");
+    expect(addPayload?.payload?.message).toContain("drink water");
+    expect(addPayload?.payload?.toolsAllow).toEqual([]);
+    expect(addPayload?.delivery).toEqual({
       mode: "announce",
       channel: "qqbot",
       to: "qqbot:c2c:user-openid",
       accountId: "bot2",
     });
+    expect(addPayload?.deleteAfterRun).toBe(true);
+    expect((addPayload?.schedule as { kind?: string })?.kind).toBe("at");
     expect(result.details).toEqual({
       ok: true,
       action: "add",
