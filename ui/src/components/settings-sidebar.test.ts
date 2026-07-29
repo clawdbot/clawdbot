@@ -231,6 +231,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
