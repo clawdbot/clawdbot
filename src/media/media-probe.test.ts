@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  probeMediaFile,
   probeMediaFileDescriptor,
   probeMediaFilesWithinBudget,
   probeVideoDimensions,
 } from "./media-probe.js";
+import type { MediaProbeKind, MediaProbeResult } from "./media-probe.js";
 
 const { runFfprobe } = vi.hoisted(() => ({
   runFfprobe: vi.fn(),
@@ -42,6 +42,15 @@ beforeEach(() => {
   runFfprobe.mockReset();
 });
 
+async function probeMediaFile(filePath: string, kind: MediaProbeKind): Promise<MediaProbeResult> {
+  const [result] = await probeMediaFilesWithinBudget([{ filePath, kind }], {
+    budgetMs: 3000,
+    concurrency: 1,
+    maxProbes: 1,
+  });
+  return result ?? {};
+}
+
 describe("probeMediaFile", () => {
   it("returns audio duration from one bounded file probe", async () => {
     runFfprobe.mockResolvedValueOnce(JSON.stringify({ format: { duration: "12.3456" } }));
@@ -66,7 +75,7 @@ describe("probeMediaFile", () => {
         "0",
         "fd:",
       ],
-      { stdinFileDescriptor: expect.any(Number) },
+      { stdinFileDescriptor: expect.any(Number), timeoutMs: expect.any(Number) },
     );
   });
 

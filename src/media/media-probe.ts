@@ -15,12 +15,12 @@ type MediaProbeOptions = {
   timeoutMs?: number;
 };
 
-export type MediaFileProbeInput = {
+type MediaFileProbeInput = {
   filePath: string;
   kind: MediaProbeKind;
 };
 
-export type MediaProbeBatchOptions = {
+type MediaProbeBatchOptions = {
   budgetMs: number;
   concurrency: number;
   maxProbes: number;
@@ -132,7 +132,7 @@ async function probeMediaSource(
 }
 
 /** Probes a local audio or video file; every failure degrades to absent fields. */
-export async function probeMediaFile(
+async function probeMediaFile(
   filePath: string,
   kind: MediaProbeKind,
   options: MediaProbeOptions = {},
@@ -184,7 +184,7 @@ export async function probeMediaFileDescriptor(
 }
 
 /** Positive video dimensions reported by ffprobe for the first video stream. */
-export type VideoDimensions = {
+type VideoDimensions = {
   width: number;
   height: number;
 };

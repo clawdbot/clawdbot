@@ -51,10 +51,6 @@ export async function runExec(
     throw new Error("runExec accepts either input or stdinFileDescriptor, not both");
   }
   try {
-    const inheritedStdio =
-      resolvedOptions?.stdinFileDescriptor === undefined
-        ? undefined
-        : ([resolvedOptions.stdinFileDescriptor, "pipe", "pipe"] as const);
     const subprocess = spawnCommand([command, ...args], {
       baseEnv: resolvedOptions?.baseEnv,
       cancelSignal: resolvedOptions?.signal,
@@ -65,9 +61,12 @@ export async function runExec(
       ...(resolvedOptions?.input !== undefined ? { input: resolvedOptions.input } : {}),
       maxBuffer,
       reject: true,
-      ...(inheritedStdio
-        ? { stdio: inheritedStdio }
-        : { stdin: resolvedOptions?.input === undefined ? "ignore" : undefined }),
+      ...(resolvedOptions?.stdinFileDescriptor === undefined
+        ? { stdin: resolvedOptions?.input === undefined ? "ignore" : undefined }
+        : {
+            // Execa forwards arbitrary numeric stdin descriptors to Node, but its type narrows them to fd 0.
+            stdin: resolvedOptions.stdinFileDescriptor as 0,
+          }),
       stripFinalNewline: false,
       timeout,
     });
