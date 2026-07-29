@@ -84,7 +84,6 @@ import {
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
 import {
-  extractLastMatchingUserText,
   extractExactReplyDirective,
   extractExactMarkerDirective,
   extractWhatsAppLocationMarkerDirective,
@@ -130,7 +129,6 @@ import {
   extractAllUserTexts,
   extractAllInputTexts,
   extractInstructionsText,
-  isContinuationUserText,
   extractAllRequestTexts,
   buildWhatsAppPendingHistoryReply,
   buildWhatsAppBroadcastReply,
@@ -159,6 +157,12 @@ import {
 
 const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
   /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
+const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
+  /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+
+function isStreamingToolProgressContinuationText(text: string) {
+  return QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(text.trim());
+}
 
 function extractLatestScenarioFamilyPrompt(texts: string[]) {
   let envelope = "";
@@ -167,7 +171,7 @@ function extractLatestScenarioFamilyPrompt(texts: string[]) {
       envelope = text;
       break;
     }
-    if (!isContinuationUserText(text)) {
+    if (!isStreamingToolProgressContinuationText(text)) {
       return "";
     }
   }
@@ -235,13 +239,8 @@ async function buildResponsesPayload(
   const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
     ? extractWhatsAppStickerMarkerDirective(allInputText)
     : "";
-  const blockStreamingPrompt =
-    extractLastMatchingUserText(allUserTexts, QA_BLOCK_STREAMING_PROMPT_RE) ||
-    prompt ||
-    allInputText;
-  const blockStreamingMarkers =
-    extractBlockStreamingMarkerDirectives(blockStreamingPrompt) ??
-    extractBlockStreamingMarkerDirectives(allInputText);
+  const blockStreamingPrompt = scenarioFamilyPrompt || prompt || allInputText;
+  const blockStreamingMarkers = extractBlockStreamingMarkerDirectives(blockStreamingPrompt);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
@@ -264,7 +263,6 @@ async function buildResponsesPayload(
     hasDeclaredTool(body, "sessions_yield") ||
     QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText);
   const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
-  const toolProgressPrompt = toolProgressTurn?.text ?? "";
   // Progress scenarios share full session transcripts. Scope completion to
   // the selected prompt so an older turn's tool output cannot finish this one.
   const toolProgressToolOutput = toolProgressTurn
@@ -273,11 +271,11 @@ async function buildResponsesPayload(
   const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
   const buildToolProgressReadEvents = () => {
     return buildToolCallEventsWithArgs("read", {
-      path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
+      path: readTargetFromPrompt(scenarioFamilyPrompt),
     });
   };
   const buildToolProgressExecEvents = () => {
-    const command = execCommandFromToolProgressPrompt(toolProgressPrompt || prompt || allInputText);
+    const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
     return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
@@ -680,11 +678,10 @@ async function buildResponsesPayload(
     ]);
   }
   const toolProgressReplyDirective =
-    extractExactReplyDirective(toolProgressPrompt) ??
-    extractExactMarkerDirective(toolProgressPrompt) ??
+    scenarioFamilyReplyDirective ??
     extractExactReplyDirective(toolProgressToolOutput) ??
     extractExactMarkerDirective(toolProgressToolOutput);
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(toolProgressPrompt)) {
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt)) {
     if (!toolProgressToolOutput) {
       return buildToolProgressReadEvents();
     }
@@ -696,7 +693,7 @@ async function buildResponsesPayload(
       );
     }
   }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(toolProgressPrompt)) {
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(scenarioFamilyPrompt)) {
     if (!toolProgressToolOutput) {
       return buildToolProgressExecEvents() ?? buildToolProgressReadEvents();
     }
