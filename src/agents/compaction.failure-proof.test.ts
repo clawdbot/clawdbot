@@ -60,8 +60,10 @@ describe("compaction failure real-behavior proof", () => {
     // The caller must see the failure and keep the transcript intact.
     // No compaction placeholder is returned, so messages are not rotated away.
     expect(messages).toHaveLength(3);
-    expect(messages[0].content).toBe("first user request");
-    expect(messages[1].content).toBe("second user request");
-    expect(messages[2].content).toBe("third user request");
+    expect(messages.map((message) => message.content)).toEqual([
+      "first user request",
+      "second user request",
+      "third user request",
+    ]);
   });
 });
