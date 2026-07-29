@@ -17,7 +17,11 @@ const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let workspaceDir = "";
 
-function candidate(runId: string, messages: unknown[]): ExperienceReviewCandidate {
+function candidate(
+  runId: string,
+  messages: unknown[],
+  options: { turnAborted?: boolean } = {},
+): ExperienceReviewCandidate {
   const modelId = process.env.OPENCLAW_LIVE_SKILL_EXPERIENCE_MODEL ?? "gpt-5.6-luna";
   return {
     ctx: {
@@ -54,6 +58,7 @@ function candidate(runId: string, messages: unknown[]): ExperienceReviewCandidat
         },
       },
       agents: {
+        entries: { main: { default: true } },
         defaults: {
           model: { primary: `openai/${modelId}` },
           models: {
@@ -68,6 +73,7 @@ function candidate(runId: string, messages: unknown[]): ExperienceReviewCandidat
     },
     transcript: formatSkillExperienceReviewTranscript(messages),
     modelIterations: 10,
+    ...(options.turnAborted === undefined ? {} : { turnAborted: options.turnAborted }),
   };
 }
 
@@ -174,5 +180,56 @@ describeLive("skill experience review live OpenAI eval", () => {
     });
     const afterNegative = await listSkillProposals({ workspaceDir });
     expect(afterNegative.proposals).toEqual(afterPositive.proposals);
-  }, 180_000);
+
+    const interruptedMessages = [
+      {
+        role: "user",
+        content: "Publish the package. The registry keeps rejecting the token.",
+      },
+      { role: "assistant", content: [{ type: "toolCall", name: "publish", arguments: {} }] },
+      { role: "toolResult", toolName: "publish", isError: true, content: "401 invalid token" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "publish", arguments: { retry: true } }],
+      },
+      { role: "toolResult", toolName: "publish", isError: true, content: "401 invalid token" },
+      { role: "assistant", content: "Retrying does not help; the stored scope must be wrong." },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "exec", arguments: { command: "registry whoami" } }],
+      },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        content: "authenticated to legacy-registry.example, expected registry.example",
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "exec",
+            arguments: { command: "registry login --host registry.example" },
+          },
+        ],
+      },
+      { role: "toolResult", toolName: "exec", content: "login ok" },
+      { role: "assistant", content: [{ type: "toolCall", name: "publish", arguments: {} }] },
+      { role: "toolResult", toolName: "publish", content: "published 1.2.3" },
+      { role: "assistant", content: "Publish verified. Moving on to the release notes." },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: { path: "CHANGELOG.md" } }],
+      },
+    ];
+
+    const interruptedCandidate = candidate("live-interrupted", interruptedMessages, {
+      turnAborted: true,
+    });
+    await runSkillExperienceReview(interruptedCandidate, {
+      getCurrentConfig: () => interruptedCandidate.config ?? {},
+    });
+    const afterInterrupted = await listSkillProposals({ workspaceDir });
+    expect(afterInterrupted.proposals.length).toBeGreaterThan(afterNegative.proposals.length);
+  }, 300_000);
 });
