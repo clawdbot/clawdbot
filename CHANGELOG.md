@@ -51,7 +51,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Remote Codex file uploads:** transfer authoritative workspace files and generated images over bounded, sandboxed app-server command chunks, stage Gateway-owned media safely, and keep Slack and other channel uploads under the configured bot identity without requiring a shared or synchronized filesystem.
 - **Shared state corruption recovery:** evict only the exact cached SQLite owner after proven read or write corruption so a repaired database recovers without a Gateway restart while caller-injected handles remain untouched. Fixes #114269. Thanks @rizquuula.
 - **Dev-channel updates:** finish package-to-git switches in a fresh CLI process even when source SHA and version metadata are unchanged, preventing stale hashed chunks from loading after the global package root changes.
 - **Parallels release smoke:** preserve Windows installer reboot results across Parallels, wait for WSL MSI/default-version readiness, force explicit test-owned gateway stops, and reset Linux package, config, and cache state before install lanes, preventing false prerequisite, safety-gate, and stale-config failures.
