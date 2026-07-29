@@ -37,6 +37,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     initialParams.trigger,
     initialParams.inputProvenance,
   );
+  const canResumeAcrossLifecycleRotation = (lifecycleGeneration: string) =>
+    sessionQueuePriority === "foreground" &&
+    options.initialQueuedLifecycleGeneration === lifecycleGeneration;
+  const beginRunContextQueueWait = () => {
+    const lifecycleGeneration = options.getLifecycleGeneration();
+    return beginAgentRunContextQueueWait(options.getParams().runId, {
+      lifecycleGeneration,
+      resumeAcrossLifecycleRotation: canResumeAcrossLifecycleRotation(lifecycleGeneration),
+    });
+  };
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(initialParams.timeoutMs);
   const laneTaskAbortController = new AbortController();
   const laneTaskReleaseController = new AbortController();
@@ -117,10 +127,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     // Global-lane admission is healthy waiting, not run execution. Keep reply
     // staleness and stuck recovery fenced until this queue grants capacity.
     options.getParams().replyOperation?.markWaitingForGlobalLane();
-    const releaseQueueWait = beginAgentRunContextQueueWait(
-      options.getParams().runId,
-      options.getLifecycleGeneration(),
-    );
+    const releaseQueueWait = beginRunContextQueueWait();
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
@@ -135,14 +142,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
       const existingContext = getAgentRunContext(params.runId);
       if (lifecycleGeneration !== currentLifecycleGeneration) {
-        const wasQueuedBeforeRotation =
-          options.initialQueuedLifecycleGeneration === lifecycleGeneration;
-        const canResumeAcrossRotation = sessionQueuePriority === "foreground";
         const newerSameIdExecutionOwnsContext =
           existingContext?.lifecycleGeneration === currentLifecycleGeneration;
         if (
-          !wasQueuedBeforeRotation ||
-          !canResumeAcrossRotation ||
+          !canResumeAcrossLifecycleRotation(lifecycleGeneration) ||
           newerSameIdExecutionOwnsContext
         ) {
           assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -193,14 +196,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const releaseQueueWait = beginAgentRunContextQueueWait(
-      options.getParams().runId,
-      options.getLifecycleGeneration(),
-    );
+    const releaseQueueWait = beginRunContextQueueWait();
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
     const taskWithLaneAdmission = () => {
       releaseQueueWait();
       options.getParams().onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+      const lifecycleGeneration = options.getLifecycleGeneration();
+      if (!canResumeAcrossLifecycleRotation(lifecycleGeneration)) {
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      }
+      // The session task only advances to global admission, which reclaims lifecycle ownership.
       return task();
     };
     const params = options.getParams();
