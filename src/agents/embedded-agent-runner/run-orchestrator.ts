@@ -310,6 +310,7 @@ async function runEmbeddedAgentInternal(
           sessionKey: resolvedSessionKey,
           sessionId: params.sessionId,
           workspaceDir: resolvedWorkspace,
+          activeProjectKeys: [...activeProjectKeys],
           modelProviderId: provider,
           modelId,
           trigger: params.trigger,
