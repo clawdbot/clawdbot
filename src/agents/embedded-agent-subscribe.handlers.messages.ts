@@ -424,10 +424,14 @@ function resolveSilentReplyFallbackText(params: {
 function clearPendingToolMedia(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
   >,
 ) {
   state.pendingToolMediaUrls = [];
+  state.pendingToolMediaAttachments = [];
   state.pendingToolAudioAsVoice = false;
   state.pendingToolTrustedLocalMedia = false;
 }
@@ -436,11 +440,36 @@ function hasReplyMedia(payload: BlockReplyPayload): boolean {
   return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
 }
 
+function readAlignedPendingToolMedia(
+  state: Pick<EmbeddedAgentSubscribeState, "pendingToolMediaUrls" | "pendingToolMediaAttachments">,
+) {
+  const seen = new Set<string>();
+  const mediaUrls: string[] = [];
+  const attachments: NonNullable<BlockReplyPayload["attachments"]> = [];
+  for (const [index, url] of state.pendingToolMediaUrls.entries()) {
+    if (seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    mediaUrls.push(url);
+    attachments.push(state.pendingToolMediaAttachments?.[index] ?? {});
+  }
+  return {
+    mediaUrls,
+    attachments: attachments.some((entry) => Object.keys(entry).length > 0)
+      ? attachments
+      : undefined,
+  };
+}
+
 /** Moves queued tool media into a non-reasoning assistant reply payload. */
 export function consumePendingToolMediaIntoReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
   >,
   payload: BlockReplyPayload,
 ): BlockReplyPayload {
@@ -457,15 +486,36 @@ export function consumePendingToolMediaIntoReply(
   if (hasReplyMedia(payload)) {
     // Pending tool media is a fallback delivery queue; explicit final media is
     // the assistant's user-visible selection, while tool output remains in the transcript.
+    const alignedPendingMedia = readAlignedPendingToolMedia(state);
+    const metadataByUrl = new Map(
+      alignedPendingMedia.mediaUrls.map((url, index) => [
+        url,
+        alignedPendingMedia.attachments?.[index] ?? {},
+      ]),
+    );
+    const selectedAttachments = (payload.mediaUrls ?? []).map(
+      (url) => metadataByUrl.get(url.trim()) ?? {},
+    );
+    const allSelectedMediaIsPending =
+      (payload.mediaUrls?.length ?? 0) > 0 &&
+      (payload.mediaUrls ?? []).every((url) => metadataByUrl.has(url.trim()));
+    const payloadWithMetadata =
+      payload.attachments?.length ||
+      selectedAttachments.every((entry) => Object.keys(entry).length === 0)
+        ? payload
+        : { ...payload, attachments: selectedAttachments };
+    const selectedPayload =
+      state.pendingToolTrustedLocalMedia && allSelectedMediaIsPending
+        ? { ...payloadWithMetadata, trustedLocalMedia: true }
+        : payloadWithMetadata;
     clearPendingToolMedia(state);
-    return payload;
+    return selectedPayload;
   }
-  const mergedMediaUrls = Array.from(
-    new Set([...(payload.mediaUrls ?? []), ...state.pendingToolMediaUrls]),
-  );
+  const pendingMedia = readAlignedPendingToolMedia(state);
   const mergedPayload: BlockReplyPayload = {
     ...payload,
-    mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    mediaUrls: pendingMedia.mediaUrls.length ? pendingMedia.mediaUrls : undefined,
+    attachments: pendingMedia.attachments,
     audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: payload.trustedLocalMedia || state.pendingToolTrustedLocalMedia || undefined,
   };
@@ -477,7 +527,10 @@ export function consumePendingToolMediaIntoReply(
 export function consumePendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
   >,
 ): BlockReplyPayload | null {
   const payload = readPendingToolMediaReply(state);
@@ -492,7 +545,10 @@ export function consumePendingToolMediaReply(
 export function readPendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
   >,
 ): BlockReplyPayload | null {
   if (
@@ -502,10 +558,10 @@ export function readPendingToolMediaReply(
   ) {
     return null;
   }
+  const pendingMedia = readAlignedPendingToolMedia(state);
   return {
-    mediaUrls: state.pendingToolMediaUrls.length
-      ? uniqueStrings(state.pendingToolMediaUrls)
-      : undefined,
+    mediaUrls: pendingMedia.mediaUrls.length ? pendingMedia.mediaUrls : undefined,
+    attachments: pendingMedia.attachments,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
   };

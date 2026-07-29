@@ -242,7 +242,14 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       const content = await buildAssistantDisplayContentFromReplyPayloads({
         sessionKey: TEST_SESSION_KEY,
         agentId: "main",
-        payloads: [{ text: "Generated media", mediaUrls: [sourcePath], trustedLocalMedia: true }],
+        payloads: [
+          {
+            text: "Generated media",
+            mediaUrls: [sourcePath],
+            attachments: [{ type: kind, path: sourcePath, name: fileName, durationMs: 1_500 }],
+            trustedLocalMedia: true,
+          },
+        ],
         managedMediaLocalRoots: [workspaceDir],
       });
 
@@ -253,6 +260,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
           artifactId: expect.stringMatching(/^artifact_managed_media_/u),
           fileName,
           mimeType,
+          durationMs: 1_500,
         }),
       ]);
       expect(JSON.stringify(content)).not.toContain(sourcePath);

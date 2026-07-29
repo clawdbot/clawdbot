@@ -178,6 +178,7 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
       sessionKey: params.sessionKey,
       ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
       mediaUrls,
+      attachments: payload.attachments,
       localRoots: params.managedMediaLocalRoots,
       allowLocalNonImage: payload.trustedLocalMedia === true,
       continueOnPrepareError: true,

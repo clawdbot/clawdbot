@@ -12,6 +12,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
@@ -213,6 +214,10 @@ function maxBytesForManagedMediaKind(
   imageLimits: ManagedImageAttachmentLimits,
 ): number {
   return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
+}
+
+function asNonNegativeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function createManagedMediaByteLimitError(params: {
@@ -1071,6 +1076,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
   sessionKey: string;
   agentId?: string;
   mediaUrls?: string[] | null;
+  attachments?: readonly ReplyMediaAttachment[] | null;
   stateDir?: string;
   messageId?: string | null;
   limits?: ManagedImageAttachmentLimitsConfig | null;
@@ -1092,6 +1098,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
   const blocks: ManagedMediaBlock[] = [];
   let resolvedLocalRoots: readonly string[] | undefined;
   for (const [index, mediaUrl] of mediaUrls.entries()) {
+    const attachmentMetadata = params.attachments?.[index];
     const trimmedMediaUrl = mediaUrl.trim();
     const dataUrlKind = /^data:(image|audio|video)\//iu.exec(trimmedMediaUrl)?.[1];
     const fallbackLabel = `Generated ${dataUrlKind ?? "media"} ${index + 1}`;
@@ -1278,11 +1285,23 @@ export async function createManagedOutgoingMediaBlocks(params: {
           width: originalStats.width,
           height: originalStats.height,
           sizeBytes: originalStats.sizeBytes,
-          filename: mediaKind === "image" ? toRecordFilename(savedOriginal.path) : label,
+          filename:
+            mediaKind === "image"
+              ? toRecordFilename(savedOriginal.path)
+              : attachmentMetadata?.name?.trim() || label,
         },
       };
       insertManagedImageRecord(record, stateDir);
-      blocks.push(buildManagedMediaBlock(record));
+      const block = buildManagedMediaBlock(record);
+      const durationMs = asNonNegativeFiniteNumber(attachmentMetadata?.durationMs);
+      const width = asNonNegativeFiniteNumber(attachmentMetadata?.width);
+      const height = asNonNegativeFiniteNumber(attachmentMetadata?.height);
+      blocks.push({
+        ...block,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(mediaKind === "video" && width !== undefined ? { width } : {}),
+        ...(mediaKind === "video" && height !== undefined ? { height } : {}),
+      });
       if (resizeWarning) {
         blocks.push(resizeWarning);
       }

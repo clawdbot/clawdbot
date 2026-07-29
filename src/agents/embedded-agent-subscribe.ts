@@ -60,6 +60,7 @@ import {
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -139,27 +140,45 @@ function splitTrailingFenceFragment(
 
 function collectPendingMediaFromInternalEvents(
   events: SubscribeEmbeddedAgentSessionParams["internalEvents"],
-): string[] {
+): { mediaUrls: string[]; attachments: NonNullable<AgentInternalEvent["attachments"]> } {
   if (!events?.length) {
-    return [];
+    return { mediaUrls: [], attachments: [] };
   }
   const pending: string[] = [];
-  const seen = new Set<string>();
+  const attachments: NonNullable<AgentInternalEvent["attachments"]> = [];
+  const indexByUrl = new Map<string, number>();
   for (const event of events) {
+    const attachmentByUrl = new Map(
+      (event.attachments ?? []).flatMap((attachment) => {
+        const reference = normalizeOptionalString(
+          attachment.path ?? attachment.url ?? attachment.mediaUrl ?? attachment.filePath,
+        );
+        return reference ? [[reference, attachment] as const] : [];
+      }),
+    );
     const mediaUrls = [
       ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
       ...mediaUrlsFromGeneratedAttachments(event.attachments),
     ];
     for (const mediaUrl of mediaUrls) {
       const normalized = normalizeOptionalString(mediaUrl) ?? "";
-      if (!normalized || seen.has(normalized)) {
+      if (!normalized) {
         continue;
       }
-      seen.add(normalized);
+      const metadata = attachmentByUrl.get(normalized);
+      const existingIndex = indexByUrl.get(normalized);
+      if (existingIndex !== undefined) {
+        if (metadata && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
+          attachments[existingIndex] = metadata;
+        }
+        continue;
+      }
+      indexByUrl.set(normalized, pending.length);
       pending.push(normalized);
+      attachments.push(metadata ?? {});
     }
   }
-  return pending;
+  return { mediaUrls: pending, attachments };
 }
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
@@ -168,7 +187,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const canShowReasoning = params.thinkingLevel !== "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
-  const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
+  const initialPendingToolMedia = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedAgentSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
@@ -239,7 +258,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
-    pendingToolMediaUrls: initialPendingToolMediaUrls,
+    pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
+    pendingToolMediaAttachments: initialPendingToolMedia.attachments,
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
     hasToolMediaBlockReply: false,
@@ -1307,6 +1327,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
+    state.pendingToolMediaAttachments = [];
     state.pendingToolAudioAsVoice = false;
     state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
