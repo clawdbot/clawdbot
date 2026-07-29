@@ -1,5 +1,6 @@
 // Tests private message-tool final delivery and visibility suppression.
 import { describe, expect, it } from "vitest";
+import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-final.js";
 
 const base = {
@@ -93,6 +94,23 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
     { label: "short CJK single clause", finalText: "已完成", expected: false },
   ])("$label -> $expected", ({ finalText, expected }) => {
     expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(expected);
+  });
+
+  it.each([
+    { label: "ideographic full stop", terminator: "。" },
+    { label: "full-width exclamation mark", terminator: "！" },
+    { label: "full-width question mark", terminator: "？" },
+    { label: "full-width full stop", terminator: "．" },
+    { label: "half-width ideographic full stop", terminator: "｡" },
+  ])("flags a medium-length CJK reply with $label", ({ terminator }) => {
+    const finalText =
+      `第一項設定已完成，請檢查通知狀態${terminator}` +
+      `第二項資料已同步，稍後即可收到訊息${terminator}`;
+    const estimatedChars = estimateStringChars(finalText);
+
+    expect(estimatedChars).toBeGreaterThanOrEqual(120);
+    expect(estimatedChars).toBeLessThan(280);
+    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(true);
   });
 
   it.each([

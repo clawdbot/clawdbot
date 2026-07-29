@@ -1,5 +1,5 @@
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 /** Detects and logs long private finals when message-tool-only delivery was expected. */
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { estimateStringChars } from "../../utils/cjk-chars.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { isSilentReplyText } from "../tokens.js";
@@ -9,7 +9,8 @@ const privateFinalReplyLogger = createSubsystemLogger("source-reply/private-fina
 const LONG_PRIVATE_FINAL_MIN_CHARS = 280;
 const MULTI_SENTENCE_PRIVATE_FINAL_MIN_CHARS = 120;
 const MULTI_SENTENCE_TERMINATOR_MIN_COUNT = 2;
-const SENTENCE_TERMINATOR_REGEX = /[.!?]+(?:\s|$)/g;
+// CJK sentence marks do not require following whitespace; keep ASCII's boundary rule.
+const SENTENCE_TERMINATOR_REGEX = /[.!?]+(?:\s|$)|[。！？．｡]+/gu;
 
 /**
  * `message_tool_only` allows the model to stay silent by simply not calling the
