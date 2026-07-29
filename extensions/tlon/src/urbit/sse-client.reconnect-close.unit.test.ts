@@ -1,52 +1,43 @@
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { urbitFetch } from "./fetch.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { UrbitSSEClient } from "./sse-client.js";
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  sleepWithAbort: vi.fn(
-    (_delayMs: number, signal?: AbortSignal) =>
-      new Promise<void>((resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      }),
-  ),
-}));
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
-vi.mock("./fetch.js", () => ({
-  urbitFetch: vi.fn(),
-}));
-
-vi.mock("./channel-ops.js", () => ({
-  ensureUrbitChannelOpen: vi.fn().mockResolvedValue(undefined),
-  pokeUrbitChannel: vi.fn().mockResolvedValue(undefined),
-  scryUrbitPath: vi.fn().mockResolvedValue({}),
-}));
-
-describe("UrbitSSEClient extended reconnect backoff", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(urbitFetch).mockResolvedValue({
-      response: new Response(null, { status: 204 }),
-      finalUrl: "https://example.com",
-      release: vi.fn().mockResolvedValue(undefined),
-    });
-  });
-
-  it("cancels the max-attempt delay when the client closes", async () => {
+describe("UrbitSSEClient owned reconnect timers", () => {
+  it.each([
+    { name: "ordinary reconnect", exhausted: false, delayMs: 1_000 },
+    { name: "exhausted ten-second cooldown", exhausted: true, delayMs: 10_000 },
+  ])("clears the $name timer immediately when the monitor stops receiving", async (params) => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const onReconnect = vi.fn();
-    const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-      maxReconnectAttempts: 2,
+    const logger = { log: vi.fn() };
+    const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=synthetic", {
+      maxReconnectAttempts: 1,
+      reconnectDelay: 1_000,
       onReconnect,
+      logger,
     });
-    client.reconnectAttempts = client.maxReconnectAttempts;
+    if (params.exhausted) {
+      client.reconnectAttempts = client.maxReconnectAttempts;
+    }
 
     const reconnect = client.attemptReconnect();
-    expect(sleepWithAbort).toHaveBeenCalledWith(10_000, expect.any(AbortSignal));
 
-    await client.close();
-    await reconnect;
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), params.delayMs);
+    expect(vi.getTimerCount()).toBe(1);
+    client.stopReceiving();
 
-    expect(sleepWithAbort).toHaveBeenCalledTimes(1);
+    await expect(reconnect).resolves.toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
     expect(onReconnect).not.toHaveBeenCalled();
+    if (params.exhausted) {
+      expect(logger.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("reset, resuming reconnection"),
+      );
+    }
   });
 });
