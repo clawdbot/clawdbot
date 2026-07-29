@@ -81,6 +81,10 @@ public struct GatewayTLSValidationError: LocalizedError, Sendable {
     }
 }
 
+public enum GatewayBoundedDataError: Error, Equatable, Sendable {
+    case responseTooLarge(maximumBytes: Int)
+}
+
 protocol GatewayTLSFailureProviding: AnyObject {
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
@@ -762,6 +766,42 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let task = self.session.webSocketTask(with: request)
         task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
+    }
+
+    public func data(for request: URLRequest, maximumBytes: Int) async throws -> (Data, URLResponse) {
+        self.registerExpectedAuthority(url: request.url)
+        guard maximumBytes >= 0 else {
+            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        }
+
+        let (bytes, response) = try await self.session.bytes(for: request)
+        let expectedLength = response.expectedContentLength
+        guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
+            bytes.task.cancel()
+            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        }
+
+        var data = Data()
+        if expectedLength > 0 {
+            data.reserveCapacity(Int(expectedLength))
+        }
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    bytes.task.cancel()
+                    throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+                }
+                data.append(byte)
+            }
+        } catch {
+            bytes.task.cancel()
+            throw error
+        }
+        return (data, response)
+    }
+
+    public func finishTasksAndInvalidate() {
+        self.session.finishTasksAndInvalidate()
     }
 
     public func urlSession(

@@ -50,6 +50,8 @@ function failedCodeModeWorkerResult(
     status: "failed",
     error: errorMessage(error),
     code,
+    failurePhase: "host",
+    bridgeDispatchStarted: false,
     output: [],
   };
 }
@@ -102,6 +104,8 @@ export async function runCodeModeWorker(
           status: "failed",
           error: "code mode worker timeout exceeded",
           code: "timeout",
+          failurePhase: "host",
+          bridgeDispatchStarted: false,
           output: [],
         });
       }, timeoutMs);
@@ -114,6 +118,8 @@ export async function runCodeModeWorker(
               ? "code mode timeout exceeded"
               : "code mode execution aborted",
           code: abortReason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
+          failurePhase: "host",
+          bridgeDispatchStarted: false,
           output: [],
         });
       };
@@ -147,6 +153,8 @@ export async function runCodeModeWorker(
                   status: "failed",
                   error: "invalid code mode worker response",
                   code: "internal_error",
+                  failurePhase: "host",
+                  bridgeDispatchStarted: false,
                   output: [],
                 } satisfies CodeModeWorkerResult);
             finish(normalizeCodeModeWorkerResult(result));

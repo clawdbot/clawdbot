@@ -439,8 +439,11 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         lastProvider: "heartbeat",
         lastTo: "heartbeat",
         updatedAt: Date.now(),
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "HEARTBEAT_OK",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "HEARTBEAT_OK",
+          createdAt: Date.now(),
+        },
       });
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
 
@@ -468,8 +471,11 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         lastProvider: "heartbeat",
         lastTo: "heartbeat",
         updatedAt: Date.now(),
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "HEARTBEAT_OK short",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "HEARTBEAT_OK short",
+          createdAt: Date.now(),
+        },
       });
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
 
@@ -500,9 +506,11 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         lastProvider: "telegram",
         lastTo: "default-heartbeat-target",
         updatedAt: Date.now() - 60_000,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "private prior user answer",
-        pendingFinalDeliveryCreatedAt: Date.now() - 60_000,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "private prior user answer",
+          createdAt: Date.now() - 60_000,
+        },
       });
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "default" });

@@ -76,6 +76,7 @@ vi.mock("./status-reaction.js", () => ({
 }));
 
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
+import { createEchoTracker } from "./echo.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
 const baseRoute = {
@@ -250,7 +251,11 @@ function createGroupCfg(): Record<string, unknown> {
   };
 }
 
-function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg()) {
+function createHandler(
+  warn = vi.fn(),
+  cfg: Record<string, unknown> = createCfg(),
+  echoTracker?: ReturnType<typeof createEchoTracker>,
+) {
   const groupHistories = new Map();
   return {
     warn,
@@ -263,7 +268,7 @@ function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg(
       groupHistoryLimit: 20,
       groupHistories,
       groupMemberNames: new Map(),
-      echoTracker: {
+      echoTracker: echoTracker ?? {
         has: () => false,
         forget: () => {},
         rememberText: () => {},
@@ -377,6 +382,42 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockImplementation(resolvedConfiguredRoute());
+  });
+
+  it("dispatches another conversation's identical text while suppressing the actual echo", async () => {
+    const sentConversation = "15550001111@s.whatsapp.net";
+    const otherConversation = "15550002222@s.whatsapp.net";
+    const echoTracker = createEchoTracker({ maxItems: 10 });
+    echoTracker.rememberText("Done.", { conversationId: sentConversation });
+    resolveConfiguredBindingRouteMock.mockImplementation(({ route }) => ({
+      bindingResolution: null,
+      route,
+    }));
+    const { handler } = createHandler(vi.fn(), createCfg(), echoTracker);
+
+    const messageForConversation = (conversationId: string) =>
+      createTestWebInboundMessage({
+        admission: {
+          accountId: "work",
+          conversation: { kind: "direct", id: conversationId },
+          sender: { id: conversationId },
+        },
+        payload: { body: "Done." },
+        platform: {
+          chatJid: conversationId,
+          recipientJid: "15559876543@s.whatsapp.net",
+        },
+      });
+
+    await handler(messageForConversation(otherConversation));
+
+    expect(processMessageMock).toHaveBeenCalledTimes(1);
+    expect(echoTracker.has("Done.", sentConversation)).toBe(true);
+
+    await handler(messageForConversation(sentConversation));
+
+    expect(processMessageMock).toHaveBeenCalledTimes(1);
+    expect(echoTracker.has("Done.", sentConversation)).toBe(false);
   });
 
   it("rewrites matching WhatsApp inbound turns to the configured ACP session key", async () => {

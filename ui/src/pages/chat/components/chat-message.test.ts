@@ -10,10 +10,12 @@ import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
 import {
+  getAssistantAttachmentAvailabilityRenderVersion,
   dismissConfirmedActionPopovers,
   renderMessageGroup,
   renderStreamGroup,
 } from "./chat-message.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const localStorageValues = new Map<string, string>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
@@ -526,29 +528,30 @@ function setupArmedDeleteConfirm() {
   const outsideClickListener = expectLastCaptureClickListener(addListenerSpy.mock.calls);
   const outsideContextMenuListener = getLastCaptureContextMenuListener(addListenerSpy.mock.calls);
   const escapeListener = getLastCaptureKeydownListener(addKeyListenerSpy.mock.calls);
+  const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
   expect(typeof outsideContextMenuListener).toBe("function");
   expect(typeof escapeListener).toBe("function");
-  expect(fixture.container.querySelectorAll(".chat-delete-confirm")).toHaveLength(1);
 
   return {
     ...fixture,
     escapeListener,
     outsideClickListener,
     outsideContextMenuListener,
+    popover,
     removeKeyListenerSpy,
     removeListenerSpy,
   };
 }
 
 function expectDeleteConfirmDismissed(params: {
-  container: HTMLElement;
   escapeListener: unknown;
   outsideClickListener: unknown;
   outsideContextMenuListener: unknown;
+  popover: HTMLElement;
   removeKeyListenerSpy: ReturnType<typeof vi.spyOn>;
   removeListenerSpy: ReturnType<typeof vi.spyOn>;
 }) {
-  expect(params.container.querySelector(".chat-delete-confirm")).toBeNull();
+  expect(params.popover.isConnected).toBe(false);
   expect(
     countCaptureClickListenerRemovals(
       params.removeListenerSpy.mock.calls,
@@ -583,8 +586,21 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
   };
 }
 
+async function requireAudioPlayer(container: HTMLElement) {
+  const player = expectElement(
+    container,
+    "openclaw-chat-audio-player",
+    HTMLElement,
+  ) as HTMLElement & { updateComplete: Promise<unknown> };
+  await player.updateComplete;
+  return player;
+}
+
 afterEach(() => {
   markdownRenderMock.mockClear();
+  document.querySelectorAll("[data-media-player-test-fixture]").forEach((element) => {
+    element.remove();
+  });
   document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
     dismissConfirmedActionPopovers(element);
     element.remove();
@@ -995,9 +1011,7 @@ describe("grouped chat rendering", () => {
       expect(userDeleteButton).toBeInstanceOf(HTMLButtonElement);
       userDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      const userConfirm = container.querySelector<HTMLElement>(
-        ".chat-group.user .chat-delete-confirm",
-      );
+      const userConfirm = document.querySelector<HTMLElement>(".chat-delete-confirm--left");
       expect(userConfirm).toBeInstanceOf(HTMLElement);
       expect([...userConfirm!.classList]).toEqual([
         "chat-delete-confirm",
@@ -1010,9 +1024,7 @@ describe("grouped chat rendering", () => {
       expect(assistantDeleteButton).toBeInstanceOf(HTMLButtonElement);
       assistantDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      const assistantConfirm = container.querySelector<HTMLElement>(
-        ".chat-group.assistant .chat-delete-confirm",
-      );
+      const assistantConfirm = document.querySelector<HTMLElement>(".chat-delete-confirm--right");
       expect(assistantConfirm).toBeInstanceOf(HTMLElement);
       expect([...assistantConfirm!.classList]).toEqual([
         "chat-delete-confirm",
@@ -1039,10 +1051,10 @@ describe("grouped chat rendering", () => {
     const rewindButtons = container.querySelectorAll<HTMLButtonElement>(".chat-group-rewind");
     expect(rewindButtons).toHaveLength(1);
     rewindButtons[0]!.click();
-    expect(container.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+    expect(document.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
       "Rewind to before this message?",
     );
-    container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+    document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
     expect(onRewind).toHaveBeenCalledTimes(1);
   });
 
@@ -1101,7 +1113,8 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const element = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const element = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
+    expect(element.parentElement).toBe(document.body);
     if (placement) {
       expect(element.dataset.placement).toBe(placement);
     }
@@ -1115,7 +1128,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
     const check = expectElement(popover, ".chat-delete-confirm__check", HTMLInputElement);
     const cancel = expectElement(popover, ".chat-delete-confirm__cancel", HTMLButtonElement);
     const confirm = expectElement(popover, ".chat-delete-confirm__yes", HTMLButtonElement);
@@ -1150,7 +1163,7 @@ describe("grouped chat rendering", () => {
   it("dismisses the confirmation with Escape before underlying keyboard handlers run", () => {
     const fixture = setupArmedDeleteConfirm();
     const cancel = expectElement(
-      fixture.container,
+      fixture.popover,
       ".chat-delete-confirm__cancel",
       HTMLButtonElement,
     );
@@ -1179,12 +1192,24 @@ describe("grouped chat rendering", () => {
     const fixture = setupArmedDeleteConfirm();
     const sibling = renderDeleteConfirmFixture();
     openDeleteConfirm(sibling.deleteButton);
+    const siblingPopover = [...document.querySelectorAll<HTMLElement>(".chat-delete-confirm")].find(
+      (popover) => popover !== fixture.popover,
+    );
 
     dismissConfirmedActionPopovers(fixture.container);
 
     expectDeleteConfirmDismissed(fixture);
-    expect(sibling.container.querySelector(".chat-delete-confirm")).not.toBeNull();
+    expect(siblingPopover?.isConnected).toBe(true);
     dismissConfirmedActionPopovers(sibling.container);
+  });
+
+  it("dismisses a portaled confirmation when its owner is detached", async () => {
+    const fixture = setupArmedDeleteConfirm();
+
+    fixture.container.remove();
+    await Promise.resolve();
+
+    expectDeleteConfirmDismissed(fixture);
   });
 
   it("does not attach an outside-click listener after owner cleanup before the next frame", () => {
@@ -1203,7 +1228,7 @@ describe("grouped chat rendering", () => {
     dismissConfirmedActionPopovers(fixture.container);
     flushAnimationFrames();
 
-    expect(fixture.container.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
     expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
     expect(
       countCaptureContextMenuListenerRemovals(removeListenerSpy.mock.calls, contextMenuListener),
@@ -1215,9 +1240,7 @@ describe("grouped chat rendering", () => {
 
   it("removes the delete confirm outside-click listener when Cancel dismisses it", () => {
     const fixture = setupArmedDeleteConfirm();
-    const cancel = fixture.container.querySelector<HTMLButtonElement>(
-      ".chat-delete-confirm__cancel",
-    );
+    const cancel = fixture.popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel");
 
     expect(cancel).toBeInstanceOf(HTMLButtonElement);
     cancel!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -1229,7 +1252,7 @@ describe("grouped chat rendering", () => {
 
   it("removes the delete confirm outside-click listener when Delete dismisses it", () => {
     const fixture = setupArmedDeleteConfirm();
-    const confirm = fixture.container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes");
+    const confirm = fixture.popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes");
 
     expect(confirm).toBeInstanceOf(HTMLButtonElement);
     confirm!.focus();
@@ -1284,7 +1307,7 @@ describe("grouped chat rendering", () => {
     openDeleteConfirm(fixture.deleteButton);
     flushAnimationFrames();
 
-    expect(fixture.container.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
     expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
     expect(fixture.onDelete).not.toHaveBeenCalled();
   });
@@ -1609,7 +1632,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
     expect(container.querySelector(".chat-working-indicator")).toBeNull();
     expect(container.querySelector(".chat-turn-recap--continuation")?.textContent).toContain(
-      "Done in 5s",
+      "Done in 5 seconds",
     );
     expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
   });
@@ -1635,6 +1658,31 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector(".chat-working-indicator__status > .agent-chat__sr-only"),
     ).toBeNull();
+  });
+
+  it("formats terminal recap durations with full localized units", () => {
+    const cases = [
+      { runtimeMs: 3_600_000, expected: "Done in 1 hour" },
+      { runtimeMs: 10 * 60_000, expected: "Done in 10 minutes" },
+      { runtimeMs: 30_000, expected: "Done in 30 seconds" },
+      { runtimeMs: 86_400_000, expected: "Done in 1 day" },
+      {
+        runtimeMs: 4 * 3_600_000 + 2 * 60_000,
+        expected: "Done in 4 hours, 2 minutes",
+      },
+    ];
+
+    for (const { runtimeMs, expected } of cases) {
+      const container = document.createElement("div");
+      render(renderTurnRecapRow({ runtimeMs, outputTokens: null }), container);
+      expect(container.querySelector(".chat-turn-recap")?.textContent?.trim()).toBe(expected);
+    }
+
+    const withTokens = document.createElement("div");
+    render(renderTurnRecapRow({ runtimeMs: 30_000, outputTokens: 2_400 }), withTokens);
+    expect(
+      withTokens.querySelector(".chat-turn-recap")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("Done in 30 seconds · 2.4k tokens");
   });
 
   it("shows live output usage beside elapsed time", () => {
@@ -1714,7 +1762,9 @@ describe("grouped chat rendering", () => {
     const group = container.querySelector(".chat-group.assistant");
     expect(group?.classList.contains("chat-group--working")).toBe(false);
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
-    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 
   it("seeds at most one stable claw surprise per reading-indicator key", () => {
@@ -3000,8 +3050,9 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("renders assistant MEDIA attachments, voice-note badge, and reply pill", () => {
-    const container = document.createElement("div");
+  it("renders assistant MEDIA attachments, voice-note badge, and reply pill", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
     const onOpenImage = vi.fn();
     renderAssistantMessage(
       container,
@@ -3027,7 +3078,8 @@ describe("grouped chat rendering", () => {
       src: "https://example.com/photo.png",
       title: "photo.png",
     });
-    expect(expectElement(container, "audio", HTMLAudioElement).src).toBe(
+    const audioPlayer = await requireAudioPlayer(container);
+    expect(expectElement(audioPlayer, "audio", HTMLAudioElement).src).toBe(
       "https://example.com/voice.ogg",
     );
     expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
@@ -3035,8 +3087,9 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("notifies when assistant audio and video attachment metadata loads", () => {
-    const container = document.createElement("div");
+  it("notifies when assistant audio and video attachment metadata loads", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
     const onAssistantAttachmentLoaded = vi.fn();
 
     renderAssistantMessage(
@@ -3051,7 +3104,8 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false, onAssistantAttachmentLoaded },
     );
 
-    expectElement(container, "audio", HTMLAudioElement).dispatchEvent(
+    const audioPlayer = await requireAudioPlayer(container);
+    expectElement(audioPlayer, "audio", HTMLAudioElement).dispatchEvent(
       new Event("loadedmetadata", { bubbles: true }),
     );
     expectElement(container, "video", HTMLVideoElement).dispatchEvent(
@@ -3059,6 +3113,235 @@ describe("grouped chat rendering", () => {
     );
 
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks local assistant audio against server metadata while preview roots load", async () => {
+    const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return { ok: true, json: async () => mediaTicketPayload("ticket-bootstrap-audio") };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-audio-bootstrap-roots",
+          role: "assistant",
+          content: `Your recording\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: [],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const audioPlayer = await requireAudioPlayer(container);
+    const audio = expectElement(audioPlayer, "audio", HTMLAudioElement);
+    expect(audio.getAttribute("src")).toBe(
+      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
+    );
+  });
+
+  it("checks local assistant images against server metadata while preview roots load", async () => {
+    const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.png`;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return { ok: true, json: async () => mediaTicketPayload("ticket-bootstrap-image") };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-image-bootstrap-roots",
+          role: "assistant",
+          content: [{ type: "image", url: source, alt: "Local bootstrap image" }],
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: [],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const image = expectElement(container, ".chat-message-image", HTMLImageElement);
+    expect(image.getAttribute("src")).toBe(
+      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-image`,
+    );
+  });
+
+  it.each([
+    {
+      code: "outside-allowed-folders",
+      reason: "Outside allowed folders",
+      source: "/home/node/private/bootstrap-secret.mp3",
+    },
+    {
+      code: "file-not-found",
+      reason: "File not found",
+      source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
+    },
+  ] as const)(
+    "keeps server-rejected $code media blocked while preview roots load",
+    async ({ code, reason, source }) => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        expect(url).toContain("meta=1");
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+        return { ok: true, json: async () => ({ available: false, code, reason }) };
+      });
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      const container = document.createElement("div");
+      const renderMessage = () =>
+        renderAssistantMessage(
+          container,
+          {
+            id: `assistant-bootstrap-blocked-${code}`,
+            role: "assistant",
+            content: `Unavailable recording\nMEDIA:${source}`,
+            timestamp: Date.now(),
+          },
+          {
+            showToolCalls: false,
+            basePath: "/openclaw",
+            assistantAttachmentAuthToken: "session-token",
+            localMediaPreviewRoots: [],
+            onRequestUpdate: renderMessage,
+          },
+        );
+
+      renderMessage();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await flushAssistantAttachmentAvailabilityChecks();
+
+      await vi.waitFor(() => {
+        expect(
+          container.querySelector(
+            ".chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__reason",
+          )?.textContent,
+        ).toContain(reason);
+      });
+      expect(container.querySelector("audio")).toBeNull();
+      expect(container.querySelector(".chat-assistant-attachment-card__link")).toBeNull();
+    },
+  );
+
+  it("shows the download fallback when the video element emits an error", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-video-unplayable",
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "https://example.com/clip.mp4",
+              kind: "video",
+              label: "clip.mp4",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    const card = expectElement(container, ".chat-assistant-attachment-card--video", HTMLElement);
+    expectElement(card, "video", HTMLVideoElement).dispatchEvent(new Event("error"));
+    expect(card.hasAttribute("data-unplayable")).toBe(true);
+    expect(card.querySelector(".chat-assistant-video-fallback")?.textContent).toContain(
+      "Can't play this format — download instead.",
+    );
+    expect(card.querySelector<HTMLAnchorElement>(".chat-assistant-video-fallback a")?.href).toBe(
+      "https://example.com/clip.mp4",
+    );
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe("clip.mp4");
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-video-fallback a")
+        ?.getAttribute("download"),
+    ).toBe("clip.mp4");
+  });
+
+  it("omits attachment anchors for unsafe transcript URLs", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-unsafe-attachment-links",
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "javascript:audio()",
+              kind: "audio",
+              label: "unsafe.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+          {
+            type: "attachment",
+            attachment: {
+              url: "data:text/html,video",
+              kind: "video",
+              label: "unsafe.mp4",
+              mimeType: "video/mp4",
+            },
+          },
+          {
+            type: "attachment",
+            attachment: {
+              url: "vbscript:document",
+              kind: "document",
+              label: "unsafe.pdf",
+              mimeType: "application/pdf",
+            },
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+
+    await requireAudioPlayer(container);
+    expect(container.querySelectorAll(".chat-assistant-attachments a")).toHaveLength(0);
+    expect(container.textContent).toContain("unsafe.pdf");
   });
 
   it("renders verified local assistant attachments through the authenticated media route", async () => {
@@ -3202,13 +3485,78 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-old");
+    const renderVersionBeforeRefresh = getAssistantAttachmentAvailabilityRenderVersion();
 
     await vi.advanceTimersByTimeAsync(1_001);
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getAssistantAttachmentAvailabilityRenderVersion()).not.toBe(renderVersionBeforeRefresh);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-new");
+  });
+
+  it("queues refreshed audio tickets until playback needs a new source", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
+    const source = `/tmp/openclaw/${crypto.randomUUID()}-refresh.mp3`;
+    const fetchMock = vi
+      .fn<
+        (url: string, init?: RequestInit) => Promise<{ ok: true; json: () => Promise<unknown> }>
+      >()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-old", 31_000),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-new"),
+      });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-audio-ticket-refresh",
+          role: "assistant",
+          content: `Local audio\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: rerender,
+        },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    const player = await requireAudioPlayer(container);
+    const audio = expectElement(player, "audio", HTMLAudioElement);
+    Object.defineProperties(audio, {
+      paused: { configurable: true, value: true },
+      currentTime: { configurable: true, writable: true, value: 24 },
+      duration: { configurable: true, value: 90 },
+    });
+    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-old");
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    await flushAssistantAttachmentAvailabilityChecks();
+    await player.updateComplete;
+
+    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-old");
+    expect(
+      player.querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")?.href,
+    ).toContain("mediaTicket=ticket-new");
+
+    audio.dispatchEvent(new Event("error"));
+    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-new");
+    audio.currentTime = 0;
+    audio.dispatchEvent(new Event("loadedmetadata"));
+    expect(audio.currentTime).toBe(24);
   });
 
   it("rechecks local assistant media when its auth token changes", async () => {
@@ -3261,7 +3609,7 @@ describe("grouped chat rendering", () => {
     ).toContain("mediaTicket=ticket-fresh");
   });
 
-  it("retries unavailable local assistant media after the retry window", async () => {
+  it("automatically retries unavailable local assistant media after the retry window", async () => {
     vi.useFakeTimers();
     const source = `/tmp/openclaw/${crypto.randomUUID()}-retry.png`;
     const fetchMock = vi
@@ -3298,12 +3646,58 @@ describe("grouped chat rendering", () => {
     );
 
     await vi.advanceTimersByTimeAsync(5_001);
-    rerender();
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
       expectElement(container, ".chat-message-image", HTMLImageElement).getAttribute("src"),
     ).toContain("mediaTicket=ticket-retry");
+  });
+
+  it("stops automatically retrying permanently unavailable local assistant media", async () => {
+    vi.useFakeTimers();
+    const source = `/tmp/openclaw/${crypto.randomUUID()}-permanently-unavailable.png`;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ available: false }),
+    }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-media-permanently-unavailable",
+          role: "assistant",
+          content: `Local image\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: rerender,
+        },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_001);
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
+      "Unavailable",
+    );
+
+    rerender();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("preserves same-origin assistant attachments without local preview rewriting", () => {
@@ -3636,6 +4030,52 @@ describe("grouped chat rendering", () => {
     );
     const activeItem = onOpenImage.mock.calls[0]?.[0];
     activeItem?.release?.();
+  });
+
+  it("prefers an artifact ticket without forwarding the gateway bearer", async () => {
+    const artifactId = `artifact_managed_image_${crypto.randomUUID()}`;
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const ticketedUrl = `${managedChatImageUrl}?mediaTicket=ticket`;
+    const resolveArtifactDownload = vi.fn(async () => ({
+      url: ticketedUrl,
+      expiresAt: "2026-07-28T05:00:00.000Z",
+    }));
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe(ticketedUrl);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBeNull();
+      expect(headers.get("x-openclaw-requester-session-key")).toBeNull();
+      return { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            artifactId,
+            url: managedChatImageUrl,
+            alt: "Ticketed image",
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "must-not-be-forwarded",
+        resolveArtifactDownload,
+      },
+    );
+
+    await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+    expect(resolveArtifactDownload).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
   });
 
   it("aborts a stalled managed outgoing image fetch after the deadline", async () => {

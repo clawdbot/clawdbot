@@ -108,6 +108,15 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.conversationRecall).toEqual(conversationRecall);
   });
 
+  it("forwards host-prepared active project keys", () => {
+    const activeProjectKeys = ["github.com/OpenClaw/OpenClaw"];
+    const result = resolveOpenClawPluginToolInputs({
+      options: { config: {} as never, activeProjectKeys },
+    });
+
+    expect(result.context.activeProjectKeys).toBe(activeProjectKeys);
+  });
+
   it("forwards runtime-owned active model metadata", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

@@ -4,67 +4,68 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
-import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolSpec,
+} from "./protocol.js";
 
 export function buildDeveloperInstructions(
   params: EmbeddedRunAttemptParams,
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
+  const deferredToolNames = new Set<string>();
+  let hasSkillWorkshop = false;
+  let hasSessionsYield = false;
+  let hasSeenDirectNamespace = false;
+  let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
+  for (const spec of options.dynamicTools ?? []) {
+    const isDirectNamespace =
+      spec.type === "namespace" &&
+      !hasSeenDirectNamespace &&
+      spec.name.trim() === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE;
+    if (isDirectNamespace) {
+      hasSeenDirectNamespace = true;
+    }
+    for (const tool of spec.type === "namespace" ? spec.tools : [spec]) {
+      const name = tool.name.trim();
+      if (tool.deferLoading === true && name) {
+        deferredToolNames.add(name);
+      }
+      hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
+      hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
+      messageToolAvailable ||= name === "message";
+    }
+  }
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
   }).join("\n");
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
-    buildDeferredDynamicToolManifest(options.dynamicTools),
-    buildSkillWorkshopInstruction(options.dynamicTools),
+    deferredToolNames.size > 0
+      ? `Deferred searchable OpenClaw dynamic tools available: ${[...deferredToolNames]
+          .toSorted((left, right) => left.localeCompare(right))
+          .join(", ")}. Use \`tool_search\` to load exact callable specs before use.`
+      : undefined,
+    hasSkillWorkshop ? buildSkillWorkshopPromptSection().join("\n") : undefined,
     // Codex defers native collab tools behind tool_search on search-capable
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     "Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
-    buildVisibleReplyInstruction(params, options.dynamicTools),
+    hasSessionsYield
+      ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
+      : undefined,
+    buildVisibleReplyInstruction(params, messageToolAvailable),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
 }
 
-function buildDeferredDynamicToolManifest(
-  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
-): string | undefined {
-  const deferredToolNames = [
-    ...new Set(
-      flattenCodexDynamicToolFunctions(dynamicTools)
-        .filter((tool) => tool.deferLoading === true)
-        .map((tool) => tool.name.trim())
-        .filter(Boolean),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
-  if (deferredToolNames.length === 0) {
-    return undefined;
-  }
-  return `Deferred searchable OpenClaw dynamic tools available: ${deferredToolNames.join(", ")}. Use \`tool_search\` to load exact callable specs before use.`;
-}
-
-function buildSkillWorkshopInstruction(
-  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
-): string | undefined {
-  const hasSkillWorkshop = flattenCodexDynamicToolFunctions(dynamicTools).some(
-    (tool) => tool.name.trim() === SKILL_WORKSHOP_TOOL_NAME,
-  );
-  if (!hasSkillWorkshop) {
-    return undefined;
-  }
-  return buildSkillWorkshopPromptSection().join("\n");
-}
-
 function buildVisibleReplyInstruction(
   params: EmbeddedRunAttemptParams,
-  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+  messageToolAvailable: boolean,
 ): string {
-  const messageToolAvailable = dynamicTools
-    ? flattenCodexDynamicToolFunctions(dynamicTools).some((tool) => tool.name.trim() === "message")
-    : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
     return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. If `final` is omitted, OpenClaw continues and resolves the latest omitted source reply only when the turn ends successfully. Do not repeat visible message content in your final answer.";
   }

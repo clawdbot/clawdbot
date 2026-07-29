@@ -21,6 +21,8 @@ export type SlackAttachment = {
   ts?: string;
   channel_name?: string;
   channel_id?: string;
+  app_unfurl_url?: string;
+  is_app_unfurl?: boolean;
   is_msg_unfurl?: boolean;
   is_share?: boolean;
   image_url?: string;

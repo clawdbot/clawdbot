@@ -18,6 +18,7 @@ export const TIMEZONE_SUGGESTIONS = [
   "America/New_York",
   "Europe/London",
   "Europe/Berlin",
+  "Asia/Shanghai",
   "Asia/Tokyo",
 ];
 

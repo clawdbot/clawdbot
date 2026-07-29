@@ -751,6 +751,465 @@ describe("session.message websocket events", () => {
     }
   });
 
+  test("keeps web and TUI subscribers on the same authoritative session transcript", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-web-tui-shared";
+    const sessionKey = "agent:main:web-tui-shared";
+    await writeSessionStore({
+      entries: { "web-tui-shared": { sessionId, updatedAt: Date.now() } },
+      storePath,
+    });
+
+    const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const tuiWs = await harness.openWs();
+    let reconnectedTuiWs: Awaited<ReturnType<typeof harness.openWs>> | undefined;
+    try {
+      await connectOk(webWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.UI,
+          platform: "web",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "shared-web-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      await connectOk(tuiWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TUI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          platform: "test",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "shared-tui-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      for (const ws of [webWs, tuiWs]) {
+        const subscription = await rpcReq(ws, "sessions.messages.subscribe", {
+          key: sessionKey,
+        });
+        expect(subscription.ok).toBe(true);
+      }
+
+      const sharedMessages = [
+        "Sent from the web.",
+        "Sent from the TUI.",
+        ...Array.from({ length: 30 }, (_, index) => `Shared burst message ${index + 1}.`),
+      ];
+      for (const [index, text] of sharedMessages.entries()) {
+        const messageId = `shared-turn-${index + 1}`;
+        const deliveries = [webWs, tuiWs].map((ws) =>
+          onceMessage(
+            ws,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "session.message" &&
+              (frame.payload as { messageId?: string } | undefined)?.messageId === messageId,
+          ),
+        );
+        const persisted = await persistSessionTranscriptTurn(
+          { agentId: "main", sessionId, sessionKey, storePath },
+          {
+            messages: [
+              {
+                eventId: messageId,
+                message: {
+                  content: [{ type: "text", text }],
+                  idempotencyKey: `${messageId}:user`,
+                  role: "user",
+                  timestamp: Date.now(),
+                },
+              },
+            ],
+          },
+        );
+        expect(persisted.appendedCount).toBe(1);
+        for (const delivery of await Promise.all(deliveries)) {
+          expectRecordFields(delivery.payload, {
+            messageId,
+            messageSeq: index + 1,
+            sessionKey,
+          });
+          expect(requireRecord(delivery.payload, "shared session event").message).toMatchObject({
+            __openclaw: {
+              id: messageId,
+              idempotencyKey: `${messageId}:user`,
+              seq: index + 1,
+            },
+            content: [{ type: "text", text }],
+            role: "user",
+          });
+        }
+      }
+
+      tuiWs.close();
+      reconnectedTuiWs = await harness.openWs();
+      await connectOk(reconnectedTuiWs, { scopes: ["operator.read"] });
+      const history = await rpcReq(reconnectedTuiWs, "chat.history", { sessionKey });
+      expect(history.ok).toBe(true);
+      expect((history.payload as { messages?: unknown[] }).messages).toMatchObject(
+        sharedMessages.map((text) => ({
+          content: [{ type: "text", text }],
+          role: "user",
+        })),
+      );
+    } finally {
+      webWs.close();
+      tuiWs.close();
+      reconnectedTuiWs?.close();
+    }
+  });
+
+  test("delivers every message from one committed turn to web and TUI in transcript order", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-web-tui-committed-turn";
+    const sessionKey = "agent:main:web-tui-committed-turn";
+    await writeSessionStore({
+      entries: { "web-tui-committed-turn": { sessionId, updatedAt: Date.now() } },
+      storePath,
+    });
+
+    const earlierMessage = {
+      id: "committed-existing-turn",
+      text: "An existing message establishes the active-branch sequence.",
+    };
+    const seeded = await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [
+          {
+            eventId: earlierMessage.id,
+            message: {
+              content: [{ type: "text", text: earlierMessage.text }],
+              idempotencyKey: `${earlierMessage.id}:user`,
+              role: "user",
+              timestamp: 1_699_999_999_999,
+            },
+          },
+        ],
+      },
+    );
+    expect(seeded.appendedCount).toBe(1);
+
+    const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const tuiWs = await harness.openWs();
+    const committedMessages = [
+      { id: "committed-web-turn", text: "The same prompt from either client." },
+      { id: "committed-tui-turn", text: "The same prompt from either client." },
+      { id: "committed-final-turn", text: "The third message in the same transaction." },
+    ];
+
+    try {
+      await connectOk(webWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.UI,
+          platform: "web",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "committed-web-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      await connectOk(tuiWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TUI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          platform: "test",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "committed-tui-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      for (const ws of [webWs, tuiWs]) {
+        const subscription = await rpcReq(ws, "sessions.messages.subscribe", {
+          key: sessionKey,
+        });
+        expect(subscription.ok).toBe(true);
+      }
+
+      const observedByClient: Array<
+        Array<{ messageId: unknown; messageSeq: unknown; sessionKey: unknown }>
+      > = [[], []];
+      for (const [clientIndex, ws] of [webWs, tuiWs].entries()) {
+        const observed = observedByClient[clientIndex];
+        if (!observed) {
+          throw new Error(`missing committed-turn observer for client ${clientIndex}`);
+        }
+        ws.on("message", (data: RawData) => {
+          const frame = JSON.parse(rawDataToString(data)) as {
+            event?: string;
+            payload?: { messageId?: unknown; messageSeq?: unknown; sessionKey?: unknown };
+            type?: string;
+          };
+          if (
+            frame.type === "event" &&
+            frame.event === "session.message" &&
+            frame.payload?.sessionKey === sessionKey
+          ) {
+            observed.push({
+              messageId: frame.payload.messageId,
+              messageSeq: frame.payload.messageSeq,
+              sessionKey: frame.payload.sessionKey,
+            });
+          }
+        });
+      }
+
+      // Install every real socket listener before the one SQLite commit can broadcast.
+      const deliveriesByClient = [webWs, tuiWs].map((ws) =>
+        committedMessages.map(({ id }) =>
+          onceMessage(
+            ws,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "session.message" &&
+              (frame.payload as { messageId?: string } | undefined)?.messageId === id,
+          ),
+        ),
+      );
+      const committedTurn = {
+        messages: committedMessages.map(({ id, text }, index) => ({
+          eventId: id,
+          message: {
+            content: [{ type: "text", text }],
+            idempotencyKey: `${id}:user`,
+            role: "user",
+            timestamp: 1_700_000_000_000 + index,
+          },
+        })),
+      };
+      const persisted = await persistSessionTranscriptTurn(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        committedTurn,
+      );
+      expect(persisted.appendedCount).toBe(committedMessages.length);
+
+      for (const [clientIndex, clientDeliveries] of deliveriesByClient.entries()) {
+        const frames = await Promise.all(clientDeliveries);
+        expect(observedByClient[clientIndex]).toEqual(
+          committedMessages.map(({ id }, index) => ({
+            messageId: id,
+            messageSeq: index + 2,
+            sessionKey,
+          })),
+        );
+        expect(
+          frames.map((frame) => {
+            const payload = requireRecord(frame.payload, "committed session event");
+            return {
+              messageId: payload.messageId,
+              messageSeq: payload.messageSeq,
+              sessionKey: payload.sessionKey,
+            };
+          }),
+        ).toEqual(
+          committedMessages.map(({ id }, index) => ({
+            messageId: id,
+            messageSeq: index + 2,
+            sessionKey,
+          })),
+        );
+        for (const [index, frame] of frames.entries()) {
+          const expected = committedMessages[index];
+          if (!expected) {
+            throw new Error(`unexpected committed-turn delivery at index ${index}`);
+          }
+          expect(requireRecord(frame.payload, "committed session event").message).toMatchObject({
+            __openclaw: {
+              id: expected.id,
+              idempotencyKey: `${expected.id}:user`,
+              seq: index + 2,
+            },
+            content: [{ type: "text", text: expected.text }],
+            role: "user",
+          });
+        }
+      }
+
+      const history = await rpcReq(tuiWs, "chat.history", { sessionKey });
+      expect(history.ok).toBe(true);
+      expect((history.payload as { messages?: unknown[] }).messages).toMatchObject(
+        [earlierMessage, ...committedMessages].map(({ id, text }, index) => ({
+          __openclaw: { id, idempotencyKey: `${id}:user`, seq: index + 1 },
+          content: [{ type: "text", text }],
+          role: "user",
+        })),
+      );
+
+      const duplicateDeliveries = [webWs, tuiWs].map((ws) =>
+        onceMessage(
+          ws,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "session.message" &&
+            (frame.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+          300,
+        ).then(
+          () => true,
+          () => false,
+        ),
+      );
+      const replayed = await persistSessionTranscriptTurn(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        committedTurn,
+      );
+      expect(replayed.appendedCount).toBe(0);
+      await expect(Promise.all(duplicateDeliveries)).resolves.toEqual([false, false]);
+    } finally {
+      webWs.close();
+      tuiWs.close();
+    }
+  });
+
+  test("invalidates the selected web and TUI transcript once for an identity-only committed turn", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-web-tui-identity-only";
+    const sessionKey = "agent:main:web-tui-identity-only";
+    const lifecycleRevision = "identity-only-committed-revision";
+    await writeSessionStore({
+      entries: {
+        "web-tui-identity-only": { sessionId, lifecycleRevision, updatedAt: Date.now() },
+        "web-tui-wrong-session": {
+          sessionId: "sess-web-tui-wrong-session",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const tuiWs = await harness.openWs();
+    const wrongSessionWs = await harness.openWs();
+    try {
+      await connectOk(webWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.UI,
+          platform: "web",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "identity-only-web-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      await connectOk(tuiWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TUI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          platform: "test",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "identity-only-tui-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      await connectOk(wrongSessionWs, { scopes: ["operator.read"] });
+      for (const ws of [webWs, tuiWs]) {
+        const subscription = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
+        expect(subscription.ok).toBe(true);
+      }
+      const wrongSubscription = await rpcReq(wrongSessionWs, "sessions.messages.subscribe", {
+        key: "agent:main:web-tui-wrong-session",
+      });
+      expect(wrongSubscription.ok).toBe(true);
+
+      await withOperatorSessionSubscriber(async (broadWs) => {
+        const observers = [webWs, tuiWs, broadWs];
+        const observedInvalidations: Array<Array<Record<string, unknown>>> = observers.map(
+          () => [],
+        );
+        for (const [index, ws] of observers.entries()) {
+          const observed = observedInvalidations[index];
+          if (!observed) {
+            throw new Error(`missing identity-only transcript observer ${index}`);
+          }
+          ws.on("message", (data: RawData) => {
+            const frame = JSON.parse(rawDataToString(data)) as {
+              event?: string;
+              payload?: Record<string, unknown>;
+              type?: string;
+            };
+            if (
+              frame.type === "event" &&
+              frame.event === "sessions.changed" &&
+              frame.payload?.phase === "message" &&
+              frame.payload.sessionKey === sessionKey
+            ) {
+              observed.push(frame.payload);
+            }
+          });
+        }
+
+        const invalidations = observers.map((ws) =>
+          waitForSessionsChangedMessagePhase(ws, sessionKey),
+        );
+        const unexpectedFrames = [webWs, tuiWs, wrongSessionWs].map((ws) =>
+          onceMessage(
+            ws,
+            (frame) =>
+              frame.type === "event" &&
+              (frame.event === "session.message" ||
+                (ws === wrongSessionWs && frame.event === "sessions.changed")) &&
+              (frame.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+            300,
+          ).then(
+            () => true,
+            () => false,
+          ),
+        );
+
+        const committed = await persistSessionTranscriptTurn(
+          { agentId: "main", sessionId, sessionKey, storePath },
+          {
+            messages: ["first", "second"].map((name, index) => ({
+              eventId: `identity-only-${name}`,
+              message: {
+                content: [{ type: "text", text: `Identity-only committed message ${index + 1}.` }],
+                idempotencyKey: `identity-only-${name}:user`,
+                role: "user",
+                timestamp: 1_700_000_000_000 + index,
+              },
+            })),
+            updateMode: "file-only",
+          },
+        );
+        expect(committed.appendedCount).toBe(2);
+
+        for (const frame of await Promise.all(invalidations)) {
+          const payload = requireRecord(frame.payload, "identity-only transcript invalidation");
+          expect(payload).toMatchObject({ phase: "message", sessionKey });
+          for (const privateField of [
+            "lifecycleRevision",
+            "message",
+            "messageId",
+            "messageSeq",
+            "storePath",
+          ]) {
+            expect(payload).not.toHaveProperty(privateField);
+          }
+          expect(JSON.stringify(payload)).not.toContain(storePath);
+          expect(JSON.stringify(payload)).not.toContain(lifecycleRevision);
+        }
+        await expect(Promise.all(unexpectedFrames)).resolves.toEqual([false, false, false]);
+        expect(observedInvalidations.map((frames) => frames.length)).toEqual([1, 1, 1]);
+      });
+    } finally {
+      webWs.close();
+      tuiWs.close();
+      wrongSessionWs.close();
+    }
+  });
+
   test("broadcasts appended transcript messages with the session key", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({

@@ -21,7 +21,7 @@ import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { refreshChatMetadata } from "./chat-state-refresh.ts";
+import { invalidateChatMetadataCache, refreshChatMetadata } from "./chat-state-refresh.ts";
 import {
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
@@ -52,6 +52,297 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("canonical session message recovery", () => {
+  function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionId: "selected-session",
+      thinkingLevel: null,
+    });
+    const state = {
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      connectionEpoch: 1,
+      sessionKey: "agent:main:main",
+      currentSessionId: "selected-session",
+      chatLoading: false,
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatThinkingLevel: null,
+      chatVerboseLevel: null,
+      chatSending: false,
+      chatMessage: "",
+      chatAttachments: [],
+      chatQueue: [],
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      lastError: null,
+      hello: null,
+      sessions: {
+        reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+        refresh: vi.fn().mockResolvedValue(undefined),
+      },
+      requestUpdate: vi.fn(),
+      ...overrides,
+    } as unknown as ChatPageHost;
+    return { request, state };
+  }
+
+  it("rejects envelope-only sequence for an incomplete imported user identity", () => {
+    const { state } = createSessionEventState({ connected: false });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        messageId: "conflicting-native-envelope",
+        messageSeq: 90,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Incomplete imported prompt" }],
+          __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user" },
+        },
+      },
+    });
+
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("keeps the persisted sequence for an incomplete imported user identity", () => {
+    const { state } = createSessionEventState({ connected: false });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        messageId: "conflicting-native-envelope",
+        messageSeq: 90,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Persisted imported prompt" }],
+          __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user", seq: 3 },
+        },
+      },
+    });
+
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user", seq: 3 },
+    });
+  });
+
+  it("renders distinct live peers immediately and coalesces their stale history", async () => {
+    let resolveHistory!: (result: {
+      messages: unknown[];
+      sessionId: string;
+      thinkingLevel: null;
+    }) => void;
+    const history = new Promise<{
+      messages: unknown[];
+      sessionId: string;
+      thinkingLevel: null;
+    }>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const { request, state } = createSessionEventState({ chatDisplayedLeafEntryId: undefined });
+    request.mockReturnValue(history);
+
+    for (const [index, client] of ["web", "tui"].entries()) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          messageId: `conflicting-${client}-envelope`,
+          messageSeq: 100 + index,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "shared prompt" }],
+            __openclaw: {
+              id: `canonical-${client}-same-text`,
+              idempotencyKey: `${client}-same-text-run:user`,
+              seq: index + 1,
+            },
+          },
+        },
+      });
+
+      expect(state.chatMessages).toHaveLength(index + 1);
+      expect(state.requestUpdate).toHaveBeenCalledTimes(index + 1);
+    }
+
+    expect(request).toHaveBeenCalledOnce();
+    resolveHistory({
+      messages: [],
+      sessionId: "selected-session",
+      thinkingLevel: null,
+    });
+
+    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toMatchObject([
+      { __openclaw: { id: "canonical-web-same-text", seq: 1 } },
+      { __openclaw: { id: "canonical-tui-same-text", seq: 2 } },
+    ]);
+  });
+
+  it("drops pre-reset live and pending messages before accepting a new session turn", () => {
+    const pendingUser = {
+      role: "user",
+      content: [{ type: "text", text: "Pending before reset" }],
+      __openclaw: { idempotencyKey: "pre-reset-pending:user" },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [pendingUser],
+    });
+    const deliverUser = (id: string, text: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          message: {
+            role: "user",
+            content: [{ type: "text", text }],
+            __openclaw: { id, idempotencyKey: `${id}:user`, seq: 1 },
+          },
+        },
+      });
+
+    deliverUser("pre-reset-live", "Live before reset");
+    expect(state.chatMessages).toHaveLength(2);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        reason: "reset",
+      },
+    });
+    expect(state.chatMessages).toEqual([]);
+
+    deliverUser("post-reset-live", "Live after reset");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      __openclaw: { id: "post-reset-live", seq: 1 },
+    });
+  });
+
+  it("does not clear the selected transcript when another agent resets", () => {
+    const selectedUser = {
+      role: "user",
+      content: [{ type: "text", text: "Keep this agent's conversation" }],
+      __openclaw: { id: "selected-user", seq: 1 },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [selectedUser],
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:other:main",
+        agentId: "other",
+        reason: "reset",
+      },
+    });
+
+    expect(state.chatMessages).toEqual([selectedUser]);
+  });
+
+  it("does not mistake identity-only message invalidation for a session reset", () => {
+    const selectedUser = {
+      role: "user",
+      content: [{ type: "text", text: "Keep this pending transcript" }],
+      __openclaw: { idempotencyKey: "still-pending:user" },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [selectedUser],
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        phase: "message",
+      },
+    });
+
+    expect(state.chatMessages).toEqual([selectedUser]);
+  });
+
+  it("reloads selected history for an identity-only persisted message invalidation", async () => {
+    const { request, state } = createSessionEventState({ chatRunId: "active-run" });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        phase: "message",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("chat.history", {
+        agentId: "main",
+        sessionKey: state.sessionKey,
+        limit: 100,
+      });
+    });
+    expect(state.chatRunId).toBe("active-run");
+  });
+
+  it("does not reload another session for an identity-only message invalidation", async () => {
+    const { request, state } = createSessionEventState();
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:other:main",
+        agentId: "other",
+        phase: "message",
+      },
+    });
+
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not reload for an already identified session message", async () => {
+    const { request, state } = createSessionEventState();
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        phase: "message",
+        messageId: "already-authoritative-user",
+        messageSeq: 3,
+      },
+    });
+
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatStateController render lifecycle", () => {
@@ -1755,8 +2046,12 @@ describe("resolveChatAvatarUrl", () => {
 });
 
 describe("loadPageAssistantIdentity", () => {
-  it("loads the identity for the current session after a same-client route switch", async () => {
-    const request = vi.fn().mockResolvedValue({ name: "Second Session", agentId: "main" });
+  it("memoizes identity by agent while fetching a cross-agent switch", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
+      name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
+      agentId: params?.agentId ?? "main",
+    }));
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
       agents: { state: { agentsList: null }, adoptList: vi.fn() },
@@ -1782,15 +2077,30 @@ describe("loadPageAssistantIdentity", () => {
     );
     state.client = client;
     state.connected = true;
-    state.assistantName = "First Session";
-    state.sessionKey = "agent:main:second";
+    state.assistantName = "Initial";
+    state.sessionKey = "agent:main:first";
 
+    await state.loadAssistantIdentity();
+    state.sessionKey = "agent:main:second";
     await state.loadAssistantIdentity();
 
     expect(request).toHaveBeenCalledWith("agent.identity.get", {
-      sessionKey: "agent:main:second",
+      agentId: "main",
     });
-    expect(state.assistantName).toBe("Second Session");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.assistantName).toBe("Main Agent");
+
+    state.sessionKey = "agent:other:main";
+    await state.loadAssistantIdentity();
+    expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "other" });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.assistantName).toBe("Other Agent");
+
+    now.mockReturnValue(61_001);
+    state.sessionKey = "agent:main:third";
+    await state.loadAssistantIdentity();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "main" });
   });
 });
 
@@ -1852,6 +2162,30 @@ describe("refreshChatMetadata", () => {
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {
+    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
+      commands: [],
+      models: [
+        {
+          id: `${params?.agentId}-model`,
+          name: `${params?.agentId} Model`,
+          provider: "openai",
+        },
+      ],
+    }));
+    const state = createMetadataState(request);
+
+    await refreshChatMetadata(state);
+    state.sessionKey = "agent:work:second";
+    await refreshChatMetadata(state);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    state.sessionKey = "agent:other:main";
+    await refreshChatMetadata(state);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith("chat.metadata", { agentId: "other" });
   });
 
   it("ignores metadata after switching to a different agent", async () => {
@@ -1963,6 +2297,7 @@ describe("refreshChatMetadata", () => {
     const state = createMetadataState(request);
 
     const firstRefresh = refreshChatMetadata(state);
+    invalidateChatMetadataCache(state);
     const secondRefresh = refreshChatMetadata(state);
     resolveSecond({
       commands: [],

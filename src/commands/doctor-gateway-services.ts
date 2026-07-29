@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
-import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
+import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { formatGatewayHeapLimitReport, inspectGatewayHeapLimit } from "../daemon/gateway-heap.js";
 import {
@@ -37,6 +37,7 @@ import {
 } from "../daemon/systemd.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -357,6 +358,9 @@ async function filterInactiveExtraGatewayServices(
 export async function detectExtraGatewayServiceIssues(
   options: Pick<DoctorOptions, "deep"> = {},
 ): Promise<readonly ExtraGatewayService[]> {
+  if (!isDefaultInstallIdentity(process.env)) {
+    return [];
+  }
   const detectedExtraServices = await findExtraGatewayServices(process.env, {
     deep: options.deep,
   });
@@ -538,6 +542,10 @@ export async function maybeRepairGatewayServiceConfig(
   prompter: DoctorPrompter,
   options: GatewayServiceConfigRepairOptions = {},
 ): Promise<OpenClawConfig> {
+  if (!isDefaultInstallIdentity(process.env)) {
+    note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return cfg;
+  }
   if (resolveIsNixMode(process.env)) {
     note("Nix mode detected; skip service updates.", "Gateway");
     return cfg;
@@ -934,6 +942,10 @@ export async function maybeScanExtraGatewayServices(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
+  if (!isDefaultInstallIdentity(process.env)) {
+    note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
   const extraServices = await detectExtraGatewayServiceIssues(options);
   if (extraServices.length === 0) {
     return;
@@ -990,7 +1002,11 @@ export async function maybeScanExtraGatewayServices(
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
+  // Legacy jobs have their own confirmed cleanup flow; generic hints must
+  // only name detected extra services, never the active managed gateway.
+  const cleanupHints = renderGatewayServiceCleanupHints(
+    extraServices.filter((service) => service.legacy !== true),
+  );
   if (cleanupHints.length > 0) {
     note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }

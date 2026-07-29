@@ -32,6 +32,9 @@ import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.gateway.GatewayLoadedImage
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -253,6 +256,7 @@ fun ChatScreen(
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
@@ -294,6 +298,7 @@ fun ChatScreen(
   val micCooldown by viewModel.micCooldown.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val talkModeListening by viewModel.talkModeListening.collectAsState()
+  val inlineMediaPlaybackBlocked = messageSpeechState != null || talkModeEnabled || talkModeListening
   val thinkingSupported =
     chatThinkingSupported(
       selection = thinkingLevelSelection,
@@ -680,7 +685,10 @@ fun ChatScreen(
       messages = messages,
       transcriptAnchor = transcriptAnchor,
       historyLoading = historyLoading,
-      pendingRunCount = pendingRunCount,
+      activeRunCount = selectedActiveRun.count,
+      activeRunId = selectedActiveRun.runId,
+      activeRunClockKey = selectedActiveRun.clockKey,
+      activeRunOutputTokens = selectedActiveRun.outputTokens,
       pendingToolCalls = pendingToolCalls,
       questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
       streamingAssistantText = streamingAssistantText,
@@ -738,7 +746,10 @@ fun ChatScreen(
       },
       speechState = messageSpeechState,
       onToggleListen = viewModel::toggleChatMessageSpeech,
+      inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
       resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
+      loadImageArtifact = viewModel::loadChatImageArtifact,
+      loadMediaArtifact = viewModel::loadChatMediaArtifact,
       modifier = Modifier.weight(1f),
     )
 
@@ -1235,7 +1246,10 @@ private fun ChatMessageList(
   messages: List<ChatMessage>,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
-  pendingRunCount: Int,
+  activeRunCount: Int,
+  activeRunId: String?,
+  activeRunClockKey: String?,
+  activeRunOutputTokens: Long?,
   pendingToolCalls: List<ChatPendingToolCall>,
   questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
@@ -1254,14 +1268,17 @@ private fun ChatMessageList(
   onForkMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  inlineMediaPlaybackBlocked: Boolean,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
+  loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
+  loadMediaArtifact: suspend (String, GatewayMediaKind) -> GatewayLoadedMedia?,
   modifier: Modifier = Modifier,
 ) {
   val baseTimeline =
-    remember(messages, pendingRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(messages, activeRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       buildChatTimeline(
         messages = messages,
-        pendingRunCount = pendingRunCount,
+        pendingRunCount = activeRunCount,
         pendingToolCalls = pendingToolCalls,
         streamingAssistantText = streamingAssistantText,
         outboxItems = outboxItems,
@@ -1269,9 +1286,16 @@ private fun ChatMessageList(
         questions = questions,
       )
     }
-  val indicatorVisible = pendingRunCount > 0
+  val indicatorVisible = activeRunCount > 0
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
-  val workingRun = workingRunTracker.resolve(indicatorVisible, session, SystemClock.elapsedRealtime())
+  val workingRun =
+    workingRunTracker.resolve(
+      indicatorVisible = indicatorVisible,
+      clockKey = activeRunClockKey,
+      authoritativeRunId = activeRunId,
+      nowElapsedMs = SystemClock.elapsedRealtime(),
+      outputTokens = activeRunOutputTokens,
+    )
   val turnRecapResolver = remember { TurnRecapResolver() }
   val turnRecap =
     turnRecapResolver.resolve(
@@ -1321,8 +1345,11 @@ private fun ChatMessageList(
               onForkMessage = onForkMessage,
               speechState = speechState,
               onToggleListen = onToggleListen,
+              inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
+              loadImageArtifact = loadImageArtifact,
+              loadMediaArtifact = loadMediaArtifact,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -1364,13 +1391,20 @@ private fun ChatMessageList(
               onForkMessage = onForkMessage,
               speechState = null,
               onToggleListen = onToggleListen,
+              inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
+              loadImageArtifact = loadImageArtifact,
+              loadMediaArtifact = loadMediaArtifact,
             )
           ChatTimelineItem.Thinking -> {
             val run = workingRun
             if (run != null) {
-              ChatTypingIndicatorBubble(runKey = run.key, observedAtElapsedMs = run.observedAtElapsedMs)
+              ChatTypingIndicatorBubble(
+                runKey = run.clockKey,
+                observedAtElapsedMs = run.observedAtElapsedMs,
+                outputTokens = run.outputTokens,
+              )
             }
           }
         }
@@ -1424,10 +1458,10 @@ private fun ChatMessageList(
 }
 
 internal data class ChatWorkingRun(
-  val key: String,
+  val clockKey: String,
   val observedAtElapsedMs: Long,
   val authoritativeRunId: String?,
-  val authoritativeStartedAtMs: Long?,
+  val outputTokens: Long?,
 )
 
 internal class ChatWorkingRunTracker(
@@ -1437,35 +1471,30 @@ internal class ChatWorkingRunTracker(
 
   fun resolve(
     indicatorVisible: Boolean,
-    session: ChatSessionEntry?,
+    clockKey: String?,
+    authoritativeRunId: String?,
     nowElapsedMs: Long,
+    outputTokens: Long?,
   ): ChatWorkingRun? {
     if (!indicatorVisible) {
       current = null
       return null
     }
-    val runId = session?.activeRunIds?.lastOrNull()
-    val startedAt = session?.startedAt?.takeIf { session.endedAt == null }
+    val resolvedClockKey = clockKey ?: "$sessionKey:active"
     val previous = current
-    val replacementByRunId = previous?.authoritativeRunId != null && runId != null && previous.authoritativeRunId != runId
-    val replacementByStart =
-      previous?.authoritativeStartedAtMs != null && startedAt != null && previous.authoritativeStartedAtMs != startedAt
-    val replacement = replacementByRunId || replacementByStart
-    if (previous == null || replacement) {
+    if (previous == null || previous.clockKey != resolvedClockKey) {
       return ChatWorkingRun(
-        key = runId ?: "$sessionKey:${startedAt ?: nowElapsedMs}",
+        clockKey = resolvedClockKey,
         observedAtElapsedMs = nowElapsedMs,
-        authoritativeRunId = runId,
-        authoritativeStartedAtMs = startedAt,
+        authoritativeRunId = authoritativeRunId,
+        outputTokens = outputTokens,
       ).also { current = it }
     }
-    val adoptsRunId = previous.authoritativeRunId == null && runId != null
-    val adoptsStartedAt = previous.authoritativeStartedAtMs == null && startedAt != null
-    if (adoptsRunId || adoptsStartedAt) {
+    if (previous.authoritativeRunId != authoritativeRunId || previous.outputTokens != outputTokens) {
       current =
         previous.copy(
-          authoritativeRunId = runId ?: previous.authoritativeRunId,
-          authoritativeStartedAtMs = startedAt ?: previous.authoritativeStartedAtMs,
+          authoritativeRunId = authoritativeRunId,
+          outputTokens = outputTokens,
         )
     }
     return current
@@ -1614,20 +1643,30 @@ private fun ChatBubble(
   onForkMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  inlineMediaPlaybackBlocked: Boolean,
   inlineWidgetResolverReady: Boolean,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
+  loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
+  loadMediaArtifact: suspend (String, GatewayMediaKind) -> GatewayLoadedMedia?,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
+  var visibleImageCount = 0
   val displayableContent =
     content.filter { part ->
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
-        "image" -> !part.base64.isNullOrBlank()
+        "image" -> {
+          val displayable = !part.base64.isNullOrBlank() || !part.artifactId.isNullOrBlank()
+          val visible = displayable && visibleImageCount < 4
+          if (displayable) visibleImageCount += 1
+          visible
+        }
         "canvas" -> normalizedRole == "assistant" && part.widget != null
-        else -> part.isAudioAttachment()
+        else -> part.isAudioAttachment() || part.isVideoAttachment()
       }
     }
+  val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)
   if (displayableContent.isEmpty()) return
 
   val messageText = chatMessagePlainText(displayableContent)
@@ -1690,12 +1729,33 @@ private fun ChatBubble(
             when {
               part.type == "text" && !collapsibleUserText -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
               part.type == "text" -> Unit
-              part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
-              part.type == "image" ->
-                ChatBase64Image(
-                  base64 = checkNotNull(part.base64),
-                  mimeType = part.mimeType,
+              part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
+                ChatAudioPlayerCard(
+                  content = part,
+                  playbackBlocked = inlineMediaPlaybackBlocked,
+                  loadMedia = loadMediaArtifact,
                 )
+              part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
+                ChatVideoPlayerCard(
+                  content = part,
+                  playbackBlocked = inlineMediaPlaybackBlocked,
+                  loadMedia = loadMediaArtifact,
+                )
+              part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
+              part.type == "image" ->
+                if (!part.base64.isNullOrBlank()) {
+                  ChatBase64Image(
+                    base64 = part.base64,
+                    mimeType = part.mimeType,
+                  )
+                } else {
+                  ChatManagedImage(
+                    artifactId = checkNotNull(part.artifactId),
+                    label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
+                    resolverReady = inlineWidgetResolverReady,
+                    loadImage = loadImageArtifact,
+                  )
+                }
               part.type == "canvas" && normalizedRole == "assistant" ->
                 ChatInlineWidget(
                   preview = checkNotNull(part.widget),
@@ -1704,6 +1764,13 @@ private fun ChatBubble(
                 )
               else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
+          }
+          if (omittedImageCount > 0) {
+            Text(
+              text = nativeString("Additional images hidden: \${omittedImageCount}", omittedImageCount),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
           }
           if (messageId != null) {
             ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent)

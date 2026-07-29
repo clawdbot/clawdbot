@@ -19,6 +19,16 @@ type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
+const RTL_LOCALES = new Set<Locale>(["ar", "fa"]);
+
+function syncDocumentLocale(locale: Locale): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.documentElement.lang = locale;
+  document.documentElement.dir = RTL_LOCALES.has(locale) ? "rtl" : "ltr";
+}
+
 class I18nManager {
   private locale: Locale = DEFAULT_LOCALE;
   private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
@@ -75,6 +85,7 @@ class I18nManager {
     const initialLocale = this.resolveInitialLocale();
     if (initialLocale === DEFAULT_LOCALE) {
       this.locale = DEFAULT_LOCALE;
+      syncDocumentLocale(DEFAULT_LOCALE);
       return;
     }
     // Use the normal locale setter so startup locale loading follows the same
@@ -128,6 +139,7 @@ class I18nManager {
     }
     this.pendingLocale = null;
     this.locale = locale;
+    syncDocumentLocale(locale);
     this.persistLocale(locale);
     this.notify();
   }

@@ -50,4 +50,13 @@ describe("detectChangedScope Windows routing", () => {
       });
     }
   });
+
+  it("routes the OpenSSH resolver and its native proof to Windows", () => {
+    for (const sshPath of ["src/infra/ssh-client.ts", "src/infra/ssh-client.windows.test.ts"]) {
+      expect(detectChangedScope([sshPath]), sshPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
 });

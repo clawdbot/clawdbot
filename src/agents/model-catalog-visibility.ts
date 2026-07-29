@@ -8,6 +8,7 @@ import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
+import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import {
   type ModelCatalogRoutePolicy,
   type ModelCatalogRouteProjection,
@@ -77,9 +78,7 @@ async function modelCatalogEntryHasProviderAuth(
 }
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return entries.toSorted(
-    (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
-  );
+  return entries.toSorted(compareModelCatalogEntries);
 }
 
 function resolveLogicalKey(

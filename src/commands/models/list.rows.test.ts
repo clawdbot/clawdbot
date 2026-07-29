@@ -456,6 +456,55 @@ describe("appendConfiguredRows", () => {
 
     expect(requireOnlyRow(rows).available).toBeNull();
   });
+
+  it("evaluates configured-row auth with observed routes from the shared snapshot", async () => {
+    const rows: ModelRow[] = [];
+    const evaluateModelAuth = vi.fn(() => ({
+      availability: true,
+      routeResolution: null,
+    }));
+    const catalogEntry = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 400_000,
+      input: ["text" as const],
+    };
+
+    await appendConfiguredRows({
+      rows,
+      entries: [
+        {
+          key: "openai/gpt-5.5",
+          ref: { provider: "openai", model: "gpt-5.5" },
+          tags: new Set(["default"]),
+          aliases: [],
+        },
+      ],
+      catalogSnapshot: { entries: [catalogEntry], routeVariants: [catalogEntry] },
+      context: {
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: { evaluateModelAuth },
+        configuredByKey: new Map(),
+        discoveredKeys: new Set<string>(),
+        filter: {},
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    // The same physical routes the catalog rows use must inform configured-row
+    // auth, so both views agree on availability for route-managed models.
+    expect(evaluateModelAuth).toHaveBeenCalledWith(
+      "openai",
+      expect.objectContaining({
+        observedRoutes: [{ api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
+      }),
+    );
+    expect(requireOnlyRow(rows)).toMatchObject({ key: "openai/gpt-5.5", contextWindow: 400_000 });
+  });
 });
 
 describe("prepared provider catalog projection", () => {

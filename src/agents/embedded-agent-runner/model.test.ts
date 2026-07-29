@@ -16,6 +16,7 @@ import {
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.owner.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
@@ -38,6 +39,8 @@ const preparedSnapshotState = vi.hoisted(() => ({
   enabled: true,
   getInputs: [] as Array<Record<string, unknown>>,
   snapshots: new Map<string, unknown>(),
+  configuredRuntimeModels: [] as PreparedModelRuntimeSnapshot["configuredRuntimeModels"],
+  inlineProviderModels: [] as PreparedModelRuntimeSnapshot["inlineProviderModels"],
 }));
 
 vi.mock("../model-suppression.js", () => {
@@ -176,6 +179,8 @@ vi.mock("../prepared-model-runtime.js", async () => {
     }
     const snapshot = {
       ...(workspaceDir ? { workspaceDir } : {}),
+      configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
+      inlineProviderModels: preparedSnapshotState.inlineProviderModels,
       createStores: () => ({ authStorage, modelRegistry }),
     };
     preparedSnapshotState.snapshots.set(key, snapshot);
@@ -247,6 +252,8 @@ beforeEach(() => {
   preparedSnapshotState.enabled = true;
   preparedSnapshotState.getInputs.length = 0;
   preparedSnapshotState.snapshots.clear();
+  preparedSnapshotState.configuredRuntimeModels = [];
+  preparedSnapshotState.inlineProviderModels = [];
   clearRuntimeAuthProfileStoreSnapshots();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
@@ -839,6 +846,143 @@ describe("resolveModel", () => {
     expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("reuses configured static models from the loaded snapshot", async () => {
+    const preparedModel = {
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      name: "Mistral Medium 3.5",
+      api: "openai-completions" as const,
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text" as const, "image" as const],
+      cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 8192,
+    };
+
+    preparedSnapshotState.configuredRuntimeModels = [
+      {
+        provider: "mistral",
+        modelId: "mistral-medium-3-5",
+        model: preparedModel,
+      },
+    ];
+
+    const result = await resolveModelAsync(
+      "mistral",
+      "mistral-medium-3-5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      api: "openai-completions",
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves configured inline models from one prepared generation", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            api: "openai-completions",
+            models: [{ id: "deepseek-v4-pro", name: "Configured DeepSeek" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const preparedModelRuntime = {
+      agentDir: "/tmp/agent",
+      activeProjectKeys: [],
+      config: cfg,
+      metadataSnapshot: { plugins: [] } as never,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [
+        {
+          provider: "deepseek",
+          modelId: "deepseek-v4-pro",
+          model: {
+            provider: "deepseek",
+            id: "deepseek-v4-pro",
+            name: "DeepSeek V4 Pro",
+            api: "openai-completions",
+            baseUrl: "https://api.deepseek.com",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+            contextWindow: 1_000_000,
+            maxTokens: 384_000,
+          },
+        },
+      ],
+      inlineProviderModels: buildInlineProviderModels(cfg.models?.providers ?? {}),
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+    } satisfies PreparedModelRuntimeSnapshot;
+
+    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: { find: vi.fn(() => null) } as never,
+      preparedModelRuntime,
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expectRecordFields(expectResolvedModel(result), {
+      name: "Configured DeepSeek",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+    });
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back when an opaque prepared handle has no model facts", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      name: "Mistral Medium 3.5",
+      api: "openai-completions",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262_144,
+      maxTokens: 8_192,
+    });
+
+    const result = await resolveModelAsync(
+      "mistral",
+      "mistral-medium-3-5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        authStorage: { mocked: true } as never,
+        modelRegistry: { find: vi.fn(() => null) } as never,
+        preparedModelRuntime: {} as PreparedModelRuntimeSnapshot,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      baseUrl: "https://api.mistral.ai/v1",
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledOnce();
   });
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {

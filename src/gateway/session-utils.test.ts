@@ -231,6 +231,22 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("projects stored session tool overrides to list and live payloads", () => {
+    const toolOverrides = { mcpServers: { docs: false }, webSearch: false };
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "session-tools", updatedAt: 1, toolOverrides },
+    });
+
+    expect(row.toolOverrides).toEqual(toolOverrides);
+    expect(buildGatewaySessionEventFields({ sessionRow: row }).toolOverrides).toEqual(
+      toolOverrides,
+    );
+  });
+
   test("emits a tombstone when a session has no current control owner", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
@@ -2423,6 +2439,57 @@ describe("gateway session utils", () => {
       id: "codex",
       source: "implicit",
     });
+  });
+
+  test("listAgentsForGateway projects a profile-qualified default as canonical model identity", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.6-sol@openai:setup-fake",
+            fallbacks: ["anthropic/claude-sonnet-4-6@anthropic:backup"],
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    const catalog = [
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        reasoning: true,
+      },
+    ];
+
+    const result = listAgentsForGateway(cfg, catalog);
+    const defaults = getSessionDefaults(cfg, catalog);
+
+    expect(result.agents[0]?.model).toEqual({
+      primary: "openai/gpt-5.6-sol",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(result.agents[0]?.thinkingLevels).toEqual(defaults.thinkingLevels);
+    expect(result.agents[0]?.thinkingDefault).toBe(defaults.thinkingDefault);
+  });
+
+  test.each([
+    ["custom/vertex-ai_claude-haiku-4-5@20251001", "custom/vertex-ai_claude-haiku-4-5@20251001"],
+    [
+      "custom/vertex-ai_claude-haiku-4-5@20251001@custom:setup-fake",
+      "custom/vertex-ai_claude-haiku-4-5@20251001",
+    ],
+    ["lmstudio/gemma-4-31b-it@q8_0", "lmstudio/gemma-4-31b-it@q8_0"],
+    ["lmstudio/gemma-4-31b-it@q8_0@lmstudio:setup-fake", "lmstudio/gemma-4-31b-it@q8_0"],
+  ])("listAgentsForGateway preserves model-owned @ suffixes in %s", (primary, expected) => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary } },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    expect(listAgentsForGateway(cfg).agents[0]?.model?.primary).toBe(expected);
   });
 
   test("listAgentsForGateway reports whether each workspace is a git checkout", () => {

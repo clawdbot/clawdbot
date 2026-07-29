@@ -20,7 +20,9 @@
   --chrome: rgba(14, 16, 21, 0.96);
   --chrome-strong: rgba(14, 16, 21, 0.98);
 
-  /* Text - Clean contrast */
+  /* Text - Clean contrast
+   * Keep --muted AA on dark surfaces; do not dim muted body text with opacity. */
+
   --text: #d4d4d8;
   --text-strong: #f4f4f5;
   --chat-text: #d4d4d8;
@@ -430,9 +432,9 @@
   --text: #3a3a42;
   --text-strong: #18181b;
   --chat-text: #3a3a42;
-  --muted: #6a6a72;
+  --muted: #68676f;
   --muted-strong: #52525a;
-  --muted-foreground: #6a6a72;
+  --muted-foreground: #68676f;
 
   /* Borders — clean, minimal */
   --border: #e2e2e8;
@@ -506,9 +508,9 @@
   --text: #d8c8b8;
   --text-strong: #f0e4da;
   --chat-text: #d8c8b8;
-  --muted: #9a8878;
-  --muted-strong: #8a7868;
-  --muted-foreground: #9a8878;
+  --muted: #a18f80;
+  --muted-strong: #a08f7f;
+  --muted-foreground: #a18f80;
 
   --border: #302418;
   --border-strong: #443828;
@@ -570,9 +572,9 @@
   --text: #4a3828;
   --text-strong: #2c2118;
   --chat-text: #4a3828;
-  --muted: #756050;
+  --muted: #725d4d;
   --muted-strong: #604838;
-  --muted-foreground: #756050;
+  --muted-foreground: #725d4d;
 
   --border: #ddd0c2;
   --border-strong: #c8b8a6;

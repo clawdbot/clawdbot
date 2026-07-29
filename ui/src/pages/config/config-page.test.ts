@@ -29,6 +29,7 @@ function deferred<T>() {
 let localStorageMock: Storage;
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/");
   vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
     switchActiveRealtimeTalkCameras,
   );
@@ -46,8 +47,8 @@ afterEach(() => {
 
 describe("configSelectionFromSearch", () => {
   it("opens a valid linked Settings section", () => {
-    expect(configSelectionFromSearch("communications", "?section=talk")).toEqual({
-      activeSection: "talk",
+    expect(configSelectionFromSearch("communications", "?section=tts")).toEqual({
+      activeSection: "tts",
       activeSubsection: null,
     });
   });
@@ -78,8 +79,16 @@ describe("configSelectionFromSearch", () => {
     });
   });
 
-  it("keeps Communications focused on messages, talk, and voice", () => {
-    expect(configSectionKeysForPage("communications")).toEqual(["messages", "talk", "tts"]);
+  it("keeps Communications focused on messages and text-to-speech", () => {
+    expect(configSectionKeysForPage("communications")).toEqual(["messages", "tts"]);
+  });
+
+  it("gives Talk its own curated page", () => {
+    expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
+  });
+
+  it("keeps provider models off Agent Defaults", () => {
+    expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
   });
 });
 
@@ -87,6 +96,7 @@ describe("ConfigPage moved section routes", () => {
   it.each([
     ["channels", "channels", ""],
     ["broadcast", "advanced", "?section=broadcast"],
+    ["talk", "talk", "?section=talk"],
   ])("redirects the former Communications %s section", (section, routeId, search) => {
     const navigate = vi.fn();
     const page = new ConfigPage();
@@ -94,6 +104,9 @@ describe("ConfigPage moved section routes", () => {
       context: { navigate: typeof navigate };
       pageId: "communications";
       routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
         section: string;
         advanced: boolean;
         tab: string | null;
@@ -103,11 +116,53 @@ describe("ConfigPage moved section routes", () => {
     };
     state.context = { navigate };
     state.pageId = "communications";
-    state.routeData = { section, advanced: false, tab: null, targetBlockId: null };
+    state.routeData = {
+      pathname: "/settings/communications",
+      search: `?section=${section}`,
+      hash: "",
+      section,
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
 
     state.syncRouteData();
 
     expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
+  });
+
+  it("redirects the former Agent Defaults models section", () => {
+    const navigate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: { navigate: typeof navigate };
+      pageId: "ai-agents";
+      routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
+        section: string;
+        advanced: boolean;
+        tab: string | null;
+        targetBlockId: string | null;
+      };
+      syncRouteData: () => void;
+    };
+    state.context = { navigate };
+    state.pageId = "ai-agents";
+    state.routeData = {
+      pathname: "/settings/ai-agents",
+      search: "?section=models",
+      hash: "",
+      section: "models",
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
+
+    state.syncRouteData();
+
+    expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
   });
 });
 
@@ -131,6 +186,10 @@ describe("ConfigPage advanced selection guard", () => {
     });
     expect(configSelectionFromSearch("advanced", "?section=broadcast")).toEqual({
       activeSection: "broadcast",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=models")).toEqual({
+      activeSection: "models",
       activeSubsection: null,
     });
   });

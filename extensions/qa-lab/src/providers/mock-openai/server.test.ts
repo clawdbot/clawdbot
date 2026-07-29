@@ -20,6 +20,8 @@ const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
   "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
 const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
   "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then answer with exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK.";
+const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT =
+  "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK.";
 const QA_REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
@@ -196,6 +198,7 @@ const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as cons
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
+const IMAGE_GENERATE_TOOL = { type: "function", name: "image_generate" } as const;
 const SLACK_CHART_SUMMARY_TOKEN = "SLACK_QA_CHART_SUMMARY_TEST";
 const SLACK_CHART_DONE_TOKEN = "SLACK_QA_CHART_DONE_TEST";
 const SLACK_CHART_MESSAGE_TOOL_ARGS = {
@@ -501,7 +504,9 @@ describe("qa mock openai server", () => {
 
     const initialText = initialBody.output?.[0]?.content?.[0]?.text ?? "";
     expect(initialText).toContain("QA-STRANDED-85714");
-    expect(initialText.length).toBeGreaterThanOrEqual(120);
+    expect(initialText).toContain("近 7 日營收較前期增加");
+    expect(initialText).toHaveLength(167);
+    expect(initialText.match(/[.!?]+(?:\s|$)/g) ?? []).toHaveLength(0);
     expect(outputItems(initialBody).some((item) => item.type === "function_call")).toBe(false);
 
     const retryBody = await expectResponsesJson(server, {
@@ -522,7 +527,7 @@ describe("qa mock openai server", () => {
     const toolCall = outputToolCall(retryBody, "message");
     expect(outputToolArgsFromItem(toolCall)).toEqual({
       action: "send",
-      message: "QA-STRANDED-85714",
+      message: initialText,
     });
   });
 
@@ -3738,6 +3743,7 @@ describe("qa mock openai server", () => {
 
     const toolPlan = await postResponses(server, {
       stream: false,
+      tools: [IMAGE_GENERATE_TOOL],
       input: [makeUserInput(channelPrompt), makeUserInput(genericPrompt)],
     });
 
@@ -3773,6 +3779,60 @@ describe("qa mock openai server", () => {
 
     expect(toolResult.status).toBe(200);
     expect(outputText(await toolResult.json())).toContain("Attachment: /tmp/qa-lighthouse.png");
+  });
+
+  it("completes an image without replaying a tool unavailable to the completion turn", async () => {
+    const server = await startMockServer();
+    const completion = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput("Image generation check: generate a QA lighthouse image."),
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "source: image_generation",
+            "status: completed successfully",
+            "Generated media:",
+            "MEDIA:/tmp/qa-lighthouse.png",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(
+      outputItems(completion).some(
+        (item) => item.type === "function_call" && item.name === "image_generate",
+      ),
+    ).toBe(false);
+    expect(outputText(completion)).toBe(
+      "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
+    );
+  });
+
+  it("does not replay a historical image completion on a new marker turn", async () => {
+    const server = await startMockServer();
+    const completion = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "source: image_generation",
+            "status: completed successfully",
+            "MEDIA:/tmp/qa-lighthouse.png",
+          ].join("\n"),
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "MEDIA:/tmp/qa-lighthouse.png" }],
+        },
+        makeUserInput("Marker exact marker: `fresh-image-completion-marker`"),
+      ],
+    });
+
+    expect(outputText(completion)).toBe("fresh-image-completion-marker");
   });
 
   it("plans QA tool-search calls for instruction-declared Codex dynamic tools", async () => {
@@ -5017,6 +5077,138 @@ describe("qa mock openai server", () => {
     };
     expect(debug.toolOutputCallId).toBe("toolu_mock_read_error");
     expect(debug.toolOutputStructuredError).toBe(true);
+  });
+
+  it("replays one signed Anthropic thinking error for each independent scenario", async () => {
+    const server = await startMockServer();
+    const readCallIds: string[] = [];
+    const scenarioPrompts: string[] = [];
+
+    const requestAnthropicStream = async (messages: unknown[]) => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        stream: true,
+        messages,
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      return response.text();
+    };
+
+    const readAnthropicToolCallId = (readStream: string) => {
+      const readEvents = readStream
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) =>
+          requireRecord(JSON.parse(line.slice("data: ".length)) as unknown, "Anthropic SSE event"),
+        );
+      const readEvent = readEvents.find(
+        (event) =>
+          event.type === "content_block_start" &&
+          requireRecord(event.content_block, "Anthropic content block").type === "tool_use",
+      );
+      const readTool = requireRecord(readEvent?.content_block, "Anthropic read tool call");
+      expect(readTool.name).toBe("read");
+      expect(readTool.input).toEqual({});
+      const readInputEvent = readEvents.find(
+        (event) => event.type === "content_block_delta" && event.index === readEvent?.index,
+      );
+      expect(requireRecord(readInputEvent?.delta, "Anthropic read tool input delta")).toEqual({
+        type: "input_json_delta",
+        partial_json: JSON.stringify({ path: "QA_KICKOFF_TASK.md" }),
+      });
+      const callId = readTool.id;
+      if (typeof callId !== "string" || callId.length === 0) {
+        throw new Error("Expected an Anthropic read tool call ID");
+      }
+      readCallIds.push(callId);
+      return callId;
+    };
+
+    const buildReplayMessages = (
+      promptMessage: { role: "user"; content: Array<{ type: "text"; text: string }> },
+      callId: string,
+    ) => [
+      promptMessage,
+      {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "tool_use" as const,
+            id: callId,
+            name: "read",
+            input: { path: "QA_KICKOFF_TASK.md" },
+          },
+        ],
+      },
+      {
+        role: "user" as const,
+        content: [
+          {
+            type: "tool_result" as const,
+            tool_use_id: callId,
+            content: "QA kickoff task completed.",
+          },
+        ],
+      },
+    ];
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const scenarioPrompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
+      scenarioPrompts.push(scenarioPrompt);
+      const promptMessage = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: scenarioPrompt }],
+      };
+      const initialCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
+      const errorStream = await requestAnthropicStream(
+        buildReplayMessages(promptMessage, initialCallId),
+      );
+      expect(errorStream).toContain('"type":"thinking_delta"');
+      expect(errorStream).toContain('"type":"signature_delta"');
+      expect(errorStream).toContain('"signature":"qa_signed_thinking_block_91953"');
+      expect(errorStream).toContain("event: error");
+      expect(errorStream).toContain('"type":"api_error"');
+
+      const retryCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
+      expect(retryCallId).not.toBe(initialCallId);
+      const recoveryStream = await requestAnthropicStream(
+        buildReplayMessages(promptMessage, retryCallId),
+      );
+      expect(recoveryStream).toContain("event: message_stop");
+      expect(recoveryStream).toContain("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+      expect(recoveryStream).not.toContain("event: error");
+    }
+
+    expect(new Set(readCallIds).size).toBe(4);
+    const debugResponse = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(debugResponse.status).toBe(200);
+    const debugRequests = requireArray(await debugResponse.json(), "Anthropic debug requests").map(
+      (request) => requireRecord(request, "Anthropic debug request"),
+    );
+    expect(debugRequests).toHaveLength(8);
+    expect(debugRequests.every((request) => request.providerVariant === "anthropic")).toBe(true);
+    expect(debugRequests.map((request) => request.toolOutputCallId)).toEqual([
+      undefined,
+      readCallIds[0],
+      undefined,
+      readCallIds[1],
+      undefined,
+      readCallIds[2],
+      undefined,
+      readCallIds[3],
+    ]);
+    expect(debugRequests.map((request) => request.prompt)).toEqual([
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+    ]);
   });
 
   it("streams Anthropic /v1/messages tool_use responses as SSE", async () => {

@@ -682,7 +682,7 @@ async function buildResponsesPayload(
       if (!toolOutput && hasDeclaredTool(body, "message")) {
         return buildToolCallEventsWithArgs("message", {
           action: "send",
-          message: "QA-STRANDED-85714",
+          message: buildStrandedFinalRecoveryText(),
         });
       }
       return buildAssistantEvents("");
@@ -1119,7 +1119,11 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && !toolOutput) {
+  if (
+    QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
+    !toolOutput &&
+    hasToolDefinition(body, "image_generate")
+  ) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",
@@ -1295,7 +1299,7 @@ export async function startQaMockOpenAiServer(params?: {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
-    anthropicThinkingErrorPhase: 0,
+    anthropicThinkingErrorScenarioKeys: new Set<string>(),
     subagentFanoutPhase: 0,
     subagentHandoffSpawned: false,
     toolLoopReadAttempts: 0,

@@ -2,6 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server.impl.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import {
+  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+  OpenClawAgentDatabaseMediaMigrationRequiredError,
+} from "../../state/openclaw-agent-db-migration-required.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
@@ -473,6 +477,34 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("records a typed reason for media-migration startup failures", async () => {
+    await withIsolatedSignals(async () => {
+      const failure = new OpenClawAgentDatabaseMediaMigrationRequiredError(
+        "/tmp/openclaw-agent.sqlite",
+        14,
+      );
+      const { runtime } = createRuntimeWithExitSignal();
+      const completeBoot = vi.fn();
+      const { runGatewayLoop } = await import("./run-loop.js");
+
+      await expect(
+        runGatewayLoop({
+          start: vi.fn(async () => {
+            throw failure;
+          }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+          completeBoot,
+        }),
+      ).rejects.toBe(failure);
+
+      expect(completeBoot).toHaveBeenCalledWith({
+        outcome: "startup_failed",
+        reason: failure.message,
+        startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+      });
+    });
+  });
+
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
 
@@ -496,6 +528,148 @@ describe("runGatewayLoop", () => {
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(flushLogger).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each(["SIGTERM", "SIGINT"] as const)(
+    "drains admitted root work before closing on %s",
+    async (signal) => {
+      vi.clearAllMocks();
+
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, runtime, exited } = await createSignaledLoopHarness();
+        let releaseDrain: (() => void) | undefined;
+        const pendingDrain = new Promise<void>((resolve) => {
+          releaseDrain = resolve;
+        });
+        waitForActiveGatewayRootWork.mockImplementationOnce(async () => {
+          await pendingDrain;
+          return { drained: true, active: 0 };
+        });
+
+        try {
+          captureSignal(signal)();
+          await waitForLoopCondition(
+            () => waitForActiveGatewayRootWork.mock.calls.length === 1,
+            `expected ${signal} to drain admitted gateway root work`,
+          );
+
+          expect(markGatewayDraining).toHaveBeenCalledOnce();
+          expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
+            waitForActiveGatewayRootWork.mock.invocationCallOrder[0] ?? 0,
+          );
+          expect(waitForActiveGatewayRootWork).toHaveBeenCalledWith(15_000);
+          expect(close).not.toHaveBeenCalled();
+          expect(runtime.exit).not.toHaveBeenCalled();
+
+          releaseDrain?.();
+
+          await expect(exited).resolves.toBe(0);
+          expect(close).toHaveBeenCalledWith({
+            reason: "gateway stopping",
+            restartExpectedMs: null,
+          });
+        } finally {
+          releaseDrain?.();
+          await exited;
+          waitForActiveGatewayRootWork.mockReset();
+          waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
+        }
+      });
+    },
+  );
+
+  it("continues direct shutdown when the bounded root-work drain times out", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      waitForActiveGatewayRootWork.mockResolvedValueOnce({ drained: false, active: 2 });
+      const { close, runtime, exited } = await createSignaledLoopHarness();
+
+      try {
+        captureSignal("SIGTERM")();
+
+        await expect(exited).resolves.toBe(0);
+        expect(waitForActiveGatewayRootWork).toHaveBeenCalledWith(15_000);
+        expect(gatewayLog.warn).toHaveBeenCalledWith(
+          "gateway root transaction drain timeout reached with 2 root(s) still active; proceeding with shutdown",
+        );
+        expect(close).toHaveBeenCalledWith({
+          reason: "gateway stopping",
+          restartExpectedMs: null,
+        });
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+      } finally {
+        waitForActiveGatewayRootWork.mockReset();
+        waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
+      }
+    });
+  });
+
+  it("still closes and exits when the direct-shutdown root-work drain fails", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      waitForActiveGatewayRootWork.mockRejectedValueOnce(new Error("root drain unavailable"));
+      const { close, runtime, exited } = await createSignaledLoopHarness();
+
+      try {
+        captureSignal("SIGTERM")();
+
+        await expect(exited).resolves.toBe(0);
+        expect(waitForActiveGatewayRootWork).toHaveBeenCalledWith(15_000);
+        expect(gatewayLog.warn).toHaveBeenCalledWith(
+          "gateway root transaction drain failed; proceeding with shutdown: root drain unavailable",
+        );
+        expect(close).toHaveBeenCalledWith({
+          reason: "gateway stopping",
+          restartExpectedMs: null,
+        });
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+      } finally {
+        waitForActiveGatewayRootWork.mockReset();
+        waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
+      }
+    });
+  });
+
+  it("does not start a second root-work drain for repeated shutdown signals", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { exited } = await createSignaledLoopHarness();
+      let releaseDrain: (() => void) | undefined;
+      const pendingDrain = new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      });
+      waitForActiveGatewayRootWork.mockImplementationOnce(async () => {
+        await pendingDrain;
+        return { drained: true, active: 0 };
+      });
+
+      try {
+        const sigterm = captureSignal("SIGTERM");
+        const sigint = captureSignal("SIGINT");
+        sigterm();
+        await waitForLoopCondition(
+          () => waitForActiveGatewayRootWork.mock.calls.length === 1,
+          "expected first shutdown signal to begin the root-work drain",
+        );
+
+        sigint();
+
+        expect(waitForActiveGatewayRootWork).toHaveBeenCalledOnce();
+        expect(markGatewayDraining).toHaveBeenCalledOnce();
+        expect(gatewayLog.info).toHaveBeenCalledWith("received SIGINT during shutdown; ignoring");
+
+        releaseDrain?.();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        releaseDrain?.();
+        await exited;
+        waitForActiveGatewayRootWork.mockReset();
+        waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
+      }
     });
   });
 

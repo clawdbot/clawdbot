@@ -11,6 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  registerNodeSqliteKyselyQueryErrorHandler,
 } from "./kysely-sync.js";
 
 type SyncHelperTestDatabase = {
@@ -375,16 +376,109 @@ describe("kysely sync helpers", () => {
     expect(prepares.calls()).toBe(2);
   });
 
+  it("reports query failures without replacing the original database error", () => {
+    database = new DatabaseSync(":memory:");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const malformedJson = db.selectNoFrom(
+      /* kysely-allow-raw: failure reporting needs a deterministic SQLite step error. */
+      sql<string>`json(${"{"})`.as("value"),
+    );
+    const observed: unknown[] = [];
+    registerNodeSqliteKyselyQueryErrorHandler(database, (error) => {
+      observed.push(error);
+      throw new Error("handler failure");
+    });
+
+    const thrown = captureError(() => executeSqliteQuerySync(database!, malformedJson));
+
+    expect(observed).toEqual([thrown]);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/malformed JSON/iu);
+  });
+
+  it("preserves close return values and double-close errors", () => {
+    const baseline = new DatabaseSync(":memory:");
+    expect(baseline.close()).toBeUndefined();
+    const baselineError = captureError(() => baseline.close());
+
+    const cached = new DatabaseSync(":memory:");
+    enableNodeSqliteKyselyStatementCache(cached);
+    expect(cached.close()).toBeUndefined();
+    expect(errorShape(captureError(() => cached.close()))).toEqual(errorShape(baselineError));
+  });
+
+  it("preserves close errors when invalidation is installed after the handle closes", () => {
+    const baseline = new DatabaseSync(":memory:");
+    baseline.close();
+    const baselineError = captureError(() => baseline.close());
+
+    const cached = new DatabaseSync(":memory:");
+    cached.close();
+    enableNodeSqliteKyselyStatementCache(cached);
+    expect(errorShape(captureError(() => cached.close()))).toEqual(errorShape(baselineError));
+  });
+
+  it("clears cached statements before propagating a close failure", () => {
+    const cached = new DatabaseSync(":memory:");
+    cached.exec("create table items (id integer primary key, name text not null)");
+    cached.exec("insert into items (id, name) values (1, 'Ada')");
+    const closeError = new Error("synthetic close failure");
+    Object.defineProperty(cached, "close", {
+      configurable: true,
+      writable: true,
+      value(): never {
+        throw closeError;
+      },
+    });
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(cached);
+    const select = db.selectFrom("items").selectAll();
+    const prepares = countPrepares(cached);
+
+    try {
+      expect(executeSqliteQuerySync(cached, select).rows).toEqual([{ id: 1, name: "Ada" }]);
+      expect(executeSqliteQuerySync(cached, select).rows).toEqual([{ id: 1, name: "Ada" }]);
+      expect(executeSqliteQuerySync(cached, select).rows).toEqual([{ id: 1, name: "Ada" }]);
+      expect(prepares.calls()).toBe(2);
+
+      expect(() => cached.close()).toThrow(closeError);
+      expect(executeSqliteQuerySync(cached, select).rows).toEqual([{ id: 1, name: "Ada" }]);
+      expect(prepares.calls()).toBe(3);
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(cached);
+      delete (cached as { close?: DatabaseSync["close"] }).close;
+      cached.close();
+    }
+  });
+
   it("allows databases and prepared statements to collect after lifecycle clearing", () => {
-    expect(runRetentionScenario({ clearBeforeDrop: true })).toEqual({
+    expect(runRetentionScenario({ cleanup: "clear-and-close" })).toEqual({
       databaseCollected: true,
       statementsCollected: 2,
       statementCount: 2,
     });
   });
 
+  it("allows databases and prepared statements to collect after close", () => {
+    expect(runRetentionScenario({ cleanup: "close" })).toEqual({
+      databaseCollected: true,
+      statementsCollected: 2,
+      statementCount: 2,
+    });
+  });
+
+  it.skipIf(typeof DatabaseSync.prototype[Symbol.dispose] !== "function")(
+    "allows databases and prepared statements to collect after disposal",
+    () => {
+      expect(runRetentionScenario({ cleanup: "dispose" })).toEqual({
+        databaseCollected: true,
+        statementsCollected: 2,
+        statementCount: 2,
+      });
+    },
+  );
+
   it("retains a cached database when lifecycle clearing is skipped", () => {
-    expect(runRetentionScenario({ clearBeforeDrop: false })).toEqual({
+    expect(runRetentionScenario({ cleanup: "drop" })).toEqual({
       databaseCollected: false,
       statementsCollected: 1,
       statementCount: 2,
@@ -432,18 +526,42 @@ function countPrepares(database: DatabaseSync): { calls: () => number } {
   return { calls: () => calls };
 }
 
-function runRetentionScenario(options: { clearBeforeDrop: boolean }): {
+function captureError(operation: () => void): unknown {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected operation to throw");
+}
+
+function errorShape(error: unknown): { code: string | undefined; message: string; name: string } {
+  expect(error).toBeInstanceOf(Error);
+  const sqliteError = error as Error & { code?: string };
+  return {
+    code: sqliteError.code,
+    message: sqliteError.message,
+    name: sqliteError.name,
+  };
+}
+
+function runRetentionScenario(options: {
+  cleanup: "clear-and-close" | "close" | "dispose" | "drop";
+}): {
   databaseCollected: boolean;
   statementsCollected: number;
   statementCount: number;
 } {
   const moduleUrl = new URL("./kysely-sync.ts", import.meta.url).href;
-  const cleanup = options.clearBeforeDrop
-    ? `
+  const cleanup = {
+    "clear-and-close": `
         clearNodeSqliteKyselyCacheForDatabase(database);
         database.close();
-      `
-    : "";
+      `,
+    close: "database.close();",
+    dispose: "database[Symbol.dispose]();",
+    drop: "",
+  }[options.cleanup];
   const script = `
     import { DatabaseSync } from "node:sqlite";
     import {

@@ -147,7 +147,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");
-    const errorHelp = `${errorMessage}. Configure native thread discovery in Settings > Automation > Plugins.`;
+    const errorHelp = t("chat.sidebar.catalogDiscoveryHelp", { error: errorMessage });
     const sectionClass = [
       "sidebar-recent-sessions__group",
       "sidebar-recent-sessions__group--zone-coding",

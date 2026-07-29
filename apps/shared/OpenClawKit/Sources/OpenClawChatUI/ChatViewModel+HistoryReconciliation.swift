@@ -25,6 +25,13 @@ extension OpenClawChatViewModel {
                 thinkingSignature: content.thinkingSignature,
                 mimeType: content.mimeType,
                 fileName: content.fileName,
+                artifactId: content.artifactId,
+                url: content.url,
+                openUrl: content.openUrl,
+                alt: content.alt,
+                width: content.width,
+                height: content.height,
+                sizeBytes: content.sizeBytes,
                 durationSeconds: content.durationSeconds,
                 content: content.content,
                 id: content.id,
@@ -56,7 +63,12 @@ extension OpenClawChatViewModel {
             let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, id, name, fileName].joined(separator: "\\u{001F}")
+            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let mimeType = (item.mimeType ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text, id, name, fileName, artifactId, url, openUrl, mimeType]
+                .joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
 
@@ -64,7 +76,10 @@ extension OpenClawChatViewModel {
         message.content.map { item in
             let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text].joined(separator: "\\u{001F}")
+            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text, artifactId, url, openUrl].joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
 
@@ -76,6 +91,9 @@ extension OpenClawChatViewModel {
         // so a server timestamp change cannot replace the optimistic row's ID.
         if let idempotencyKey = Self.normalizedIdempotencyKey(message.idempotencyKey) {
             return [role, "idempotency", idempotencyKey].joined(separator: "|")
+        }
+        if let transcriptMessageID = Self.normalizedTranscriptMessageID(message.transcriptMessageID) {
+            return [role, "transcript", transcriptMessageID].joined(separator: "|")
         }
 
         let timestamp: String = {
@@ -131,6 +149,11 @@ extension OpenClawChatViewModel {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func normalizedTranscriptMessageID(_ id: String?) -> String? {
+        let trimmed = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func adoptingCanonicalMessage(
         _ incoming: OpenClawChatMessage,
         over existing: OpenClawChatMessage) -> OpenClawChatMessage
@@ -142,6 +165,7 @@ extension OpenClawChatViewModel {
                 in: incoming.content,
                 from: existing.content),
             timestamp: incoming.timestamp ?? existing.timestamp,
+            transcriptMessageID: incoming.transcriptMessageID ?? existing.transcriptMessageID,
             idempotencyKey: incoming.idempotencyKey,
             toolCallId: incoming.toolCallId,
             toolName: incoming.toolName,
@@ -176,6 +200,13 @@ extension OpenClawChatViewModel {
                 thinkingSignature: content.thinkingSignature,
                 mimeType: content.mimeType,
                 fileName: content.fileName,
+                artifactId: content.artifactId,
+                url: content.url,
+                openUrl: content.openUrl,
+                alt: content.alt,
+                width: content.width,
+                height: content.height,
+                sizeBytes: content.sizeBytes,
                 durationSeconds: localDuration,
                 content: content.content,
                 id: content.id,
@@ -673,6 +704,9 @@ extension OpenClawChatViewModel {
     static func dedupeKey(for message: OpenClawChatMessage) -> String? {
         if let idempotencyKey = normalizedIdempotencyKey(message.idempotencyKey) {
             return "\(message.role)|idempotency|\(idempotencyKey)"
+        }
+        if let transcriptMessageID = normalizedTranscriptMessageID(message.transcriptMessageID) {
+            return "\(message.role)|transcript|\(transcriptMessageID)"
         }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")

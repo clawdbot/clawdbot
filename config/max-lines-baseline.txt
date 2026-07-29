@@ -182,13 +182,11 @@ extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.actions.test.ts
 extensions/msteams/src/channel.ts
-extensions/msteams/src/monitor-handler/message-handler.ts
 extensions/mxc/test/mxc-backend.test.ts
 extensions/oc-path/src/oc-path/find.ts
 extensions/oc-path/src/oc-path/universal.ts
 extensions/ollama/index.test.ts
 extensions/ollama/index.ts
-extensions/ollama/src/setup.ts
 extensions/ollama/src/stream-runtime.test.ts
 extensions/ollama/src/stream.ts
 extensions/openai/image-generation-provider.test.ts
@@ -301,7 +299,6 @@ extensions/whatsapp/src/auto-reply.web-auto-reply.connection-and-logging.e2e.tes
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.test.ts
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts
 extensions/whatsapp/src/connection-controller.ts
-extensions/whatsapp/src/inbound/monitor.ts
 extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test-support.ts
 extensions/workboard/src/sqlite-store.ts
 extensions/workboard/src/store-card-helpers.ts
@@ -382,8 +379,6 @@ src/agents/cli-runner/claude-live-session.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
-src/agents/code-mode-namespaces.ts
-src/agents/code-mode.test.ts
 src/agents/command/attempt-execution.cli.test.ts
 src/agents/command/attempt-execution.test.ts
 src/agents/command/attempt-execution.ts
@@ -592,7 +587,6 @@ src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
-src/cli/plugins-install-command.ts
 src/cli/program/register.status-health-sessions.ts
 src/cli/run-main.exit.test.ts
 src/cli/run-main.ts
@@ -636,7 +630,6 @@ src/commands/doctor/shared/preview-warnings.test.ts
 src/commands/doctor/shared/preview-warnings.ts
 src/commands/doctor/shared/stale-auth-order.test.ts
 src/commands/gateway-status.test.ts
-src/commands/health.ts
 src/commands/migrate.test.ts
 src/commands/model-picker.test.ts
 src/commands/models/auth.test.ts
@@ -674,7 +667,6 @@ src/config/sessions/transcript.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
-src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
 src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts
@@ -950,7 +942,6 @@ src/skills/loading/workspace-load.test.ts
 src/skills/loading/workspace.ts
 src/skills/security/scanner.ts
 src/skills/workshop/service.test.ts
-src/skills/workshop/service.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts

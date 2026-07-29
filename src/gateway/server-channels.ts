@@ -2,6 +2,7 @@
 // Starts, stops, restarts, and snapshots plugin channel account runtimes.
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
+import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -709,6 +710,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             restartPending: false,
             lastStartAt: Date.now(),
             lastError: null,
+            // Runtime rows are patch-merged, so a dead-ingress verdict from the
+            // previous lifecycle would outlive the condition it described. Every
+            // start re-proves ingress, so every start must clear it first.
+            ingressUnavailable: undefined,
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
@@ -805,7 +810,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 return;
               }
               const message = formatErrorMessage(err);
-              setRuntime(channelId, id, { accountId: id, lastError: message });
+              setRuntime(channelId, id, {
+                accountId: id,
+                lastError: message,
+                // A channel that never armed its ingress admission is not "crashed":
+                // outbound may work fine while inbound is silently dead. Record the
+                // distinct dimension so health stops reading a live socket as healthy.
+                ...(isChannelIngressUnavailableError(err) ? { ingressUnavailable: true } : {}),
+              });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .then(async () => {

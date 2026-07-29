@@ -290,10 +290,11 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     provider,
     providers: providerConfigs,
     model,
+    // talk.realtime.voice is not a schema key (strictObject rejects it);
+    // provider-level `voice` compat is owned by each provider's normalizer.
     voice:
       normalizeOptionalString(talkRealtime?.speakerVoice) ??
-      normalizeOptionalString(talkRealtime?.speakerVoiceId) ??
-      normalizeOptionalString(talkRealtime?.voice),
+      normalizeOptionalString(talkRealtime?.speakerVoiceId),
     instructions: normalizeOptionalString(talkRealtime?.instructions),
     mode: normalizeOptionalLowercaseString(talkRealtime?.mode),
     transport: normalizeRealtimeTransport(talkRealtime?.transport),

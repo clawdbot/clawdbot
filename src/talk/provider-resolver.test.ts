@@ -1,5 +1,5 @@
 // Talk provider resolver tests cover provider selection from config.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   resolveConfiguredRealtimeVoiceProvider,
@@ -11,9 +11,13 @@ const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-
 function attachInternalRealtimeVoiceProviderApi(
   provider: RealtimeVoiceProviderPlugin,
   api: {
-    isBrowserSessionConfigured: () => boolean;
+    isBrowserSessionConfigured: (ctx: {
+      providerConfig: Record<string, unknown>;
+      agentId?: string;
+    }) => boolean;
     resolveBrowserSessionCapabilities?: (ctx: {
       providerConfig: Record<string, unknown>;
+      model?: string;
     }) => object;
   },
 ): void {
@@ -65,6 +69,9 @@ describe("realtime voice provider resolver", () => {
   });
 
   it("keeps browser-only providers out of bridge auto-selection", () => {
+    const isBrowserSessionConfigured = vi.fn(
+      ({ agentId }: { agentId?: string }) => agentId === "voice-agent",
+    );
     const browserOnly: RealtimeVoiceProviderPlugin = {
       id: "browser-only",
       label: "Browser only",
@@ -75,7 +82,7 @@ describe("realtime voice provider resolver", () => {
       },
     };
     attachInternalRealtimeVoiceProviderApi(browserOnly, {
-      isBrowserSessionConfigured: () => true,
+      isBrowserSessionConfigured,
     });
     const bridge: RealtimeVoiceProviderPlugin = {
       id: "bridge",
@@ -96,10 +103,14 @@ describe("realtime voice provider resolver", () => {
     expect(
       resolveConfiguredRealtimeVoiceProvider({
         cfg: {},
+        agentId: "voice-agent",
         providers: [browserOnly, bridge],
         surface: "browser-session",
       }).provider.id,
     ).toBe("browser-only");
+    expect(isBrowserSessionConfigured).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "voice-agent" }),
+    );
   });
 
   it("applies a default model before provider config resolution", () => {
@@ -187,11 +198,11 @@ describe("realtime voice provider resolver", () => {
     };
     attachInternalRealtimeVoiceProviderApi(provider, {
       isBrowserSessionConfigured: () => true,
-      resolveBrowserSessionCapabilities: ({ providerConfig }) => ({
+      resolveBrowserSessionCapabilities: ({ providerConfig, model }) => ({
         transports: ["webrtc"],
         inputAudioFormats: [],
         outputAudioFormats: [],
-        supportsVideoFrames: providerConfig.authMode !== "native",
+        supportsVideoFrames: providerConfig.authMode !== "native" && model === "gpt-live-1",
       }),
     });
 
@@ -199,8 +210,17 @@ describe("realtime voice provider resolver", () => {
       resolveRealtimeVoiceProviderCapabilities({
         provider,
         providerConfig: { authMode: "native" },
+        model: "gpt-live-1",
         surface: "browser-session",
       })?.supportsVideoFrames,
     ).toBe(false);
+    expect(
+      resolveRealtimeVoiceProviderCapabilities({
+        provider,
+        providerConfig: { authMode: "oauth" },
+        model: "gpt-live-1",
+        surface: "browser-session",
+      })?.supportsVideoFrames,
+    ).toBe(true);
   });
 });

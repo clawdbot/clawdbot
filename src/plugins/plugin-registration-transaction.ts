@@ -21,6 +21,11 @@ import {
   restorePluginInteractiveHandlers,
 } from "./interactive-registry.js";
 import {
+  restoreLegacyPluginInternalHooks,
+  snapshotLegacyPluginInternalHooks,
+  type LegacyPluginInternalHookState,
+} from "./legacy-internal-hook-state.js";
+import {
   listRegisteredMemoryEmbeddingProviders,
   restoreRegisteredMemoryEmbeddingProviders,
 } from "./memory-embedding-providers.js";
@@ -31,7 +36,7 @@ import {
   listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
-import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
   getSessionDiscussionProvider,
   restoreSessionDiscussionProvider,
@@ -44,6 +49,7 @@ export type PluginProcessGlobalState = {
   detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
   embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
   interactiveHandlers: ReturnType<typeof listPluginInteractiveHandlers>;
+  legacyInternalHooks: LegacyPluginInternalHookState;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
@@ -60,6 +66,7 @@ export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
     detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
     embeddingProviders: listRegisteredEmbeddingProviders(),
     interactiveHandlers: listPluginInteractiveHandlers(),
+    legacyInternalHooks: snapshotLegacyPluginInternalHooks(),
     memoryCapability: getMemoryCapabilityRegistration(),
     memoryCorpusSupplements: listMemoryCorpusSupplements(),
     memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
@@ -76,6 +83,7 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreDetachedTaskLifecycleRuntimeRegistration(state.detachedTaskRuntimeRegistration);
   restoreRegisteredEmbeddingProviders(state.embeddingProviders);
   restorePluginInteractiveHandlers(state.interactiveHandlers);
+  restoreLegacyPluginInternalHooks(state.legacyInternalHooks);
   restoreRegisteredMemoryEmbeddingProviders(state.memoryEmbeddingProviders);
   restoreMemoryPluginState({
     capability: state.memoryCapability,
@@ -86,17 +94,61 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreSessionDiscussionProvider(state.sessionDiscussionProvider);
 }
 
+/**
+ * Shallow-clone a registration record so metadata mutations do not leak
+ * through rollback, while preserving opaque plugin-owned instances
+ * (providers, services, channels, harnesses, resolvers) by reference.
+ *
+ * A generic recursive deep-clone would convert every plugin-owned object
+ * into a plain object, losing prototypes, internal slots, symbols, and
+ * shared identity. Shallow-cloning is correct here because the mutable
+ * fields on registration records are primitives (strings, numbers,
+ * booleans, Dates), and the opaque fields are class instances that the
+ * registry must not reconstitute.
+ */
+function cloneRegistryEntry(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneRegistryEntry(item));
+  }
+  if (value instanceof Map) {
+    return new Map([...value].map(([k, v]) => [k, cloneRegistryEntry(v)]));
+  }
+  if (value instanceof Date) {
+    return new Date(value);
+  }
+  // Shallow-clone so primitive metadata fields become independent copies
+  // while opaque plugin-owned objects stay by reference.
+  const cloned: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const val = (value as Record<string, unknown>)[key];
+    if (val instanceof Date) {
+      cloned[key] = new Date(val);
+    } else if (Array.isArray(val)) {
+      cloned[key] = [...val];
+    } else {
+      cloned[key] = val;
+    }
+  }
+  return cloned;
+}
+
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
   return Object.fromEntries(
     Object.entries(registry).map(([key, value]) => {
       if (Array.isArray(value)) {
-        return [key, [...value]];
+        return [key, value.map((item) => cloneRegistryEntry(item))];
       }
       if (value instanceof Map) {
-        return [key, new Map(value as ReadonlyMap<unknown, unknown>)];
+        return [key, new Map([...value].map(([k, v]) => [k, cloneRegistryEntry(v)]))];
       }
       if (value && typeof value === "object") {
-        return [key, { ...value }];
+        return [key, cloneRegistryEntry(value)];
       }
       return [key, value];
     }),
@@ -107,6 +159,27 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   Object.assign(registry, snapshot);
 }
 
+/**
+ * Snapshot of the active PluginRecord's transaction-owned mutable fields.
+ * Captured with cloneRegistryEntry so arrays, Dates, and primitives become
+ * independent copies while runtime objects (configUiHints, configJsonSchema,
+ * contracts) stay by reference.
+ */
+type ActiveRecordSnapshot = Record<string, unknown>;
+
+function snapshotActiveRecord(record: PluginRecord): ActiveRecordSnapshot {
+  return cloneRegistryEntry(record) as ActiveRecordSnapshot;
+}
+
+function restoreActiveRecord(record: PluginRecord, snapshot: ActiveRecordSnapshot): void {
+  // Registration may create optional metadata that did not exist when the
+  // transaction began. Remove the live shape before restoring the snapshot.
+  for (const key of Object.keys(record)) {
+    Reflect.deleteProperty(record, key);
+  }
+  Object.assign(record, snapshot);
+}
+
 type PluginRegistrationTransaction = {
   commit: (params: { activate: boolean }) => void;
   rollback: () => void;
@@ -115,9 +188,17 @@ type PluginRegistrationTransaction = {
 export function createPluginRegistrationTransaction(params: {
   registry?: PluginRegistry;
   rollbackGlobalSideEffects?: () => void;
+  /** Active PluginRecord being registered by the caller (mutated during
+   *  register() before being pushed to registry.plugins).  When set, its
+   *  mutable metadata fields (arrays, scalars, flags, Dates) are snapshotted
+   *  and restored on rollback while runtime objects keep their identity. */
+  activeRecord?: PluginRecord;
 }): PluginRegistrationTransaction {
   const registrySnapshot = params.registry ? snapshotPluginRegistry(params.registry) : undefined;
   const processGlobalState = snapshotPluginProcessGlobalState();
+  const activeRecordSnapshot = params.activeRecord
+    ? snapshotActiveRecord(params.activeRecord)
+    : null;
   let settled = false;
 
   const settle = (action: () => void): void => {
@@ -143,6 +224,9 @@ export function createPluginRegistrationTransaction(params: {
           restorePluginRegistry(params.registry, registrySnapshot);
         }
         restorePluginProcessGlobalState(processGlobalState);
+        if (activeRecordSnapshot && params.activeRecord) {
+          restoreActiveRecord(params.activeRecord, activeRecordSnapshot);
+        }
       });
     },
   };
