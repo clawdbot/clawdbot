@@ -725,7 +725,7 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.scenarioIds).not.toContain("control-ui-qa-channel-image-roundtrip");
   });
 
-  it("rejects explicit profile selections outside the profile taxonomy", async () => {
+  it("rejects explicit profile selections incompatible with the profile channel", async () => {
     await expect(
       runQaProfileCommand({
         repoRoot: "/tmp/openclaw-repo",
@@ -733,7 +733,7 @@ describe("qa cli runtime", () => {
         scenarioIds: ["control-ui-qa-channel-image-roundtrip"],
       }),
     ).rejects.toThrow(
-      "qa run did not find taxonomy scenarios for --qa-profile smoke-ci --scenario control-ui-qa-channel-image-roundtrip.",
+      "qa run --qa-profile smoke-ci cannot run explicitly selected scenario(s): control-ui-qa-channel-image-roundtrip (channelDriver=qa-channel).",
     );
 
     expect(runQaSuite).not.toHaveBeenCalled();
