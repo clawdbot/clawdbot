@@ -4332,7 +4332,7 @@ describe("chat welcome", () => {
       onModelSetup,
     });
 
-    expect(container.textContent).toContain("Connect an AI model");
+    expect(container.textContent).toContain("No AI provider configured");
     expect(container.querySelector(".agent-chat__suggestions")).toBeNull();
 
     container.querySelector<HTMLButtonElement>(".agent-chat__welcome button")?.click();
@@ -4344,8 +4344,8 @@ describe("chat welcome", () => {
       canSend: false,
       disabledBanner: {
         kind: "composer-replacement",
-        text: "OpenClaw needs a working model before it can start a conversation.",
-        actionLabel: "Connect AI",
+        text: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
+        actionLabel: "Configure a provider",
         onAction: () => undefined,
       },
       modelSetupRequired: true,

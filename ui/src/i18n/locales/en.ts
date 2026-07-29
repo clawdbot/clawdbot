@@ -1867,9 +1867,9 @@ export const en: TranslationMap = {
     intro:
       "OpenClaw reuses AI access you already have — a CLI login, an API key, or a provider sign-in.",
     required: {
-      title: "Connect an AI model",
-      body: "OpenClaw needs a working model before it can start a conversation.",
-      action: "Connect AI",
+      title: "No AI provider configured",
+      body: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
+      action: "Configure a provider",
     },
     loading: "Checking this Gateway for available AI access…",
     retry: "Retry",

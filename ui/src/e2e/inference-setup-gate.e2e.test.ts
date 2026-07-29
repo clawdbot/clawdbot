@@ -33,13 +33,15 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByRole("heading", { name: "Connect an AI model" }).waitFor();
+      await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
-      await expect.poll(() => page.getByRole("button", { name: "Connect AI" }).count()).toBe(1);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Configure a provider" }).count())
+        .toBe(1);
       await captureProof(page, "chat-home-desktop.png");
-      await page.getByRole("button", { name: "Connect AI" }).click();
+      await page.getByRole("button", { name: "Configure a provider" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     } finally {
       await context.close();
@@ -57,12 +59,12 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.getByRole("heading", { name: "Connect an AI model" }).waitFor();
+      await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
       await expect.poll(() => page.locator(".new-session-page__composer").count()).toBe(0);
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
       await captureProof(page, "new-session-desktop.png");
-      await page.getByRole("button", { name: "Connect AI" }).click();
+      await page.getByRole("button", { name: "Configure a provider" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     } finally {
       await context.close();
@@ -82,7 +84,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}custodian`);
-      await page.getByRole("heading", { name: "Connect an AI model" }).waitFor();
+      await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       await expect.poll(() => page.locator(".custodian__error").count()).toBe(0);
@@ -95,7 +97,7 @@ suite.define(() => {
 
       await page.setViewportSize({ height: 520, width: 900 });
       await expect
-        .poll(() => page.getByRole("button", { name: "Connect AI" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Configure a provider" }).isVisible())
         .toBe(true);
       await expect
         .poll(() =>
@@ -107,7 +109,7 @@ suite.define(() => {
       await captureProof(page, "custodian-short-window.png");
 
       await page.setViewportSize({ height: 900, width: 1660 });
-      await page.getByRole("button", { name: "Connect AI" }).click();
+      await page.getByRole("button", { name: "Configure a provider" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
       const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
       await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
