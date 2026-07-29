@@ -5,9 +5,9 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.reasoning-only-recovery
+      - agent-runtime.failure-recovery-reasoning-only-recovery
     secondary:
-      - runtime.retry-policy
+      - agent-runtime.failure-recovery-retry-policy
   objective: Verify a GPT-style reasoning-only turn after a mutating write stays replay-unsafe and does not auto-retry.
   successCriteria:
     - Scenario is mock-openai only so live lanes do not pick it up implicitly.
@@ -17,7 +17,7 @@ scenario:
   docsRefs:
     - docs/help/testing.md
   codeRefs:
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
     - src/agents/embedded-agent-runner/run/incomplete-turn.ts
   execution:
     kind: flow

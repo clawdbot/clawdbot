@@ -244,13 +244,16 @@ describe("git-hooks/pre-commit (integration)", () => {
   it("still formats staged files during a normal commit", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-normal-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-    installPreCommitFixture(dir);
+    const fakeBinDir = installPreCommitFixture(dir);
+    run(dir, "rm", ["-f", path.join(fakeBinDir, "node")]);
     const logPath = installFormattingRecorder(dir);
 
     writeFileSync(path.join(dir, "changed.ts"), "export const value = 1;\n", "utf8");
     run(dir, "git", ["add", "--", "changed.ts"]);
 
-    run(dir, "bash", ["git-hooks/pre-commit"]);
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
 
     expect(readFormatterLog(logPath)).toEqual([
       "oxfmt --write --no-error-on-unmatched-pattern changed.ts",

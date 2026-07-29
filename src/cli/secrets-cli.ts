@@ -48,22 +48,50 @@ const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
 
 class SecretsPlanFileNotFoundError extends Error {}
 
+const SECRETS_PLAN_MAX_BYTES = 16 * 1024 * 1024;
+
+function serializePlanFile(plan: SecretsApplyPlan, pathname: string): string {
+  const raw = `${JSON.stringify(plan, null, 2)}\n`;
+  if (Buffer.byteLength(raw, "utf8") > SECRETS_PLAN_MAX_BYTES) {
+    throw new RangeError(
+      `Secrets plan exceeds ${SECRETS_PLAN_MAX_BYTES} bytes and cannot be written: ${pathname}`,
+    );
+  }
+  return raw;
+}
+
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
-  const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
+  const [fsModule, { readFileDescriptorBounded }, { isSecretsApplyPlan }] = await Promise.all([
     fsModuleLoader.load(),
+    import("../infra/boundary-file-read.js"),
     import("../secrets/plan.js"),
   ]);
-  let raw: string;
-  try {
-    raw = readFileSync(pathname, "utf8");
-  } catch (err) {
+  const fsConstants = fsModule.constants as typeof fsModule.constants & { O_NONBLOCK?: number };
+  // Non-blocking open lets descriptor stat reject special files without a FIFO stalling first.
+  const openFlags = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+  const file = await fsModule.promises.open(pathname, openFlags).catch((err: unknown) => {
     if (hasErrnoCode(err, "ENOENT")) {
       throw new SecretsPlanFileNotFoundError(`Secrets plan file not found: ${pathname}`, {
         cause: err,
       });
     }
     throw err;
+  });
+  let raw: string;
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Secrets plan path is not a regular file: ${pathname}`);
+    }
+    if (stat.size > SECRETS_PLAN_MAX_BYTES) {
+      throw new RangeError(
+        `Secrets plan file exceeds ${SECRETS_PLAN_MAX_BYTES} bytes: ${pathname}`,
+      );
+    }
+    raw = (await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES)).toString("utf8");
+  } finally {
+    await file.close();
   }
   let parsed: unknown;
   try {
@@ -198,7 +226,7 @@ export function registerSecretsCli(program: Command): void {
       "Allow exec SecretRef preflight checks (may execute provider commands)",
       false,
     )
-    .option("--plan-out <path>", "Write generated plan JSON to a file")
+    .option("--plan-out <path>", "Write generated plan JSON to a file (max 16 MiB)")
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
       try {
@@ -211,7 +239,7 @@ export function registerSecretsCli(program: Command): void {
         });
         if (opts.planOut) {
           const { writeFileSync } = await fsModuleLoader.load();
-          writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
+          writeFileSync(opts.planOut, serializePlanFile(configured.plan, opts.planOut), "utf8");
         }
 
         let shouldApply = Boolean(opts.apply || opts.yes);
@@ -307,7 +335,7 @@ export function registerSecretsCli(program: Command): void {
   secrets
     .command("apply")
     .description("Apply a previously generated secrets plan")
-    .requiredOption("--from <path>", "Path to plan JSON")
+    .requiredOption("--from <path>", "Path to plan JSON (max 16 MiB)")
     .option("--dry-run", "Validate/preflight only", false)
     .option("--allow-exec", "Allow exec SecretRef checks (may execute provider commands)", false)
     .option("--json", "Output JSON", false)

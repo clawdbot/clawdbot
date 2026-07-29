@@ -18,8 +18,8 @@ import { chromium } from "playwright-core";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
-import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
+import { resolveDiscordQaScenarioIds } from "./scenario-selection.js";
 
 type DiscordQaRuntimeEnv = {
   guildId: string;
@@ -412,10 +412,6 @@ function buildDiscordQaConfig(
         statusReactions: {
           ...baseCfg.messages?.statusReactions,
           enabled: true,
-          timing: {
-            ...baseCfg.messages?.statusReactions?.timing,
-            debounceMs: 0,
-          },
         },
       }
     : {
@@ -1349,10 +1345,7 @@ function buildObservedMessagesArtifact(params: {
 }
 
 function findScenario(ids?: string[]) {
-  const requestedIds =
-    ids && ids.length > 0
-      ? ids
-      : listQaScenariosForExecutionProfile("discord:adapter").map((scenario) => scenario.id);
+  const requestedIds = resolveDiscordQaScenarioIds({ scenarioIds: ids });
   const scenariosById = new Map(DISCORD_QA_SCENARIOS.map((scenario) => [scenario.id, scenario]));
   const missingIds = requestedIds.filter((id) => !scenariosById.has(id as DiscordQaScenarioId));
   if (missingIds.length > 0) {

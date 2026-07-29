@@ -198,6 +198,39 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("persists a compact failure reason and clears it when a new run starts", async () => {
+    const failed = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: {
+          phase: "error",
+          endedAt: 1_800,
+          error: `Provider credits exhausted\n${"details ".repeat(40)}`,
+        },
+      },
+    );
+
+    expect(failed.status).toBe("failed");
+    expect(failed.lastRunError).toMatch(/^Provider credits exhausted details/);
+    expect(failed.lastRunError?.length).toBeLessThanOrEqual(160);
+    expect(failed.lastRunError).not.toContain("\n");
+
+    const restarted = await persistLifecycle(failed, {
+      ts: 2_100,
+      sessionId: "session-id",
+      data: { phase: "start", startedAt: 2_100 },
+    });
+    expect(restarted.status).toBe("running");
+    expect(restarted.lastRunError).toBeUndefined();
+  });
+
   it("keeps an explicitly yielded parent pending until continuation starts", async () => {
     const yielded = await persistLifecycle(
       {

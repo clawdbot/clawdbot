@@ -2,118 +2,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import "./custodian-page.ts";
-
-type TestCustodianPage = HTMLElement & {
-  onboarding: boolean;
-  updateComplete: Promise<boolean>;
-};
-
-type ContextHarness = {
-  context: ApplicationContext;
-  setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
-  setGatewayUrl: (gatewayUrl: string) => void;
-  setGatewayToken: (token: string) => void;
-  setGatewayBootstrapToken: (bootstrapToken: string) => void;
-  setGatewayDeviceToken: (deviceToken: string) => void;
-};
-
-function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
-  const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = {
-    client,
-    connected: true,
-    reconnecting: false,
-    hello: {
-      type: "hello-ok" as const,
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: ["openclaw.chat"] },
-    },
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  const connection = {
-    gatewayUrl: "ws://gateway.test/control",
-    token: "",
-    bootstrapToken: "",
-    password: "",
-  };
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection,
-    subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  } as unknown as ApplicationGateway;
-  const context = {
-    gateway,
-    basePath: "",
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-  return {
-    context,
-    setGatewaySnapshot: (patch) => {
-      snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-    setGatewayUrl: (gatewayUrl) => {
-      connection.gatewayUrl = gatewayUrl;
-    },
-    setGatewayToken: (token: string) => {
-      connection.token = token;
-    },
-    setGatewayBootstrapToken: (value: string) => {
-      connection.bootstrapToken = value;
-    },
-    setGatewayDeviceToken: (deviceToken: string) => {
-      snapshot = {
-        ...snapshot,
-        hello: snapshot.hello
-          ? { ...snapshot.hello, auth: { ...snapshot.hello.auth, deviceToken } }
-          : snapshot.hello,
-      };
-    },
-  };
-}
-
-async function mountPage(
-  context: ApplicationContext,
-  options: { onboarding?: boolean } = {},
-): Promise<{
-  page: TestCustodianPage;
-  provider: ApplicationContextProvider;
-}> {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
-  page.onboarding = options.onboarding ?? true;
-  provider.append(page);
-  document.body.append(provider);
-  await page.updateComplete;
-  return { page, provider };
-}
+import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
 describe("custodian page", () => {
   beforeEach(() => {
     vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    window.history.replaceState({}, "", "/");
   });
 
   afterEach(() => {
@@ -141,7 +36,7 @@ describe("custodian page", () => {
       .fn()
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Welcome aboard.",
+        reply: "Welcome **aboard**.",
         action: "none",
         question,
       })
@@ -155,12 +50,21 @@ describe("custodian page", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
+    const assistantGroup = page.querySelector<HTMLElement>(".chat-group.assistant")!;
+    expect(assistantGroup.querySelector("strong")?.textContent).toBe("aboard");
+    expect(
+      assistantGroup
+        .querySelector<HTMLImageElement>("img.chat-avatar.assistant")
+        ?.getAttribute("src"),
+    ).toBe("/favicon.svg");
+    expect(page.querySelector(".custodian__mark openclaw-mascot")).not.toBeNull();
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(
       "Talk to my agent",
     );
-    page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')!.click();
+    const connectOption = page.querySelectorAll<HTMLButtonElement>("[data-option-value]")[1]!;
+    connectOption.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
@@ -171,10 +75,226 @@ describe("custodian page", () => {
       welcomeVariant: "onboarding",
       message: "connect whatsapp",
     });
-    expect(page.textContent).toContain("Connect WhatsApp");
-    expect(
-      page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')?.disabled,
-    ).toBe(true);
+    const userGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
+    expect(userGroup.textContent).toContain("Connect WhatsApp");
+    expect(connectOption.disabled).toBe(true);
+  });
+
+  it("collapses an empty transcript around a blocking startup error", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "OpenClaw requires working inference: No agent model is configured. Run `openclaw onboard` first.",
+        ),
+      );
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() =>
+      expect(page.querySelector(".custodian-surface--empty-error")).not.toBeNull(),
+    );
+    expect(page.querySelector("[role=alert]")?.textContent).toContain(
+      "No agent model is configured",
+    );
+  });
+
+  it.each([
+    { pathname: "/settings/channels", expectedPage: "channels" },
+    { pathname: "/not-an-openclaw-route", expectedPage: undefined },
+  ])(
+    "adds resolved page context only to user turns at $pathname",
+    async ({ pathname, expectedPage }) => {
+      window.history.replaceState({}, "", pathname);
+      const request = vi.fn().mockResolvedValue({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "All good.",
+        action: "none",
+      });
+      const { context } = createContext(request);
+      const { page } = await mountPage(context, { onboarding: false });
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+      expect(request.mock.calls[0]?.[1]).not.toHaveProperty("context");
+      const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+      composer.value = "What about this page?";
+      composer.dispatchEvent(new Event("input"));
+      await page.updateComplete;
+      page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+      if (expectedPage) {
+        expect(request.mock.calls[1]?.[1]).toMatchObject({
+          message: "What about this page?",
+          context: { page: expectedPage },
+        });
+      } else {
+        expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "What about this page?" });
+        expect(request.mock.calls[1]?.[1]).not.toHaveProperty("context");
+      }
+    },
+  );
+
+  it("renders advertised durable history before the live welcome with a divider", async () => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "openclaw.chat.history") {
+        return {
+          turns: [
+            { role: "user", text: "Earlier question", at: 1 },
+            { role: "assistant", text: "Earlier answer", at: 2 },
+          ],
+        };
+      }
+      if (method === "openclaw.chat") {
+        return {
+          sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+          reply: "Live welcome",
+          action: "none",
+        };
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const { page } = await mountPage(context);
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await page.updateComplete;
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+    expect(request.mock.calls[0]?.[1]).toEqual({});
+    const rows = Array.from(page.querySelectorAll(".chat-group, .chat-divider")).map((row) =>
+      row.textContent?.trim(),
+    );
+    expect(rows).toEqual([
+      expect.stringContaining("Earlier question"),
+      expect.stringContaining("Earlier answer"),
+      expect.stringContaining("Earlier"),
+      expect.stringContaining("Live welcome"),
+    ]);
+  });
+
+  it("continues to the welcome when the bounded history request times out", async () => {
+    const request = vi.fn(
+      async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
+        if (method === "openclaw.chat.history") {
+          expect(options).toEqual({ timeoutMs: 15_000 });
+          throw new Error("history request timed out");
+        }
+        return {
+          sessionId: "engine-session-after-history-timeout",
+          reply: "Welcome without history.",
+          action: "none",
+        };
+      },
+    );
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const { page } = await mountPage(context);
+
+    await waitForFast(() => expect(page.textContent).toContain("Welcome without history."));
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+  });
+
+  it("keeps rows for a same-ownership client replacement and requests a fresh welcome", async () => {
+    let chatCalls = 0;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "openclaw.chat.history") {
+        return { turns: [{ role: "assistant", text: "Earlier state", at: 1 }] };
+      }
+      if (method === "openclaw.chat") {
+        chatCalls += 1;
+        return {
+          sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+          reply: chatCalls === 1 ? "Live welcome" : "Fresh session welcome",
+          action: "none",
+        };
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const { context, setGatewaySnapshot } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForFast(() => expect(page.textContent).toContain("Fresh session welcome"));
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+      "openclaw.chat",
+    ]);
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
+      sessionId: expect.stringMatching(/^control-ui-onboarding-/),
+    });
+    expect(page.textContent).toContain("Earlier state");
+    expect(page.textContent).toContain("Fresh session welcome");
+  });
+
+  it("does not rotate against a replacement gateway without chat support", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "engine-session-before-replacement",
+      reply: "Existing welcome.",
+      action: "none",
+    });
+    const replacementRequest = vi.fn();
+    const { context, setGatewaySnapshot } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    setGatewaySnapshot({
+      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: [] },
+      },
+    });
+    await waitForFast(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Update the Gateway"),
+    );
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(replacementRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps loaded transcript rows when a welcome retry cannot refresh them", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        turns: [{ role: "assistant", text: "Loaded transcript row", at: 1 }],
+      })
+      .mockRejectedValueOnce(new Error("temporary welcome failure"))
+      .mockRejectedValueOnce(new Error("temporary history failure"))
+      .mockResolvedValueOnce({
+        sessionId: "engine-session-after-retry",
+        reply: "Recovered welcome.",
+        action: "none",
+      });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(page.querySelector('[role="alert"] button')).not.toBeNull());
+
+    page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForFast(() => expect(page.textContent).toContain("Recovered welcome."));
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+    expect(page.textContent).toContain("Loaded transcript row");
   });
 
   it("keeps failed sensitive replies masked for correction and retry", async () => {
@@ -192,77 +312,65 @@ describe("custodian page", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
     const input = page.querySelector<HTMLInputElement>(
-      '.custodian__composer input[type="password"]',
+      '.agent-chat__composer-combobox input[type="password"]',
     )!;
     input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
     await page.updateComplete;
-    expect(page.querySelector('.custodian__composer input[type="password"]')).not.toBeNull();
+    expect(input.isConnected).toBe(true);
     expect(page.textContent).toContain("Sensitive reply sent");
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
 
-  it("preserves the onboarding session across a same-gateway reconnect", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Hello from OpenClaw.",
-      action: "none",
+  it("keeps an unanswered structured question across a same-client reconnect", async () => {
+    const question = {
+      id: "reconnect-choice",
+      header: "Next step",
+      question: "What should happen next?",
+      options: [{ label: "Continue" }, { label: "Pause" }],
+      isOther: false,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "openclaw.chat.history") {
+        return { turns: [{ role: "assistant", text: "Earlier row", at: 1 }] };
+      }
+      return {
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Choose the next step.",
+        question,
+        action: "none",
+      };
     });
-    const { context, setGatewaySnapshot } = createContext(request);
+    const { context, setGatewaySnapshot } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
     const { page } = await mountPage(context);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
+    expect(page.querySelector("openclaw-option-card")).not.toBeNull();
 
-    setGatewaySnapshot({ client: null, connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
     setGatewaySnapshot({
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      reconnecting: false,
+      phase: "connected",
     });
     await page.updateComplete;
 
-    expect(request).toHaveBeenCalledOnce();
-    expect(page.textContent).toContain("Hello from OpenClaw.");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+    expect(page.querySelector("openclaw-option-card")).not.toBeNull();
+    expect(page.textContent).toContain("Choose the next step.");
   });
 
-  it("keeps the device-token session scope while hello is gone during a drop", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Device-token conversation.",
-      action: "none",
-    });
-    const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
-    setGatewayDeviceToken("stored-device-token");
-    const { page } = await mountPage(context);
-    await waitForFast(() => expect(page.textContent).toContain("Device-token conversation."));
-
-    // Transient drop: the retrying client stays but hello is cleared.
-    setGatewaySnapshot({ client: null, connected: false, reconnecting: true, hello: null });
-    await page.updateComplete;
-    setGatewaySnapshot({
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      reconnecting: false,
-      hello: {
-        type: "hello-ok" as const,
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "stored-device-token" },
-        features: { methods: ["openclaw.chat"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    await page.updateComplete;
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(page.textContent).toContain("Device-token conversation.");
-  });
-
-  it("offers retry when a connected client is replaced mid-request", async () => {
+  it("requests a fresh welcome when a connected client is replaced mid-request", async () => {
     const request = vi
       .fn()
       .mockReturnValueOnce(
@@ -280,162 +388,122 @@ describe("custodian page", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
     setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
-    await waitForFast(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain(
-        "Gateway connection changed",
-      ),
-    );
-    page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.textContent).toContain("Hello after reconnect."));
+    expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("clears the prior conversation when the gateway changes while offline", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Gateway A conversation.",
-      action: "none",
-    });
-    const { context, setGatewaySnapshot, setGatewayUrl } = createContext(request);
+  it("warns without offering replay when a client replacement abandons a user turn", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "engine-session-before-user-turn",
+        reply: "Welcome.",
+        action: "none",
+      })
+      .mockReturnValueOnce(
+        new Promise<never>(() => {
+          // The user turn may reach the old gateway before its client is replaced.
+        }),
+      )
+      .mockResolvedValueOnce({
+        sessionId: "engine-session-after-user-turn",
+        reply: "Fresh welcome.",
+        action: "none",
+      });
+    const { context, setGatewaySnapshot } = createContext(request);
     const { page } = await mountPage(context);
-    await waitForFast(() => expect(page.textContent).toContain("Gateway A conversation."));
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
-    setGatewayUrl("ws://gateway-b.test/control");
-    setGatewaySnapshot({ client: null, connected: false, reconnecting: true });
-    await waitForFast(() => expect(page.textContent).not.toContain("Gateway A conversation."));
+    const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    composer.value = "check this system";
+    composer.dispatchEvent(new Event("input"));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
+    setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForFast(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+        "The Gateway connection changed",
+      ),
+    );
+
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
     expect(page.querySelector('[role="alert"] button')).toBeNull();
   });
 
-  it("starts a fresh session when credentials change on the same gateway", async () => {
+  it("clears stale rows and cold-starts against the new gateway after credentials change", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Operator A conversation.",
-        action: "none",
+        turns: [{ role: "assistant", text: "Old gateway transcript", at: 1 }],
       })
       .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Operator B welcome.",
-        action: "none",
-      });
-    const { context, setGatewaySnapshot, setGatewayToken } = createContext(request);
-    const { page } = await mountPage(context);
-    await waitForFast(() => expect(page.textContent).toContain("Operator A conversation."));
-
-    setGatewayToken("test-token-placeholder");
-    setGatewaySnapshot({
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      reconnecting: false,
-    });
-
-    await waitForFast(() => expect(page.textContent).toContain("Operator B welcome."));
-    expect(page.textContent).not.toContain("Operator A conversation.");
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
-  });
-
-  it("starts a fresh session when a bootstrap token re-pairs the same gateway", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Paired device conversation.",
-        action: "none",
-      })
-      .mockResolvedValue({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Re-paired welcome.",
-        action: "none",
-      });
-    const { context, setGatewaySnapshot, setGatewayBootstrapToken } = createContext(request);
-    const { page } = await mountPage(context);
-    await waitForFast(() => expect(page.textContent).toContain("Paired device conversation."));
-
-    setGatewayBootstrapToken("test-token-placeholder");
-    setGatewaySnapshot({
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      reconnecting: false,
-    });
-
-    await waitForFast(() => expect(page.textContent).toContain("Re-paired welcome."));
-    expect(page.textContent).not.toContain("Paired device conversation.");
-  });
-
-  it("starts a fresh session when stored device auth changes on the same gateway", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Device A conversation.",
-        action: "none",
-      })
-      .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Device B welcome.",
-        action: "none",
-      });
-    const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
-    const { page } = await mountPage(context);
-    await waitForFast(() => expect(page.textContent).toContain("Device A conversation."));
-
-    setGatewayDeviceToken("test-token-placeholder");
-    setGatewaySnapshot({
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      reconnecting: false,
-    });
-
-    await waitForFast(() => expect(page.textContent).toContain("Device B welcome."));
-    expect(page.textContent).not.toContain("Device A conversation.");
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("clears a pending sensitive turn when stored device auth changes", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Paste your token.",
+        sessionId: "engine-session-before-rotation",
+        reply: "Enter the token.",
         sensitive: true,
         action: "none",
       })
       .mockReturnValueOnce(
         new Promise<never>(() => {
-          // Keep the sensitive turn pending across the credential change.
+          // Keep the sensitive turn pending while the gateway replaces its client.
         }),
-      )
+      );
+    const replacementRequest = vi
+      .fn()
       .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "New operator welcome.",
+        turns: [{ role: "assistant", text: "New gateway transcript", at: 2 }],
+      })
+      .mockResolvedValueOnce({
+        sessionId: "engine-session-after-rotation",
+        reply: "Fresh safe welcome.",
         action: "none",
       });
-    const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
+    const { context, setGatewaySnapshot, setGatewayToken } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
     const { page } = await mountPage(context);
-    await waitForFast(() => expect(page.textContent).toContain("Paste your token."));
-
-    const composer = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-    composer.value = "test-token-placeholder";
-    composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
-    setGatewayDeviceToken("test-token-placeholder");
-    setGatewaySnapshot({
-      client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      reconnecting: false,
-    });
+    const input = page.querySelector<HTMLInputElement>(
+      '.agent-chat__composer-combobox input[type="password"]',
+    )!;
+    input.value = "test-token-placeholder";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
 
-    await waitForFast(() => expect(page.textContent).toContain("New operator welcome."));
-    expect(page.textContent).not.toContain("Paste your token.");
+    setGatewayToken("new-operator-token");
+    setGatewaySnapshot({
+      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+    });
+    await waitForFast(() => expect(replacementRequest).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(page.textContent).toContain("Fresh safe welcome."));
+
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
+      sessionId: "engine-session-before-rotation",
+      message: "test-token-placeholder",
+    });
+    expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+    expect(replacementRequest.mock.calls[1]?.[1]).toMatchObject({
+      sessionId: expect.stringMatching(/^control-ui-onboarding-/),
+    });
+    expect(replacementRequest.mock.calls[1]?.[1]).not.toHaveProperty("message");
+    expect(replacementRequest.mock.calls[1]?.[1]).not.toMatchObject({
+      sessionId: "engine-session-before-rotation",
+    });
+    expect(page.textContent).not.toContain("Old gateway transcript");
+    expect(page.textContent).not.toContain("Enter the token.");
     expect(page.textContent).not.toContain("Sensitive reply sent");
-    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(page.textContent).toContain("New gateway transcript");
+    expect(page.querySelector('input[type="password"]')).toBeNull();
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
 
@@ -456,7 +524,7 @@ describe("custodian page", () => {
     composer.value = "install everything";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("gateway timeout"),
@@ -487,7 +555,7 @@ describe("custodian page", () => {
     composer.value = sensitiveValue;
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: sensitiveValue });
@@ -495,7 +563,7 @@ describe("custodian page", () => {
     expect(page.textContent).not.toContain("test-token-placeholder");
   });
 
-  it("sends skip as a reply and dismisses the question", async () => {
+  it("sends a wizard-parseable cancel reply when skipping a closed question", async () => {
     const question = {
       id: "access",
       header: "Access",
@@ -525,8 +593,72 @@ describe("custodian page", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "Skip for now" });
-    expect(page.querySelector("openclaw-option-card")).toBeNull();
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "cancel" });
+    expect(page.querySelector(".chat-group.user")?.textContent).toContain("Skip for now");
+    await waitForFast(() => expect(page.querySelector("openclaw-option-card")).toBeNull());
+  });
+
+  it("exits onboarding locally when the question declares an exit skip action", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "What would you like to do first?",
+      action: "none",
+      question: {
+        id: "onboarding-next-step",
+        header: "Next step",
+        question: "What would you like to do first?",
+        options: [{ label: "Talk to my agent" }, { label: "Connect a channel" }],
+        isOther: true,
+        skipAction: "exit",
+      },
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
+
+    expect(context.navigate).toHaveBeenCalledWith("chat");
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not render a silent assistant reply", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: " NO_REPLY ",
+      action: "none",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(page.querySelector(".chat-group.assistant")).toBeNull();
+    expect(page.textContent).not.toContain("NO_REPLY");
+  });
+
+  it("keeps a structured question attached to a silent assistant reply", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "NO_REPLY",
+      action: "none",
+      question: {
+        id: "channel",
+        header: "Channel",
+        question: "Which channel?",
+        options: [{ label: "WhatsApp" }, { label: "Telegram" }],
+      },
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(page.querySelector(".chat-group.assistant")).toBeNull();
+    expect(page.querySelector("openclaw-option-card")).not.toBeNull();
+    expect(page.textContent).toContain("Which channel?");
+    expect(page.textContent).not.toContain("NO_REPLY");
   });
 
   it("retires a structured question after a freeform reply", async () => {
@@ -554,16 +686,21 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
-    const input = page.querySelector<HTMLTextAreaElement>(".custodian__composer textarea")!;
-    input.value = "Something else";
+    const input = page.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox textarea",
+    )!;
+    input.value = "**Something** else";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
 
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "Something else" });
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "**Something** else" });
+    // Parity with the regular chat: user turns run through the same markdown pipeline.
+    const sentGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
+    expect(sentGroup.querySelector("strong")?.textContent).toBe("Something");
     expect(page.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.disabled).toBe(
       true,
     );
@@ -588,10 +725,44 @@ describe("custodian page", () => {
     composer.value = "status";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });
+  });
+
+  it("renders and sends quick actions on the normal caretaker welcome", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "I'm OpenClaw. All systems nominal.",
+        action: "none",
+        question: {
+          id: "system-agent-quick-actions",
+          header: "Quick actions",
+          question: "What would you like me to do?",
+          options: [
+            { label: "Talk to my agent", reply: "talk to agent", recommended: true },
+            { label: "Show recent changes", reply: "audit" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "Here's the audit state.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>('[data-option-value="Show recent changes"]')!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "audit" });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
   });
 
   it("starts a fresh welcome when onboarding mode changes", async () => {
@@ -618,6 +789,37 @@ describe("custodian page", () => {
     expect(page.textContent).not.toContain("Normal caretaker conversation.");
     expect(request.mock.calls[1]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+  });
+
+  it("hands off to agent chat with the hatch draft on open-agent", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Your agent is hatching — handing you over now.",
+      action: "open-agent",
+      agentDraft: "hatch",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main",
+      search: `?draft=${encodeURIComponent("Wake up, my friend!")}`,
+    });
+  });
+
+  it("hands off to normal agent chat without the hatch draft", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Setup here is done — continue with your agent.",
+      action: "open-agent",
+    });
+    const { context } = createContext(request);
+    await mountPage(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+    expect(context.navigate).toHaveBeenCalledWith("chat");
   });
 
   it("exits setup through normal chat navigation", async () => {

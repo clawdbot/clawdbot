@@ -85,6 +85,18 @@ describe("fetchDeepSeekUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it.each([
+    ["null response", null],
+    ["array response", []],
+  ])("treats %s as absent balance data", async (_name, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+
+    const result = await fetchDeepSeekUsage("deepseek-key", 5000, mockFetch);
+
+    expect(result.error).toBe("No balance data");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("marks unavailable accounts while keeping the balance summary", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {

@@ -52,6 +52,26 @@ function writeBridgeCommand(): string {
   return scriptPath;
 }
 
+function writeSigtermResistantBridgeCommand(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-resistant-bridge-"));
+  tempDirs.push(dir);
+  const scriptPath = path.join(dir, "bridge-command.mjs");
+  writeFileSync(
+    scriptPath,
+    [
+      "process.on('SIGTERM', () => {",
+      "  process.stderr.write('sigterm\\n');",
+      "});",
+      "process.stdin.resume();",
+      "setTimeout(() => process.stderr.write(`ready:${process.argv[2]}\\n`), 50);",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return scriptPath;
+}
+
 function makeRecordingSpawn(): MeetRealtimeAudioSpawn {
   return (command, args, options) => {
     const child = spawnChildProcess(command, args, options);
@@ -379,6 +399,50 @@ describe("local Meet realtime transport process stream errors", () => {
       } outputPid=${outputProcess.pid ?? "unknown"}`,
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "waits for SIGTERM-resistant bridge processes and shares the stop promise",
+    async () => {
+      const bridgeScript = writeSigtermResistantBridgeCommand();
+      const transport = createLocalMeetingRealtimeAudioTransport({
+        inputCommand: [process.execPath, bridgeScript, "capture"],
+        outputCommand: [process.execPath, bridgeScript, "play"],
+        bargeInRmsThreshold: 10,
+        bargeInPeakThreshold: 10,
+        bargeInCooldownMs: 1,
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        logScope: "[google-meet]",
+        spawn: makeRecordingSpawn(),
+      });
+      const [outputProcess, inputProcess] = spawnedChildren;
+      if (!inputProcess || !outputProcess || !inputProcess.stderr || !outputProcess.stderr) {
+        throw new Error("Expected Google Meet bridge to spawn stderr-backed child processes");
+      }
+      await Promise.all([once(inputProcess.stderr, "data"), once(outputProcess.stderr, "data")]);
+      const originalInputKill = inputProcess.kill.bind(inputProcess);
+      const originalOutputKill = outputProcess.kill.bind(outputProcess);
+      const inputKillSpy = vi
+        .spyOn(inputProcess, "kill")
+        .mockImplementation((signal) => originalInputKill(signal));
+      const outputKillSpy = vi
+        .spyOn(outputProcess, "kill")
+        .mockImplementation((signal) => originalOutputKill(signal));
+
+      const startedAt = Date.now();
+      const firstStop = transport.stop();
+      const secondStop = transport.stop();
+
+      expect(secondStop).toBe(firstStop);
+      await firstStop;
+      const elapsedMs = Date.now() - startedAt;
+      expect(elapsedMs).toBeGreaterThanOrEqual(900);
+      expect(elapsedMs).toBeLessThan(5_000);
+      expect(inputKillSpy.mock.calls.filter(([signal]) => signal === "SIGTERM")).toHaveLength(1);
+      expect(inputKillSpy.mock.calls.filter(([signal]) => signal === "SIGKILL")).toHaveLength(1);
+      expect(outputKillSpy.mock.calls.filter(([signal]) => signal === "SIGTERM")).toHaveLength(1);
+      expect(outputKillSpy.mock.calls.filter(([signal]) => signal === "SIGKILL")).toHaveLength(1);
+    },
+  );
 });
 
 describe("Google Meet bidi realtime engine cleanup", () => {

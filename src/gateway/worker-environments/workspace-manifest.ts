@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export type WorkerWorkspaceManifestEntry =
   | { path: string; type: "file"; mode: number; size: number; sha256: string }
@@ -19,6 +20,9 @@ export type WorkerWorkspaceReconciliationJournal = {
   currentManifestRef: string;
   baseEntries: WorkerWorkspaceManifestEntry[];
   appliedEntries: WorkerWorkspaceManifestEntry[];
+  baseDirectories?: string[];
+  appliedDirectories?: string[];
+  appliedManifestRef?: string;
   baseTree: string;
   basePackSha256: string;
   basePack: Uint8Array;
@@ -64,6 +68,10 @@ function manifestMode(value: unknown): number {
 
 export function gitFileMode(mode: number): number {
   return (mode & 0o111) === 0 ? 0o644 : 0o755;
+}
+
+function compareManifestPaths(left: { path: string }, right: { path: string }): number {
+  return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
 
 type RawManifestEntry =
@@ -145,12 +153,32 @@ function validateAndProjectEntries(values: unknown[]): {
   }
   return {
     entries: rawEntries.filter(
-      (entry): entry is WorkerWorkspaceManifestEntry => entry.type !== "directory",
+      (entry): entry is WorkerWorkspaceManifestEntry =>
+        entry.type !== "directory" && !isDerivedWorkspacePath(entry.path),
     ),
     directories: rawEntries
-      .filter((entry) => entry.type === "directory")
+      .filter((entry) => entry.type === "directory" && !isDerivedWorkspacePath(entry.path))
       .map((entry) => entry.path),
   };
+}
+
+export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManifest): string {
+  return JSON.stringify({
+    version: manifest.version,
+    baseCommit: manifest.baseCommit,
+    entries: [
+      ...(manifest.directories ?? [])
+        .filter((entryPath) => !isDerivedWorkspacePath(entryPath))
+        .map((entryPath) => ({
+          path: entryPath,
+          type: "directory" as const,
+          // Phase 1 projects directory permissions away. Keep recomputed
+          // manifests deterministic without creating a new mode contract.
+          mode: 0o700,
+        })),
+      ...manifest.entries.filter((entry) => !isDerivedWorkspacePath(entry.path)),
+    ].toSorted(compareManifestPaths),
+  });
 }
 
 export function parseWorkerWorkspaceManifest(
@@ -205,6 +233,9 @@ export function serializeWorkerWorkspaceReconciliationPlan(
     currentManifestRef: journal.currentManifestRef,
     baseEntries: journal.baseEntries,
     appliedEntries: journal.appliedEntries,
+    baseDirectories: journal.baseDirectories ?? [],
+    appliedDirectories: journal.appliedDirectories ?? [],
+    appliedManifestRef: journal.appliedManifestRef,
     baseTree: journal.baseTree,
     basePackSha256: journal.basePackSha256,
   } satisfies WorkerWorkspaceReconciliationPlan);
@@ -232,16 +263,34 @@ export function parseWorkerWorkspaceReconciliationPlan(
     !/^[a-f0-9]{64}$/u.test(plan.basePackSha256) ||
     !Array.isArray(plan.baseEntries) ||
     !Array.isArray(plan.appliedEntries) ||
-    plan.baseEntries.length + plan.appliedEntries.length > MAX_RECONCILIATION_ENTRIES
+    (plan.baseDirectories !== undefined && !Array.isArray(plan.baseDirectories)) ||
+    (plan.appliedDirectories !== undefined && !Array.isArray(plan.appliedDirectories)) ||
+    (plan.appliedManifestRef !== undefined &&
+      (typeof plan.appliedManifestRef !== "string" ||
+        !MANIFEST_REF_PATTERN.test(plan.appliedManifestRef))) ||
+    plan.baseEntries.length +
+      plan.appliedEntries.length +
+      ((plan.baseDirectories as unknown[] | undefined)?.length ?? 0) +
+      ((plan.appliedDirectories as unknown[] | undefined)?.length ?? 0) >
+      MAX_RECONCILIATION_ENTRIES
   ) {
     throw new Error("Worker workspace reconciliation journal has an unsupported shape");
   }
   const baseEntries = plan.baseEntries.map(parseJournalEntry);
   const appliedEntries = plan.appliedEntries.map(parseJournalEntry);
+  const baseDirectories = ((plan.baseDirectories as unknown[] | undefined) ?? []).map(manifestPath);
+  const appliedDirectories = ((plan.appliedDirectories as unknown[] | undefined) ?? []).map(
+    manifestPath,
+  );
   for (const entries of [baseEntries, appliedEntries]) {
     const paths = entries.map((entry) => entry.path);
     if (new Set(paths).size !== paths.length) {
       throw new Error("Worker workspace reconciliation journal has duplicate paths");
+    }
+  }
+  for (const directories of [baseDirectories, appliedDirectories]) {
+    if (new Set(directories).size !== directories.length) {
+      throw new Error("Worker workspace reconciliation journal has duplicate directories");
     }
   }
   return {
@@ -251,6 +300,9 @@ export function parseWorkerWorkspaceReconciliationPlan(
     currentManifestRef: plan.currentManifestRef,
     baseEntries,
     appliedEntries,
+    baseDirectories,
+    appliedDirectories,
+    appliedManifestRef: plan.appliedManifestRef as string | undefined,
     baseTree: plan.baseTree,
     basePackSha256: plan.basePackSha256,
   };

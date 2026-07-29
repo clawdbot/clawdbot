@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-import { runPluginPayloadSmokeCheck } from "./plugin-payload-validation.js";
+import {
+  runPluginPayloadSmokeCheck,
+  runPluginPayloadSmokeCheckForManifestRecords,
+} from "./plugin-payload-validation.js";
 
 type BundleFormat = "codex" | "claude" | "cursor";
 type FormatMarkedBundleInstallRecord = PluginInstallRecord & {
@@ -109,6 +112,21 @@ describe("runPluginPayloadSmokeCheck", () => {
     });
     expect(result.failures).toEqual([]);
     expect(result.checked).toEqual(["discord"]);
+  });
+
+  it("checks a selected manifest root without an installed-index record", async () => {
+    const dir = path.join(tmpRoot, "codex");
+    await writePackage(
+      dir,
+      { name: "@openclaw/codex", openclaw: { extensions: ["./index.js"] } },
+      "export default {};",
+    );
+    const result = await runPluginPayloadSmokeCheckForManifestRecords({
+      plugins: [{ id: "codex", rootDir: dir }],
+      env: {},
+    });
+
+    expect(result).toEqual({ checked: ["codex"], failures: [] });
   });
 
   it("reports a failure when the package directory is missing", async () => {
@@ -372,7 +390,7 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
-  it("reports missing main entry when extension entries are valid", async () => {
+  it("accepts a valid declared extension when an unrelated npm main is missing", async () => {
     const dir = path.join(tmpRoot, "brave");
     await writePackage(dir, {
       name: "@openclaw/brave-plugin",
@@ -384,12 +402,33 @@ describe("runPluginPayloadSmokeCheck", () => {
       records: { brave: { source: "npm", installPath: dir } },
       env: {},
     });
+    expect(result.failures).toEqual([]);
+  });
+
+  it("does not accept an existing npm main in place of a missing declared extension", async () => {
+    const dir = path.join(tmpRoot, "missing-declared-extension");
+    await writePackage(
+      dir,
+      {
+        name: "missing-declared-extension",
+        openclaw: { extensions: ["./missing-extension.js"] },
+        main: "./index.js",
+      },
+      "export default {};\n",
+    );
+
+    const result = await runPluginPayloadSmokeCheck({
+      records: { "missing-declared-extension": { source: "npm", installPath: dir } },
+      env: {},
+    });
+
     expect(result.failures).toStrictEqual([
       {
-        pluginId: "brave",
+        pluginId: "missing-declared-extension",
         installPath: dir,
-        reason: "missing-main-entry",
-        detail: `Plugin main entry "dist/index.js" not found at ${path.join(dir, "dist/index.js")}`,
+        reason: "missing-extension-entry",
+        detail:
+          "Plugin extension entry validation failed: extension entry not found: ./missing-extension.js",
       },
     ]);
   });

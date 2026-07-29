@@ -276,14 +276,14 @@ class ChatMessageContentParsingTest {
     }
 
   @Test
-  fun parsesImageBlocksOnlyWhenInlineContentExists() {
+  fun parsesInlineAndManagedImageBlocks() {
     val image =
       Json.parseToJsonElement(
         """{"type":"image","mimeType":"image/png","fileName":"chart.png","content":"abc123"}""",
       )
     val managedImage =
       Json.parseToJsonElement(
-        """{"type":"image","mimeType":"image/png","fileName":"chart.png","url":"/api/chat/media/outgoing/main/id"}""",
+        """{"type":"image","artifactId":"artifact_managed_image_11111111-1111-4111-8111-111111111111","mimeType":"image/png","fileName":"chart.png","url":"/api/chat/media/outgoing/main/id","openUrl":"/api/chat/media/outgoing/main/id","alt":"Chart","width":1200,"height":800,"sizeBytes":2048}""",
       )
 
     assertEquals(
@@ -291,8 +291,44 @@ class ChatMessageContentParsingTest {
       parseChatMessageContent(image),
     )
     assertEquals(
-      ChatMessageContent(type = "image", mimeType = "image/png", fileName = "chart.png", base64 = null),
+      ChatMessageContent(
+        type = "image",
+        mimeType = "image/png",
+        fileName = "chart.png",
+        artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111",
+        url = "/api/chat/media/outgoing/main/id",
+        openUrl = "/api/chat/media/outgoing/main/id",
+        alt = "Chart",
+        width = 1200,
+        height = 800,
+        sizeBytes = 2048,
+      ),
       parseChatMessageContent(managedImage),
+    )
+  }
+
+  @Test
+  fun derivesArtifactIdentityForShippedManagedImageBlocks() {
+    val image =
+      Json.parseToJsonElement(
+        """{"type":"image","mimeType":"image/png","url":"/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full"}""",
+      )
+
+    assertEquals(
+      "artifact_managed_image_11111111-1111-4111-8111-111111111111",
+      parseChatMessageContent(image)?.artifactId,
+    )
+  }
+
+  @Test
+  fun derivesArtifactIdentityForManagedAudioAndVideoBlocks() {
+    val attachmentId = "22222222-2222-4222-8222-222222222222"
+    val url = "/api/chat/media/outgoing/main/$attachmentId/full"
+
+    assertEquals("artifact_managed_media_$attachmentId", managedMediaArtifactId(url))
+    assertEquals(
+      "artifact_managed_media_$attachmentId",
+      parseChatMessageContent(Json.parseToJsonElement("""{"type":"video","mimeType":"video/mp4","url":"$url"}"""))?.artifactId,
     )
   }
 
@@ -311,14 +347,27 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
-  fun parsesDirectAndAttachmentAudioBlocks() {
+  fun dropsInlineAudioAndVideoContentThatRequiresManagedArtifacts() {
+    val audio = Json.parseToJsonElement("""{"type":"audio","mimeType":"audio/mpeg","content":"audio-bytes"}""")
+    val video = Json.parseToJsonElement("""{"type":"video","mimeType":"video/mp4","content":"video-bytes"}""")
+
+    assertEquals(ChatMessageContent(type = "audio", mimeType = "audio/mpeg"), parseChatMessageContent(audio))
+    assertEquals(ChatMessageContent(type = "video", mimeType = "video/mp4"), parseChatMessageContent(video))
+  }
+
+  @Test
+  fun parsesDirectAndAttachmentAudioVideoBlocks() {
     val direct =
       Json.parseToJsonElement(
         """{"type":"audio","mimeType":"audio/mp4","fileName":"voice.m4a"}""",
       )
     val attachment =
       Json.parseToJsonElement(
-        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mpeg","label":"reply.mp3"}}""",
+        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mpeg","label":"reply.mp3","artifactId":"artifact_managed_media_33333333-3333-4333-8333-333333333333","url":"/api/chat/media/outgoing/main/33333333-3333-4333-8333-333333333333/full","sizeBytes":4096,"durationMs":2100}}""",
+      )
+    val video =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"video","mimeType":"video/mp4","fileName":"demo.mp4","artifactId":"artifact_managed_media_44444444-4444-4444-8444-444444444444","url":"/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full","sizeBytes":8192,"durationMs":5300,"width":1920,"height":1080}}""",
       )
 
     assertEquals(
@@ -326,8 +375,30 @@ class ChatMessageContentParsingTest {
       parseChatMessageContent(direct),
     )
     assertEquals(
-      ChatMessageContent(type = "audio", mimeType = "audio/mpeg", fileName = "reply.mp3"),
+      ChatMessageContent(
+        type = "audio",
+        mimeType = "audio/mpeg",
+        fileName = "reply.mp3",
+        artifactId = "artifact_managed_media_33333333-3333-4333-8333-333333333333",
+        url = "/api/chat/media/outgoing/main/33333333-3333-4333-8333-333333333333/full",
+        sizeBytes = 4096,
+        durationMs = 2100,
+      ),
       parseChatMessageContent(attachment),
+    )
+    assertEquals(
+      ChatMessageContent(
+        type = "video",
+        mimeType = "video/mp4",
+        fileName = "demo.mp4",
+        artifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444",
+        url = "/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full",
+        width = 1920,
+        height = 1080,
+        sizeBytes = 8192,
+        durationMs = 5300,
+      ),
+      parseChatMessageContent(video),
     )
   }
 

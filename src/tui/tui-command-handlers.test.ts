@@ -3,11 +3,19 @@
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createSessionProjection,
+  type SessionProjectionState,
+} from "../../packages/gateway-client/src/session-projection.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
+import {
+  readTuiSessionProjectionScope,
+  reduceTuiSessionProjection,
+} from "./tui-session-projection.js";
 import {
   getPendingSubmitAcceptedRunId,
   getPendingSubmitDraft,
@@ -43,6 +51,16 @@ async function flushAsyncSelect() {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
+}
+
+function createDeferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function expectSendChatFields(
@@ -106,6 +124,7 @@ function createHarness(params?: {
   currentSessionId?: string | null;
   currentAgentId?: string;
   currentSessionKey?: string;
+  sessionProjection?: SessionProjectionState;
   sessionInfo?: SessionInfo;
   abortActive?: AbortActiveMock;
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
@@ -161,6 +180,7 @@ function createHarness(params?: {
     currentAgentId: params?.currentAgentId ?? "main",
     currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
     currentSessionId: params?.currentSessionId ?? null,
+    sessionProjection: params?.sessionProjection,
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingSubmit: params?.pendingSubmit ?? null,
     activityStatus: params?.activityStatus ?? "idle",
@@ -322,6 +342,34 @@ describe("tui command handlers", () => {
     expect(requestRender).toHaveBeenCalled();
   });
 
+  it("projects the canonical pending user before chat.send is acknowledged", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const sendChat = vi.fn(() => deferred.promise);
+    const harness = createHarness({ sendChat });
+
+    const sending = harness.handleCommand("hello");
+    const provisionalRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+
+    expect(harness.state.sessionProjection?.scope).toEqual({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(harness.state.sessionProjection?.entries).toEqual([
+      expect.objectContaining({
+        pending: true,
+        pendingRunId: provisionalRunId,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          __openclaw: { idempotencyKey: `${provisionalRunId}:user` },
+        },
+      }),
+    ]);
+
+    deferred.resolve({ runId: provisionalRunId });
+    await sending;
+  });
+
   it("re-keys the optimistic pending row to the gateway-accepted runId in place", async () => {
     const sendChat = vi.fn().mockResolvedValue({ runId: "r-accepted" });
     const harness = createHarness({ sendChat });
@@ -335,10 +383,63 @@ describe("tui command handlers", () => {
     expect(harness.rekeyPendingUser).toHaveBeenCalledWith(localRunId, "r-accepted");
     expect(harness.addPendingUser).toHaveBeenCalledTimes(1);
     expect(harness.dropPendingUser).not.toHaveBeenCalled();
+    expect(harness.state.sessionProjection?.entries).toEqual([
+      expect.objectContaining({
+        pending: true,
+        pendingRunId: "r-accepted",
+        message: expect.objectContaining({
+          role: "user",
+          __openclaw: { idempotencyKey: `${localRunId}:user` },
+        }),
+      }),
+    ]);
     expect(getPendingSubmitDraft(harness.state)).toEqual({
       runId: "r-accepted",
       text: "hello",
     });
+  });
+
+  it("retires only the provisional viewport when a persisted turn arrives before its ACK", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const sendChat = vi.fn(() => deferred.promise);
+    const harness = createHarness({ sendChat });
+    const sending = harness.handleCommand("hello");
+    const provisionalRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    const acceptedMessage = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      __openclaw: {
+        id: "accepted-user",
+        seq: 1,
+        idempotencyKey: "accepted-run:user",
+      },
+    };
+    const sameTextPeer = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      __openclaw: {
+        id: "peer-user",
+        seq: 2,
+        idempotencyKey: "peer-run:user",
+      },
+    };
+    for (const message of [acceptedMessage, sameTextPeer]) {
+      reduceTuiSessionProjection(harness.state as never, {
+        type: "messagePersisted",
+        message,
+        scope: readTuiSessionProjectionScope(harness.state),
+      });
+    }
+
+    deferred.resolve({ runId: "accepted-run" });
+    await sending;
+
+    expect(harness.state.sessionProjection?.messages).toEqual([acceptedMessage, sameTextPeer]);
+    expect(harness.state.sessionProjection?.entries.every((entry) => !entry.pending)).toBe(true);
+    expect(harness.dropPendingUser).toHaveBeenCalledExactlyOnceWith(provisionalRunId);
+    expect(harness.rekeyPendingUser).not.toHaveBeenCalled();
+    expect(harness.noteLocalRunId).toHaveBeenCalledWith("accepted-run");
+    expect(getPendingSubmitAcceptedRunId(harness.state)).toBe("accepted-run");
   });
 
   it("does not re-arm the submit draft when the accepted run already emitted events", async () => {
@@ -733,6 +834,7 @@ describe("tui command handlers", () => {
     const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
     expect(dropPendingUser).toHaveBeenCalledWith(sentRunId);
     expect(state.pendingSubmit).toBeNull();
+    expect(state.sessionProjection?.entries).toEqual([]);
     expect(addSystem).toHaveBeenCalledWith(
       "send failed: Chat failed before the run started; try again.",
     );
@@ -759,8 +861,25 @@ describe("tui command handlers", () => {
       "send failed: Chat failed before the run started; try again.",
     );
     expect(state.pendingSubmit).toBeNull();
+    expect(state.sessionProjection?.entries).toEqual([]);
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the accepted canonical pending turn after a re-keyed terminal failure", async () => {
+    const sendChat = vi.fn().mockResolvedValue({
+      runId: "accepted-failed-run",
+      status: "error",
+    });
+    const harness = createHarness({ sendChat });
+
+    await harness.handleCommand("hello");
+
+    const provisionalRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(harness.rekeyPendingUser).toHaveBeenCalledWith(provisionalRunId, "accepted-failed-run");
+    expect(harness.dropPendingUser).toHaveBeenCalledWith("accepted-failed-run");
+    expect(harness.state.sessionProjection?.entries).toEqual([]);
+    expect(harness.state.pendingSubmit).toBeNull();
   });
 
   it("refreshes history without waiting when chat send returns a terminal ok ack", async () => {
@@ -778,6 +897,7 @@ describe("tui command handlers", () => {
 
     expect(dropPendingUser).not.toHaveBeenCalled();
     expect(state.pendingSubmit).toBeNull();
+    expect(state.sessionProjection?.entries).toHaveLength(1);
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
@@ -910,6 +1030,35 @@ describe("tui command handlers", () => {
     const sentRunId = (firstMockArg(sendChatMock, "sendChat") as { runId: string }).runId;
     expect(dropPendingUser).toHaveBeenCalledWith(sentRunId);
     expect(state.pendingSubmit).toBeNull();
+    expect(state.sessionProjection?.entries).toEqual([]);
+  });
+
+  it("keeps a same-text persisted peer when the local send fails", async () => {
+    const peerMessage = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+      __openclaw: {
+        id: "peer-user",
+        seq: 4,
+        idempotencyKey: "peer-run:user",
+      },
+    };
+    const sessionProjection = createSessionProjection(
+      { sessionKey: "agent:main:main", agentId: "main" },
+      [peerMessage],
+    );
+    const harness = createHarness({
+      sendChat: vi.fn().mockRejectedValue(new Error("local send failed")),
+      sessionProjection,
+    });
+
+    await harness.handleCommand("hello");
+
+    expect(harness.state.sessionProjection?.messages).toEqual([peerMessage]);
+    expect(harness.state.sessionProjection?.entries[0]).toMatchObject({
+      pending: false,
+      pendingRunId: null,
+    });
   });
 
   it("sends /btw without hijacking the active main run", async () => {
@@ -926,6 +1075,7 @@ describe("tui command handlers", () => {
     expect(noteLocalRunId).not.toHaveBeenCalled();
     expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
     expect(state.activeChatRunId).toBe("run-main");
+    expect(state.sessionProjection).toBeUndefined();
     expect(setActivityStatus).not.toHaveBeenCalledWith("sending");
     expect(setActivityStatus).not.toHaveBeenCalledWith("waiting");
     expectSendChatFields(sendChat, { message: "/btw what changed?" });
@@ -976,13 +1126,14 @@ describe("tui command handlers", () => {
     // /new creates a unique session key (isolates TUI client) (#39217)
     expect(createSessionMock).toHaveBeenCalledTimes(1);
     const createOptions = firstMockArg(createSessionMock, "createSession") as
-      | { key?: string; agentId?: string; parentSessionKey?: string }
+      | { key?: string; agentId?: string; parentSessionKey?: string; succeedsParent?: boolean }
       | undefined;
     if (!createOptions?.key) {
       throw new Error("expected /new to create a TUI session key");
     }
     expect(createOptions.agentId).toBe("main");
     expect(createOptions.parentSessionKey).toBe("agent:main:main");
+    expect(createOptions.succeedsParent).toBe(true);
     expect(createOptions.key.startsWith("tui-")).toBe(true);
     const uuidParts: string[] = createOptions.key.slice("tui-".length).split("-");
     expect(uuidParts.map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
@@ -991,9 +1142,42 @@ describe("tui command handlers", () => {
     // /reset still resets the shared session
     expect(resetSession).toHaveBeenCalledTimes(1);
     expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset", undefined);
-    expect(applySessionMutationResult).toHaveBeenCalledWith(resetResult);
+    expect(applySessionMutationResult).toHaveBeenCalledWith(resetResult, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("reports a reset after adopting the backend's replacement session key", async () => {
+    const resetResult = {
+      ok: true as const,
+      key: "agent:main:replacement",
+      entry: { sessionId: "replacement-session" },
+    };
+    const applySessionMutationResult = vi.fn((result: typeof resetResult) => {
+      harness.state.currentSessionKey = result.key;
+      harness.state.currentSessionId = result.entry.sessionId;
+      return true;
+    });
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const harness = createHarness({
+      applySessionMutationResult,
+      refreshSessionInfo,
+      resetSession: vi.fn().mockResolvedValue(resetResult),
+    });
+
+    await harness.handleCommand("/reset");
+
+    expect(applySessionMutationResult).toHaveBeenCalledExactlyOnceWith(resetResult, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(refreshSessionInfo).toHaveBeenCalledOnce();
+    expect(harness.state.currentSessionKey).toBe("agent:main:replacement");
+    expect(harness.state.currentSessionId).toBe("replacement-session");
+    expect(harness.addSystem).toHaveBeenCalledWith("session agent:main:replacement reset");
   });
 
   it.each([
@@ -1025,7 +1209,7 @@ describe("tui command handlers", () => {
     expect(createSession).toHaveBeenCalledWith({
       key: expect.stringMatching(/^tui-/),
       agentId: currentAgentId,
-      ...(expectedParent ? { parentSessionKey: expectedParent } : {}),
+      ...(expectedParent ? { parentSessionKey: expectedParent, succeedsParent: true } : {}),
     });
   });
 
@@ -1068,6 +1252,45 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("abort the current run before /new");
   });
 
+  it.each([
+    {
+      activeChatRunId: "active-run",
+      pendingSubmit: null,
+      activityStatus: "running",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: {
+        phase: "accepted" as const,
+        runId: "pending-run",
+        draftText: null,
+      },
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: {
+        phase: "sending" as const,
+        runId: "pending-run",
+        draftText: "pending",
+      },
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: null,
+      activityStatus: "finishing context",
+    },
+  ])("blocks /reset while the current session lifecycle is unfinished", async (runState) => {
+    const resetSession = vi.fn();
+    const { handleCommand, addSystem } = createHarness({ resetSession, ...runState });
+
+    await handleCommand("/reset");
+
+    expect(resetSession).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("abort the current run before /reset");
+  });
+
   it("serializes input until /new adopts the created session", async () => {
     let resolveCreate: ((value: { ok: true; key: string }) => void) | undefined;
     const createSession = vi.fn().mockImplementation(
@@ -1106,8 +1329,73 @@ describe("tui command handlers", () => {
 
     await handleCommand("/reset");
 
-    expect(applySessionMutationResult).toHaveBeenCalledWith({ ok: true });
+    expect(applySessionMutationResult).toHaveBeenCalledWith(
+      { ok: true },
+      { sessionKey: "agent:main:main", agentId: "main" },
+    );
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the canonical transcript exactly once through the session mutation owner", async () => {
+    const sessionProjection = createSessionProjection(
+      { sessionKey: "agent:main:main", agentId: "main" },
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "before reset" }],
+          __openclaw: { id: "before-reset", seq: 1 },
+        },
+      ],
+    );
+    const resetResult = {
+      ok: true as const,
+      key: "agent:main:main",
+      entry: { sessionId: "reset-session" },
+    };
+    const applySessionMutationResult = vi.fn(() => {
+      reduceTuiSessionProjection(harness.state as never, {
+        type: "sessionReset",
+        scope: readTuiSessionProjectionScope(harness.state),
+      });
+      return true;
+    });
+    const harness = createHarness({
+      resetSession: vi.fn().mockResolvedValue(resetResult),
+      applySessionMutationResult,
+      sessionProjection,
+    });
+
+    await harness.handleCommand("/reset");
+
+    expect(applySessionMutationResult).toHaveBeenCalledExactlyOnceWith(resetResult, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(harness.state.sessionProjection?.messages).toEqual([]);
+    expect(harness.state.sessionProjection?.entries).toEqual([]);
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("preserves the canonical transcript when the selected session reset fails", async () => {
+    const message = {
+      role: "user",
+      content: [{ type: "text", text: "preserve failed reset" }],
+      __openclaw: { id: "before-failed-reset", seq: 1 },
+    };
+    const sessionProjection = createSessionProjection(
+      { sessionKey: "agent:main:main", agentId: "main" },
+      [message],
+    );
+    const harness = createHarness({
+      resetSession: vi.fn().mockRejectedValue(new Error("reset unavailable")),
+      sessionProjection,
+    });
+
+    await harness.handleCommand("/reset");
+
+    expect(harness.state.sessionProjection?.messages).toEqual([message]);
+    expect(harness.applySessionMutationResult).not.toHaveBeenCalled();
+    expect(harness.addSystem).toHaveBeenCalledWith("reset failed: reset unavailable");
   });
 
   it("scopes /reset for the selected global agent", async () => {
@@ -1138,6 +1426,198 @@ describe("tui command handlers", () => {
     });
   });
 
+  it.each([
+    "/model openai/gpt-5.6-luna",
+    "/think medium",
+    "/verbose off",
+    "/verbose full",
+    "/trace on",
+    "/fast on",
+    "/reasoning on",
+    "/usage reset",
+    "/usage full",
+    "/elevated ask",
+    "/activation always",
+  ])("ignores a stale %s result after switching sessions", async (command) => {
+    const deferred = createDeferred<{
+      ok: true;
+      path: string;
+      key: string;
+      entry: Record<string, unknown>;
+    }>();
+    const harness = createHarness({
+      currentSessionKey: "agent:main:first",
+      sessionInfo: { responseUsage: "tokens", effectiveResponseUsage: "tokens" },
+      patchSession: vi.fn(() => deferred.promise),
+    });
+
+    const pending = harness.handleCommand(command);
+    expect(harness.patchSession).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "agent:main:first" }),
+    );
+    harness.state.currentSessionKey = "agent:main:second";
+    deferred.resolve({
+      ok: true,
+      path: "/sessions/patch",
+      key: "agent:main:first",
+      entry: { model: "stale-model" },
+    });
+    await pending;
+
+    expect(harness.state.currentSessionKey).toBe("agent:main:second");
+    expect(harness.state.sessionInfo.responseUsage).toBe("tokens");
+    expect(harness.state.sessionInfo.effectiveResponseUsage).toBe("tokens");
+    expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
+    expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+    expect(harness.clearTools).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
+  it.each(["/model openai/gpt-5.6-luna", "/usage reset"])(
+    "ignores a stale global-agent %s result",
+    async (command) => {
+      const deferred = createDeferred<{
+        ok: true;
+        path: string;
+        key: string;
+        entry: Record<string, unknown>;
+      }>();
+      const harness = createHarness({
+        currentSessionKey: "global",
+        currentAgentId: "main",
+        sessionInfo: { responseUsage: "tokens", effectiveResponseUsage: "tokens" },
+        patchSession: vi.fn(() => deferred.promise),
+      });
+
+      const pending = harness.handleCommand(command);
+      expect(harness.patchSession).toHaveBeenCalledWith(
+        expect.objectContaining({ key: "global", agentId: "main" }),
+      );
+      harness.state.currentAgentId = "work";
+      deferred.resolve({
+        ok: true,
+        path: "/sessions/patch",
+        key: "global",
+        entry: { model: "main-agent-model" },
+      });
+      await pending;
+
+      expect(harness.state.currentSessionKey).toBe("global");
+      expect(harness.state.currentAgentId).toBe("work");
+      expect(harness.state.sessionInfo.responseUsage).toBe("tokens");
+      expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
+      expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+      expect(harness.addSystem).not.toHaveBeenCalled();
+    },
+  );
+
+  it("applies a model patch after its selected session becomes canonical", async () => {
+    const deferred = createDeferred<{
+      ok: true;
+      path: string;
+      key: string;
+      entry: Record<string, unknown>;
+    }>();
+    const harness = createHarness({
+      currentSessionKey: "main",
+      patchSession: vi.fn(() => deferred.promise),
+    });
+
+    const pending = harness.handleCommand("/model openai/gpt-5.6-luna");
+    harness.state.currentSessionKey = "agent:main:main";
+    const result = {
+      ok: true as const,
+      path: "/sessions/patch",
+      key: "agent:main:main",
+      entry: { model: "gpt-5.6-luna" },
+    };
+    deferred.resolve(result);
+    await pending;
+
+    expect(harness.applySessionInfoFromPatch).toHaveBeenCalledWith(result);
+    expect(harness.refreshSessionInfo).toHaveBeenCalledOnce();
+    expect(harness.addSystem).toHaveBeenCalledWith("model set to openai/gpt-5.6-luna");
+  });
+
+  it("ignores a rejected model patch after switching sessions", async () => {
+    const deferred = createDeferred<never>();
+    const harness = createHarness({
+      currentSessionKey: "agent:main:first",
+      patchSession: vi.fn(() => deferred.promise),
+    });
+
+    const pending = harness.handleCommand("/model openai/gpt-5.6-luna");
+    harness.state.currentSessionKey = "agent:main:second";
+    deferred.reject(new Error("stale model patch"));
+    await pending;
+
+    expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
+    expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "another session", initialKey: "agent:main:first", nextKey: "agent:main:second" },
+    { name: "another global agent", initialKey: "global", nextKey: "global" },
+  ])("ignores a stale reset after selecting $name", async ({ initialKey, nextKey }) => {
+    const deferred = createDeferred<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string };
+    }>();
+    const harness = createHarness({
+      currentSessionKey: initialKey,
+      currentAgentId: "main",
+      resetSession: vi.fn(() => deferred.promise),
+      applySessionMutationResult: vi.fn().mockReturnValue(true),
+    });
+
+    const pending = harness.handleCommand("/reset");
+    expect(harness.resetSession).toHaveBeenCalledWith(
+      initialKey,
+      "reset",
+      initialKey === "global" ? { agentId: "main" } : undefined,
+    );
+    harness.state.currentSessionKey = nextKey;
+    if (initialKey === "global") {
+      harness.state.currentAgentId = "work";
+    }
+    harness.state.currentSessionId = "second-session";
+    deferred.resolve({
+      ok: true,
+      key: initialKey,
+      entry: { sessionId: "stale-reset-session" },
+    });
+    await pending;
+
+    expect(harness.state.currentSessionKey).toBe(nextKey);
+    expect(harness.state.currentSessionId).toBe("second-session");
+    expect(harness.applySessionMutationResult).not.toHaveBeenCalled();
+    expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
+  it("ignores a rejected global reset after switching agents", async () => {
+    const deferred = createDeferred<never>();
+    const harness = createHarness({
+      currentSessionKey: "global",
+      currentAgentId: "main",
+      resetSession: vi.fn(() => deferred.promise),
+    });
+
+    const pending = harness.handleCommand("/reset");
+    harness.state.currentAgentId = "work";
+    deferred.reject(new Error("stale global reset"));
+    await pending;
+
+    expect(harness.applySessionMutationResult).not.toHaveBeenCalled();
+    expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
   it("uses the effective runtime for the no-arg /think usage", async () => {
     const codex = createHarness({
       sessionInfo: {
@@ -1158,6 +1638,18 @@ describe("tui command handlers", () => {
     });
     await openclaw.handleCommand("/think");
     expect(openclaw.addSystem).toHaveBeenCalledWith(expect.stringContaining("ultra"));
+  });
+
+  it.each([
+    { command: "verbose", usage: "usage: /verbose <on|off|full>" },
+    { command: "reasoning", usage: "usage: /reasoning <on|off|stream>" },
+  ])("shows the complete canonical no-argument /$command usage", async ({ command, usage }) => {
+    const { handleCommand, addSystem, patchSession } = createHarness();
+
+    await handleCommand(`/${command}`);
+
+    expect(addSystem).toHaveBeenCalledWith(usage);
+    expect(patchSession).not.toHaveBeenCalled();
   });
 
   it("hides tools locally for /verbose off without reloading history", async () => {
@@ -1200,6 +1692,31 @@ describe("tui command handlers", () => {
     expect(clearTools).not.toHaveBeenCalled();
   });
 
+  it("reloads history for /verbose full so prior full tool output becomes visible", async () => {
+    const patchResult = { entry: { verboseLevel: "full" } };
+    const patchSession = vi.fn().mockResolvedValue(patchResult);
+    const applySessionInfoFromPatch = vi.fn();
+    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, clearTools } = createHarness({
+      patchSession,
+      applySessionInfoFromPatch,
+      loadHistory,
+      refreshSessionInfo,
+    });
+
+    await handleCommand("/verbose full");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      verboseLevel: "full",
+    });
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith(patchResult);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(refreshSessionInfo).not.toHaveBeenCalled();
+    expect(clearTools).not.toHaveBeenCalled();
+  });
+
   it("refreshes session info for /trace without reloading history", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
@@ -1223,9 +1740,25 @@ describe("tui command handlers", () => {
 
     await handleCommand("/context detail");
 
-    expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
+    expect(addSystem).toHaveBeenCalledWith("send failed: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
     expect(state.pendingSubmit).toBeNull();
+  });
+
+  it("redacts secrets and preserves nested causes in displayed send failures", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
+    const { handleCommand, addSystem } = createHarness({
+      sendChat: vi.fn().mockRejectedValue(new Error("gateway down", { cause })),
+    });
+
+    await handleCommand("/context detail");
+
+    const message = addSystem.mock.calls.at(-1)?.[0];
+    expect(message).toContain("send failed: gateway down");
+    expect(message).toContain("Authorization: Bearer");
+    expect(message).not.toContain(secret);
+    expect(message).not.toContain("\u001b");
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {
@@ -1239,8 +1772,8 @@ describe("tui command handlers", () => {
     await handleCommand("/new");
     await handleCommand("/reset");
 
-    expect(addSystem).toHaveBeenNthCalledWith(1, "new session failed: Error: boom");
-    expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: Error: boom");
+    expect(addSystem).toHaveBeenNthCalledWith(1, "new session failed: boom");
+    expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: boom");
   });
 
   it("reports disconnected status and skips gateway send when offline", async () => {
@@ -1732,6 +2265,88 @@ describe("tui command handlers", () => {
     await pending;
 
     expect(openOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not open a stale model selector after switching sessions", async () => {
+    const deferred = createDeferred<Array<{ provider: string; id: string; name?: string }>>();
+    const harness = createHarness({
+      currentSessionKey: "agent:main:first",
+      listModels: vi.fn(() => deferred.promise),
+    });
+
+    const pending = harness.handleCommand("/models");
+    expect(harness.addSystem).toHaveBeenCalledWith("loading models...");
+    harness.addSystem.mockClear();
+    harness.state.currentSessionKey = "agent:main:second";
+    deferred.resolve([{ provider: "openai", id: "gpt-5.6-luna" }]);
+    await pending;
+
+    expect(harness.openOverlay).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "another session", initialKey: "agent:main:first", nextKey: "agent:main:second" },
+    { name: "another global agent", initialKey: "global", nextKey: "global" },
+  ])("ignores a model-picker result after selecting $name", async ({ initialKey, nextKey }) => {
+    const deferred = createDeferred<{
+      ok: true;
+      path: string;
+      key: string;
+      entry: Record<string, unknown>;
+    }>();
+    const harness = createHarness({
+      currentSessionKey: initialKey,
+      currentAgentId: "main",
+      listModels: vi.fn().mockResolvedValue([{ provider: "openai", id: "gpt-5.6-luna" }]),
+      patchSession: vi.fn(() => deferred.promise),
+    });
+
+    await harness.handleCommand("/models");
+    const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+    harness.addSystem.mockClear();
+    selector.onSelect?.({ value: "openai/gpt-5.6-luna" });
+    expect(harness.patchSession).toHaveBeenCalledWith({
+      key: initialKey,
+      ...(initialKey === "global" ? { agentId: "main" } : {}),
+      model: "openai/gpt-5.6-luna",
+    });
+    harness.state.currentSessionKey = nextKey;
+    if (initialKey === "global") {
+      harness.state.currentAgentId = "work";
+    }
+    deferred.resolve({
+      ok: true,
+      path: "/sessions/patch",
+      key: initialKey,
+      entry: { model: "stale-model" },
+    });
+    await flushAsyncSelect();
+
+    expect(harness.state.currentSessionKey).toBe(nextKey);
+    expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
+    expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
+  it("does not open a stale session selector after switching agents", async () => {
+    const deferred = createDeferred<{
+      sessions: Array<{ key: string; updatedAt: number }>;
+    }>();
+    const harness = createHarness({
+      currentAgentId: "main",
+      listSessions: vi.fn(() => deferred.promise),
+    });
+
+    const pending = harness.openSessionSelector();
+    harness.state.currentAgentId = "work";
+    deferred.resolve({
+      sessions: [{ key: "agent:main:main", updatedAt: 1 }],
+    });
+    await pending;
+
+    expect(harness.openOverlay).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
   });
 
   it("/usage reset clears the stale local responseUsage after the gateway patch", async () => {

@@ -4,6 +4,7 @@
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeVoiceAudioFormat,
+  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,

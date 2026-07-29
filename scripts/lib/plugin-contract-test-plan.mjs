@@ -7,12 +7,9 @@ function listContractTestFiles(rootDir = "src/plugins/contracts") {
 
 const CONTRACT_FILE_WEIGHTS = new Map([
   ["plugin-sdk-subpaths.test.ts", 80],
-  ["plugin-sdk-root-alias.test.ts", 90],
   ["tts.contract.test.ts", 70],
   ["boundary-invariants.test.ts", 36],
   ["extension-package-project-boundaries.test.ts", 34],
-  ["plugin-sdk-index.test.ts", 32],
-  ["plugin-sdk-index.bundle.test.ts", 32],
   ["plugin-sdk-package-contract-guardrails.test.ts", 46],
   ["providers.contract.test.ts", 30],
   ["registry.contract.test.ts", 30],

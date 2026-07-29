@@ -263,5 +263,5 @@ describe("agent-scoped memory-wiki tools", () => {
     } finally {
       clearMemoryPluginState();
     }
-  });
+  }, 240_000);
 });

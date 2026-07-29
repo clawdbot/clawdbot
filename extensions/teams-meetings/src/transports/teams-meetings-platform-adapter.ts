@@ -1,7 +1,7 @@
-import type {
-  MeetingBrowserJoinSession,
-  MeetingManualActionCategory,
+import {
   MeetingPlatformAdapter,
+  type MeetingBrowserJoinSession,
+  type MeetingManualActionCategory,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { TeamsMeetingsMode } from "../config.js";
 import {
@@ -18,149 +18,67 @@ import {
 } from "./teams-meetings-urls.js";
 import type { TeamsMeetingsChromeHealth, TeamsMeetingsTranscriptSnapshot } from "./types.js";
 
-export function isTeamsMeetingsTalkBackMode(mode: TeamsMeetingsMode): boolean {
-  return mode === "agent" || mode === "bidi";
-}
-
-export function isTeamsMeetingsRealtimeRouteReady(
-  mode: TeamsMeetingsMode,
-  health: TeamsMeetingsChromeHealth | undefined,
-): boolean {
-  return (
-    isTeamsMeetingsTalkBackMode(mode) &&
-    health?.inCall === true &&
-    health.micMuted === false &&
-    health.audioInputRouted === true &&
-    health.audioOutputRouted === true &&
-    health.manualActionRequired !== true
-  );
-}
-
-function parseBrowserStatus(result: unknown): TeamsMeetingsChromeHealth | undefined {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  if (typeof record.result !== "string" || !record.result.trim()) {
+function teamsMeetingOrigin(meetingUrl: string): string | undefined {
+  try {
+    const origin = new URL(meetingUrl).origin;
+    return origin === "https://teams.microsoft.com" || origin === "https://teams.live.com"
+      ? origin
+      : undefined;
+  } catch {
     return undefined;
   }
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(record.result) as Record<string, unknown>;
-  } catch {
-    throw new Error("Microsoft Teams browser status JSON is malformed.");
-  }
-  return {
-    inCall: typeof parsed.inCall === "boolean" ? parsed.inCall : undefined,
-    micMuted: typeof parsed.micMuted === "boolean" ? parsed.micMuted : undefined,
-    cameraOff: typeof parsed.cameraOff === "boolean" ? parsed.cameraOff : undefined,
-    lobbyWaiting: typeof parsed.lobbyWaiting === "boolean" ? parsed.lobbyWaiting : undefined,
-    audioInputRouted:
-      typeof parsed.audioInputRouted === "boolean" ? parsed.audioInputRouted : undefined,
-    audioInputDeviceLabel:
-      typeof parsed.audioInputDeviceLabel === "string" ? parsed.audioInputDeviceLabel : undefined,
-    audioInputRouteError:
-      typeof parsed.audioInputRouteError === "string" ? parsed.audioInputRouteError : undefined,
-    audioOutputRouted:
-      typeof parsed.audioOutputRouted === "boolean" ? parsed.audioOutputRouted : undefined,
-    audioOutputDeviceLabel:
-      typeof parsed.audioOutputDeviceLabel === "string" ? parsed.audioOutputDeviceLabel : undefined,
-    audioOutputRouteError:
-      typeof parsed.audioOutputRouteError === "string" ? parsed.audioOutputRouteError : undefined,
-    manualActionRequired:
-      typeof parsed.manualActionRequired === "boolean" ? parsed.manualActionRequired : undefined,
-    manualActionReason:
-      typeof parsed.manualActionReason === "string"
-        ? (parsed.manualActionReason as TeamsMeetingsChromeHealth["manualActionReason"])
-        : undefined,
-    manualActionMessage:
-      typeof parsed.manualActionMessage === "string" ? parsed.manualActionMessage : undefined,
-    browserUrl: typeof parsed.url === "string" ? parsed.url : undefined,
-    browserTitle: typeof parsed.title === "string" ? parsed.title : undefined,
-    status: "browser-control",
-    notes: Array.isArray(parsed.notes)
-      ? parsed.notes.filter((note): note is string => typeof note === "string")
-      : undefined,
-  };
 }
 
-function classifyManualAction(health: TeamsMeetingsChromeHealth) {
-  if (!health.manualActionRequired || !health.manualActionReason || !health.manualActionMessage) {
-    return undefined;
-  }
-  const category: MeetingManualActionCategory =
-    health.manualActionReason === "teams-login-required"
-      ? "login-required"
-      : health.manualActionReason === "teams-admission-required"
-        ? "admission-required"
-        : health.manualActionReason === "teams-permission-required"
-          ? "permission-required"
-          : health.manualActionReason === "teams-audio-choice-required"
-            ? "audio-choice-required"
-            : health.manualActionReason === "teams-session-conflict"
-              ? "session-conflict"
-              : health.manualActionReason === "browser-control-unavailable"
-                ? "browser-control-unavailable"
-                : "custom";
-  return {
-    category,
-    reason: health.manualActionReason,
-    message: health.manualActionMessage,
-  };
-}
-
-function parseLeaveResult(result: unknown): {
-  departed: boolean;
-  leaveAction?: "leave" | "confirm";
-  urlMatched?: boolean;
-} {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  if (typeof record.result !== "string" || !record.result.trim()) {
-    return { departed: false };
-  }
-  try {
-    const parsed = JSON.parse(record.result) as Record<string, unknown>;
-    const leaveAction =
-      parsed.leaveAction === "leave" || parsed.leaveAction === "confirm"
-        ? parsed.leaveAction
-        : undefined;
-    return {
-      departed: parsed.departed === true,
-      ...(leaveAction ? { leaveAction } : {}),
-      ...(typeof parsed.urlMatched === "boolean" ? { urlMatched: parsed.urlMatched } : {}),
-    };
-  } catch {
-    return { departed: false };
+function classifyManualActionReason(reason: string): MeetingManualActionCategory {
+  switch (reason) {
+    case "teams-login-required":
+      return "login-required";
+    case "teams-admission-required":
+      return "admission-required";
+    case "teams-permission-required":
+      return "permission-required";
+    case "teams-audio-choice-required":
+      return "audio-choice-required";
+    case "teams-session-conflict":
+      return "session-conflict";
+    case "browser-control-unavailable":
+      return "browser-control-unavailable";
+    default:
+      return "custom";
   }
 }
 
-function parseTranscript(result: unknown) {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  if (typeof record.result !== "string" || !record.result.trim()) {
-    return { droppedLines: 0, lines: [] };
-  }
-  try {
-    const parsed = JSON.parse(record.result) as Record<string, unknown>;
-    return {
-      droppedLines: 0,
-      lines: [],
-      ...(typeof parsed.urlMatched === "boolean" ? { urlMatched: parsed.urlMatched } : {}),
-      ...(typeof parsed.sessionMatched === "boolean"
-        ? { sessionMatched: parsed.sessionMatched }
-        : {}),
-    };
-  } catch {
-    throw new Error("Microsoft Teams transcript JSON is malformed.");
-  }
-}
-
-export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
+export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<TeamsMeetingsMode>,
   TeamsMeetingsMode,
   TeamsMeetingsChromeHealth,
   TeamsMeetingsTranscriptSnapshot
-> = {
+>({
   id: "teams-meetings",
   displayName: "Microsoft Teams meetings",
   browserLabel: "Teams meeting",
   logScope: "[teams-meetings]",
+  agentConsult: {
+    surface: "a private Microsoft Teams meeting",
+    userLabel: "Participant",
+    assistantLabel: "Agent",
+    questionSourceLabel: "participant",
+    workingResponseLabel: "participant",
+    extraSystemPrompt: [
+      "You are a behind-the-scenes consultant for a live meeting voice agent.",
+      "Prioritize a fast, speakable answer over exhaustive investigation.",
+      "Use only bounded, task-relevant tool calls.",
+      "Never print secrets or dump environment variables.",
+      "Be accurate, brief, and speakable.",
+    ].join(" "),
+  },
+  session: {
+    idPrefix: "teams_meeting",
+    participantIdentity: (transport) =>
+      transport === "chrome-node"
+        ? "Microsoft Teams guest in Chrome on a paired node"
+        : "Microsoft Teams guest in the OpenClaw Chrome profile",
+  },
   nodeCommandName: TEAMS_MEETINGS_NODE_COMMAND,
   nodeConfigPath: "plugins.entries.teams-meetings.config.chromeNode.node",
   urls: {
@@ -174,39 +92,63 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
     localeAction: () => undefined,
   },
   browser: {
-    allowsMicrophone: isTeamsMeetingsTalkBackMode,
+    allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
     buildStatusJoinScript: (params) =>
       teamsMeetingStatusScript({
-        allowMicrophone: isTeamsMeetingsTalkBackMode(params.mode),
+        allowMicrophone: MeetingPlatformAdapter.isTalkBackMode(params.mode),
+        allowSessionAdoption: params.allowSessionAdoption,
         autoJoin: params.autoJoin,
+        captureCaptions: params.captureCaptions,
         guestName: params.guestName,
         meetingSessionId: params.meetingSessionId || undefined,
         meetingUrl: params.url,
         readOnly: params.readOnly,
+        waitForInCallMs: params.waitForInCallMs,
       }),
-    parseStatus: parseBrowserStatus,
-    classifyManualAction,
+    shouldRetryJoinStatus: (health) =>
+      health.inCall === true &&
+      ((health.manualAction?.reason === "teams-audio-choice-required" &&
+        health.audioInputRouted === true &&
+        health.audioOutputRouteRetryable === true) ||
+        (health.manualAction === undefined &&
+          health.captionCaptureRequested === true &&
+          health.captioning !== true)),
     browserControlUnavailable: () => ({
       category: "browser-control-unavailable",
       reason: "browser-control-unavailable",
       message:
         "Open the OpenClaw browser profile, finish the Teams sign-in, admission, or permission prompt, then retry.",
     }),
-    buildLeaveScript: teamsMeetingLeaveScript,
-    parseLeaveResult,
+    buildLeaveScript: (meetingUrl) =>
+      teamsMeetingLeaveScript({
+        leaveInitiated: false,
+        meetingSessionId: "",
+        meetingUrl,
+      }),
+    buildSessionLeaveScript: teamsMeetingLeaveScript,
     captions: {
-      // Teams caption DOM is not enabled until a live tenant flow validates stable selectors.
-      enabled: () => false,
-      buildTranscriptScript: ({ meetingSessionId, meetingUrl }) =>
-        teamsMeetingTranscriptScript(meetingUrl, meetingSessionId),
-      parseTranscript,
+      // Durable notes observe the caption stream in every mode; live transcript
+      // visibility remains gated by MeetingSessionRuntime.
+      enabled: () => true,
+      buildTranscriptScript: ({ finalize, meetingSessionId, meetingUrl }) =>
+        teamsMeetingTranscriptScript(meetingUrl, meetingSessionId, finalize),
     },
-    // The core permission hook has no meeting URL, so it cannot select between
-    // teams.microsoft.com and teams.live.com without guessing an origin.
-    permissions: () => undefined,
-    permissionNotes: ({ allowMicrophone }) =>
-      allowMicrophone
-        ? ["Teams media permissions are handled in the browser when prompted."]
-        : ["Observe-only mode does not request Teams microphone access."],
+    permissions: ({ allowMicrophone, meetingUrl }) => {
+      const origin = teamsMeetingOrigin(meetingUrl);
+      return allowMicrophone && origin
+        ? {
+            origin,
+            permissions: ["audioCapture"],
+            optionalPermissions: ["speakerSelection"],
+          }
+        : undefined;
+    },
   },
-};
+  parsing: {
+    classifyManualActionReason,
+    displayName: "Teams",
+    invalidTranscriptMessage: "Microsoft Teams transcript payload is invalid.",
+    malformedStatusMessage: "Microsoft Teams browser status JSON is malformed.",
+    malformedTranscriptMessage: "Microsoft Teams transcript JSON is malformed.",
+  },
+});

@@ -6,9 +6,10 @@ import { normalizeMediaAttachments } from "./runner.attachments.js";
 describe("normalizeMediaAttachments", () => {
   it("skips a cached sticker while preserving supplemental media indexes", () => {
     const ctx: MsgContext = {
-      MediaPath: "/tmp/cached-sticker.webp",
-      MediaPaths: ["/tmp/cached-sticker.webp", "/tmp/replied-audio.ogg"],
-      MediaTypes: ["image/webp", "audio/ogg"],
+      media: [
+        { path: "/tmp/cached-sticker.webp", contentType: "image/webp" },
+        { path: "/tmp/replied-audio.ogg", contentType: "audio/ogg" },
+      ],
       StickerMediaIncluded: true,
       SkipStickerMediaUnderstanding: true,
     };

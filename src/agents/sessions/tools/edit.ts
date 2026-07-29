@@ -12,22 +12,21 @@ import {
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
+import { detectLineEnding, normalizeToLF, restoreLineEndings } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
+import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
   applyEditsToNormalizedContent,
   computeEditsDiff,
-  detectLineEnding,
   EditNoChangeError,
   type Edit,
   type EditDiffError,
   type EditDiffResult,
   generateDiffString,
   generateUnifiedPatch,
-  normalizeToLF,
-  restoreLineEndings,
   splitNoOpEdits,
   stripBom,
   validateNoOpEditTargets,
@@ -437,7 +436,7 @@ export function createEditToolDefinition(
         }
 
         const buffer = await ops.readFile(absolutePath);
-        const rawContent = buffer.toString("utf-8");
+        const rawContent = decodeUtf8File(buffer, absolutePath);
         try {
           if (signal?.aborted) {
             throw new Error("Operation aborted");

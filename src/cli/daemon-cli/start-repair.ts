@@ -12,13 +12,12 @@ import type {
   GatewayServiceState,
 } from "../../daemon/service.js";
 import { formatGatewayServiceStartRepairIssues } from "../../daemon/service.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
-/** Repair a loaded but stale Gateway service definition and report the start result. */
-export async function repairLoadedGatewayServiceForStart(params: {
-  action?: "restart" | "start";
+type GatewayServiceRepairParams = {
   service: GatewayService;
   port?: number;
   state: GatewayServiceState;
@@ -26,12 +25,31 @@ export async function repairLoadedGatewayServiceForStart(params: {
   json: boolean;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
-}): Promise<{
+};
+
+type GatewayServiceRepairResult<TResult extends "restarted" | "started"> = {
+  result: TResult;
+  message: string;
+  warnings?: string[];
+  loaded: boolean;
+};
+
+/** Repair a loaded but stale Gateway service definition and report the start result. */
+export function repairLoadedGatewayServiceForStart(
+  params: GatewayServiceRepairParams & { action: "restart" },
+): Promise<GatewayServiceRepairResult<"restarted">>;
+export function repairLoadedGatewayServiceForStart(
+  params: GatewayServiceRepairParams & { action?: "start" },
+): Promise<GatewayServiceRepairResult<"started">>;
+export async function repairLoadedGatewayServiceForStart(
+  params: GatewayServiceRepairParams & { action?: "restart" | "start" },
+): Promise<{
   result: "restarted" | "started";
   message: string;
   warnings?: string[];
   loaded: boolean;
 }> {
+  assertGatewayServiceMutationAllowed("repair the gateway service");
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;

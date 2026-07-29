@@ -49,7 +49,11 @@ function isTelegramRichLinkHref(href: string): boolean {
  *
  * Excluded: .ai, .io, .tv, .fm (popular domain TLDs like x.ai, vercel.io, github.io)
  */
-function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
+function buildTelegramLink(
+  link: MarkdownLinkSpan,
+  text: string,
+  context: { origin: "authored" | "linkify" },
+) {
   const href = link.href.trim();
   if (!href) {
     return null;
@@ -64,7 +68,7 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   }
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
   const label = text.slice(link.start, link.end);
-  if (isAutoLinkedFileRef(href, label)) {
+  if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
     return null;
   }
   const safeHref = escapeHtmlAttr(href);
@@ -178,7 +182,6 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
 const ESCAPED_HTML_TAG_PATTERN = /&lt;(\/?)([a-zA-Z][a-zA-Z0-9-]*)(.*?)&gt;/g;
 const TELEGRAM_HTML_ANCHOR_PATTERN =
@@ -208,11 +211,10 @@ const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
   ["a", /^\s+href="[^"]+"\s*$/],
   ["span", /^\s+class="tg-spoiler"\s*$/],
   ["tg-emoji", /^\s+emoji-id="[^"]+"\s*$/],
-  ["tg-time", /^\s+datetime="[^"]+"\s*$/],
+  ["tg-time", /^\s+unix="[1-9]\d*"(?:\s+format="(?:r|w?[dD]?[tT]?)")?\s*$/],
   ["blockquote", /^(\s+expandable)?\s*$/],
 ]);
 const TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN = /^\s+class="language-[^"]+"\s*$/;
-const TELEGRAM_VOID_HTML_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 type TelegramHtmlTagSupport = {
   simpleTags: ReadonlySet<string>;
@@ -287,7 +289,7 @@ function preserveTelegramHtmlTag(
   if (closing) {
     return popLastTagName(openTags, tagName) ? rawTag : escapeTag(rawTag);
   }
-  if (TELEGRAM_VOID_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>")) {
+  if (rawTag.trimEnd().endsWith("/>")) {
     return rawTag;
   }
   openTags.push(tagName);
@@ -499,15 +501,6 @@ function wrapSegmentFileRefs(
 }
 
 export function wrapFileReferencesInHtml(html: string): string {
-  // Safety-net: de-linkify auto-generated anchors where href="http://<label>" (defense in depth for textMode: "html")
-  AUTO_LINKED_ANCHOR_PATTERN.lastIndex = 0;
-  const deLinkified = html.replace(AUTO_LINKED_ANCHOR_PATTERN, (_match, label: string) => {
-    if (!isAutoLinkedFileRef(`http://${label}`, label)) {
-      return _match;
-    }
-    return `<code>${escapeHtml(label)}</code>`;
-  });
-
   // Track nesting depth for tags that should not be modified
   let codeDepth = 0;
   let preDepth = 0;
@@ -516,14 +509,14 @@ export function wrapFileReferencesInHtml(html: string): string {
   let lastIndex = 0;
 
   // Process tags token-by-token so we can skip protected regions while wrapping plain text.
-  for (const tag of tokenizeHtmlTags(deLinkified)) {
+  for (const tag of tokenizeHtmlTags(html)) {
     const tagStart = tag.start;
     const tagEnd = tag.end;
     const isClosing = tag.closing;
     const tagName = tag.name;
 
     // Process text before this tag
-    const textBefore = deLinkified.slice(lastIndex, tagStart);
+    const textBefore = html.slice(lastIndex, tagStart);
     result += wrapSegmentFileRefs(textBefore, codeDepth, preDepth, anchorDepth);
 
     // Update tag depth (clamp at 0 for malformed HTML with stray closing tags)
@@ -536,12 +529,12 @@ export function wrapFileReferencesInHtml(html: string): string {
     }
 
     // Add the tag itself
-    result += deLinkified.slice(tagStart, tagEnd);
+    result += html.slice(tagStart, tagEnd);
     lastIndex = tagEnd;
   }
 
   // Process remaining text
-  const remainingText = deLinkified.slice(lastIndex);
+  const remainingText = html.slice(lastIndex);
   result += wrapSegmentFileRefs(remainingText, codeDepth, preDepth, anchorDepth);
 
   return result;
@@ -662,8 +655,6 @@ type TelegramHtmlTag = {
   closeTag: string;
 };
 
-const TELEGRAM_SELF_CLOSING_HTML_TAGS = TELEGRAM_VOID_HTML_TAGS;
-
 function buildTelegramHtmlOpenPrefix(tags: TelegramHtmlTag[]): string {
   return tags.map((tag) => tag.openTag).join("");
 }
@@ -694,12 +685,32 @@ function clampToSurrogateBoundary(text: string, index: number): number {
   return index > 1 ? index - 1 : index + 1;
 }
 
+// Prefer a word/paragraph boundary inside the entity-safe window so long text
+// runs break between words instead of mid-word. Whitespace never falls inside
+// an HTML entity, so this keeps entities intact; the caller falls back to the
+// entity-safe hard cut only when the window has no interior whitespace.
+function findTelegramHtmlWordSafeSplitIndex(text: string, end: number): number {
+  let lastNewline = 0;
+  let lastWhitespace = 0;
+  for (let index = 1; index < end; index += 1) {
+    const char = text[index];
+    if (char === "\n") {
+      lastNewline = index + 1;
+    } else if (char !== undefined && /\s/.test(char)) {
+      lastWhitespace = index + 1;
+    }
+  }
+  return lastNewline > 0 ? lastNewline : lastWhitespace;
+}
+
 function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
   if (text.length <= maxLength) {
     return text.length;
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
-  const splitIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  const entitySafeIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  const wordSafeIndex = findTelegramHtmlWordSafeSplitIndex(text, entitySafeIndex);
+  const splitIndex = wordSafeIndex > 0 ? wordSafeIndex : entitySafeIndex;
   return clampToSurrogateBoundary(text, splitIndex);
 }
 
@@ -806,9 +817,7 @@ function splitTelegramHtmlChunksRaw(html: string, limit: number): string[] {
     const rawTag = tag.raw;
     const isClosing = tag.closing;
     const tagName = tag.name;
-    const isSelfClosing =
-      !isClosing &&
-      (TELEGRAM_SELF_CLOSING_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));
+    const isSelfClosing = !isClosing && rawTag.trimEnd().endsWith("/>");
 
     if (!isClosing) {
       const nextCloseLength = isSelfClosing ? 0 : `</${tagName}>`.length;

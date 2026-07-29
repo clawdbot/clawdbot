@@ -17,6 +17,13 @@ dreaming stay owned by whichever memory backend is configured
 (`memory-core`, QMD, Honcho, etc.). `memory-wiki` sits beside it and compiles
 knowledge into a maintained wiki layer.
 
+Enable the plugin before using its CLI, tools, or runtime integration:
+
+```bash
+openclaw plugins enable memory-wiki
+openclaw gateway restart
+```
+
 | Layer                | Owns                                                                              |
 | -------------------- | --------------------------------------------------------------------------------- |
 | Active memory plugin | Recall, semantic search, promotion, dreaming, memory runtime                      |
@@ -275,6 +282,23 @@ includes compact `Claim:` and `Evidence:` lines when available.
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
 plugin supports corpus selection.
+
+## Browsing the wiki in the Control UI
+
+The [Control UI](/web/control-ui) can browse the compiled wiki directly: open
+the Memory page, then **Dreams → Diary → Memory Wiki**. The tab clusters
+synthesis, entity, and concept pages — plus source and report pages that
+carry claims, open questions, or contradictions — with per-page counts and a
+full-vault page breakdown, and opens full page content inline. Raw sources
+and reports without that metadata count toward the breakdown but are not
+listed as cards; open them from the **Imported Insights** sub-tab, which
+reviews what external-history imports surfaced before promotion.
+
+Both sub-tabs appear once the plugin is enabled; in agent-scoped vault setups
+they show the selected agent's own vault. The UI reads through the plugin's
+gateway methods (`wiki.overview`, `wiki.get`, `wiki.importInsights`); inline
+page previews use `wiki.get`, the same lookup agents reach through the
+`wiki_get` tool.
 
 ## Prompt and context behavior
 

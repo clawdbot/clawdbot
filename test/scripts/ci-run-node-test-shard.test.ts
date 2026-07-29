@@ -14,6 +14,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildChildEnv,
+  clonePersistentCacheSlots,
   pruneFsModuleCache,
   resolveShardChildCommand,
   resolveShardPlans,
@@ -216,6 +217,24 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
       path.join(persistentRoot, "vitest-cache-0"),
       path.join(persistentRoot, "vitest-cache-1"),
     ]);
+  });
+
+  it("clones a restored persistent seed into every concurrent cache slot", () => {
+    const persistentRoot = makeScratchDir();
+    const seed = path.join(persistentRoot, "vitest-cache-0");
+    mkdirSync(seed, { recursive: true });
+    writeFileSync(path.join(seed, "transform"), "cached", "utf8");
+    const staleSlot = path.join(persistentRoot, "vitest-cache-1");
+    mkdirSync(staleSlot, { recursive: true });
+    writeFileSync(path.join(staleSlot, "stale"), "old", "utf8");
+
+    expect(clonePersistentCacheSlots(persistentRoot, 3)).toBe(2);
+    for (const cacheSlot of [1, 2]) {
+      expect(
+        readFileSync(path.join(persistentRoot, `vitest-cache-${cacheSlot}`, "transform"), "utf8"),
+      ).toBe("cached");
+    }
+    expect(existsSync(path.join(staleSlot, "stale"))).toBe(false);
   });
 
   it("prunes oldest transform entries while preserving Vitest metadata", () => {

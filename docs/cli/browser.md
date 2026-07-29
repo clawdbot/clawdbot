@@ -135,7 +135,25 @@ openclaw browser close t1
 
 Raw target ids are volatile diagnostic handles, not durable agent memory: when Chromium replaces the underlying raw target during a navigation or form submit, OpenClaw keeps the stable `tabId`/label attached to the replacement tab when it can prove the match. Prefer `suggestedTargetId`.
 
-## Snapshot / screenshot / actions
+## Extract / snapshot / screenshot / actions
+
+Answer a question from the current page without printing the page content:
+
+```bash
+openclaw browser extract "What is the main conclusion?"
+openclaw browser extract "Which deadline is listed?" --target-id docs --timeout-ms 90000
+openclaw browser extract "List the releases" --selector "main" --ignore-selector "nav" --schema '{"type":"array","items":{"type":"object"}}'
+```
+
+`extract` uses the selected agent model, returns only the wrapped answer, and
+reports `NOT_FOUND` when the answer is absent. Its overall timeout defaults to
+60 seconds and is clamped to 5–120 seconds. It requires a Playwright-backed
+profile; use `snapshot` when you need refs or when extraction is unavailable.
+Use `--selector <css>` to limit large pages to matching subtrees and repeat
+`--ignore-selector <css>` to remove navigation, footers, ads, or banners before
+conversion. `--schema <json>` requests validated structured output in
+`details.json`; invalid structured output is retried once, then fails with
+guidance to retry without the schema.
 
 Snapshot:
 
@@ -197,6 +215,16 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 When an action opens a modal dialog, the action response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 
+Batch actions:
+
+```bash
+openclaw browser batch --actions '[{"kind":"wait","timeMs":500},{"kind":"click","ref":"12"},{"kind":"type","ref":"23","text":"hello"}]'
+openclaw browser batch --actions-file plan.json
+openclaw browser batch --actions-file - --continue
+```
+
+`openclaw browser batch` sends a `kind="batch"` `/act` request with nested `BrowserActRequest` actions (`wait`, `click`, `type`, `evaluate`, ...) — not `open`/`navigate`/`snapshot`/`screenshot`, which are CLI subcommands, not `/act` kinds. `--continue` sets `stopOnError=false` (default stops on first error); `--target-id` scopes the whole batch to one tab. A failed nested action makes the command exit nonzero; use `--json` to retain the ordered `results` response. See [Browser batch CLI](/tools/browser-control#browser-batch-cli) for the full contract (ref lifecycle, target id conflicts, error summary). `batch` is not supported on `profile="user"` / existing-session profiles.
+
 ## State and storage
 
 Viewport + emulation:
@@ -255,7 +283,7 @@ The default existing-session path is host-only Chrome MCP auto-connect. If the b
 Current existing-session limits:
 
 - Snapshot-driven actions use refs, not CSS selectors.
-- `browser.actionTimeoutMs` defaults supported `act` requests to 60000 ms when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
+- Supported `act` requests use a built-in 60000 ms default when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
 - `click` is left-click only.
 - `type` does not support `slowly=true`.
 - `press` does not support `delayMs`.
@@ -265,7 +293,7 @@ Current existing-session limits:
 - File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.
 - Dialog hooks do not support `--timeout`.
 - Screenshots support page captures and `--ref`, but not CSS `--element`.
-- `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
+- `extract`, `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
 
 ## Remote browser control (node host proxy)
 

@@ -13,7 +13,7 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 | Scope                | Default path                                               | Contents                                                                                              |
 | -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and verification history             |
+| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
 A few high-volume or lifecycle-specific features use dedicated SQLite stores, including the task registry and trajectory data.
@@ -52,17 +52,47 @@ Version 3 was an unshipped development step folded into version 4.
 | 1       | Initial shared state database                                                                            | `v2026.5.30-beta.1` |
 | 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))         | `v2026.7.2-beta.1`  |
 | 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663)) | `v2026.7.2-beta.2`  |
+| 4       | Session watch provenance replaces encoded sentinel rows                                                  | Unreleased          |
 
 ## Integrity checks
 
-| When                                        | Check                                                                                              |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Every open                                  | Validate the `schema_meta` table and primary metadata row                                          |
-| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                    |
-| Gateway background verifier                 | Run the full scan about once daily and record results in the global `database_verifications` table |
-| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database                                       |
+| When                                        | Check                                                           |
+| ------------------------------------------- | --------------------------------------------------------------- |
+| Every open                                  | Validate the `schema_meta` table and primary metadata row       |
+| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan |
+| Gateway background verifier                 | Run the full scan about once daily and log results              |
+| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database    |
 
 The Gateway preflight reads schema headers only. The background verifier owns the slower full scan for databases that do not need migration.
+Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
+
+## Troubleshooting
+
+### Why you cannot go back after updating to 2026.7.2
+
+Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 2026.7.2 release train (starting with `v2026.7.2-beta.1`) migrates your databases forward on first start. That migration is one-way: the data is rewritten into the newer schema, and installing an older OpenClaw afterwards does not undo it. The older build refuses to start with a `newer schema version` error that names the build that owns the database.
+
+Downgrading the binary never downgrades the data. If you must run a release older than 2026.7.2 after updating, you have three options:
+
+1. Restore a backup taken before the update. [Create and verify backups](/cli/backup) before major updates.
+2. Run the older build against a separate state directory (`OPENCLAW_STATE_DIR`). It starts fresh; your migrated data stays untouched for when you return to the newer build.
+3. Follow the manual downgrade procedure below. It is unsupported and risks data loss without a verified backup.
+
+Since 2026.7.2, `openclaw update` refuses to install a release that cannot open your current databases, so the updater will not put you in this situation. Installing an older version manually through npm bypasses that guard; the databases still refuse the old binary, but only after it is installed.
+
+### The Gateway refuses to start with a newer schema version error
+
+A newer OpenClaw build wrote your databases, and the running build is older. The error names the refusing install — release version, commit, and install root — plus the schema it supports and the schema it found.
+
+Act on the install root, not the version. One release version string spans many `main` commits and several schema levels, so two installs can both call themselves `2026.7.2` and support different schemas. A prerelease version may not exist on the `latest` npm tag at all: check `npm view openclaw dist-tags` before reinstalling, because the tag carrying the schema you need may be `beta`, and reinstalling from `latest` can move you further away.
+
+A linked source checkout is the case where the commit misleads: `openclaw --version` reports the checkout's git HEAD, but the code actually executing is whatever `dist/` was last built. If the install root is a checkout, rebuild it (`pnpm build`) before concluding the version is wrong.
+
+Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
+
+### A database is quarantined after integrity verification failed
+
+The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
 
 ## Downgrades are unsupported
 

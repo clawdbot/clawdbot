@@ -1,10 +1,10 @@
+import { fork, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  confirmOpenClawAgentDatabaseIntegrity,
   listOpenClawRegisteredAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
@@ -12,10 +12,10 @@ import type {
   OpenClawDatabaseVerifyResult,
   OpenClawDatabaseVerifyTarget,
 } from "./openclaw-database-verify.worker.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { recordOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import {
+  confirmOpenClawStateDatabaseIntegrity,
   recordOpenClawStateDatabaseOpenFailure,
-  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -23,7 +23,7 @@ export const OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS = 5 * 60_000;
 export const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
 
 const log = createSubsystemLogger("state/database-verify");
-type VerificationDatabase = Pick<OpenClawStateKyselyDatabase, "database_verifications">;
+const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
@@ -57,13 +57,18 @@ function isVerifyResult(value: unknown): value is OpenClawDatabaseVerifyResult {
 
 export function runDatabaseVerifyWorker(
   targets: readonly OpenClawDatabaseVerifyTarget[],
-  options: { onWorker?: (worker: Worker | undefined) => void; workerUrl?: URL } = {},
+  options: { onWorker?: (worker: ChildProcess | undefined) => void; workerUrl?: URL } = {},
 ): Promise<OpenClawDatabaseVerifyResult[]> {
   const workerUrl = options.workerUrl ?? resolveDatabaseVerifyWorkerUrl();
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
-  let worker: Worker;
+  let worker: ChildProcess;
   try {
-    worker = new Worker(workerUrl, { workerData: targets, execArgv });
+    // Snapshot preparation opens and closes raw source descriptors. Isolate it
+    // because POSIX close() can release the Gateway's process-owned SQLite locks.
+    worker = fork(fileURLToPath(workerUrl), [DATABASE_VERIFY_CHILD_ARG], {
+      execArgv,
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
   } catch (error) {
     return Promise.reject(toError(error));
   }
@@ -71,6 +76,10 @@ export function runDatabaseVerifyWorker(
 
   return new Promise((resolve, reject) => {
     let settled = false;
+    let result: OpenClawDatabaseVerifyResult[] | undefined;
+    let protocolError: Error | undefined;
+    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let disconnected = !worker.connected;
     const settle = (finish: () => void) => {
       if (settled) {
         return;
@@ -80,23 +89,68 @@ export function runDatabaseVerifyWorker(
       options.onWorker?.(undefined);
       finish();
     };
-    worker.once("message", (message: unknown) => {
+    const settleAfterExitAndDisconnect = () => {
+      const completedExit = exit;
+      if (!completedExit || !disconnected) {
+        return;
+      }
       settle(() => {
-        if (!Array.isArray(message) || !message.every(isVerifyResult)) {
-          reject(new Error("database verification worker returned invalid results"));
-          return;
+        if (protocolError) {
+          reject(protocolError);
+        } else if (completedExit.code !== 0) {
+          reject(
+            new Error(
+              `database verification worker exited with ${
+                completedExit.signal
+                  ? `signal ${completedExit.signal}`
+                  : `code ${completedExit.code}`
+              }`,
+            ),
+          );
+        } else if (!result) {
+          reject(new Error("database verification worker exited without results"));
+        } else {
+          resolve(result);
         }
-        resolve(message);
       });
+    };
+    worker.once("message", (message: unknown) => {
+      if (!Array.isArray(message) || !message.every(isVerifyResult)) {
+        protocolError = new Error("database verification worker returned invalid results");
+        worker.kill();
+        return;
+      }
+      result = message;
     });
     worker.once("error", (error) => settle(() => reject(toError(error))));
-    worker.once("exit", (code) => {
-      if (code !== 0) {
-        settle(() => reject(new Error(`database verification worker exited with code ${code}`)));
-      } else {
-        settle(() => reject(new Error("database verification worker exited without results")));
-      }
+    worker.once("disconnect", () => {
+      disconnected = true;
+      settleAfterExitAndDisconnect();
     });
+    worker.once("exit", (code, signal) => {
+      exit = { code, signal };
+      disconnected ||= !worker.connected;
+      settleAfterExitAndDisconnect();
+    });
+    worker.send(targets, (error) => {
+      if (!error) {
+        return;
+      }
+      worker.kill();
+      settle(() => reject(toError(error)));
+    });
+  });
+}
+
+export async function terminateDatabaseVerifyWorker(worker: ChildProcess): Promise<void> {
+  if (worker.exitCode !== null || worker.signalCode !== null) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    worker.once("exit", () => resolve());
+    if (!worker.kill()) {
+      resolve();
+    }
   });
 }
 
@@ -131,104 +185,25 @@ export function collectOpenClawDatabaseVerifyTargets(options: {
   return [...targets.values()];
 }
 
-function createVerificationFailure(result: OpenClawDatabaseVerifyResult): Error {
-  const error = new Error(
-    result.error ?? `SQLite integrity verification failed for ${result.path}`,
-  );
-  error.name = "SqliteIntegrityError";
-  return error;
-}
-
-/** Persist one worker batch, then latch failures at each database owner. */
+/** Reconfirm worker failures on live owners before quarantine and latching. */
 export function applyOpenClawDatabaseVerificationResults(options: {
   env: NodeJS.ProcessEnv;
   results: readonly OpenClawDatabaseVerifyResult[];
   targets: readonly OpenClawDatabaseVerifyTarget[];
-  verifiedAt?: number;
 }): void {
   const targetByPath = new Map(options.targets.map((target) => [target.path, target]));
-  const verifiedAt = options.verifiedAt ?? Date.now();
-
-  // One best-effort row write into a possibly corrupt state file buys restart-durable quarantine.
-  // Doctor rebuilds the file during repair, so this bounded mutation is an accepted tradeoff.
-  const persistResults = (results: readonly OpenClawDatabaseVerifyResult[]) => {
-    runOpenClawStateWriteTransaction(
-      (database) => {
-        const db = getNodeSqliteKysely<VerificationDatabase>(database.db);
-        for (const result of results) {
-          const target = targetByPath.get(result.path);
-          if (!target) {
-            continue;
-          }
-          const existing = executeSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("database_verifications")
-              .select("result")
-              .where("path", "=", result.path)
-              .limit(1),
-          ).rows[0];
-          if (existing?.result === "error") {
-            continue;
-          }
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .insertInto("database_verifications")
-              .values({
-                path: result.path,
-                kind: target.kind,
-                verified_at: verifiedAt,
-                result: result.ok ? "ok" : result.terminal ? "error" : "inconclusive",
-                error: result.error ?? null,
-              })
-              .onConflict((conflict) =>
-                conflict.column("path").doUpdateSet({
-                  kind: target.kind,
-                  verified_at: verifiedAt,
-                  result: result.ok ? "ok" : result.terminal ? "error" : "inconclusive",
-                  error: result.error ?? null,
-                }),
-              ),
-          );
-        }
-      },
-      { env: options.env },
-      { operationLabel: "state.database-verifications.record" },
-    );
-  };
-  try {
-    persistResults(options.results);
-  } catch (error) {
-    // Terminal rows are the restart-durable quarantine; retry those once so a
-    // transient state-DB lock does not silently downgrade them to process-local.
-    const terminalResults = options.results.filter((result) => !result.ok && result.terminal);
-    let retried = false;
-    if (terminalResults.length > 0) {
-      try {
-        persistResults(terminalResults);
-        retried = true;
-      } catch {
-        // fall through to the process-local warning below
-      }
-    }
-    if (!retried) {
-      // Accepted tradeoff: when this write fails the quarantine stays process-local
-      // until the next daily verifier pass re-detects and re-persists. A sidecar
-      // marker would break the SQLite-only storage contract, and startup full
-      // scans would reintroduce the multi-second opens this design removes.
-      log.error("failed to persist database verification results; quarantine is process-local", {
-        error: String(error),
-      });
-    }
-  }
 
   for (const result of options.results) {
-    if (result.ok) {
-      continue;
-    }
     const target = targetByPath.get(result.path);
     if (!target) {
+      continue;
+    }
+    if (result.ok) {
+      log.info("database integrity verification passed", {
+        kind: target.kind,
+        label: target.label,
+        path: result.path,
+      });
       continue;
     }
     if (!result.terminal) {
@@ -240,17 +215,66 @@ export function applyOpenClawDatabaseVerificationResults(options: {
       });
       continue;
     }
-    const error = createVerificationFailure(result);
-    if (target.kind === "state") {
-      recordOpenClawStateDatabaseOpenFailure(result.path, error);
-    } else {
-      recordOpenClawAgentDatabaseOpenFailure(result.path, error);
+    const confirmation =
+      target.kind === "state"
+        ? confirmOpenClawStateDatabaseIntegrity(result.path)
+        : confirmOpenClawAgentDatabaseIntegrity(result.path);
+    if (confirmation.status === "healthy") {
+      log.info("discarding stale database integrity verification result", {
+        kind: target.kind,
+        label: target.label,
+        path: result.path,
+      });
+      continue;
+    }
+    if (!confirmation.terminal) {
+      log.warn("database integrity verification was inconclusive", {
+        kind: target.kind,
+        label: target.label,
+        path: result.path,
+        error: confirmation.error.message,
+      });
+      continue;
+    }
+    const latched =
+      target.kind === "state"
+        ? recordOpenClawStateDatabaseOpenFailure(
+            result.path,
+            confirmation.error,
+            confirmation.generation,
+          )
+        : recordOpenClawAgentDatabaseOpenFailure(
+            result.path,
+            confirmation.error,
+            confirmation.generation,
+          );
+    if (!latched) {
+      log.info("discarding database integrity result after database generation changed", {
+        kind: target.kind,
+        label: target.label,
+        path: result.path,
+      });
+      continue;
+    }
+    const recorded = recordOpenClawDatabaseQuarantine({
+      env: options.env,
+      generation: confirmation.generation,
+      kind: target.kind,
+      path: result.path,
+      reason: confirmation.error.message,
+    });
+    if (!recorded) {
+      // Store unavailable. Daily verification retries persistence.
+      log.error("failed to persist database quarantine; quarantine is process-local", {
+        kind: target.kind,
+        path: result.path,
+      });
     }
     log.error("database integrity verification failed", {
       kind: target.kind,
       label: target.label,
       path: result.path,
-      error: error.message,
+      error: confirmation.error.message,
     });
   }
 }

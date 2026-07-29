@@ -1,9 +1,11 @@
 /** Tests for process-local SecretRef degraded-owner state. */
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  associateSecretResolutionErrorOwners,
   assertSecretOwnerAvailable,
   clearActiveCredentialDegradedOwner,
   listActiveDegradedSecretOwners,
+  listSecretResolutionErrorOwners,
   SecretSurfaceUnavailableError,
   setActiveCredentialDegradedOwner,
   setActiveDegradedSecretOwners,
@@ -36,6 +38,46 @@ describe("runtime degraded SecretRef owners", () => {
       "Secret owner provider:openai is configured but unavailable",
     );
     expect(() => assertSecretOwnerAvailable("provider", "anthropic")).not.toThrow();
+  });
+  it("records strict resolution owner metadata without exposing mutable state", () => {
+    const error = new Error("private provider details");
+    const owner = {
+      ownerKind: "provider" as const,
+      ownerId: "openai",
+      state: "unavailable" as const,
+      paths: ["models.providers.openai.apiKey"],
+      refKeys: ["env:default:OPENAI_API_KEY"],
+      reason: "secret provider failed",
+      degradationState: "stale" as const,
+      failureMatched: true,
+      source: "config" as const,
+    };
+    associateSecretResolutionErrorOwners(error, [owner]);
+
+    const recorded = listSecretResolutionErrorOwners(error);
+    recorded[0]?.paths.push("mutated");
+    expect(listSecretResolutionErrorOwners(error)[0]?.paths).toEqual([
+      "models.providers.openai.apiKey",
+    ]);
+  });
+
+  it("reports stale owners without blocking their last-known-good runtime", () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        degradationState: "stale",
+        paths: ["models.providers.openai.apiKey"],
+        refKeys: ["env:default:OPENAI_API_KEY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    expect(listActiveDegradedSecretOwners()).toMatchObject([
+      { ownerId: "openai", degradationState: "stale" },
+    ]);
+    expect(() => assertSecretOwnerAvailable("provider", "openai")).not.toThrow();
   });
 
   it("merges runtime-discovered credential owners and clears them independently", () => {

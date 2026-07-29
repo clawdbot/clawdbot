@@ -1,6 +1,8 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   type ProviderOperationTimeoutMs,
@@ -71,13 +73,21 @@ export async function downloadXaiVideo(
     maxBytes: number;
   } & XaiVideoRequestPolicy,
 ): Promise<GeneratedVideoAsset> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? params.defaultTimeoutMs,
+    label: "xAI generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? params.defaultTimeoutMs,
+  });
   const { response, release } = await fetchXaiVideoResponse({
     url: params.url,
     stage: "download",
     requestFailedMessage: "xAI generated video download failed",
     auditContext: "xai-video-download",
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs,
+    timeoutMs,
     defaultTimeoutMs: params.defaultTimeoutMs,
     allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
@@ -86,6 +96,11 @@ export async function downloadXaiVideo(
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `xAI generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`xAI generated video download exceeds ${maxBytes} bytes`),
     });

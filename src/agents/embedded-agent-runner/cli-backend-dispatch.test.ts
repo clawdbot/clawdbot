@@ -343,11 +343,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       requireExplicitMessageTarget: true,
       cliToolAvailability: {
         native: [],
-        mcp: [
-          "mcp__openclaw__memory_search",
-          "mcp__openclaw__memory_get",
-          "mcp__openclaw__notes_retrieve_context",
-        ],
+        openClaw: ["memory_search", "memory_get", "notes_retrieve_context"],
       },
     });
     // Embedded toolsAllow must never reach the CLI runner: it fails closed.
@@ -383,6 +379,43 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
   });
 
+  it("retains prompt media facts through the embedded-to-CLI bridge", async () => {
+    const media = [{ path: "/tmp/recall.png", contentType: "image/png" }];
+
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ media }));
+
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      prompt: "recall prompt",
+      media,
+    });
+  });
+
+  it("forwards execution phases from the CLI backend", async () => {
+    const onExecutionPhase = vi.fn();
+    runCliAgent.mockImplementation(
+      async (cliParams: { onExecutionPhase?: RunEmbeddedAgentParams["onExecutionPhase"] }) => {
+        cliParams.onExecutionPhase?.({
+          phase: "model_call_started",
+          provider: "anthropic",
+          model: "claude-opus-4-8",
+          backend: "claude-cli",
+          firstModelCallStarted: true,
+        });
+        return cliRunResult();
+      },
+    );
+
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ onExecutionPhase }));
+
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "model_call_started",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      backend: "claude-cli",
+      firstModelCallStarted: true,
+    });
+  });
+
   it("bridges CLI tool result events to onAgentToolResult without the MCP prefix", async () => {
     const observed: Array<{ toolName: string; isError: boolean }> = [];
     const params = baseRunParams({
@@ -400,6 +433,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
           name: "mcp__openclaw__memory_search",
           result: { content: [] },
           isError: false,
+          resultContentSource: "network",
         },
       });
       // Soft tool failures must surface as isError like the native path.
@@ -482,6 +516,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
           toolCallId: "call-1",
           result: { content: [] },
           isError: false,
+          resultContentSource: "network",
         },
       });
       return cliRunResult();
@@ -507,7 +542,11 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       }),
     );
     expect(transcriptRecorder.noteToolEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "result", toolName: "memory_search" }),
+      expect.objectContaining({
+        phase: "result",
+        toolName: "memory_search",
+        resultContentSource: "network",
+      }),
     );
     expect(transcriptRecorder.finalize).toHaveBeenCalledWith("recall summary");
   });

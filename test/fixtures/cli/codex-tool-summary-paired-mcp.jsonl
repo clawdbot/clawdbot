@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"thread-paired"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"mcp-paired","type":"mcp_tool_call","server":"github","tool":"search","arguments":{"query":"openclaw"},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"mcp-paired","type":"mcp_tool_call","server":"github","tool":"search","arguments":{"query":"openclaw"},"result":{"content":[],"structured_content":{}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"message-paired","type":"agent_message","text":"paired mcp"}}
+{"type":"turn.completed","usage":{"input_tokens":5,"cached_input_tokens":1,"cache_write_input_tokens":0,"output_tokens":3,"reasoning_output_tokens":0}}

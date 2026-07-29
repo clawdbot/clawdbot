@@ -1,5 +1,5 @@
 // Google provider module implements model/runtime integration.
-import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
@@ -205,7 +205,7 @@ function normalizeGoogleTtsProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.google.apiKey",
+      path: "tts.providers.google.apiKey",
     }),
     baseUrl: trimToUndefined(raw?.baseUrl),
     model: normalizeGoogleTtsModel(raw?.model),
@@ -297,7 +297,11 @@ function extractGoogleSpeechPcm(payload: GoogleGenerateSpeechResponse): Buffer {
       if (!data) {
         continue;
       }
-      return Buffer.from(data, "base64");
+      const canonicalAudio = canonicalizeBase64(data);
+      if (!canonicalAudio) {
+        throw new Error("Google TTS response returned malformed base64 audio data");
+      }
+      return Buffer.from(canonicalAudio, "base64");
     }
   }
   throw new Error("Google TTS response missing audio data");
@@ -325,12 +329,6 @@ function normalizePromptSectionText(value: string | undefined): string | undefin
   return sanitized;
 }
 
-function normalizePromptList(values: readonly string[] | undefined): string[] {
-  return (values ?? [])
-    .map((value) => normalizePromptSectionText(value))
-    .filter((value): value is string => Boolean(value));
-}
-
 function isOpenClawGoogleAudioProfilePrompt(text: string): boolean {
   return (
     text.includes("# AUDIO PROFILE:") &&
@@ -344,27 +342,10 @@ function renderGoogleAudioProfilePrompt(params: {
   persona?: {
     id: string;
     label?: string;
-    prompt?: {
-      profile?: string;
-      scene?: string;
-      sampleContext?: string;
-      style?: string;
-      accent?: string;
-      pacing?: string;
-      constraints?: string[];
-    };
   };
   personaPrompt?: string;
 }): string {
   const transcript = params.text.replace(/\r\n?/g, "\n").trim();
-  const prompt = params.persona?.prompt;
-  const profile = normalizePromptSectionText(prompt?.profile);
-  const scene = normalizePromptSectionText(prompt?.scene);
-  const sampleContext = normalizePromptSectionText(prompt?.sampleContext);
-  const style = normalizePromptSectionText(prompt?.style);
-  const accent = normalizePromptSectionText(prompt?.accent);
-  const pacing = normalizePromptSectionText(prompt?.pacing);
-  const constraints = normalizePromptList(prompt?.constraints);
   const personaPrompt = normalizePromptSectionText(params.personaPrompt);
   const label =
     normalizePromptSectionText(params.persona?.label) ??
@@ -378,35 +359,16 @@ function renderGoogleAudioProfilePrompt(params: {
     ].join("\n"),
   ];
 
-  if (label || profile) {
-    sections.push([`# AUDIO PROFILE: ${label ?? "voice"}`, profile].filter(Boolean).join("\n"));
-  }
-  if (scene) {
-    sections.push(["## THE SCENE", scene].join("\n"));
+  if (label) {
+    sections.push(`# AUDIO PROFILE: ${label}`);
   }
 
   const directorNotes: string[] = [];
-  if (style) {
-    directorNotes.push(`Style: ${style}`);
-  }
-  if (accent) {
-    directorNotes.push(`Accent: ${accent}`);
-  }
-  if (pacing) {
-    directorNotes.push(`Pacing: ${pacing}`);
-  }
-  if (constraints.length > 0) {
-    directorNotes.push(["Constraints:", ...constraints.map((item) => `- ${item}`)].join("\n"));
-  }
   if (personaPrompt) {
     directorNotes.push(["Provider notes:", personaPrompt].join("\n"));
   }
   if (directorNotes.length > 0) {
     sections.push(["### DIRECTOR'S NOTES", ...directorNotes].join("\n"));
-  }
-
-  if (sampleContext) {
-    sections.push(["### SAMPLE CONTEXT", sampleContext].join("\n"));
   }
 
   sections.push(["### TRANSCRIPT", transcript].join("\n"));

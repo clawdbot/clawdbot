@@ -21,7 +21,7 @@ export type GoogleMeetMode = "agent" | "bidi" | "transcribe";
 export type GoogleMeetModeInput = GoogleMeetMode | "realtime";
 type GoogleMeetRealtimeStrategy = "agent" | "bidi";
 type GoogleMeetChromeAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
-export type GoogleMeetToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
+type GoogleMeetToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 
 export type GoogleMeetConfig = {
   enabled: boolean;

@@ -208,9 +208,25 @@ function createLegacyStateMigrationDetectionResult(params?: {
     targetScope: undefined,
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
+    deviceAuth: {
+      sourcePath: "/tmp/state/identity/device-auth.json",
+      sourcePresent: false,
+      hasLegacy: false,
+    },
+    deviceIdentity: {
+      sourcePath: "/tmp/state/identity/device.json",
+      claimPath: "/tmp/state/identity/device.json.doctor-importing",
+      nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+      hasLegacy: false,
+      hasInvalidCanonical: false,
+    },
     mcpOauth: {
       sourceDir: "/tmp/state/mcp-oauth",
       sourcePaths: [],
+      hasLegacy: false,
+    },
+    execApprovals: {
+      sourcePath: "/tmp/state/exec-approvals.json",
       hasLegacy: false,
     },
     sessions: {
@@ -250,6 +266,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       preview: [],
     },
+    worktrees: { hasLegacy: false },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
       flowRunsPath: "/tmp/state/flows/registry.sqlite",
@@ -287,6 +304,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     commitments: {
       sourcePath: "/tmp/state/commitments/commitments.json",
+      hasLegacy: false,
+    },
+    auditLogs: {
+      sources: [],
       hasLegacy: false,
     },
     acpReplayLedger: {

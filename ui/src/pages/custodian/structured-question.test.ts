@@ -1,3 +1,4 @@
+// @vitest-environment node
 import type { SystemAgentChatQuestion } from "@openclaw/gateway-protocol";
 import { describe, expect, it } from "vitest";
 import { parseCustodianQuestion } from "./structured-question.ts";
@@ -13,6 +14,7 @@ describe("custodian typed question", () => {
         { label: "Connect WhatsApp", reply: "connect whatsapp", description: "Chat there." },
       ],
       isOther: true,
+      skipAction: "exit",
     };
     expect(parseCustodianQuestion(question)).toEqual({
       id: "onboarding-next-step",
@@ -23,6 +25,7 @@ describe("custodian typed question", () => {
         { label: "Connect WhatsApp", reply: "connect whatsapp", description: "Chat there." },
       ],
       isOther: true,
+      skipAction: "exit",
     });
   });
 

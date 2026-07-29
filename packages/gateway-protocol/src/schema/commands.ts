@@ -34,21 +34,21 @@ export const COMMAND_LIST_MAX_ITEMS = 500;
 const BoundedNonEmptyString = (maxLength: number) => Type.String({ minLength: 1, maxLength });
 
 /** Source system that contributed a command. */
-export const CommandSourceSchema = Type.Union([
+const CommandSourceSchema = Type.Union([
   Type.Literal("native"),
   Type.Literal("skill"),
   Type.Literal("plugin"),
 ]);
 
 /** Surfaces where a command may be invoked. */
-export const CommandScopeSchema = Type.Union([
+const CommandScopeSchema = Type.Union([
   Type.Literal("text"),
   Type.Literal("native"),
   Type.Literal("both"),
 ]);
 
 /** Coarse UI grouping for command catalog display. */
-export const CommandCategorySchema = Type.Union([
+const CommandCategorySchema = Type.Union([
   Type.Literal("session"),
   Type.Literal("options"),
   Type.Literal("status"),
@@ -59,13 +59,13 @@ export const CommandCategorySchema = Type.Union([
 ]);
 
 /** Static argument choice shown to clients. */
-export const CommandArgChoiceSchema = closedObject({
+const CommandArgChoiceSchema = closedObject({
   value: Type.String({ maxLength: COMMAND_CHOICE_VALUE_MAX_LENGTH }),
   label: Type.String({ maxLength: COMMAND_CHOICE_LABEL_MAX_LENGTH }),
 });
 
 /** One typed argument advertised for a command. */
-export const CommandArgSchema = closedObject({
+const CommandArgSchema = closedObject({
   name: BoundedNonEmptyString(COMMAND_ARG_NAME_MAX_LENGTH),
   description: Type.String({ maxLength: COMMAND_ARG_DESCRIPTION_MAX_LENGTH }),
   type: Type.Union([Type.Literal("string"), Type.Literal("number"), Type.Literal("boolean")]),

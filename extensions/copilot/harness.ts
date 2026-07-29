@@ -4,6 +4,7 @@ import {
   buildAgentHookContextChannelFields,
   compactWithSafetyTimeout,
   getModelProviderRequestTransport,
+  projectSettledTurnFinalizationAttemptResult,
   resolveCompactionTimeoutMs,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
@@ -43,6 +44,7 @@ interface CreateCopilotAgentHarnessOptions {
 }
 
 interface TrackedSession {
+  journalVersion?: 1;
   sdkSessionId: string;
   client: CopilotClient;
   clientOptions: ClientCreateOptions;
@@ -90,6 +92,7 @@ interface CopilotHistoryCompactSession {
 
 export type CopilotSessionBinding = {
   schemaVersion: 2;
+  journalVersion?: 1;
   sdkSessionId: string;
   compatKey: string;
   compactKey: string;
@@ -106,7 +109,10 @@ type LegacyCopilotSessionBinding = {
   updatedAt: number;
 };
 
-type CopilotAttemptSessionBinding = Pick<CopilotSessionBinding, "compatKey" | "sdkSessionId">;
+type CopilotAttemptSessionBinding = Pick<
+  CopilotSessionBinding,
+  "compatKey" | "journalVersion" | "sdkSessionId"
+>;
 type DeferredCompactionCleanupOutcome = "aborted" | "completed" | "deadline";
 type DeferredCompactionCleanup = {
   abort: () => void;
@@ -159,6 +165,7 @@ function normalizeBinding(
     value.compatKey.trim() === "" ||
     typeof value.compactKey !== "string" ||
     value.compactKey.trim() === "" ||
+    (value.journalVersion !== undefined && value.journalVersion !== 1) ||
     (value.authMode !== "gitHubToken" &&
       value.authMode !== "byok" &&
       value.authMode !== "useLoggedInUser") ||
@@ -174,6 +181,7 @@ function normalizeBinding(
   }
   return {
     schemaVersion: 2,
+    ...(value.journalVersion === 1 ? { journalVersion: 1 as const } : {}),
     sdkSessionId: value.sdkSessionId.trim(),
     compatKey: value.compatKey,
     compactKey: value.compactKey,
@@ -654,6 +662,226 @@ export function createCopilotAgentHarness(
     await Promise.allSettled(pending.map(([cleanup]) => cleanup));
   }
 
+  async function runHarnessAttempt(
+    params: AgentHarnessAttemptParams,
+    operation: "attempt" | "settled-tool-finalization",
+  ): Promise<AgentHarnessAttemptResult> {
+    const attemptPromise = (async () => {
+      if (disposed) {
+        throw new Error("[copilot] harness has been disposed; cannot start new attempts");
+      }
+      const { resolvePoolAcquire, runCopilotAttempt } = await import("./src/attempt.js");
+      if (disposed) {
+        throw new Error("[copilot] harness was disposed while starting an attempt");
+      }
+      const pool = await getPool();
+      if (disposed) {
+        throw new Error("[copilot] harness was disposed while starting an attempt");
+      }
+      let poolAcquire: ReturnType<typeof resolvePoolAcquire>;
+      try {
+        poolAcquire = resolvePoolAcquire(params as never);
+      } catch (error) {
+        // Keep invalid forced BYOK model configuration on the normal attempt
+        // result path so callers receive `model_not_supported` instead of an
+        // uncaught harness rejection. Finalization cannot safely create a new
+        // incompatible session and therefore keeps the failure closed.
+        if (operation === "attempt" && isCopilotByokUnsupportedProviderError(error)) {
+          return runCopilotAttempt(params, { pool });
+        }
+        throw error;
+      }
+      const openclawSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+
+      // Reuse the SDK session across turns within the same OpenClaw session so
+      // Copilot's prompt cache, tool history, and compaction state survive.
+      // Compatibility covers provider/model/cwd/auth; incompatible state starts
+      // a fresh ordinary attempt but cannot be used for settled finalization.
+      const currentCompatKey = computeSessionCompatKey(params);
+      const currentCompactKey = computeSessionCompactKey(params);
+      const compactionCleanupPending =
+        openclawSessionId !== undefined && hasPendingDeferredCompactionCleanup(openclawSessionId);
+      const replayBlocked =
+        openclawSessionId !== undefined &&
+        (compactionCleanupPending || resetBlockedStoredSessions.has(openclawSessionId));
+      const tracked =
+        openclawSessionId && !replayBlocked ? trackedSessions.get(openclawSessionId) : undefined;
+      const stored = openclawSessionId
+        ? replayBlocked
+          ? undefined
+          : lookupStoredBinding(options?.sessionStore, openclawSessionId)
+        : undefined;
+      const resumableBinding =
+        tracked && tracked.compatKey === currentCompatKey
+          ? tracked
+          : !tracked && stored && stored.compatKey === currentCompatKey
+            ? stored
+            : undefined;
+      const resumableSessionId = resumableBinding?.sdkSessionId;
+      if (operation === "settled-tool-finalization" && !resumableSessionId) {
+        throw new Error(
+          "[copilot] cannot safely finalize a settled tool turn without its compatible SDK session",
+        );
+      }
+      const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
+        ? ({
+            ...params,
+            ...(operation === "settled-tool-finalization"
+              ? {
+                  disableTools: true,
+                  onAgentEvent: undefined,
+                  onAgentToolResult: undefined,
+                  onAssistantDelta: undefined,
+                  onAssistantMessageStart: undefined,
+                  onBlockReply: undefined,
+                  onBlockReplyFlush: undefined,
+                  onPartialReply: undefined,
+                  onReasoningEnd: undefined,
+                  onReasoningStream: undefined,
+                  onToolResult: undefined,
+                  onToolStreamBoundary: undefined,
+                }
+              : {}),
+            // Finalization is a new, isolated turn over settled state, not a
+            // replay of the side-effecting prompt. Ignore replayInvalid while
+            // still requiring the exact compatible native session above.
+            initialReplayState:
+              operation === "settled-tool-finalization"
+                ? {
+                    ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
+                    sdkSessionId: resumableSessionId,
+                  }
+                : {
+                    ...params.initialReplayState,
+                    ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
+                    sdkSessionId: resumableSessionId,
+                  },
+          } as AgentHarnessAttemptParams)
+        : params;
+
+      const result = await runCopilotAttempt(effectiveParams, {
+        pool,
+        ...(operation === "settled-tool-finalization" ? { operation } : {}),
+        onSessionEstablished:
+          operation === "attempt" && openclawSessionId
+            ? ({
+                compactionSessionConfig,
+                sdkSessionId,
+                pooledClient,
+                sessionConfig,
+              }: {
+                compactionSessionConfig?: CopilotSessionConfig;
+                sdkSessionId: string;
+                pooledClient: PooledClient;
+                sessionConfig: CopilotSessionConfig;
+              }) => {
+                trackedSessions.set(openclawSessionId, {
+                  sdkSessionId,
+                  client: pooledClient.client,
+                  clientOptions: poolAcquire.options,
+                  compatKey: currentCompatKey,
+                  compactKey: currentCompactKey,
+                  poolKey: pooledClient.key,
+                  sessionConfig: compactionSessionConfig ?? sessionConfig,
+                  ...sessionAuthFields(poolAcquire.auth),
+                });
+                registerStoredBinding(options?.sessionStore, openclawSessionId, {
+                  schemaVersion: 2,
+                  sdkSessionId,
+                  compatKey: currentCompatKey,
+                  compactKey: currentCompactKey,
+                  ...sessionAuthFields(poolAcquire.auth),
+                  updatedAt: Date.now(),
+                });
+                resetBlockedStoredSessions.delete(openclawSessionId);
+              }
+            : undefined,
+        onDeferredCompaction: openclawSessionId
+          ? ({
+              abort,
+              cleanup,
+              sdkSessionId,
+            }: {
+              abort: () => void;
+              cleanup: Promise<DeferredCompactionCleanupOutcome>;
+              sdkSessionId: string;
+            }) => {
+              const trackedBinding = trackedSessions.get(openclawSessionId);
+              const storedBinding = lookupStoredBinding(options?.sessionStore, openclawSessionId);
+              const ownsTrackedSession = trackedBinding?.sdkSessionId === sdkSessionId;
+              const ownsStoredSession = storedBinding?.sdkSessionId === sdkSessionId;
+              if (!ownsTrackedSession && !ownsStoredSession) {
+                return;
+              }
+              trackDeferredCompactionCleanup({
+                abort,
+                cleanup,
+                sessionId: openclawSessionId,
+                sdkSessionId,
+              });
+              // The attempt retains this SDK session until its background
+              // compaction resolves. Preserve its binding for a successful
+              // completion, but do not let a new turn resume it yet.
+              resetBlockedStoredSessions.add(openclawSessionId);
+              void cleanup.then((outcome) => {
+                const currentTracked = trackedSessions.get(openclawSessionId);
+                const currentStored = lookupStoredBinding(options?.sessionStore, openclawSessionId);
+                const stillOwnsTrackedSession = currentTracked?.sdkSessionId === sdkSessionId;
+                const stillOwnsStoredSession = currentStored?.sdkSessionId === sdkSessionId;
+                if (outcome === "completed") {
+                  if (stillOwnsTrackedSession || stillOwnsStoredSession) {
+                    resetBlockedStoredSessions.delete(openclawSessionId);
+                  }
+                  return;
+                }
+                if (stillOwnsTrackedSession) {
+                  trackedSessions.delete(openclawSessionId);
+                }
+                if (stillOwnsStoredSession) {
+                  deleteStoredBinding(options?.sessionStore, openclawSessionId);
+                }
+                if (stillOwnsTrackedSession || stillOwnsStoredSession) {
+                  resetBlockedStoredSessions.add(openclawSessionId);
+                }
+              });
+            }
+          : undefined,
+      });
+      if (operation === "attempt" && openclawSessionId) {
+        const attemptResult = result as AgentHarnessAttemptResult & {
+          journalValidated?: boolean;
+          sdkSessionId?: string;
+        };
+        const sdkSessionId = attemptResult.sdkSessionId;
+        const trackedSession = trackedSessions.get(openclawSessionId);
+        if (sdkSessionId && trackedSession?.sdkSessionId === sdkSessionId) {
+          const { journalVersion: _journalVersion, ...baseTracked } = trackedSession;
+          const nextTracked: TrackedSession = {
+            ...baseTracked,
+            ...(attemptResult.journalValidated ? { journalVersion: 1 } : {}),
+          };
+          trackedSessions.set(openclawSessionId, nextTracked);
+          registerStoredBinding(options?.sessionStore, openclawSessionId, {
+            schemaVersion: 2,
+            ...(attemptResult.journalValidated ? { journalVersion: 1 } : {}),
+            sdkSessionId,
+            compatKey: nextTracked.compatKey,
+            compactKey: nextTracked.compactKey,
+            ...sessionAuthFields(nextTracked),
+            updatedAt: Date.now(),
+          });
+        }
+      }
+      return result;
+    })();
+    inFlight.add(attemptPromise);
+    try {
+      return await attemptPromise;
+    } finally {
+      inFlight.delete(attemptPromise);
+    }
+  }
+
   return {
     id: options?.id ?? "copilot",
     label: options?.label ?? "GitHub Copilot agent runtime",
@@ -702,180 +930,11 @@ export function createCopilotAgentHarness(
       return { supported: true, priority: 100 };
     },
 
-    async runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult> {
-      const attemptPromise = (async () => {
-        if (disposed) {
-          throw new Error("[copilot] harness has been disposed; cannot start new attempts");
-        }
-        const { resolvePoolAcquire, runCopilotAttempt } = await import("./src/attempt.js");
-        if (disposed) {
-          throw new Error("[copilot] harness was disposed while starting an attempt");
-        }
-        const pool = await getPool();
-        if (disposed) {
-          throw new Error("[copilot] harness was disposed while starting an attempt");
-        }
-        let poolAcquire: ReturnType<typeof resolvePoolAcquire>;
-        try {
-          poolAcquire = resolvePoolAcquire(params as never);
-        } catch (error) {
-          // Keep invalid forced BYOK model configuration on the normal attempt
-          // result path so callers receive `model_not_supported` instead of an
-          // uncaught harness rejection. Other auth/pool errors remain fatal.
-          if (isCopilotByokUnsupportedProviderError(error)) {
-            return runCopilotAttempt(params, { pool });
-          }
-          throw error;
-        }
-        const openclawSessionId =
-          typeof params.sessionId === "string" ? params.sessionId : undefined;
+    runAttempt: (params) => runHarnessAttempt(params, "attempt"),
 
-        // Dogfood finding #4: reuse the SDK session across turns within
-        // the same OpenClaw session so that the GitHub Copilot agent runtime's prompt
-        // cache, tool-call history, and any server-side compaction state
-        // survive turn boundaries. Without this, every turn called
-        // `createSession()` and lost cache + thread continuity — the
-        // smoking gun was distinct `${sdkSessionId}` scopes per turn in
-        // the playground transcript.
-        //
-        // Safety:
-        //   - Only inject when the tracked compatKey still matches the
-        //     current attempt's fingerprint (provider/model/cwd/auth).
-        //     Mismatch falls through to `createSession` and the new SDK
-        //     session replaces the tracked entry below.
-        //   - Preserve any caller-provided `replayInvalid: true` — never
-        //     downgrade an orchestrator-issued safety signal to false.
-        //     `decideReplayAction` treats undefined as resumable already.
-        //   - On resume failure, `attempt.ts` recovers via the
-        //     `replay-shim` (`resumeFailureRecovered:true`) and falls
-        //     back to `createSession`, so a stale-session error never
-        //     surfaces as a prompt error.
-        const currentCompatKey = computeSessionCompatKey(params);
-        const currentCompactKey = computeSessionCompactKey(params);
-        const compactionCleanupPending =
-          openclawSessionId !== undefined && hasPendingDeferredCompactionCleanup(openclawSessionId);
-        const replayBlocked =
-          openclawSessionId !== undefined &&
-          (compactionCleanupPending || resetBlockedStoredSessions.has(openclawSessionId));
-        const tracked =
-          openclawSessionId && !replayBlocked ? trackedSessions.get(openclawSessionId) : undefined;
-        const stored = openclawSessionId
-          ? replayBlocked
-            ? undefined
-            : lookupStoredBinding(options?.sessionStore, openclawSessionId)
-          : undefined;
-        const resumableSessionId =
-          tracked && tracked.compatKey === currentCompatKey
-            ? tracked.sdkSessionId
-            : !tracked && stored && stored.compatKey === currentCompatKey
-              ? stored.sdkSessionId
-              : undefined;
-        const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
-          ? ({
-              ...params,
-              initialReplayState: {
-                ...params.initialReplayState,
-                sdkSessionId: resumableSessionId,
-              },
-            } as AgentHarnessAttemptParams)
-          : params;
-
-        return runCopilotAttempt(effectiveParams, {
-          pool,
-          onSessionEstablished: openclawSessionId
-            ? ({
-                compactionSessionConfig,
-                sdkSessionId,
-                pooledClient,
-                sessionConfig,
-              }: {
-                compactionSessionConfig?: CopilotSessionConfig;
-                sdkSessionId: string;
-                pooledClient: PooledClient;
-                sessionConfig: CopilotSessionConfig;
-              }) => {
-                trackedSessions.set(openclawSessionId, {
-                  sdkSessionId,
-                  client: pooledClient.client,
-                  clientOptions: poolAcquire.options,
-                  compatKey: currentCompatKey,
-                  compactKey: currentCompactKey,
-                  poolKey: pooledClient.key,
-                  sessionConfig: compactionSessionConfig ?? sessionConfig,
-                  ...sessionAuthFields(poolAcquire.auth),
-                });
-                registerStoredBinding(options?.sessionStore, openclawSessionId, {
-                  schemaVersion: 2,
-                  sdkSessionId,
-                  compatKey: currentCompatKey,
-                  compactKey: currentCompactKey,
-                  ...sessionAuthFields(poolAcquire.auth),
-                  updatedAt: Date.now(),
-                });
-                resetBlockedStoredSessions.delete(openclawSessionId);
-              }
-            : undefined,
-          onDeferredCompaction: openclawSessionId
-            ? ({
-                abort,
-                cleanup,
-                sdkSessionId,
-              }: {
-                abort: () => void;
-                cleanup: Promise<DeferredCompactionCleanupOutcome>;
-                sdkSessionId: string;
-              }) => {
-                const trackedBinding = trackedSessions.get(openclawSessionId);
-                const storedBinding = lookupStoredBinding(options?.sessionStore, openclawSessionId);
-                const ownsTrackedSession = trackedBinding?.sdkSessionId === sdkSessionId;
-                const ownsStoredSession = storedBinding?.sdkSessionId === sdkSessionId;
-                if (!ownsTrackedSession && !ownsStoredSession) {
-                  return;
-                }
-                trackDeferredCompactionCleanup({
-                  abort,
-                  cleanup,
-                  sessionId: openclawSessionId,
-                  sdkSessionId,
-                });
-                // The attempt retains this SDK session until its background
-                // compaction resolves. Preserve its binding for a successful
-                // completion, but do not let a new turn resume it yet.
-                resetBlockedStoredSessions.add(openclawSessionId);
-                void cleanup.then((outcome) => {
-                  const currentTracked = trackedSessions.get(openclawSessionId);
-                  const currentStored = lookupStoredBinding(
-                    options?.sessionStore,
-                    openclawSessionId,
-                  );
-                  const stillOwnsTrackedSession = currentTracked?.sdkSessionId === sdkSessionId;
-                  const stillOwnsStoredSession = currentStored?.sdkSessionId === sdkSessionId;
-                  if (outcome === "completed") {
-                    if (stillOwnsTrackedSession || stillOwnsStoredSession) {
-                      resetBlockedStoredSessions.delete(openclawSessionId);
-                    }
-                    return;
-                  }
-                  if (stillOwnsTrackedSession) {
-                    trackedSessions.delete(openclawSessionId);
-                  }
-                  if (stillOwnsStoredSession) {
-                    deleteStoredBinding(options?.sessionStore, openclawSessionId);
-                  }
-                  if (stillOwnsTrackedSession || stillOwnsStoredSession) {
-                    resetBlockedStoredSessions.add(openclawSessionId);
-                  }
-                });
-              }
-            : undefined,
-        });
-      })();
-      inFlight.add(attemptPromise);
-      try {
-        return await attemptPromise;
-      } finally {
-        inFlight.delete(attemptPromise);
-      }
+    finalizeSettledTurn: async ({ attempt }) => {
+      const result = await runHarnessAttempt(attempt, "settled-tool-finalization");
+      return projectSettledTurnFinalizationAttemptResult(result);
     },
 
     async reset(params: AgentHarnessResetParams): Promise<void> {

@@ -36,6 +36,15 @@ import type {
 const DEFAULT_BOT_ID = "openclaw";
 const DEFAULT_BOT_NAME = "OpenClaw QA";
 
+function normalizeInboundConversation(conversation: QaBusConversation): QaBusConversation {
+  const rawKind = (conversation as { kind?: unknown }).kind;
+  const kind = rawKind === "dm" ? "direct" : rawKind;
+  if (kind !== "direct" && kind !== "channel" && kind !== "group") {
+    throw new Error(`invalid qa-channel conversation kind: ${String(rawKind)}`);
+  }
+  return kind === conversation.kind ? conversation : { ...conversation, kind };
+}
+
 type QaBusEventSeed =
   | {
       kind: "inbound-message";
@@ -75,6 +84,7 @@ export function createQaBusState() {
   const threads = new Map<string, QaBusThread>();
   const messages = new Map<string, QaBusMessage>();
   const events: QaBusEvent[] = [];
+  const acknowledgedPollCursors = new Map<string, number>();
   let cursor = 0;
   const waiters = createQaBusWaiterStore(() =>
     buildQaBusSnapshot({
@@ -161,7 +171,7 @@ export function createQaBusState() {
       messages.clear();
       events.length = 0;
       // Keep the cursor monotonic across resets so long-poll clients do not
-      // miss fresh events after the bus is cleared mid-session.
+      // miss fresh events and retained restart acknowledgements remain valid.
       waiters.reset();
     },
     getSnapshot() {
@@ -178,7 +188,10 @@ export function createQaBusState() {
       const message = createMessage({
         direction: "inbound",
         accountId,
-        conversation: input.conversation,
+        // `dm:` is the canonical target spelling and is also used by manual
+        // QA-bus clients. Normalize its matching ingress alias before routing
+        // so a DM can never silently acquire group/channel privacy semantics.
+        conversation: normalizeInboundConversation(input.conversation),
         senderId: input.senderId,
         senderName: input.senderName,
         text: input.text,
@@ -288,6 +301,20 @@ export function createQaBusState() {
     },
     searchMessages(input: QaBusSearchMessagesInput) {
       return searchQaBusMessages({ messages, input });
+    },
+    resolvePollCursor(input: QaBusPollInput = {}) {
+      const accountId = normalizeAccountId(input.accountId);
+      const requestedCursor = input.cursor ?? 0;
+      const acknowledgedCursor = acknowledgedPollCursors.get(accountId) ?? 0;
+      if (requestedCursor > acknowledgedCursor && requestedCursor <= cursor) {
+        acknowledgedPollCursors.set(accountId, requestedCursor);
+      }
+      // A restarted channel consumer begins at zero. Resume its account cursor
+      // so retained events are not replayed, while still returning unacked work.
+      return requestedCursor === 0 ? acknowledgedCursor : requestedCursor;
+    },
+    getAcknowledgedPollCursor(accountId?: string) {
+      return acknowledgedPollCursors.get(normalizeAccountId(accountId)) ?? 0;
     },
     poll(input: QaBusPollInput = {}) {
       return pollQaBusEvents({ events, cursor, input });

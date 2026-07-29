@@ -15,7 +15,7 @@ import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 /** Reclaim free pages from one agent session SQLite database. */
 export function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
-  options: { migrateOlderSchema?: boolean } = {},
+  options: { env?: NodeJS.ProcessEnv; migrateOlderSchema?: boolean } = {},
 ): DoctorSessionSqliteCompactReport {
   const sqlitePath = resolveTargetSqlitePath(target);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
@@ -42,7 +42,7 @@ export function compactDoctorSessionSqliteTarget(
     );
   }
   const requireQuarantineCleared = () => {
-    if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath)) {
+    if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath, { env: options.env })) {
       throw new Error(
         `OpenClaw agent database ${sqlitePath} was repaired, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,
       );
@@ -57,7 +57,7 @@ export function compactDoctorSessionSqliteTarget(
   }
 
   const compact = compactDoctorSqliteFile({
-    afterMutation: () => {
+    afterSuccess: () => {
       requireQuarantineCleared();
       ensureOpenClawAgentDatabasePermissions(sqlitePath, {
         agentId: target.agentId,

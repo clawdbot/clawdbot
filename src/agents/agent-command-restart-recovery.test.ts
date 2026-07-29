@@ -115,7 +115,70 @@ describe("constrainRestartRecoveryDeliveryPayloads", () => {
         ],
         [" /tmp/missing.png ", "/tmp/missing.png"],
       ),
-    ).toEqual([{ text: "ready" }, { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true }]);
+    ).toEqual([
+      {
+        text: "ready",
+        mediaUrl: "/tmp/missing.png",
+        mediaUrls: ["/tmp/missing.png"],
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
+  it("attaches host-owned media to the first visible reply after reasoning", () => {
+    expect(
+      constrainRestartRecoveryDeliveryPayloads(
+        [
+          { text: "thinking", isReasoning: true, mediaUrls: ["/tmp/model-reasoning.png"] },
+          { text: "ready", mediaUrls: ["/tmp/model-selected.png"] },
+        ],
+        [" /tmp/missing.png ", "/tmp/missing.png"],
+      ),
+    ).toEqual([
+      { text: "thinking", isReasoning: true },
+      {
+        text: "ready",
+        mediaUrl: "/tmp/missing.png",
+        mediaUrls: ["/tmp/missing.png"],
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
+  it("does not attach host-owned media to commentary, notices, or errors", () => {
+    expect(
+      constrainRestartRecoveryDeliveryPayloads(
+        [
+          { text: "commentary", isCommentary: true },
+          { text: "status", isStatusNotice: true },
+          { text: "failed attempt", isError: true },
+          { text: "ready" },
+        ],
+        ["/tmp/missing.png"],
+      ),
+    ).toEqual([
+      { text: "commentary", isCommentary: true },
+      { text: "status", isStatusNotice: true },
+      { text: "failed attempt", isError: true },
+      {
+        text: "ready",
+        mediaUrl: "/tmp/missing.png",
+        mediaUrls: ["/tmp/missing.png"],
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
+  it("keeps host-owned media separate when no visible successful reply exists", () => {
+    expect(
+      constrainRestartRecoveryDeliveryPayloads(
+        [{ text: "failed attempt", isError: true }],
+        ["/tmp/missing.png"],
+      ),
+    ).toEqual([
+      { text: "failed attempt", isError: true },
+      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
+    ]);
   });
 
   it("strips all model media from a text-only notice", () => {

@@ -1,7 +1,7 @@
 // Android Version script supports OpenClaw repository automation.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { parseReleaseVersion } from "./npm-publish-plan.mjs";
+import { parseReleaseVersion } from "./release-version.mjs";
 
 const ANDROID_VERSION_FILE = "apps/android/version.json";
 const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
