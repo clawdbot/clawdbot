@@ -2,7 +2,7 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { loadClawHubSecurityVerdicts, loadSkillStatusReport } from "../../lib/skills/index.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
 
 function errorMessage(error: unknown): string {
@@ -23,12 +23,16 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
       selectedAgentId: null,
       report: null,
       error: null,
+      clawhubVerdicts: {},
+      clawhubVerdictsError: null,
     };
   }
 
   let error: string | null = null;
   let agentsList: SkillsRouteData["agentsList"] = null;
   let report: SkillsRouteData["report"] = null;
+  let clawhubVerdicts: SkillsRouteData["clawhubVerdicts"] = {};
+  let clawhubVerdictsError: string | null = null;
   try {
     agentsList = await agents.ensureList();
   } catch (err) {
@@ -39,6 +43,13 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
   } catch (err) {
     error ??= errorMessage(err);
   }
+  if (report) {
+    try {
+      clawhubVerdicts = await loadClawHubSecurityVerdicts(client, report, null);
+    } catch (err) {
+      clawhubVerdictsError = errorMessage(err);
+    }
+  }
   return {
     gateway,
     gatewaySnapshot,
@@ -47,6 +58,8 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
     selectedAgentId: null,
     report,
     error,
+    clawhubVerdicts,
+    clawhubVerdictsError,
   };
 }
 

@@ -435,6 +435,12 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
     const context = contextWithClient(client, { connected: true, agentsList });
     const report = { skills: [{ skillKey: "old" }] } as unknown as SkillsRouteData["report"];
+    const verdicts = {
+      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": {
+        decision: "pass",
+        securityStatus: "clean",
+      },
+    } as unknown as SkillsRouteData["clawhubVerdicts"];
     const routeData = {
       gateway: context.gateway,
       gatewaySnapshot: context.gateway.snapshot,
@@ -443,10 +449,13 @@ describe("gateway source replacement across reconnect with a reused client", () 
       selectedAgentId: "main",
       report,
       error: null,
+      clawhubVerdicts: verdicts,
+      clawhubVerdictsError: null,
     } as unknown as SkillsRouteData;
     const page = createPage("openclaw-skills-page", context) as TestPage & {
       routeData: SkillsRouteData;
       skillsReport: SkillsRouteData["report"];
+      clawhubVerdicts: SkillsRouteData["clawhubVerdicts"];
     };
     page.routeData = routeData;
 
@@ -454,6 +463,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await page.updateComplete;
 
     expect(page.skillsReport).toBe(report);
+    expect(page.clawhubVerdicts).toBe(verdicts);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -478,6 +488,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
       selectedAgentId: "main",
       report: staleReport,
       error: null,
+      clawhubVerdicts: {},
+      clawhubVerdictsError: null,
     } as unknown as SkillsRouteData;
 
     document.body.append(page);

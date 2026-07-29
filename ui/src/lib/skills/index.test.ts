@@ -169,14 +169,16 @@ describe("loadSkills", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "skills.status", {});
     expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", {});
-    expect(state.clawhubVerdicts).toEqual({
-      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
-        ok: true,
-        decision: "pass",
-        securityStatus: "clean",
-        securityPassed: true,
+    await waitForFast(() =>
+      expect(state.clawhubVerdicts).toEqual({
+        "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+          ok: true,
+          decision: "pass",
+          securityStatus: "clean",
+          securityPassed: true,
+        }),
       }),
-    });
+    );
     expect(state.clawhubVerdictsLoading).toBe(false);
     expect(state.clawhubVerdictsError).toBeNull();
   });

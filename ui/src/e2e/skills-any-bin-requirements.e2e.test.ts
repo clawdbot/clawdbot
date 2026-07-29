@@ -144,4 +144,68 @@ describeControlUiE2e("Control UI alternative skill binary requirements", () => {
       await context.close();
     }
   });
+
+  it("hydrates a linked skill security verdict before rendering its details", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const linkedSkill = {
+      ...codingAgentSkill([]),
+      name: "AgentReceipt",
+      description: "Verify agent output provenance.",
+      skillKey: "agentreceipt",
+      clawhub: {
+        status: "linked",
+        valid: true,
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        installedVersion: "1.2.3",
+        installedAt: 123,
+      },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "skills.status": {
+          workspaceDir: "/tmp/openclaw-e2e/workspace",
+          managedSkillsDir: "/tmp/openclaw-e2e/skills",
+          skills: [linkedSkill],
+        },
+        "skills.securityVerdicts": {
+          schema: "openclaw.skills.security-verdicts.v1",
+          items: [
+            {
+              registry: "https://clawhub.ai",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}skills`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("skills.securityVerdicts");
+      await page.getByRole("button", { name: "Open AgentReceipt details" }).click();
+
+      const dialog = page.locator("openclaw-modal-dialog", { hasText: "AgentReceipt" });
+      await expect.poll(async () => await dialog.count()).toBe(1);
+      expect(await dialog.getByText("Clean", { exact: true }).count()).toBe(1);
+      expect(await dialog.getByText("Unavailable", { exact: true }).count()).toBe(0);
+      const verdictRequests = await gateway.getRequests("skills.securityVerdicts");
+      expect(verdictRequests.length).toBeGreaterThan(0);
+      expect(verdictRequests[0]?.params).toEqual({});
+    } finally {
+      await context.close();
+    }
+  });
 });

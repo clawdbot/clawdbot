@@ -859,6 +859,57 @@ describe("renderSkills", () => {
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
 
+  it("renders a preloaded clean ClawHub verdict as Clean", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const linkedSkill = createSkill({
+      skillKey: "agentreceipt",
+      name: "AgentReceipt",
+      clawhub: {
+        status: "linked",
+        valid: true,
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        installedVersion: "1.2.3",
+        installedAt: 123,
+      },
+    });
+
+    render(
+      renderSkills(
+        createProps({
+          report: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [linkedSkill],
+          },
+          clawhubVerdicts: {
+            "https://clawhub.ai\u0000agentreceipt\u00001.2.3": {
+              registry: "https://clawhub.ai",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const cleanStatus = Array.from(container.querySelectorAll(".settings-status")).find(
+      (status) => normalizeText(status) === "Clean",
+    );
+    expect(cleanStatus).toBeDefined();
+    expect(cleanStatus?.classList.contains("settings-status--ok")).toBe(true);
+    expect(normalizeText(container)).not.toContain("Unavailable");
+  });
+
   it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
     const container = document.createElement("div");
     document.body.append(container);

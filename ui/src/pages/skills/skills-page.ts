@@ -31,6 +31,7 @@ import {
   type ClawHubSearchResult,
   type ClawHubSkillDetail,
   type ClawHubSkillSecurityVerdict,
+  type ClawHubSkillSecurityVerdicts,
   type SkillOperation,
   type SkillMessageMap,
 } from "../../lib/skills/index.ts";
@@ -51,6 +52,8 @@ export type SkillsRouteData = {
   selectedAgentId: string | null;
   report: SkillStatusReport | null;
   error: string | null;
+  clawhubVerdicts: ClawHubSkillSecurityVerdicts;
+  clawhubVerdictsError: string | null;
 };
 
 class SkillsPage extends OpenClawLightDomElement {
@@ -265,6 +268,9 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
+    this.clawhubVerdicts = data.clawhubVerdicts;
+    this.clawhubVerdictsLoading = false;
+    this.clawhubVerdictsError = data.clawhubVerdictsError;
   }
 
   private ensureInitialData() {

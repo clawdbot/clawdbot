@@ -212,6 +212,71 @@ describe("route preload gateway provenance", () => {
     expect(data.agents).toBe(agents);
   });
 
+  it("preloads security verdicts for linked ClawHub skills", async () => {
+    const requestMethod = vi.fn(async (method: string) => {
+      if (method === "skills.status") {
+        return {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [
+            {
+              name: "AgentReceipt",
+              skillKey: "agentreceipt",
+              source: "workspace",
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "agentreceipt",
+                installedVersion: "1.2.3",
+                installedAt: 123,
+              },
+            },
+          ],
+        };
+      }
+      if (method === "skills.securityVerdicts") {
+        return {
+          schema: "openclaw.skills.security-verdicts.v1",
+          items: [
+            {
+              registry: "https://clawhub.ai",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    const client = { request: requestMethod } as unknown as GatewayBrowserClient;
+    const mutable = mutableGateway(snapshot(client, true));
+
+    const data = await loadRoute<SkillsRouteData>(skillsPage, {
+      gateway: mutable.gateway,
+      agents: {
+        ensureList: vi.fn(async () => null),
+      },
+    } as unknown as ApplicationContext);
+
+    expect(requestMethod.mock.calls.map(([method]) => method)).toEqual([
+      "skills.status",
+      "skills.securityVerdicts",
+    ]);
+    expect(data.clawhubVerdicts).toEqual({
+      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+        decision: "pass",
+        securityStatus: "clean",
+      }),
+    });
+    expect(data.clawhubVerdictsError).toBeNull();
+  });
+
   it("keeps plugins provenance from before its async preload", async () => {
     const result = { plugins: [], diagnostics: [], mutationAllowed: true };
     const response = deferred<typeof result>();

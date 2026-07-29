@@ -75,6 +75,8 @@ export type ClawHubSkillSecurityVerdict = {
   };
 };
 
+export type ClawHubSkillSecurityVerdicts = Record<string, ClawHubSkillSecurityVerdict>;
+
 type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -101,7 +103,7 @@ type SkillsState = {
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null;
-  clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
+  clawhubVerdicts: ClawHubSkillSecurityVerdicts;
   clawhubVerdictsLoading: boolean;
   clawhubVerdictsError: string | null;
   skillCardContents: Record<string, string>;
@@ -214,6 +216,30 @@ export async function loadSkillStatusReport(
   agentId: string | null | undefined,
 ): Promise<SkillStatusReport | undefined> {
   return client.request<SkillStatusReport | undefined>("skills.status", skillsAgentParams(agentId));
+}
+
+export async function loadClawHubSecurityVerdicts(
+  client: GatewayBrowserClient,
+  report: SkillStatusReport,
+  agentId: string | null | undefined,
+): Promise<ClawHubSkillSecurityVerdicts> {
+  if (!reportHasLinkedClawHubSkills(report)) {
+    return {};
+  }
+  const response = await client.request<{
+    schema: "openclaw.skills.security-verdicts.v1";
+    items: ClawHubSkillSecurityVerdict[];
+  }>("skills.securityVerdicts", skillsAgentParams(agentId));
+  return Object.fromEntries(
+    (response?.items ?? []).map((item) => [
+      clawhubVerdictKey({
+        registry: item.registry,
+        slug: item.requestedSlug,
+        version: item.requestedVersion,
+      }),
+      item,
+    ]),
+  );
 }
 
 type SkillsAgentScope = {
@@ -329,7 +355,7 @@ export async function loadSkills(
     if (res && Array.isArray(res.skills)) {
       state.skillsReport = res;
       pruneSkillCardState(state, res);
-      void loadClawHubSecurityVerdicts(state, res);
+      void hydrateClawHubSecurityVerdicts(state, res);
     }
   } catch (err) {
     if (!isCurrent()) {
@@ -455,7 +481,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   }
 }
 
-async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
+async function hydrateClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
   if (!client || !state.connected || !reportHasLinkedClawHubSkills(report)) {
@@ -467,23 +493,11 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
   state.clawhubVerdictsLoading = true;
   state.clawhubVerdictsError = null;
   try {
-    const response = await client.request<{
-      schema: "openclaw.skills.security-verdicts.v1";
-      items: ClawHubSkillSecurityVerdict[];
-    }>("skills.securityVerdicts", stateSkillsAgentParams(state));
+    const verdicts = await loadClawHubSecurityVerdicts(client, report, state.skillsAgentId);
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
       return;
     }
-    state.clawhubVerdicts = Object.fromEntries(
-      (response?.items ?? []).map((item) => [
-        clawhubVerdictKey({
-          registry: item.registry,
-          slug: item.requestedSlug,
-          version: item.requestedVersion,
-        }),
-        item,
-      ]),
-    );
+    state.clawhubVerdicts = verdicts;
   } catch (err) {
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
       return;
