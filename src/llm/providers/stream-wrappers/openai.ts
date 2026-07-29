@@ -5,6 +5,7 @@ import {
 import {
   emitModelTransportDebug,
   filterCodeModePayloadTools,
+  isCodeModeModelVisibleToolName,
   readCodeModePayloadToolName,
 } from "@openclaw/ai/transports";
 import {
@@ -162,7 +163,10 @@ function resolveCodeModeVisibleToolNames(context: {
       .map(readCodeModePayloadToolName)
       .filter((name): name is string => typeof name === "string"),
   );
-  return names.has("exec") && names.has("wait") ? names : undefined;
+  return isCodeModeModelVisibleToolName("exec", names) &&
+    isCodeModeModelVisibleToolName("wait", names)
+    ? names
+    : undefined;
 }
 
 function shouldApplyOpenAIReasoningCompatibility(model: {

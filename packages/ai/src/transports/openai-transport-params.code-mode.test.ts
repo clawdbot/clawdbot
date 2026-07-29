@@ -41,7 +41,7 @@ describe("OpenAI Code Mode payload tool names", () => {
           { name: "computer" },
           withThrowingGetter("name"),
         ],
-      } as Parameters<typeof resolveCodeModeResponsesVisibleToolNames>[0]),
+      } as unknown as Parameters<typeof resolveCodeModeResponsesVisibleToolNames>[0]),
     ).toEqual(new Set(["exec", "wait", "computer"]));
   });
 });
