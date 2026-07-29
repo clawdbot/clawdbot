@@ -79,7 +79,7 @@ async function resolveSlackAppMentionChannelType(params: {
   // Only an authoritative event/cache/API type may choose this event's owner.
   const resolved = await params.ctx
     .resolveChannelName(params.mention.channel, params.eventScope)
-    .catch(() => ({}));
+    .catch(() => ({ type: undefined }));
   return resolved.type
     ? normalizeSlackChannelType(resolved.type, params.mention.channel)
     : undefined;
