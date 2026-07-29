@@ -117,6 +117,7 @@ type GatewayProtocolClientOptions<TPlan> = {
   reconnect: { initialMs: number; multiplier: number; maxMs: number };
   requestTimeoutMs?: number;
   nowMs?: () => number;
+  shouldRetrySocketFactoryError?: (error: Error) => boolean;
   rethrowSocketFactoryError?: (error: Error) => boolean;
 };
 export class GatewayProtocolRequestError extends Error {
@@ -381,6 +382,15 @@ export class GatewayProtocolClient<TPlan> {
       if (this.opts.rethrowSocketFactoryError?.(normalized)) {
         throw normalized;
       }
+      // Callbacks can stop or restart synchronously; never schedule over their replacement socket.
+      if (
+        this.opts.shouldRetrySocketFactoryError?.(normalized) &&
+        !this.stopped &&
+        !this.socket &&
+        !this.reconnectSignal
+      ) {
+        this.scheduleReconnect();
+      }
       return;
     }
     this.generation = generation;
@@ -554,6 +564,11 @@ export class GatewayProtocolClient<TPlan> {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
           const expected = this.lastSeq + 1;
           this.invoke("gap", () => this.opts.onGap?.({ expected, received: seq }));
+          // Gap recovery can retire this socket synchronously. Never advance a
+          // replacement's sequence or dispatch a frame from the retired owner.
+          if (!this.isActive(socket, generation)) {
+            return;
+          }
         }
         this.lastSeq = seq;
       }

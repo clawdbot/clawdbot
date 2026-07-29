@@ -11,10 +11,10 @@ describe("kimi provider catalog", () => {
     expect(provider.baseUrl).toBe("https://api.kimi.com/coding/");
     expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
     expect(provider.models.map((model) => model.id)).toEqual([
-      "kimi-for-coding",
-      "kimi-for-coding-highspeed",
       "k3",
       "k3-256k",
+      "kimi-for-coding",
+      "kimi-for-coding-highspeed",
     ]);
     expect(provider.models.find((model) => model.id === "k3")).toMatchObject({
       name: "Kimi K3",

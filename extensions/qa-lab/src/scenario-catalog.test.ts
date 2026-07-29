@@ -321,7 +321,7 @@ describe("qa scenario catalog", () => {
       "sends a chat turn through the GUI and renders the final Gateway event",
     );
     expect(scenario.execution.flow).toBeUndefined();
-    expect(scenario.coverage?.primary).toContain(`${browserUi}.gateway-hosted-ui-control`);
+    expect(scenario.coverage?.secondary).toContain(`${browserUi}.gateway-hosted-ui-control`);
     expect(otelSmoke.execution.kind).toBe("script");
     if (otelSmoke.execution.kind !== "script") {
       throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
@@ -333,6 +333,27 @@ describe("qa scenario catalog", () => {
       "both",
     ]);
     expect(otelSmoke.coverage?.secondary).not.toContain(`${otel}.otlp-http-traces-qa-lab`);
+  });
+
+  it("reserves Gateway-hosted Control UI proof for the real Gateway flow", () => {
+    const coverageId = `${browserUi}.gateway-hosted-ui-control`;
+    const primaryOwnerIds = readQaScenarioPack()
+      .scenarios.filter((scenario) => scenario.coverage?.primary.includes(coverageId))
+      .map((scenario) => scenario.id);
+    expect(primaryOwnerIds).toStrictEqual(["control-ui-qa-channel-image-roundtrip"]);
+
+    for (const scenario of [
+      readQaScenarioById("control-ui-chat-flow-playwright"),
+      readQaScenarioById("control-ui-plan-replay-reconnect"),
+    ]) {
+      expect(scenario.execution.kind, scenario.id).toBe("playwright");
+      expect(scenario.coverage?.primary, scenario.id).not.toContain(coverageId);
+      expect(scenario.coverage?.secondary, scenario.id).toContain(coverageId);
+    }
+
+    const hostedScenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
+    expect(hostedScenario.execution).toMatchObject({ kind: "flow", channel: "qa-channel" });
+    expect(hostedScenario.coverage?.primary).toContain(coverageId);
   });
 
   it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {

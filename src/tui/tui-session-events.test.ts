@@ -171,6 +171,156 @@ describe("readTuiSessionUserMessage", () => {
     ).toEqual({ messageId: "user-1", runId: "run-1", text: "shared prompt" });
   });
 
+  it("prefers persisted identity when a Gateway envelope names a different message and run", () => {
+    expect(
+      readTuiSessionUserMessage({
+        clientRunId: "another-client-run",
+        messageId: "another-client-message",
+        messageSeq: 99,
+        message: {
+          role: "user",
+          content: "authoritative persisted prompt",
+          __openclaw: {
+            id: "persisted-message",
+            idempotencyKey: "persisted-run:user",
+            seq: 7,
+          },
+        },
+      } satisfies SessionMessageEvent),
+    ).toEqual({
+      messageId: "persisted-message",
+      runId: "persisted-run",
+      text: "authoritative persisted prompt",
+    });
+  });
+
+  it("prefers persisted sequence over a conflicting Gateway envelope without a message ID", () => {
+    expect(
+      readTuiSessionUserMessage({
+        messageSeq: 99,
+        message: {
+          role: "user",
+          content: "sequenced persisted prompt",
+          __openclaw: { seq: 7 },
+        },
+      }),
+    ).toEqual({ messageId: "seq:7", text: "sequenced persisted prompt" });
+  });
+
+  it("normalizes exactly one persisted user-turn suffix", () => {
+    expect(
+      readTuiSessionUserMessage({
+        clientRunId: "another-client-run",
+        message: {
+          role: "user",
+          content: "nested user suffix",
+          __openclaw: { id: "persisted-message", idempotencyKey: "actual:user:user" },
+        },
+      }),
+    ).toEqual({
+      messageId: "persisted-message",
+      runId: "actual:user",
+      text: "nested user suffix",
+    });
+  });
+
+  it("keys imported messages by their complete provider and CLI session identity", () => {
+    const readImportedMessage = (cliSessionId: string) =>
+      readTuiSessionUserMessage({
+        messageId: "native-or-other-provider-id",
+        message: {
+          role: "user",
+          content: "imported prompt",
+          __openclaw: {
+            id: "provider-local-id",
+            importedFrom: "claude-cli",
+            cliSessionId,
+            externalId: "provider-local-id",
+          },
+        },
+      });
+
+    expect(readImportedMessage("cli-session-1")).toEqual({
+      messageId: `external:${JSON.stringify(["claude-cli", "cli-session-1", "provider-local-id"])}`,
+      text: "imported prompt",
+    });
+    expect(readImportedMessage("cli-session-2")?.messageId).not.toBe(
+      readImportedMessage("cli-session-1")?.messageId,
+    );
+  });
+
+  it("uses the persisted transcript position for an incomplete imported identity", () => {
+    expect(
+      readTuiSessionUserMessage({
+        messageId: "native-message",
+        messageSeq: 99,
+        message: {
+          role: "user",
+          content: "partially imported prompt",
+          __openclaw: {
+            id: "provider-local-id",
+            importedFrom: "claude-cli",
+            externalId: "provider-local-id",
+            seq: 7,
+          },
+        },
+      }),
+    ).toEqual({ messageId: "imported-seq:7", text: "partially imported prompt" });
+  });
+
+  it("keeps distinct incomplete imports with the same provider-local ID separate", () => {
+    const readImportedMessage = (seq: number) =>
+      readTuiSessionUserMessage({
+        message: {
+          role: "user",
+          content: `partially imported prompt ${seq}`,
+          __openclaw: {
+            id: "shared-provider-local-id",
+            importedFrom: "claude-cli",
+            seq,
+          },
+        },
+      });
+
+    expect(readImportedMessage(7)?.messageId).toBe("imported-seq:7");
+    expect(readImportedMessage(8)?.messageId).toBe("imported-seq:8");
+  });
+
+  it("does not use envelope sequence to deduplicate incomplete imported ownership", () => {
+    expect(
+      readTuiSessionUserMessage({
+        messageId: "native-message",
+        messageSeq: 7,
+        message: {
+          role: "user",
+          content: "imported prompt",
+          __openclaw: {
+            id: "provider-local-id",
+            importedFrom: "claude-cli",
+            externalId: "provider-local-id",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not deduplicate imported messages without complete ownership or a persisted position", () => {
+    expect(
+      readTuiSessionUserMessage({
+        messageId: "native-message",
+        message: {
+          role: "user",
+          content: "imported prompt",
+          __openclaw: {
+            id: "provider-local-id",
+            importedFrom: "claude-cli",
+            externalId: "provider-local-id",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("uses the authoritative transcript sequence when no message id is available", () => {
     expect(
       readTuiSessionUserMessage({

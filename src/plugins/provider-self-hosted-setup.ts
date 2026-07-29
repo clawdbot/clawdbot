@@ -90,6 +90,24 @@ function readPositiveInteger(value: unknown): number | undefined {
   return Math.trunc(value);
 }
 
+const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
+  "context_length",
+  "context_window",
+  "context_size",
+] as const;
+
+function readOpenAICompatibleContextWindow(
+  model: Record<string, unknown> | undefined,
+): number | undefined {
+  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
+    const contextWindow = readPositiveInteger(model?.[field]);
+    if (contextWindow !== undefined) {
+      return contextWindow;
+    }
+  }
+  return undefined;
+}
+
 async function readSelfHostedDiscoveryJson<T>(response: Response, label: string): Promise<T> {
   return await readProviderJsonResponse<T>(response, `${label} discovery`, {
     maxBytes: SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES,
@@ -209,7 +227,13 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         if (!modelId) {
           return [];
         }
-        return [{ id: modelId, meta: asObject(model?.meta) }];
+        return [
+          {
+            id: modelId,
+            meta: asObject(model?.meta),
+            advertisedContextWindow: readOpenAICompatibleContextWindow(model),
+          },
+        ];
       });
       const runtimeContextTokensByModelId = new Map<string, number>();
       if (params.contextWindow === undefined && params.discoverRuntimeContext !== false) {
@@ -253,6 +277,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
           contextWindow:
             params.contextWindow ??
             readPositiveInteger(model.meta?.n_ctx_train) ??
+            model.advertisedContextWindow ??
             SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
           maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
         };

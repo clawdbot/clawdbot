@@ -104,7 +104,7 @@ const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js
 
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
 
-const getManagedImageAttachmentsModule = createLazyRuntimeModule(
+const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
 
@@ -906,9 +906,9 @@ export function createGatewayHttpServer(opts: {
 
       if (isManagedOutgoingImagePath(scopedRequestPath)) {
         requestStages.push({
-          name: "chat-managed-image-media",
+          name: "chat-managed-media",
           run: async () =>
-            (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
+            (await getManagedMediaAttachmentsModule()).handleManagedOutgoingMediaHttpRequest(
               req,
               res,
               {

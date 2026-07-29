@@ -1,5 +1,6 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
+import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
 import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import {
   createAckReactionHandle,
@@ -15,6 +16,22 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
+
+type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
+type InboundDebounceFlushFactory = Parameters<InboundDebounceCreateParams<unknown>["onFlush"]>[1];
+
+export const createTestInboundDebounceFlush: InboundDebounceFlushFactory = (params) => {
+  const source = params.lifecycle;
+  const completion = params.dispatch({
+    abortSignal: source?.abortSignal ?? new AbortController().signal,
+    onAdopted: async () => await source?.onAdopted?.(),
+    onDeferred: () => source?.onDeferred?.(),
+    onAdoptionFinalizing: () => source?.onAdoptionFinalizing?.(),
+    onFailed: source?.onFailed ? async (error) => await source.onFailed?.(error) : undefined,
+    onAbandoned: async () => await source?.onAbandoned?.(),
+  });
+  return { admission: completion, completion };
+};
 
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODEL = "gpt-5.6-sol";
@@ -815,13 +832,25 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       debounce: {
         createInboundDebouncer: vi.fn(
-          (params: { onFlush: (items: unknown[]) => Promise<void> }) => ({
-            enqueue: async (item: unknown) => {
-              await params.onFlush([item]);
-            },
-            flushKey: vi.fn(),
-            cancelKey: vi.fn(() => false),
-          }),
+          (params: Pick<InboundDebounceCreateParams<unknown>, "onFlush">) => {
+            const activeCompletions = new Set<Promise<void>>();
+            const runFlush = async (flush: InboundDebounceFlush) => {
+              const completion = flush.completion.catch(() => undefined);
+              activeCompletions.add(completion);
+              void completion.finally(() => activeCompletions.delete(completion));
+              await Promise.race([flush.admission, completion]);
+            };
+            return {
+              enqueue: async (item: unknown) => {
+                await runFlush(params.onFlush([item], createTestInboundDebounceFlush));
+              },
+              flushKey: vi.fn(),
+              cancelKey: vi.fn(() => false),
+              drain: async () => {
+                await Promise.all(activeCompletions);
+              },
+            };
+          },
         ) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
         resolveInboundDebounceMs: vi.fn((params: unknown) => {
           // Match the production contract so channel plugins that delegate to

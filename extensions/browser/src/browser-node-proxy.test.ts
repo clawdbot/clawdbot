@@ -13,6 +13,8 @@ type BrowserNodeRequest = {
     timeoutMs: number;
     profile?: string;
     errorEnvelope: string;
+    body?: unknown;
+    upload?: unknown;
   };
 };
 
@@ -34,13 +36,28 @@ const runtimeMocks = vi.hoisted(() => ({
   fetchBrowserJson: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
 }));
 
+const uploadMocks = vi.hoisted(() => ({
+  isBrowserProxyUploadRequest: vi.fn(
+    (params: { method: string; path: string; body: unknown }) =>
+      params.method === "POST" &&
+      params.path === "/hooks/file-chooser" &&
+      Array.isArray((params.body as { paths?: unknown } | undefined)?.paths) &&
+      ((params.body as { paths: unknown[] }).paths.length ?? 0) > 0,
+  ),
+  prepareBrowserProxyUploadRequest: vi.fn(),
+}));
+
 vi.mock("./browser-tool.runtime.js", () => runtimeMocks);
+vi.mock("./browser-proxy-upload.js", () => uploadMocks);
 
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
 
 function createSessionProxy() {
   return createBrowserNodeProxyRequest({
-    nodeTarget: { nodeId: "node-1" },
+    nodeTarget: {
+      nodeId: "node-1",
+      commands: ["browser.proxy", "browser.proxy.upload.v1"],
+    },
     allowAutomaticHostFallback: false,
   });
 }
@@ -61,6 +78,10 @@ beforeEach(() => {
   runtimeMocks.persistBrowserProxyFiles.mockResolvedValue(new Map<string, string>());
   runtimeMocks.applyBrowserProxyPaths.mockReset();
   runtimeMocks.fetchBrowserJson.mockReset();
+  uploadMocks.isBrowserProxyUploadRequest.mockClear();
+  uploadMocks.prepareBrowserProxyUploadRequest
+    .mockReset()
+    .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
 });
 
 describe("Browser node proxy nested watchdogs", () => {
@@ -140,6 +161,114 @@ describe("Browser node proxy nested watchdogs", () => {
     );
   });
 
+  it("sends Gateway-owned upload bytes without node-facing source paths", async () => {
+    const originalBody = {
+      paths: ["/tmp/openclaw/uploads/report.txt"],
+      ref: "e12",
+    };
+    const upload = {
+      envelope: "browser-upload-v1",
+      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+    };
+    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
+      body: { ref: "e12" },
+      upload,
+    });
+
+    await createSessionProxy()({
+      method: "POST",
+      path: "/hooks/file-chooser",
+      body: originalBody,
+    });
+
+    expect(readGatewayCall().node.params).toMatchObject({
+      body: { ref: "e12" },
+      upload,
+    });
+    expect(readGatewayCall().node.command).toBe("browser.proxy.upload.v1");
+    expect(readGatewayCall().node.params.body).not.toHaveProperty("paths");
+  });
+
+  it("uses the original Gateway paths when an auto-selected old node lacks upload support", async () => {
+    const originalBody = {
+      paths: ["/tmp/openclaw/uploads/report.txt"],
+      ref: "e12",
+    };
+    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
+      body: { ref: "e12" },
+      upload: {
+        envelope: "browser-upload-v1",
+        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+      },
+    });
+    runtimeMocks.fetchBrowserJson.mockResolvedValueOnce({ ok: true });
+    const proxy = createBrowserNodeProxyRequest({
+      nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
+      allowAutomaticHostFallback: true,
+    });
+
+    await proxy({
+      method: "POST",
+      path: "/hooks/file-chooser",
+      body: originalBody,
+    });
+
+    expect(runtimeMocks.fetchBrowserJson).toHaveBeenCalledWith(
+      "/hooks/file-chooser",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(originalBody),
+      }),
+    );
+    expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
+    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit old node upload before node dispatch", async () => {
+    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
+      body: { ref: "e12" },
+      upload: {
+        envelope: "browser-upload-v1",
+        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+      },
+    });
+    const proxy = createBrowserNodeProxyRequest({
+      nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
+      allowAutomaticHostFallback: false,
+    });
+
+    await expect(
+      proxy({
+        method: "POST",
+        path: "/hooks/file-chooser",
+        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
+      }),
+    ).rejects.toThrow("browser node does not support remote upload transfer");
+    expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
+    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+  });
+
+  it("explains when remote upload transfer is awaiting node command approval", async () => {
+    const proxy = createBrowserNodeProxyRequest({
+      nodeTarget: {
+        nodeId: "node-1",
+        commands: ["browser.proxy"],
+        pendingDeclaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
+      },
+      allowAutomaticHostFallback: false,
+    });
+
+    await expect(
+      proxy({
+        method: "POST",
+        path: "/hooks/file-chooser",
+        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
+      }),
+    ).rejects.toThrow("remote upload transfer is pending approval");
+    expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
+    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+  });
+
   it("keeps default action, node, and Gateway watchdogs strictly nested", async () => {
     await createSessionProxy()({ method: "GET", path: "/snapshot" });
 
@@ -195,7 +324,9 @@ describe("Browser node proxy nested watchdogs", () => {
     });
 
     try {
-      expect(runtimeMocks.callGatewayTool).toHaveBeenCalledTimes(10);
+      await vi.waitFor(() => {
+        expect(runtimeMocks.callGatewayTool).toHaveBeenCalledTimes(10);
+      });
       expect(completed.size).toBe(0);
       expect(runtimeMocks.persistBrowserProxyFiles).not.toHaveBeenCalled();
       const invocationIds = new Set<string>();
@@ -283,7 +414,9 @@ describe("Browser node proxy nested watchdogs", () => {
     const abortError = new Error("session-3 cancelled");
 
     try {
-      expect(runtimeMocks.callGatewayTool).toHaveBeenCalledTimes(10);
+      await vi.waitFor(() => {
+        expect(runtimeMocks.callGatewayTool).toHaveBeenCalledTimes(10);
+      });
       cancelledSession.controller.abort(abortError);
       await expect(cancelledRun).rejects.toBe(abortError);
       expect(runtimeMocks.persistBrowserProxyFiles).not.toHaveBeenCalled();

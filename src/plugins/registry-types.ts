@@ -421,6 +421,7 @@ type PluginConversationBindingResolvedHandlerRegistration = {
 export type PluginRecord = {
   id: string;
   name: string;
+  packageVersion?: string;
   version?: string;
   builtWithOpenClawVersion?: string;
   packageName?: string;

@@ -38,6 +38,8 @@ const {
   dispatchInboundMessageMock,
   enqueueSystemEventMock,
   recordInboundSessionMock,
+  logVerboseMock,
+  shouldLogVerboseMock,
   capture,
 } = vi.hoisted(() => {
   const captureState: { ctx?: MsgContext } = {};
@@ -52,6 +54,8 @@ const {
       await Promise.resolve(params.replyOptions?.onReplyStart?.());
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     }),
+    logVerboseMock: vi.fn(),
+    shouldLogVerboseMock: vi.fn(() => false),
     capture: captureState,
   };
 });
@@ -194,6 +198,17 @@ vi.mock("../approval-reactions.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+    shouldLogVerbose: shouldLogVerboseMock,
+  };
+});
+
 function requireCapturedContext(): MsgContext {
   if (!capture.ctx) {
     throw new Error("expected inbound MsgContext");
@@ -223,6 +238,8 @@ describe("signal createSignalEventHandler inbound context", () => {
     enqueueSystemEventMock.mockReset();
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockClear();
+    logVerboseMock.mockClear();
+    shouldLogVerboseMock.mockReset().mockReturnValue(false);
     approvalReactionMocks.maybeResolveSignalApprovalReaction.mockReset().mockResolvedValue(false);
   });
 
@@ -2171,6 +2188,40 @@ describe("signal createSignalEventHandler inbound context", () => {
 
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["LF", "line one\nline two", "line one\\nline two"],
+    ["CR", "line one\rline two", "line one\\rline two"],
+    ["CRLF", "line one\r\nline two", "line one\\r\\nline two"],
+    ["literal escape", "line one\\nline two", "line one\\nline two"],
+  ])("keeps %s inbound verbose previews single-line", async (_label, message, expectedPreview) => {
+    shouldLogVerboseMock.mockReturnValue(true);
+    try {
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: {
+            messages: { inbound: { debounceMs: 0 } },
+            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+          },
+          historyLimit: 0,
+        }),
+      );
+
+      await handler(
+        createSignalReceiveEvent({
+          dataMessage: { message },
+        }),
+      );
+
+      // body is formatInboundEnvelope(...) with an envelope prefix, so assert
+      // the escaped tail is present and the logged line stays single-line.
+      expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining(expectedPreview));
+      const logged = String(logVerboseMock.mock.calls[0]?.[0] ?? "");
+      expect(logged).not.toMatch(/[\r\n]/);
+    } finally {
+      shouldLogVerboseMock.mockReturnValue(false);
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

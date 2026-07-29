@@ -667,6 +667,24 @@ describe("lobster pet element", () => {
     expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
+  it("props an open book against the claws while keeping both eyes open", () => {
+    const palette = expectDefined(
+      LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson"),
+      "crimson palette",
+    );
+    const container = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(palette), { reading: true, standalone: true }),
+      container,
+    );
+
+    expect(container.querySelector(".lob-reading-book")).not.toBeNull();
+    expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
+    expect(container.querySelector(".lob-eye-closed")?.getAttribute("style")).toContain(
+      "display:none",
+    );
+  });
+
   it("renders full replacement geometry without the standard dome", () => {
     const flatpackPalette = expectDefined(
       LOBSTER_PET_PALETTES.find((palette) => palette.id === "flatpack"),

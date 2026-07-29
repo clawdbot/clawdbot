@@ -1,10 +1,11 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { serializeSidebarEntry, titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { serializeSidebarEntry, subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { pathForPluginsHubTab, pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -14,6 +15,7 @@ import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
@@ -45,6 +47,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
 import type { ConnectorSuggestion } from "./presentation.ts";
 import { pluginArtPath } from "./presentation.ts";
+import { canonicalPluginsRouteLocation, pluginsHubTabForRoute } from "./route-data.ts";
 import {
   connectorRowKey,
   pluginRowKey,
@@ -54,13 +57,14 @@ import {
   type PluginsTab,
 } from "./view.ts";
 
+const PLUGINS_DOCS_URL = "https://docs.openclaw.ai/plugins/manage-plugins";
+
 export type PluginsRouteData = {
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
   result: PluginListResult | null;
   error: string | null;
-  /** Tab requested via ?tab=; lets other hub pages deep-link Discover. */
-  initialTab: PluginsTab | null;
+  location: RouteLocation;
 };
 
 function errorMessage(error: unknown): string {
@@ -124,6 +128,7 @@ class PluginsPage extends OpenClawLightDomElement {
   private gatewaySource?: ApplicationContext["gateway"];
   private sourceGeneration = 0;
   private routeDataConsumed = false;
+  private normalizedLocation = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private mutationToken = 0;
   private readonly mutationTokens = new Map<string, number>();
@@ -209,12 +214,14 @@ class PluginsPage extends OpenClawLightDomElement {
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
+      this.syncCanonicalLocation();
     }
   }
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    this.syncCanonicalLocation();
   }
 
   override disconnectedCallback() {
@@ -296,10 +303,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.ensureInitialData();
       return;
     }
-    // Honor ?tab= even when the loader snapshot is stale; the tab choice is
-    // navigation intent, not catalog data. A bare URL means Installed so
-    // history back/forward always restores the tab the URL describes.
-    const urlTab = data.initialTab ?? "installed";
+    const urlTab = pluginsHubTabForRoute(data.location, this.context.basePath);
     if (urlTab !== this.activeTab) {
       this.changeTab(urlTab);
     }
@@ -313,6 +317,27 @@ class PluginsPage extends OpenClawLightDomElement {
     this.replaceResult(data.result);
     this.error = data.error;
     this.ensureInitialData();
+  }
+
+  private syncCanonicalLocation() {
+    const context = this.context;
+    const location = this.routeData?.location;
+    if (!context || !location) {
+      return;
+    }
+    const canonical = canonicalPluginsRouteLocation(location, context.basePath);
+    if (!canonical) {
+      this.normalizedLocation = "";
+      return;
+    }
+    const source = `${location.pathname}${location.search}${location.hash}`;
+    if (this.normalizedLocation === source) {
+      return;
+    }
+    // One source location gets one replace. Route-data updates clear the guard
+    // once the canonical path arrives, so returning to an old link still works.
+    this.normalizedLocation = source;
+    context.replace("plugins", canonical);
   }
 
   private invalidateRequests(invalidateCatalog = true) {
@@ -555,13 +580,10 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private selectHubTab(tab: PluginsHubTab) {
     if (tab === "installed" || tab === "discover") {
-      // Switch locally for instant feedback, then navigate so the URL and
-      // history match the documented ?tab=discover deep link.
       this.changeTab(tab);
-      this.context.navigate(
-        "plugins",
-        tab === "discover" ? { search: "?tab=discover" } : undefined,
-      );
+      this.context.navigate("plugins", {
+        pathname: pathForPluginsHubTab(tab, this.context.basePath),
+      });
       return;
     }
     this.context.navigate(tab === "skills" ? "skills" : "skill-workshop");
@@ -950,6 +972,10 @@ class PluginsPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page plugins-content-header">
         <div>
           <h1 class="page-title">${titleForRoute("plugins")}</h1>
+          <div class="page-subtitle">
+            ${subtitleForRoute("plugins")}
+            ${renderDocsLink(PLUGINS_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(html`

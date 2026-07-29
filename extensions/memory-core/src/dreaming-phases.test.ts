@@ -12,7 +12,6 @@ import {
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   filterRecallEntriesWithinLookback,
@@ -168,17 +167,11 @@ async function seedDreamingSessionTranscript(params: {
   // retaining per-message timestamps as the dreaming corpus clock.
   const updatedAt = Math.max(Date.now(), ...timestamps);
   await fs.mkdir(sessionsDir, { recursive: true });
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: params.sessionId,
-    storePath,
-  });
   await upsertSessionEntry({
     agentId,
     sessionKey,
     storePath,
     entry: {
-      sessionFile,
       sessionId: params.sessionId,
       updatedAt,
       ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
@@ -203,7 +196,6 @@ async function seedDreamingSessionTranscript(params: {
     sessionKey,
     storePath,
     entry: {
-      sessionFile,
       sessionId: params.sessionId,
       updatedAt,
       ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),

@@ -73,6 +73,7 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
   "github-copilot": "copilot",
   // CodexBar names its bundled OpenAI knot asset "codex".
   openai: "codex",
+  moonshot: "kimi",
   "opencode-go": "opencodego",
   "opencode-zen": "opencode",
   xai: "grok",
@@ -86,6 +87,7 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   google: "Google",
   "github-copilot": "GitHub",
   openai: "OpenAI",
+  moonshot: "Moonshot AI",
   opencode: "OpenCode",
   openrouter: "OpenRouter",
 };

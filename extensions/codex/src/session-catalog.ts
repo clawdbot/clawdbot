@@ -135,6 +135,7 @@ type CodexCatalogRequestOptions = {
 type CodexCatalogPageCacheEntry = {
   expiresAt: number;
   page: Promise<CodexSessionCatalogPage>;
+  settledPage?: Promise<CodexSessionCatalogPage>;
   stalePage?: Promise<CodexSessionCatalogPage>;
 };
 
@@ -429,31 +430,70 @@ export function createCodexSessionCatalogControl(params: {
       }
       const key = codexCatalogPageCacheKey(pageParams);
       const cached = cache.get(key);
-      if (pageParams.forceRefresh !== true && cached && cached.expiresAt > now()) {
-        // thread/list traverses Codex's thread store and rollout metadata. A config-scoped 32s page
-        // survives the 30s poll cadence; TTL and forceRefresh bound staleness for new native rows.
-        // Without this memo every sidebar poll repeats the app-server roundtrip and metadata scan.
+      if (pageParams.forceRefresh !== true && cached) {
+        // A settled page always serves immediately. Expiry only starts one background refresh;
+        // its result becomes visible on the next poll (one polling cycle, about 30s, for a native
+        // session created outside OpenClaw). The TTL is a refresh trigger, never a serve gate.
         cache.delete(key);
         cache.set(key, cached);
-        try {
-          return await cached.page;
-        } catch (error) {
-          if (cached.stalePage) {
-            return await cached.stalePage;
-          }
-          throw error;
+        if (cached.stalePage) {
+          return await cached.stalePage;
         }
+        if (cached.expiresAt > now()) {
+          return await cached.page;
+        }
+
+        const stalePage = cached.settledPage;
+        if (!stalePage) {
+          return await cached.page;
+        }
+        const page = control.listPage(pageParams);
+        const entry: CodexCatalogPageCacheEntry = {
+          expiresAt: Number.POSITIVE_INFINITY,
+          page,
+          settledPage: stalePage,
+          stalePage,
+        };
+        cache.set(key, entry);
+        void page.then(
+          () => {
+            if (cache.get(key) === entry) {
+              delete entry.stalePage;
+              entry.settledPage = page;
+              entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
+            }
+          },
+          async () => {
+            let stale: CodexSessionCatalogPage | undefined;
+            try {
+              stale = await stalePage;
+            } catch {
+              // A still-pending cold fill is not a real stale page.
+            }
+            if (cache.get(key) !== entry) {
+              return;
+            }
+            if (stale) {
+              cache.delete(key);
+              const settledPage = Promise.resolve(stale);
+              cache.set(key, { expiresAt: now(), page: settledPage, settledPage });
+            } else {
+              cache.delete(key);
+            }
+          },
+        );
+        return await stalePage;
       }
       if (cached) {
         cache.delete(key);
       }
       const serveStaleOnError = pageParams.forceRefresh !== true;
       const page = control.listPage(pageParams);
-      const stalePage = cached?.stalePage ?? cached?.page;
+      const stalePage = cached?.settledPage;
       const entry: CodexCatalogPageCacheEntry = {
-        expiresAt: now() + CODEX_SESSION_CATALOG_LIST_TTL_MS,
+        expiresAt: Number.POSITIVE_INFINITY,
         page,
-        ...(stalePage ? { stalePage } : {}),
+        ...(stalePage ? { stalePage, settledPage: stalePage } : {}),
       };
       cache.set(key, entry);
       while (cache.size > CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
@@ -465,7 +505,11 @@ export function createCodexSessionCatalogControl(params: {
       }
       try {
         const result = await page;
-        delete entry.stalePage;
+        if (cache.get(key) === entry) {
+          delete entry.stalePage;
+          entry.settledPage = page;
+          entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
+        }
         return result;
       } catch (error) {
         if (stalePage) {
@@ -478,7 +522,8 @@ export function createCodexSessionCatalogControl(params: {
           if (stale) {
             if (cache.get(key) === entry) {
               cache.delete(key);
-              cache.set(key, { expiresAt: now(), page: Promise.resolve(stale) });
+              const settledPage = Promise.resolve(stale);
+              cache.set(key, { expiresAt: now(), page: settledPage, settledPage });
             }
             if (serveStaleOnError) {
               return stale;

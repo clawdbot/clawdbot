@@ -8,7 +8,7 @@ import {
   type QaProviderModeInput,
 } from "./model-selection.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { describeQaProviderLaneMismatches } from "./scenario-lane.js";
+import { describeQaProviderLaneMismatches, resolveQaScenarioLaneChannel } from "./scenario-lane.js";
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardCategoryCoverageReport,
@@ -131,23 +131,13 @@ export function resolveQaRunProfileExecutionSelection(params: {
     if (scenario.execution.channel === "qa-channel" && params.channelDriver !== "qa-channel") {
       reasons.push("channelDriver=qa-channel");
     }
-    // Unpinned live profiles must resolve a declared real transport before checking a
-    // portable scenario; qa-channel is the built-in harness, not a live adapter.
-    const declaredLiveChannel =
-      params.channelDriver === "live" && scenario.execution.kind === "flow"
-        ? (scenario.execution.channels?.find(
-            (channel) =>
-              channel !== "qa-channel" &&
-              (!params.supportsChannel || params.supportsChannel(channel)),
-          ) ?? scenario.execution.channels?.find((channel) => channel !== "qa-channel"))
-        : undefined;
-    const effectiveChannel =
-      params.channelDriver === "qa-channel"
-        ? "qa-channel"
-        : (params.channel ??
-          scenario.execution.channel ??
-          declaredLiveChannel ??
-          params.defaultChannel);
+    const effectiveChannel = resolveQaScenarioLaneChannel({
+      scenario,
+      channelDriver: params.channelDriver,
+      channel: params.channel,
+      defaultChannel: params.defaultChannel,
+      supportsChannel: params.supportsChannel,
+    });
     reasons.push(
       ...describeQaProviderLaneMismatches({
         scenario,

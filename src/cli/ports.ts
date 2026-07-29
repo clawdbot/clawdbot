@@ -295,10 +295,13 @@ function killPids(
   beforeSignal?: BeforePortSignal,
 ) {
   for (const proc of listeners) {
+    beforeSignal?.({ port, pid: proc.pid, signal });
     try {
-      beforeSignal?.({ port, pid: proc.pid, signal });
       process.kill(proc.pid, signal);
     } catch (err) {
+      if (getErrnoCode(err) === "ESRCH") {
+        continue;
+      }
       throw new Error(
         `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
         { cause: err },

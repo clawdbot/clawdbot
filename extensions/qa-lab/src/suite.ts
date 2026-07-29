@@ -50,7 +50,6 @@ import {
   appendNodeOption,
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
-  buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   remapModelRefForForcedRuntime,
 } from "./suite-support.js";
@@ -157,6 +156,9 @@ export type QaSuiteRunParams = {
   runtimePair?: [RuntimeId, RuntimeId];
   captureRuntimeParityCell?: boolean;
   roundTripProbe?: QaSuiteRoundTripProbe;
+  // Profile runs prove every applicable declared channel. Direct channel lanes
+  // still treat execution.channels as an OR eligibility list.
+  expandScenarioChannels?: boolean;
   // Unified suite partitions consume child evidence in memory; only the
   // parent should write the aggregate qa-evidence.json artifact.
   writeEvidenceFile?: boolean;
@@ -551,7 +553,6 @@ export const qaSuiteProgressTesting = {
   createQaSuiteTransportAdapter,
   createScenarioStepRunner: createQaSuiteScenarioStepRunner,
   formatQaSuiteRunStartProgress,
-  buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,

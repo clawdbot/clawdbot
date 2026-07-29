@@ -9,7 +9,9 @@ import {
 
 type SidebarSessionPaginationOwner = {
   readonly context: ApplicationContext<RouteId> | undefined;
+  readonly sessionScopeGeneration: number;
   readonly sessionCreatedOrder: Map<string, number>;
+  readonly sidebarSessionPaginationState: SidebarSessionPaginationState;
   sessionMutationError: string | null;
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionsAgentId: string | null;
@@ -19,24 +21,10 @@ type SidebarSessionPaginationOwner = {
   requestSessionDataUpdate(): void;
 };
 
-type SidebarSessionPaginationState = {
+export type SidebarSessionPaginationState = {
   listRequestToken: symbol | null;
   pageRequestToken: symbol | null;
 };
-
-const sidebarSessionPaginationStates = new WeakMap<
-  SidebarSessionPaginationOwner,
-  SidebarSessionPaginationState
->();
-
-function sidebarSessionPaginationState(owner: SidebarSessionPaginationOwner) {
-  let state = sidebarSessionPaginationStates.get(owner);
-  if (!state) {
-    state = { listRequestToken: null, pageRequestToken: null };
-    sidebarSessionPaginationStates.set(owner, state);
-  }
-  return state;
-}
 
 function publishSidebarSessionResult(
   owner: SidebarSessionPaginationOwner,
@@ -84,12 +72,6 @@ function appendSidebarSessionResults(
   };
 }
 
-export function invalidateSidebarSessionPagination(owner: SidebarSessionPaginationOwner): void {
-  const state = sidebarSessionPaginationState(owner);
-  state.listRequestToken = null;
-  state.pageRequestToken = null;
-}
-
 export async function refreshSidebarSessions(
   owner: SidebarSessionPaginationOwner,
   agentId: string,
@@ -99,7 +81,7 @@ export async function refreshSidebarSessions(
   if (!context) {
     return;
   }
-  const state = sidebarSessionPaginationState(owner);
+  const state = owner.sidebarSessionPaginationState;
   state.pageRequestToken = null;
   const archivedFilter = statusFilter();
   const options = {
@@ -118,14 +100,22 @@ export async function refreshSidebarSessions(
     return;
   }
 
+  const gateway = context.gateway;
+  const client = gateway.snapshot.client;
+  const generation = owner.sessionScopeGeneration;
   const token = Symbol(agentId);
   state.listRequestToken = token;
   owner.sessionsLoading = true;
   owner.requestSessionDataUpdate();
   const isCurrent = () =>
     state.listRequestToken === token &&
+    owner.sessionScopeGeneration === generation &&
     owner.context === context &&
     owner.context.sessions === context.sessions &&
+    owner.context.gateway === gateway &&
+    gateway.snapshot.phase === "connected" &&
+    gateway.snapshot.client === client &&
+    normalizeAgentId(agentId) === normalizeAgentId(owner.expandedAgentId()) &&
     archivedFilter === statusFilter();
   try {
     const result = await context.sessions.list(options);
@@ -138,7 +128,7 @@ export async function refreshSidebarSessions(
       owner.requestSessionDataUpdate();
     }
   } finally {
-    if (state.listRequestToken === token) {
+    if (state.listRequestToken === token && owner.sessionScopeGeneration === generation) {
       owner.sessionsLoading = false;
       owner.requestSessionDataUpdate();
     }
@@ -155,7 +145,7 @@ export async function loadMoreSidebarSessions(
   // Gateway cursors are optional; accumulated rows provide the same next page.
   const offset =
     previous?.nextOffset === undefined ? previous?.sessions.length : previous.nextOffset;
-  const state = sidebarSessionPaginationState(owner);
+  const state = owner.sidebarSessionPaginationState;
   // A pending first-page refresh owns the list; its old offset cannot safely
   // start a page that would append to a superseded session snapshot.
   if (
@@ -172,15 +162,18 @@ export async function loadMoreSidebarSessions(
 
   const gateway = context.gateway;
   const client = gateway.snapshot.client;
+  const generation = owner.sessionScopeGeneration;
   const archivedFilter = statusFilter();
   const listRequestToken = state.listRequestToken;
   const token = Symbol(agentId);
   state.pageRequestToken = token;
   const isCurrent = () =>
     state.pageRequestToken === token &&
+    owner.sessionScopeGeneration === generation &&
     owner.context === context &&
     owner.context.sessions === context.sessions &&
     owner.context.gateway === gateway &&
+    gateway.snapshot.phase === "connected" &&
     gateway.snapshot.client === client &&
     archivedFilter === statusFilter() &&
     normalizeAgentId(agentId) === normalizeAgentId(owner.expandedAgentId()) &&
@@ -219,7 +212,7 @@ export async function loadMoreSidebarSessions(
       owner.requestSessionDataUpdate();
     }
   } finally {
-    if (state.pageRequestToken === token) {
+    if (state.pageRequestToken === token && owner.sessionScopeGeneration === generation) {
       state.pageRequestToken = null;
       if (archivedFilter !== "active") {
         owner.sessionsLoading = false;

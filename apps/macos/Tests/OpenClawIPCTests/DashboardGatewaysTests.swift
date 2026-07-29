@@ -111,6 +111,25 @@ struct DashboardGatewaysBridgeTests {
             port: 443,
             dashboardURL: url))
     }
+
+    @Test func `media capture trust requires the dashboard origin`() throws {
+        let url = try #require(URL(string: "https://gateway.example/control/"))
+        #expect(DashboardWindowController.isTrustedMediaCaptureOrigin(
+            protocol: "https",
+            host: "gateway.example",
+            port: 443,
+            dashboardURL: url))
+        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+            protocol: "https",
+            host: "other.example",
+            port: 443,
+            dashboardURL: url))
+        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+            protocol: "http",
+            host: "gateway.example",
+            port: 80,
+            dashboardURL: url))
+    }
 }
 
 @Suite(.serialized)

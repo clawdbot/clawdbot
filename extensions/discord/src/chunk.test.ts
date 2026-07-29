@@ -325,4 +325,76 @@ describe("chunkDiscordText", () => {
     expect(second.startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
   });
+
+  it.each([
+    ["a backtick fence", ["```python", "print(1)", "```"], "```python\nprint(1)\n```"],
+    [
+      "a backtick fence followed by reasoning",
+      ["```python", "print(1)", "```", "more reasoning"],
+      "```python\nprint(1)\n```\n_more reasoning_",
+    ],
+    ["a tilde fence", ["~~~python", "print(1)", "~~~"], "~~~python\nprint(1)\n~~~"],
+    [
+      "a tilde fence followed by reasoning",
+      ["~~~python", "print(1)", "~~~", "more reasoning"],
+      "~~~python\nprint(1)\n~~~\n_more reasoning_",
+    ],
+    [
+      "an indented fence",
+      ["  ```python", "print(1)", "  ```", "more reasoning"],
+      "  ```python\nprint(1)\n  ```\n_more reasoning_",
+    ],
+    [
+      "a longer closing fence",
+      ["```python", "print(1)", "````", "more reasoning"],
+      "```python\nprint(1)\n````\n_more reasoning_",
+    ],
+    [
+      "inline code followed by reasoning",
+      ["`inline_code_token`", "10. after"],
+      "`inline_code_token`\n_10. after_",
+    ],
+    [
+      "inline code with a longer interior backtick run",
+      ["``a```b``", "10. after"],
+      "``a```b``\n_10. after_",
+    ],
+    [
+      "consecutive leading code spans",
+      ["```js", "one()", "```", "~~~sh", "two", "~~~", "more reasoning"],
+      "```js\none()\n```\n~~~sh\ntwo\n~~~\n_more reasoning_",
+    ],
+  ] as const)("preserves %s at a reasoning chunk boundary", (_name, continuation, expected) => {
+    const body = [
+      ...Array.from({ length: 9 }, (_, index) => `${index + 1}. line`),
+      ...continuation,
+    ].join("\n");
+    const chunks = chunkDiscordText(`Reasoning:\n_${body}_`, {
+      maxLines: 10,
+      maxChars: 2000,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    const second = expectDefined(chunks[1], "second Discord chunk");
+    expect(second).toBe(expected);
+    expect(second.trimStart()).not.toMatch(/^_(```|~~~|`)/u);
+    for (const chunk of chunks) {
+      expect((chunk.match(/_/g) || []).length % 2).toBe(0);
+    }
+  });
+
+  it("treats an unmatched inline delimiter as reasoning prose", () => {
+    const body = [
+      ...Array.from({ length: 9 }, (_, index) => `${index + 1}. line`),
+      "`unclosed",
+      "10. after",
+    ].join("\n");
+    const chunks = chunkDiscordText(`Reasoning:\n_${body}_`, {
+      maxLines: 10,
+      maxChars: 2000,
+    });
+
+    expect(expectDefined(chunks[1], "second Discord chunk")).toBe("_`unclosed\n10. after_");
+    expect(chunks.every((chunk) => (chunk.match(/_/g) || []).length % 2 === 0)).toBe(true);
+  });
 });

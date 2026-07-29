@@ -5,6 +5,7 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
+import { isSqliteCorruptionError } from "./sqlite-transaction.js";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -29,25 +30,17 @@ type SqliteForeignKeyViolation = {
 
 const MAX_REPORTED_FOREIGN_KEY_VIOLATIONS = 5;
 
-const SQLITE_CORRUPT_ERRCODE = 11;
-const SQLITE_NOTADB_ERRCODE = 26;
-
 /** Return whether a named integrity failure proves persistent database damage. */
 export function isTerminalSqliteIntegrityError(error: Error): boolean {
   if (error.name !== "SqliteIntegrityError") {
     return false;
   }
-  const cause = error.cause as { errcode?: unknown } | undefined;
-  if (!cause) {
+  if (!error.cause) {
     // No cause means the check pragma itself reported corruption rows: persistent.
     return true;
   }
-  if (typeof cause.errcode !== "number") {
-    return false;
-  }
-  // Mask extended codes to the primary; transient lock/busy failures must not latch.
-  const primaryCode = cause.errcode & 0xff;
-  return primaryCode === SQLITE_CORRUPT_ERRCODE || primaryCode === SQLITE_NOTADB_ERRCODE;
+  // Only proven corruption latches; transient lock/busy pragma failures must not.
+  return isSqliteCorruptionError(error.cause);
 }
 
 /** Require structural, table/index, and referential consistency before trusting a database. */

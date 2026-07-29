@@ -70,8 +70,6 @@ export type BuildChatItemsProps = {
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
-  /** Keeps the status row visible while a running tool is parked for approval. */
-  waitingApproval?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
   planStatus?: PlanStatus | null;
@@ -480,65 +478,48 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     toolStreamPredecessors,
   );
 
-  // Working spark contract: whenever the agent works with nothing visibly
-  // streaming (pre-first-token, or a queued send in flight), the thread shows
-  // the reading indicator where the reply will materialize. Streaming text
-  // and running tool rows take over as the signal once content flows.
-  // A visible running tool row already signals active work, so the spark is
-  // suppressed rather than stacked under it; hidden tool calls keep the spark.
-  const hasVisibleRunningTool =
-    props.showToolCalls &&
-    tools.some((message) => {
-      const record = asRecord(message);
-      return (
-        record?.["__openclawToolStreamLive"] === true &&
-        record["__openclawToolStreamResultReceived"] !== true
-      );
-    });
-  // The initial-load skeleton owns the empty thread; a background reload with
-  // content still visible keeps the spark (it is the only working signal).
-  const initialHistoryLoad = props.loading === true && items.length === 0;
-  const hasPendingResponse =
-    props.stream === null &&
-    ((props.runWorking === true &&
-      (props.waitingApproval === true || !hasVisibleRunningTool) &&
-      !initialHistoryLoad) ||
-      queuedSends.some(
-        (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-      ));
-  if (props.runWorking !== true && props.stream === null && !hasPendingResponse) {
+  // The active claw is telemetry, not a placeholder: it stays through visible
+  // assistant text and tool cards until the run settles. The initial-load
+  // skeleton still owns an otherwise empty thread, but not an active stream.
+  const initialHistoryLoad = props.stream === null && props.loading === true && items.length === 0;
+  // A non-null empty stream is the acknowledgement bridge before runWorking
+  // catches up.
+  const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;
+  const showWorkingIndicator =
+    (props.runWorking === true && !initialHistoryLoad) ||
+    hasEmptyLiveStream ||
+    queuedSends.some(
+      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
+    );
+  if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);
   }
+  let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
   const resolveProgress = () =>
-    resolveWorkingProgress(
+    (progress ??= resolveWorkingProgress(
       props.sessionKey,
       props.runId ?? null,
       props.streamStartedAt,
       queuedSends,
       segments,
       tools,
-    );
-  if (hasPendingResponse) {
-    const progress = resolveProgress();
-    items.push({ kind: "reading-indicator", ...progress });
-  } else if (props.stream !== null) {
+    ));
+  if (props.stream !== null) {
     const text = sanitizeStreamText(props.stream);
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
-    if (visibleText.length > 0) {
-      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
-        const progress = resolveProgress();
-        items.push({
-          kind: "stream",
-          key: progress.key,
-          text: visibleText,
-          startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
-          isStreaming: true,
-        });
-      }
-    } else if (props.stream.trim().length === 0) {
-      const progress = resolveProgress();
-      items.push({ kind: "reading-indicator", ...progress });
+    if (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
+      const liveProgress = resolveProgress();
+      items.push({
+        kind: "stream",
+        key: liveProgress.key,
+        text: visibleText,
+        startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
+        isStreaming: true,
+      });
     }
+  }
+  if (showWorkingIndicator) {
+    items.push({ kind: "reading-indicator", ...resolveProgress() });
   }
   if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
     items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });

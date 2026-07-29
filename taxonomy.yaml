@@ -19,7 +19,6 @@ profiles:
       - agent-runtime.tool-task-followthrough
       - channels.outbound-group-reply
       - channels.resumed-final-reply
-      - control-ui.gateway-hosted-ui-control
       - gateway.health-apis
       - gateway.hello-ok-snapshot
       - gateway.websocket-transport
@@ -7956,15 +7955,15 @@ surfaces:
           - name: BotFather token creation
             coverageIds: [telegram.botfather-token-creation]
             description: BotFather token creation and first gateway start
-          - name: TELEGRAM_BOT_TOKEN
+          - name: Token-source precedence
             coverageIds: [telegram.telegram-bot-token]
-            description: TELEGRAM_BOT_TOKEN, botToken, tokenFile, and account-scoped token
+            description: Account tokenFile, account botToken, channel tokenFile, channel botToken, then TELEGRAM_BOT_TOKEN precedence.
           - name: Setup wizard credential capture
             coverageIds: [telegram.setup-wizard-credential-capture]
             description: Setup wizard credential capture, allowlist prompts, and DM policy defaults
           - name: Startup getMe
             coverageIds: [telegram.startup-getme]
-            description: Startup getMe, bot-info cache, account throttling, and multi-account default
+            description: Product-startup getMe success and authentication failure, bot-info cache fallback, and account probe throttling.
           - name: Doctor/status surfacing
             coverageIds: [telegram.doctor-status-surfacing]
             description: Doctor/status surfacing for invalid tokens, missing defaults, and read-only
@@ -8095,7 +8094,13 @@ surfaces:
             description: Built-in commands such as /help, /commands, /whoami, /status, and related command UI.
           - name: Command authorization in DMs
             coverageIds: [telegram.command-authorization-in-dms]
-            description: Command authorization in DMs, groups, and commands addressed to other bots
+            description: Command authorization for Telegram direct messages.
+          - name: Command authorization in groups
+            coverageIds: [telegram.command-authorization-in-groups]
+            description: Group allowlist authorization for Telegram commands.
+          - name: Other-bot command gating
+            coverageIds: [telegram.other-bot-command-gating]
+            description: Commands addressed to another Telegram bot remain ignored.
           - name: Model buttons
             coverageIds: [telegram.model-buttons]
             description: Model buttons and command UI helpers
@@ -8363,6 +8368,12 @@ surfaces:
           - name: Sender Authorization
             coverageIds: [slack.sender-authorization]
             description: Covers Sender Authorization across Slack DM routing, `dmPolicy`, `allowFrom`, pairing approvals, group DMs/MPIMs, account-level allowlist inheritance, command authorization in DMs, and sender identity normalization.
+          - name: MPIM routing
+            coverageIds: [slack.mpim]
+            description: Covers group direct-message routing and app-mention dispatch in Slack MPIM conversations.
+          - name: Delivery dedupe
+            coverageIds: [slack.delivery-dedupe]
+            description: Covers single-delivery enforcement when one Slack event arrives through overlapping message and app-mention paths.
         docs:
           - docs/channels/slack.md
           - docs/channels/bot-loop-protection.md

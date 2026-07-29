@@ -4,16 +4,20 @@ import { Type } from "typebox";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-icon.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
+import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
+import { SessionToolOverridesSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
 export {
   SessionCreatedActorSchema,
   SessionRowSchema,
+  SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionRow,
+  type SessionToolOverrides,
 } from "./sessions-row.js";
 
 export const SESSION_OBSERVER_HEALTH_VALUES = [
@@ -438,7 +442,7 @@ export const SessionsSendParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   message: Type.String(),
   thinking: Type.Optional(Type.String()),
-  attachments: Type.Optional(Type.Array(Type.Unknown())),
+  attachments: Type.Optional(ChatAttachmentsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   idempotencyKey: Type.Optional(NonEmptyString),
 });
@@ -498,6 +502,7 @@ export const SessionsPatchParamsSchema = closedObject({
   ),
   thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
+  toolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
   verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

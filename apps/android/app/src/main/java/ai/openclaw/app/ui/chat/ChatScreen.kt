@@ -254,6 +254,7 @@ fun ChatScreen(
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
@@ -681,7 +682,10 @@ fun ChatScreen(
       messages = messages,
       transcriptAnchor = transcriptAnchor,
       historyLoading = historyLoading,
-      pendingRunCount = pendingRunCount,
+      activeRunCount = selectedActiveRun.count,
+      activeRunId = selectedActiveRun.runId,
+      activeRunClockKey = selectedActiveRun.clockKey,
+      activeRunOutputTokens = selectedActiveRun.outputTokens,
       pendingToolCalls = pendingToolCalls,
       questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
       streamingAssistantText = streamingAssistantText,
@@ -1237,7 +1241,10 @@ private fun ChatMessageList(
   messages: List<ChatMessage>,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
-  pendingRunCount: Int,
+  activeRunCount: Int,
+  activeRunId: String?,
+  activeRunClockKey: String?,
+  activeRunOutputTokens: Long?,
   pendingToolCalls: List<ChatPendingToolCall>,
   questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
@@ -1261,10 +1268,10 @@ private fun ChatMessageList(
   modifier: Modifier = Modifier,
 ) {
   val baseTimeline =
-    remember(messages, pendingRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(messages, activeRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       buildChatTimeline(
         messages = messages,
-        pendingRunCount = pendingRunCount,
+        pendingRunCount = activeRunCount,
         pendingToolCalls = pendingToolCalls,
         streamingAssistantText = streamingAssistantText,
         outboxItems = outboxItems,
@@ -1272,9 +1279,16 @@ private fun ChatMessageList(
         questions = questions,
       )
     }
-  val indicatorVisible = pendingRunCount > 0
+  val indicatorVisible = activeRunCount > 0
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
-  val workingRun = workingRunTracker.resolve(indicatorVisible, session, SystemClock.elapsedRealtime())
+  val workingRun =
+    workingRunTracker.resolve(
+      indicatorVisible = indicatorVisible,
+      clockKey = activeRunClockKey,
+      authoritativeRunId = activeRunId,
+      nowElapsedMs = SystemClock.elapsedRealtime(),
+      outputTokens = activeRunOutputTokens,
+    )
   val turnRecapResolver = remember { TurnRecapResolver() }
   val turnRecap =
     turnRecapResolver.resolve(
@@ -1375,7 +1389,11 @@ private fun ChatMessageList(
           ChatTimelineItem.Thinking -> {
             val run = workingRun
             if (run != null) {
-              ChatTypingIndicatorBubble(runKey = run.key, observedAtElapsedMs = run.observedAtElapsedMs)
+              ChatTypingIndicatorBubble(
+                runKey = run.clockKey,
+                observedAtElapsedMs = run.observedAtElapsedMs,
+                outputTokens = run.outputTokens,
+              )
             }
           }
         }
@@ -1429,10 +1447,10 @@ private fun ChatMessageList(
 }
 
 internal data class ChatWorkingRun(
-  val key: String,
+  val clockKey: String,
   val observedAtElapsedMs: Long,
   val authoritativeRunId: String?,
-  val authoritativeStartedAtMs: Long?,
+  val outputTokens: Long?,
 )
 
 internal class ChatWorkingRunTracker(
@@ -1442,35 +1460,30 @@ internal class ChatWorkingRunTracker(
 
   fun resolve(
     indicatorVisible: Boolean,
-    session: ChatSessionEntry?,
+    clockKey: String?,
+    authoritativeRunId: String?,
     nowElapsedMs: Long,
+    outputTokens: Long?,
   ): ChatWorkingRun? {
     if (!indicatorVisible) {
       current = null
       return null
     }
-    val runId = session?.activeRunIds?.lastOrNull()
-    val startedAt = session?.startedAt?.takeIf { session.endedAt == null }
+    val resolvedClockKey = clockKey ?: "$sessionKey:active"
     val previous = current
-    val replacementByRunId = previous?.authoritativeRunId != null && runId != null && previous.authoritativeRunId != runId
-    val replacementByStart =
-      previous?.authoritativeStartedAtMs != null && startedAt != null && previous.authoritativeStartedAtMs != startedAt
-    val replacement = replacementByRunId || replacementByStart
-    if (previous == null || replacement) {
+    if (previous == null || previous.clockKey != resolvedClockKey) {
       return ChatWorkingRun(
-        key = runId ?: "$sessionKey:${startedAt ?: nowElapsedMs}",
+        clockKey = resolvedClockKey,
         observedAtElapsedMs = nowElapsedMs,
-        authoritativeRunId = runId,
-        authoritativeStartedAtMs = startedAt,
+        authoritativeRunId = authoritativeRunId,
+        outputTokens = outputTokens,
       ).also { current = it }
     }
-    val adoptsRunId = previous.authoritativeRunId == null && runId != null
-    val adoptsStartedAt = previous.authoritativeStartedAtMs == null && startedAt != null
-    if (adoptsRunId || adoptsStartedAt) {
+    if (previous.authoritativeRunId != authoritativeRunId || previous.outputTokens != outputTokens) {
       current =
         previous.copy(
-          authoritativeRunId = runId ?: previous.authoritativeRunId,
-          authoritativeStartedAtMs = startedAt ?: previous.authoritativeStartedAtMs,
+          authoritativeRunId = authoritativeRunId,
+          outputTokens = outputTokens,
         )
     }
     return current

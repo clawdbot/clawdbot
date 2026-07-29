@@ -990,7 +990,11 @@ export async function maybeScanExtraGatewayServices(
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
+  // Legacy jobs have their own confirmed cleanup flow; generic hints must
+  // only name detected extra services, never the active managed gateway.
+  const cleanupHints = renderGatewayServiceCleanupHints(
+    extraServices.filter((service) => service.legacy !== true),
+  );
   if (cleanupHints.length > 0) {
     note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }

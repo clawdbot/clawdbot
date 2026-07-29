@@ -5,6 +5,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
+import { resolveSshClient } from "./ssh-client.js";
 
 export type SshParsedTarget = {
   user?: string;
@@ -148,6 +149,11 @@ export async function startSshPortForward(opts: {
     throw new Error(`invalid SSH target: ${opts.target}`);
   }
 
+  const sshPath = resolveSshClient();
+  if (!sshPath) {
+    throw new Error("trusted SSH client not found in system directories");
+  }
+
   let localPort = opts.localPortPreferred;
   try {
     await ensurePortAvailable(localPort, "127.0.0.1");
@@ -188,7 +194,7 @@ export async function startSshPortForward(opts: {
   args.push("--", userHost);
 
   const stderr: string[] = [];
-  const child = spawn("/usr/bin/ssh", args, {
+  const child = spawn(sshPath, args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
   const stderrStream = child.stderr;

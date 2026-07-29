@@ -109,6 +109,28 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposal_rollbacks (
   FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS skill_workshop_proposal_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  proposal_id TEXT NOT NULL,
+  proposed_version TEXT NOT NULL,
+  revision_hash TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN (
+    'created',
+    'revised',
+    'evaluation_completed',
+    'applied',
+    'rejected',
+    'quarantined',
+    'stale'
+  )),
+  occurred_at TEXT NOT NULL,
+  actor_json TEXT NOT NULL,
+  correlation_id TEXT,
+  payload_json TEXT,
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,

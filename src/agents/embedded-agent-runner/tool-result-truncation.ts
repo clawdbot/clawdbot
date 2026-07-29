@@ -5,8 +5,6 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
@@ -27,10 +25,7 @@ import {
   sliceToolResultTextTailToBudget,
   sliceToolResultTextToBudget,
 } from "./tool-result-text-budget.js";
-import {
-  rewriteTranscriptEntriesInSessionManager,
-  rewriteTranscriptEntriesInRuntimeTranscript,
-} from "./transcript-rewrite.js";
+import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 import {
   resolveRuntimeTranscriptReadTarget,
   type RuntimeTranscriptScope,
@@ -100,15 +95,12 @@ function logToolResultSessionTruncation(params: {
   );
 }
 
-async function readRuntimeTranscriptState(scope: RuntimeTranscriptScope): Promise<SessionManager> {
+async function openRuntimeTranscriptSessionManager(scope: RuntimeTranscriptScope): Promise<{
+  sessionManager: SessionManager;
+  target: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>>;
+}> {
   const target = await resolveRuntimeTranscriptReadTarget(scope);
-  const events = await loadTranscriptEvents({
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  });
-  return SessionManager.fromEntries(events);
+  return { sessionManager: SessionManager.open(target), target };
 }
 
 function resolveSuffixFactory(
@@ -786,6 +778,51 @@ function mergeProjectedToolResultMessage(
   return { ...message, content: mergedContent } as AgentMessage;
 }
 
+function seedRecoveryBranchFromFrozenProjection(params: {
+  branch: ToolResultBranchEntry[];
+  projectionState: ToolResultPromptProjectionState;
+}): ToolResultBranchEntry[] {
+  const messageEntries = params.branch.filter(
+    (entry): entry is ToolResultBranchEntry & { message: AgentMessage } =>
+      entry.type === "message" && entry.message !== undefined,
+  );
+  const projectionKeys = getToolResultProjectionKeys(
+    messageEntries.map((entry) => entry.message),
+    params.projectionState,
+  );
+  const hasFrozenProjectionBaseline = params.projectionState.frozen.size > 0;
+  let messageIndex = 0;
+  return params.branch.map((entry) => {
+    if (entry.type !== "message" || !entry.message) {
+      return entry;
+    }
+    const projectionKey = projectionKeys[messageIndex++];
+    const projectedMessage =
+      projectionKey && params.projectionState.frozen.has(projectionKey)
+        ? params.projectionState.replacements.get(projectionKey)
+        : undefined;
+    const message = projectedMessage
+      ? mergeProjectedToolResultMessage(
+          entry.message,
+          projectedMessage,
+          projectionKey ? params.projectionState.sourceTextByKey.get(projectionKey) : undefined,
+        )
+      : entry.message;
+    return {
+      ...entry,
+      message,
+      aggregateEligible:
+        !projectionKey ||
+        !params.projectionState.frozen.has(projectionKey) ||
+        (projectedMessage !== undefined && message === entry.message),
+      deferAggregateRecovery:
+        projectionKey !== undefined &&
+        hasFrozenProjectionBaseline &&
+        !params.projectionState.frozen.has(projectionKey),
+    };
+  });
+}
+
 function getToolResultTextBlocks(message: AgentMessage): string[] {
   const content = (message as { content?: unknown }).content;
   if (!Array.isArray(content)) {
@@ -1151,6 +1188,7 @@ function buildRecoveryToolResultReplacementPlan(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
+  projectionState?: ToolResultPromptProjectionState;
 }): {
   maxChars: number;
   aggregateBudgetChars: number;
@@ -1165,16 +1203,40 @@ function buildRecoveryToolResultReplacementPlan(params: {
     maxChars,
     params.aggregateMaxCharsOverride,
   );
+  const projectedBranch = params.projectionState
+    ? seedRecoveryBranchFromFrozenProjection({
+        branch: params.branch,
+        projectionState: params.projectionState,
+      })
+    : params.branch;
+  const plan = buildToolResultReplacementPlan({
+    branch: projectedBranch,
+    maxChars,
+    aggregateBudgetChars,
+    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    protectTrailingToolResults: params.protectTrailingToolResults,
+  });
+  const finalBranch = applyToolResultReplacementsToBranch(projectedBranch, plan.replacements);
+  const replacements = params.branch.flatMap((entry, index) => {
+    const finalEntry = finalBranch[index];
+    if (
+      entry.type !== "message" ||
+      !entry.message ||
+      finalEntry?.type !== "message" ||
+      !finalEntry.message ||
+      JSON.stringify(entry.message) === JSON.stringify(finalEntry.message)
+    ) {
+      return [];
+    }
+    return [{ entryId: entry.id, message: finalEntry.message }];
+  });
   return {
     maxChars,
     aggregateBudgetChars,
-    plan: buildToolResultReplacementPlan({
-      branch: params.branch,
-      maxChars,
-      aggregateBudgetChars,
-      minKeepChars: RECOVERY_MIN_KEEP_CHARS,
-      protectTrailingToolResults: params.protectTrailingToolResults,
-    }),
+    plan: {
+      ...plan,
+      replacements,
+    },
   };
 }
 
@@ -1239,10 +1301,12 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
+  projectionState?: ToolResultPromptProjectionState;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  storePath?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   const { sessionManager, contextWindowTokens } = params;
   const branch = sessionManager.getBranch() as ToolResultBranchEntry[];
@@ -1257,6 +1321,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     maxCharsOverride: params.maxCharsOverride,
     aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
     protectTrailingToolResults: params.protectTrailingToolResults,
+    projectionState: params.projectionState,
   });
   if (plan.replacements.length === 0) {
     return {
@@ -1269,17 +1334,21 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     sessionManager,
     replacements: plan.replacements,
   });
-  if (rewriteResult.changed && params.sessionFile) {
+  const hasRuntimeTarget = Boolean(
+    params.sessionId && params.sessionKey && params.agentId && params.storePath,
+  );
+  if (rewriteResult.changed && (params.sessionFile || hasRuntimeTarget)) {
     emitSessionTranscriptUpdate({
-      sessionFile: params.sessionFile,
+      ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.sessionId && params.sessionKey && params.agentId
+      ...(params.sessionId && params.sessionKey && params.agentId && params.storePath
         ? {
             target: {
               agentId: params.agentId,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
+              storePath: params.storePath,
             },
           }
         : {}),
@@ -1310,6 +1379,7 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
+  projectionState?: ToolResultPromptProjectionState;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -1324,78 +1394,34 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   }
 }
 
-/**
- * Truncates oversized tool results in the active runtime transcript.
- */
-async function truncateOversizedToolResultsInRuntimeTranscript(params: {
-  scope: RuntimeTranscriptScope;
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-  aggregateMaxCharsOverride?: number;
-  protectTrailingToolResults?: boolean;
-}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
-  try {
-    const state = await readRuntimeTranscriptState(params.scope);
-    const { contextWindowTokens } = params;
-    const branch = state.getBranch() as ToolResultBranchEntry[];
-
-    if (branch.length === 0) {
-      return { truncated: false, truncatedCount: 0, reason: "empty session" };
-    }
-
-    const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
-      branch,
-      contextWindowTokens,
-      maxCharsOverride: params.maxCharsOverride,
-      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
-      protectTrailingToolResults: params.protectTrailingToolResults,
-    });
-    if (plan.replacements.length === 0) {
-      return {
-        truncated: false,
-        truncatedCount: 0,
-        reason: "no oversized or aggregate tool results",
-      };
-    }
-
-    const rewriteResult = await rewriteTranscriptEntriesInRuntimeTranscript({
-      scope: params.scope,
-      request: { replacements: plan.replacements },
-    });
-
-    logToolResultSessionTruncation({
-      rewrittenEntries: rewriteResult.rewrittenEntries,
-      contextWindowTokens,
-      maxChars,
-      aggregateBudgetChars,
-      oversizedReplacementCount: plan.oversizedReplacementCount,
-      aggregateReplacementCount: plan.aggregateReplacementCount,
-      sessionKey: params.scope.sessionKey,
-      sessionId: params.scope.sessionId,
-    });
-
-    return {
-      truncated: rewriteResult.changed,
-      truncatedCount: rewriteResult.rewrittenEntries,
-      reason: rewriteResult.reason,
-    };
-  } catch (err) {
-    const errMsg = formatErrorMessage(err);
-    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
-    return { truncated: false, truncatedCount: 0, reason: errMsg };
-  }
-}
-
-/** Truncates oversized tool results in the active SQLite runtime transcript. */
+/** Truncates oversized tool results on a new active transcript branch. */
 export async function truncateOversizedToolResultsInActiveTarget(params: {
   scope: RuntimeTranscriptScope;
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
-  config?: OpenClawConfig;
+  projectionState?: ToolResultPromptProjectionState;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
-  return await truncateOversizedToolResultsInRuntimeTranscript(params);
+  try {
+    const { sessionManager, target } = await openRuntimeTranscriptSessionManager(params.scope);
+    return truncateOversizedToolResultsInExistingSessionManager({
+      sessionManager,
+      contextWindowTokens: params.contextWindowTokens,
+      maxCharsOverride: params.maxCharsOverride,
+      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+      protectTrailingToolResults: params.protectTrailingToolResults,
+      projectionState: params.projectionState,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      agentId: target.agentId,
+      storePath: target.storePath,
+    });
+  } catch (err) {
+    const errMsg = formatErrorMessage(err);
+    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    return { truncated: false, truncatedCount: 0, reason: errMsg };
+  }
 }
 
 export function sessionLikelyHasOversizedToolResults(params: {

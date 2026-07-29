@@ -3,8 +3,10 @@ import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
+  disposeAllCodeModeRuns,
   disposeCodeModeRun,
   reserveActiveRunSlot,
+  resumingRunIds,
   storeSnapshotState,
   type PendingBridgeState,
 } from "./code-mode-state.js";
@@ -18,7 +20,10 @@ import {
 const EXPIRING_RUN_ID = "cm_worker_lifecycle_expiry";
 const CAPACITY_RUN_PREFIX = "cm_worker_lifecycle_capacity_";
 
-function parkExpiringRun(method: "callValue" | "agentWait"): ReturnType<typeof vi.fn> {
+function parkExpiringRun(
+  method: "callValue" | "agentWait",
+  runId = EXPIRING_RUN_ID,
+): ReturnType<typeof vi.fn> {
   const rawConfig = {
     tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } },
   } as never;
@@ -37,7 +42,7 @@ function parkExpiringRun(method: "callValue" | "agentWait"): ReturnType<typeof v
   };
 
   storeSnapshotState({
-    runId: EXPIRING_RUN_ID,
+    runId,
     replayId: "cm_replay_lifecycle",
     pending: [pending],
     replaySafe: false,
@@ -64,6 +69,44 @@ afterEach(() => {
 });
 
 describe("Code Mode worker lifecycle", () => {
+  it("cancels every suspended run, releases capacity, and clears its expiry timer", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const firstRunId = `${CAPACITY_RUN_PREFIX}shutdown_first`;
+    const secondRunId = `${CAPACITY_RUN_PREFIX}shutdown_second`;
+    const firstCancel = parkExpiringRun("callValue", firstRunId);
+    const secondCancel = parkExpiringRun("agentWait", secondRunId);
+    const firstRun = activeRuns.get(firstRunId);
+    if (!firstRun) {
+      throw new Error("expected a parked Code Mode shutdown run");
+    }
+    resumingRunIds.add(firstRunId);
+    resumingRunIds.add(secondRunId);
+    for (let index = 0; index < 62; index += 1) {
+      const runId = `${CAPACITY_RUN_PREFIX}shutdown_${index}`;
+      activeRuns.set(runId, { ...firstRun, runId, pending: [] });
+    }
+
+    expect(activeRuns.size).toBe(64);
+    expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
+    expect(vi.getTimerCount()).toBe(1);
+
+    const clearExpiryTimer = vi.spyOn(globalThis, "clearTimeout");
+    disposeAllCodeModeRuns();
+    disposeAllCodeModeRuns();
+
+    expect(firstCancel).toHaveBeenCalledOnce();
+    expect(secondCancel).toHaveBeenCalledOnce();
+    expect(clearExpiryTimer).toHaveBeenCalledOnce();
+    expect(activeRuns.size).toBe(0);
+    expect(resumingRunIds.has(firstRunId)).toBe(false);
+    expect(resumingRunIds.has(secondRunId)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    clearExpiryTimer.mockRestore();
+
+    const releaseFreedSlot = reserveActiveRunSlot();
+    releaseFreedSlot();
+  });
+
   it("transfers a resumed run's slot atomically at the suspended-run limit", () => {
     parkExpiringRun("callValue");
     const ownedState = activeRuns.get(EXPIRING_RUN_ID);
