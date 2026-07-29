@@ -552,11 +552,10 @@ export function createWriteToolDefinition(
       const absolutePath = resolveToCwd(path, cwd);
       const dir = dirname(absolutePath);
       // Restore newline escape sequences that some models emit literally
-      // in tool call arguments rather than as actual newline characters.
-      const unescaped = content.replaceAll("\\n", "\n");
+      const unescaped = content.replaceAll("\n", "
+");
       return withFileMutationQueue(absolutePath, async () => {
-        content = unescaped;
-        const precheck = await readOriginalWriteState(absolutePath, content, ops);
+        const precheck = await readOriginalWriteState(absolutePath, unescaped, ops);
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
@@ -569,23 +568,23 @@ export function createWriteToolDefinition(
             terminate: true,
           };
         }
-        const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
+        const details = await resolveWriteDetails({ absolutePath, content: unescaped, ops, path, precheck });
         try {
           await ops.mkdir(dir);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          await ops.writeFile(absolutePath, content);
+          await ops.writeFile(absolutePath, unescaped);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          return successfulWriteResult(path, content, details);
+          return successfulWriteResult(path, unescaped, details);
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
             absolutePath,
-            content,
+            content: unescaped,
             error,
-            ops,
+            ops, 
             path,
             precheck,
             details,
