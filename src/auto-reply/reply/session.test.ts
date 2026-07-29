@@ -4361,6 +4361,92 @@ describe("persistSessionUsageUpdate", () => {
 
   it.each([
     {
+      name: "preserves the displayed session model when heartbeat usage uses a heartbeat model",
+      seed: { modelProvider: "openai", model: "gpt-5.4" },
+      update: {
+        isHeartbeat: true,
+        usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
+        lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
+        providerUsed: "openai",
+        modelUsed: "gpt-5.1-codex-mini",
+        contextTokensUsed: 128_000,
+      },
+      expected: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        inputTokens: 1_200,
+        outputTokens: 100,
+        cacheRead: 200,
+        totalTokens: 1_105,
+      },
+    },
+    {
+      name: "persists heartbeat CLI binding while preserving displayed session model",
+      seed: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionBindings: { "claude-cli": { sessionId: "old-heartbeat-cli-session" } },
+        cliSessionIds: { "claude-cli": "old-heartbeat-cli-session" },
+        claudeCliSessionId: "old-heartbeat-cli-session",
+      },
+      update: {
+        isHeartbeat: true,
+        usage: { input: 1_200, output: 100 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        modelUsed: "claude-sonnet-4-6",
+        cliSessionBinding: {
+          sessionId: "new-heartbeat-cli-session",
+          authProfileId: "anthropic:heartbeat",
+        },
+        contextTokensUsed: 128_000,
+      },
+      expected: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: { "claude-cli": "new-heartbeat-cli-session" },
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "new-heartbeat-cli-session",
+            authProfileId: "anthropic:heartbeat",
+          },
+        },
+        claudeCliSessionId: "new-heartbeat-cli-session",
+      },
+    },
+    {
+      name: "honors heartbeat CLI binding clears while preserving displayed session model",
+      seed: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: {
+          "claude-cli": "old-heartbeat-cli-session",
+          "codex-cli": "codex-cli-session",
+        },
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
+          "codex-cli": { sessionId: "codex-cli-session" },
+        },
+        claudeCliSessionId: "old-heartbeat-cli-session",
+      },
+      update: {
+        isHeartbeat: true,
+        usage: { input: 1_200, output: 100 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        modelUsed: "claude-sonnet-4-6",
+        clearCliSessionBinding: true,
+        contextTokensUsed: 128_000,
+      },
+      expected: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: { "codex-cli": "codex-cli-session" },
+        cliSessionBindings: { "codex-cli": { sessionId: "codex-cli-session" } },
+        claudeCliSessionId: undefined,
+      },
+    },
+    {
       name: "treats CLI usage as a fresh context snapshot when requested",
       seed: {},
       update: {
@@ -4701,170 +4787,6 @@ describe("persistSessionUsageUpdate", () => {
     expect(
       expectDefined(stored2[sessionKey], "stored2[sessionKey] test invariant").estimatedCostUsd,
     ).toBeCloseTo(0.007725, 8);
-  });
-
-  it("preserves the displayed session model when heartbeat usage uses a heartbeat model", async () => {
-    const storePath = await createStorePath("openclaw-usage-heartbeat-model-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      isHeartbeat: true,
-      usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
-      lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
-      providerUsed: "openai",
-      modelUsed: "gpt-5.1-codex-mini",
-      contextTokensUsed: 128_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-    ).toBe("openai");
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
-      "gpt-5.4",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      1_200,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(100);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      200,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      1_105,
-    );
-  });
-
-  it("persists heartbeat CLI binding while preserving displayed session model", async () => {
-    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-binding-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      cliSessionBindings: {
-        "claude-cli": { sessionId: "old-heartbeat-cli-session" },
-      },
-      cliSessionIds: {
-        "claude-cli": "old-heartbeat-cli-session",
-      },
-      claudeCliSessionId: "old-heartbeat-cli-session",
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      isHeartbeat: true,
-      usage: { input: 1_200, output: 100 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      modelUsed: "claude-sonnet-4-6",
-      cliSessionBinding: {
-        sessionId: "new-heartbeat-cli-session",
-        authProfileId: "anthropic:heartbeat",
-      },
-      contextTokensUsed: 128_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-    ).toBe("openai");
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
-      "gpt-5.4",
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBe("new-heartbeat-cli-session");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toEqual({
-      sessionId: "new-heartbeat-cli-session",
-      authProfileId: "anthropic:heartbeat",
-    });
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-    ).toBe("new-heartbeat-cli-session");
-  });
-
-  it("honors heartbeat CLI binding clears while preserving displayed session model", async () => {
-    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-clear-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      cliSessionIds: {
-        "claude-cli": "old-heartbeat-cli-session",
-        "codex-cli": "codex-cli-session",
-      },
-      cliSessionBindings: {
-        "claude-cli": { sessionId: "old-heartbeat-cli-session" },
-        "codex-cli": { sessionId: "codex-cli-session" },
-      },
-      claudeCliSessionId: "old-heartbeat-cli-session",
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      isHeartbeat: true,
-      usage: { input: 1_200, output: 100 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      modelUsed: "claude-sonnet-4-6",
-      clearCliSessionBinding: true,
-      contextTokensUsed: 128_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-    ).toBe("openai");
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
-      "gpt-5.4",
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "codex-cli"
-      ],
-    ).toBe("codex-cli-session");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "codex-cli"
-      ],
-    ).toEqual({
-      sessionId: "codex-cli-session",
-    });
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-    ).toBeUndefined();
   });
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {

@@ -9,6 +9,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import {
+  publishFileNoClobber,
+  publishFileNoClobberSync,
+  syncDirectoryIfSupported,
+} from "../infra/directory-durability.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -22,7 +27,10 @@ const TOOLS_MD_MIGRATION_CHECK_ID = "core/doctor/tools-md-migration";
 const MIGRATED_SUBSECTION_HEADING = "### Local notes (migrated from TOOLS.md)";
 const TOOLS_CLAIM_INFIX = ".doctor-importing-";
 const ACTIVE_CLAIM_MAX_AGE_MS = 10 * 60 * 1000;
-const HARD_LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
+const NO_CLOBBER_PUBLICATION = {
+  strategy: "link-or-copy",
+  durability: "degrade",
+} as const;
 
 type ToolsMdMigrationResult = {
   changes: string[];
@@ -342,7 +350,7 @@ async function writeAgentsAtomically(params: {
       }
       syncFs.renameSync(params.agentsPath, backupPath);
       claimed = true;
-      publishNoClobberSync(tempPath, params.agentsPath);
+      publishFileNoClobberSync(tempPath, params.agentsPath);
       syncFs.unlinkSync(tempPath);
       if (
         (await readMigrationFileSnapshot({ filePath: backupPath, label: "AGENTS.md backup" }))
@@ -353,14 +361,14 @@ async function writeAgentsAtomically(params: {
         throw new Error("AGENTS.md changed during TOOLS.md migration");
       }
     } else {
-      publishNoClobberSync(tempPath, params.agentsPath);
+      publishFileNoClobberSync(tempPath, params.agentsPath);
       syncFs.unlinkSync(tempPath);
     }
-    await syncDirectory(path.dirname(params.agentsPath));
+    await syncDirectoryIfSupported(path.dirname(params.agentsPath));
     if (stat) {
       await fs.rm(backupPath);
       claimed = false;
-      await syncDirectory(path.dirname(params.agentsPath));
+      await syncDirectoryIfSupported(path.dirname(params.agentsPath));
     }
   } catch (error) {
     await fs.rm(tempPath, { force: true });
@@ -428,7 +436,7 @@ async function recoverInterruptedAgentsClaim(params: {
       throw error;
     }
   }
-  await publishNoClobber(claimPath, agentsPath);
+  await publishFileNoClobber(claimPath, agentsPath, NO_CLOBBER_PUBLICATION);
   await fs.rm(claimPath);
 }
 
@@ -457,52 +465,18 @@ async function recoverInterruptedAgentsPublish(agentsPath: string): Promise<void
   // The active TOOLS.md claim excludes concurrent doctor writers here; this
   // same-inode link can only be the completed half of an interrupted publish.
   syncFs.unlinkSync(path.join(dir, linkedTemps[0]!));
-  await syncDirectory(dir);
-}
-
-async function syncDirectory(dir: string): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  const handle = await fs.open(dir, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  await syncDirectoryIfSupported(dir);
 }
 
 async function restoreClaimNoClobber(claimPath: string, destinationPath: string): Promise<void> {
   try {
-    await publishNoClobber(claimPath, destinationPath);
+    await publishFileNoClobber(claimPath, destinationPath, NO_CLOBBER_PUBLICATION);
     await fs.rm(claimPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       throw new Error(`migration claim is preserved at ${claimPath}`, { cause: error });
     }
     throw error;
-  }
-}
-
-async function publishNoClobber(sourcePath: string, destinationPath: string): Promise<void> {
-  try {
-    await fs.link(sourcePath, destinationPath);
-  } catch (error) {
-    if (!HARD_LINK_UNSUPPORTED_CODES.has((error as NodeJS.ErrnoException).code ?? "")) {
-      throw error;
-    }
-    await fs.copyFile(sourcePath, destinationPath, syncFs.constants.COPYFILE_EXCL);
-  }
-}
-
-function publishNoClobberSync(sourcePath: string, destinationPath: string): void {
-  try {
-    syncFs.linkSync(sourcePath, destinationPath);
-  } catch (error) {
-    if (!HARD_LINK_UNSUPPORTED_CODES.has((error as NodeJS.ErrnoException).code ?? "")) {
-      throw error;
-    }
-    syncFs.copyFileSync(sourcePath, destinationPath, syncFs.constants.COPYFILE_EXCL);
   }
 }
 
@@ -537,9 +511,9 @@ async function archiveSource(params: {
     } finally {
       await handle.close();
     }
-    await publishNoClobber(tempPath, archivePath);
+    await publishFileNoClobber(tempPath, archivePath, NO_CLOBBER_PUBLICATION);
     await fs.rm(tempPath);
-    await syncDirectory(archiveDir);
+    await syncDirectoryIfSupported(archiveDir);
   } catch (error) {
     await fs.rm(tempPath, { force: true });
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
@@ -689,7 +663,7 @@ export async function maybeMigrateToolsMd(params: {
           throw new Error("AGENTS.md changed after TOOLS.md migration was written");
         }
         await fs.rm(claimPath);
-        await syncDirectory(target.workspaceDir);
+        await syncDirectoryIfSupported(target.workspaceDir);
       } catch (error) {
         try {
           await restoreClaimNoClobber(claimPath, source.path);

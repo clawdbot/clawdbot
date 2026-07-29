@@ -18,6 +18,23 @@ function mockFalImageProviderRuntime() {
   setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
 }
 
+function mockFalGeneratedImage(fileName: string, imageData: string) {
+  fetchWithSsrFGuardMock
+    .mockResolvedValueOnce({
+      response: Response.json({
+        images: [{ url: `https://v3.fal.media/files/example/${fileName}` }],
+      }),
+      release: vi.fn(async () => {}),
+    })
+    .mockResolvedValueOnce({
+      response: new Response(Buffer.from(imageData), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+}
+
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
   if (!request) {
@@ -315,26 +332,7 @@ describe("fal image-generation provider", () => {
 
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("edited.png", "edited-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -367,26 +365,7 @@ describe("fal image-generation provider", () => {
 
   it("routes GPT Image 2 edits through /edit with image_urls", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/gpt-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("gpt-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("gpt-edited.png", "gpt-edited-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -419,26 +398,7 @@ describe("fal image-generation provider", () => {
 
   it("allows GPT Image 2 edits up to 10 reference images", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/gpt-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("gpt-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("gpt-edited.png", "gpt-edited-data");
 
     const inputImages = Array.from({ length: 10 }, (_, index) => ({
       buffer: Buffer.from(`ref-${index + 1}`),
@@ -489,26 +449,7 @@ describe("fal image-generation provider", () => {
 
   it("routes Nano Banana 2 text generation with native resolution", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-wide.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-wide-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("nb2-wide.png", "nb2-wide-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -535,26 +476,7 @@ describe("fal image-generation provider", () => {
 
   it("does not synthesize Nano Banana 2 aspect ratio from resolution alone", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-auto.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-auto-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("nb2-auto.png", "nb2-auto-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -582,26 +504,7 @@ describe("fal image-generation provider", () => {
     { model: "fal-ai/nano-banana-2", resolution: "2K" as const },
   ])("routes $model edits through /edit with model geometry", async ({ model, resolution }) => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("nb2-edited.png", "nb2-edited-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -682,26 +585,7 @@ describe("fal image-generation provider", () => {
 
   it("routes Nano Banana 2 Lite edits through /edit with image_urls", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-lite-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-lite-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("nb2-lite-edited.png", "nb2-lite-edited-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -816,26 +700,7 @@ describe("fal image-generation provider", () => {
     },
   ])("keeps $label text-to-image on its base endpoint", async (testCase) => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/generated.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("generated-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("generated.png", "generated-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -856,26 +721,7 @@ describe("fal image-generation provider", () => {
 
   it("routes Grok Imagine edits through /edit with lowercase resolution", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/grok-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("grok-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("grok-edited.png", "grok-edited-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -957,26 +803,7 @@ describe("fal image-generation provider", () => {
 
   it("preserves an explicit Grok Imagine /quality/edit model path", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/grok-explicit.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("grok-explicit-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("grok-explicit.png", "grok-explicit-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -1001,26 +828,7 @@ describe("fal image-generation provider", () => {
 
   it("preserves exact custom Fal edit endpoints", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/custom-edit.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("custom-edit-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("custom-edit.png", "custom-edit-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -1045,26 +853,7 @@ describe("fal image-generation provider", () => {
 
   it("maps aspect ratio for text generation without forcing a square default", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/wide.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("wide-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("wide.png", "wide-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -1089,26 +878,7 @@ describe("fal image-generation provider", () => {
 
   it("combines resolution and aspect ratio for text generation", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/portrait.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("portrait-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("portrait.png", "portrait-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -1134,26 +904,7 @@ describe("fal image-generation provider", () => {
 
   it("uses Krea 2 native aspect-ratio and creativity payload schema", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/krea.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("krea-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("krea.png", "krea-data");
 
     const provider = buildFalImageGenerationProvider();
     const result = await provider.generateImage({
@@ -1183,26 +934,7 @@ describe("fal image-generation provider", () => {
 
   it("passes reference images to Krea 2 as style references without edit suffix", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/krea-style.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("krea-style-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("krea-style.png", "krea-style-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
@@ -1234,26 +966,7 @@ describe("fal image-generation provider", () => {
 
   it("maps Krea 2 size hints to the closest native aspect ratio", async () => {
     mockFalImageProviderRuntime();
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/krea-sized.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("krea-sized-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockFalGeneratedImage("krea-sized.png", "krea-sized-data");
 
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({

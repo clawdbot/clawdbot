@@ -124,10 +124,20 @@ The Gateway owns the authenticated sideband and routes delegated work through
 the configured OpenClaw agent; the browser receives neither the OAuth token nor
 a Platform API key.
 
-For GA `gpt-realtime-*` browser and iOS WebRTC sessions, Platform credentials
-remain required in this order: the configured realtime API key, an `openai`
-API-key profile, then `OPENAI_API_KEY`. ChatGPT OAuth does not configure those
-GA sessions, Voice Call, Gateway relay, or Discord realtime voice.
+For GA `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, and `gpt-realtime-2`
+browser sessions, Platform credentials remain preferred in this order: the
+configured realtime API key, an `openai` API-key profile, then
+`OPENAI_API_KEY`. With none configured, browser Talk falls back to an OpenClaw
+ChatGPT OAuth profile and exchanges SDP through the Gateway's single-use offer
+broker, so the OAuth token never reaches the browser. A configured Platform
+credential that cannot be resolved fails closed instead of silently falling
+through to OAuth.
+
+iOS client-owned WebRTC, Voice Call, Gateway relay, provider WebSocket
+transports, Discord realtime voice, and Android realtime remain
+Platform-key-only. GA browser Talk keeps the existing client-owned data channel
+and `talk.client.toolCall` loop; only the credential owner and SDP exchange path
+change under OAuth.
 
 | Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
