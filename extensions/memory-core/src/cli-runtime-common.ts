@@ -30,7 +30,7 @@ type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpos
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
 }
-export async function loadMemoryCommandConfig(commandName: string) {
+async function loadMemoryCommandConfig(commandName: string) {
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: getRuntimeConfig(),
     commandName,
@@ -41,7 +41,7 @@ export async function loadMemoryCommandConfig(commandName: string) {
     diagnostics,
   };
 }
-export function emitMemorySecretResolveDiagnostics(
+function emitMemorySecretResolveDiagnostics(
   diagnostics: string[],
   params?: { json?: boolean },
 ): void {
@@ -84,7 +84,7 @@ export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
   return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
-export function resolveAgent(cfg: OpenClawConfig, agent?: string) {
+function resolveAgent(cfg: OpenClawConfig, agent?: string) {
   const trimmed = agent?.trim();
   if (trimmed) {
     return trimmed;
@@ -99,7 +99,7 @@ export function buildCliMemorySearchSessionKey(agentId: string): string {
     dmScope: "per-channel-peer",
   });
 }
-export function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
+function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
   if (trimmed) {
     return [trimmed];
@@ -113,7 +113,7 @@ export function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
 export function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
   return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
 }
-export async function withMemoryManagerForAgent(params: {
+async function withMemoryManagerForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemoryManagerPurpose;
@@ -144,6 +144,33 @@ export async function withMemoryManagerForAgent(params: {
     },
     run: params.run,
   });
+}
+export async function withMemoryCommand(params: {
+  commandName: string;
+  agent?: string;
+  allAgents?: boolean;
+  diagnosticsToStderr?: boolean;
+  purpose?: MemoryManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
+  run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
+}): Promise<OpenClawConfig> {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig(params.commandName);
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
+  const agentIds = params.allAgents
+    ? resolveAgentIds(cfg, params.agent)
+    : [resolveAgent(cfg, params.agent)];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: params.purpose,
+      acquireLocalService: params.acquireLocalService,
+      withLease: params.withLease,
+      run: async (manager) => params.run({ manager, cfg, agentId }),
+    });
+  }
+  return cfg;
 }
 export type MemorySourceName = "memory" | "sessions";
 type SourceScan = {
