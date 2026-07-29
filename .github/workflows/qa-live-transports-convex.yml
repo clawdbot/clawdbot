@@ -386,6 +386,16 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Verify internal Matrix execution sharding support
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_source="extensions/qa-lab/src/live-transports/shared/live-transport-suite.runtime.ts"
+          if [[ ! -f "${runtime_source}" ]] || ! grep -Fq "OPENCLAW_QA_EXECUTION_SHARD" "${runtime_source}"; then
+            echo "Selected target does not support internal post-selection QA sharding; use a target that includes the current QA execution protocol." >&2
+            exit 1
+          fi
+
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -397,32 +407,17 @@ jobs:
         shell: bash
         env:
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_EXECUTION_SHARD: ${{ format('{0}/5', matrix.shard) }}
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/matrix-live-shard-${{ matrix.shard }}-of-5-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${output_dir}"
 
-          matrix_help="$(pnpm openclaw qa matrix --help 2>&1)"
-          if grep -Fq -- "--shard <index/total>" <<<"${matrix_help}"; then
-            matrix_selection=(--shard "${{ matrix.shard }}/5")
-          else
-            legacy_profiles=(transport media e2ee-smoke e2ee-deep e2ee-cli)
-            shard_index="${{ matrix.shard }}"
-            if (( shard_index < 1 || shard_index > ${#legacy_profiles[@]} )); then
-              echo "Invalid Matrix shard index for legacy profile fallback: ${shard_index}" >&2
-              exit 1
-            fi
-            legacy_profile="${legacy_profiles[shard_index - 1]}"
-            echo "Selected target predates profile-free Matrix catalog sharding; using legacy profile '${legacy_profile}'."
-            matrix_selection=(--profile "${legacy_profile}")
-          fi
-
           pnpm openclaw qa matrix \
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode mock-openai \
-            "${matrix_selection[@]}" \
             --fast
 
       - name: Upload Matrix QA artifacts

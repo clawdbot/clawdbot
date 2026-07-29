@@ -4465,10 +4465,12 @@ export const en: TranslationMap = {
       voiceNote: "Voice note",
     },
     modelControls: {
+      current: "Current",
       default: "Default",
       reasoning: "Reasoning",
       speed: "Speed",
       sessionOverride: "Thread override",
+      useDefault: "Use default",
       usingDefault: "Using default from Settings",
       resetToDefault: "Reset to default ({model})",
     },
