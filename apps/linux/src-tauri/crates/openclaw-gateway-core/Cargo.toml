@@ -1,0 +1,13 @@
+[package]
+name = "openclaw-gateway-core"
+version = "0.1.0"
+description = "Tauri-free Rust primitives for OpenClaw Gateway clients"
+edition = "2021"
+rust-version = "1.93"
+publish = false
+
+[dependencies]
+rustls = { version = "0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
+serde_json = "1.0.150"
+sha2 = "0.11.0"
+subtle = "2.6.1"

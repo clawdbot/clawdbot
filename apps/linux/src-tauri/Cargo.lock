@@ -2797,11 +2797,10 @@ dependencies = [
  "image",
  "libc",
  "mdns-sd",
- "rustls",
+ "openclaw-gateway-core",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "subtle",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -2818,6 +2817,16 @@ dependencies = [
  "uuid",
  "webkit2gtk",
  "zeroize",
+]
+
+[[package]]
+name = "openclaw-gateway-core"
+version = "0.1.0"
+dependencies = [
+ "rustls",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
 ]
 
 [[package]]
