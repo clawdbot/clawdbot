@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON } from "../state/openclaw-agent-db-migration-required.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -14,17 +14,16 @@ import {
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
 });
 
 describe("media persistence gateway lifecycle recovery", () => {
   it("repairs repeated typed startup failures after a successful v14 migration", () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-startup-recovery-");
+    const stateDir = tempDirs.make("media-persistence-startup-recovery-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
     closeOpenClawAgentDatabasesForTest();
