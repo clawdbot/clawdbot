@@ -53,6 +53,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   repoRoot?: string | null;
   /** Stable identity derived from repoRoot; null means the run is outside a repository. */
   projectKey?: string | null;
+  /** Session active project set, ordered most-recent first. */
+  activeProjectKeys?: readonly string[];
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
