@@ -6100,6 +6100,7 @@ describe("QmdMemoryManager", () => {
         score: 0.91,
         snippet: "@@ -3,1\nQMD activation",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
     await manager.close();
@@ -6153,6 +6154,7 @@ describe("QmdMemoryManager", () => {
         score: 0.91,
         snippet: "@@ -3,1\nQMD activation",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
 
@@ -6174,6 +6176,7 @@ describe("QmdMemoryManager", () => {
         score: 0.91,
         snippet: "@@ -3,1\nQMD activation",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
     await manager.close();
