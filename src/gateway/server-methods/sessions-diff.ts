@@ -1,6 +1,7 @@
 // Session checkout diff for operator clients: branch + working-tree changes
 // against the checkout's default-branch merge base, structured per file so the
 // Control UI diff panel can render without shelling out client-side.
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -25,8 +26,132 @@ const MAX_TOTAL_PATCH_BYTES = 1_500_000;
 // Past this the full-patch git call is skipped entirely: runGit buffers stdout
 // in memory, so a pathological diff must degrade to stats-only entries.
 const MAX_TOTAL_CHANGED_LINES = 100_000;
+// Per-session baseline that records the working-tree snapshot captured on the
+// first diff call, so pre-existing checkout changes are not attributed to the
+// session. Only untracked files are fingerprinted: tracked-file diffs already
+// compare against the correct git base.
+const BASELINE_FILE_PREFIX = "session-diff-baseline-";
+// 10 MiB limit per file for baseline hashing; files larger than this skip
+// fingerprinting and remain visible in the diff.
+const MAX_BASELINE_FILE_BYTES = 10 * 1024 * 1024;
 
 type FileStatus = SessionDiffFile["status"];
+
+/** Per-session workspace fingerprint: path → content SHA-256 hex digest. */
+type SessionDiffBaseline = {
+  files: Record<string, string>;
+  capturedAt: number;
+};
+
+function resolveBaselinePath(storePath: string, sessionId: string): string {
+  const dir = nodePath.dirname(storePath);
+  return nodePath.join(dir, `${BASELINE_FILE_PREFIX}${sessionId}.json`);
+}
+
+/** Compute a SHA-256 hex digest of a file's contents without buffering it all in memory. */
+async function hashFileHex(absPath: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(absPath);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_BASELINE_FILE_BYTES) {
+      return null;
+    }
+    const hash = crypto.createHash("sha256");
+    const stream = (await import("node:fs")).createReadStream(absPath, {
+      highWaterMark: 64 * 1024,
+    });
+    return await new Promise<string>((resolve, reject) => {
+      stream.on("data", (chunk: Buffer) => hash.update(chunk));
+      stream.on("end", () => resolve(hash.digest("hex")));
+      stream.on("error", reject);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Load a previously saved baseline, or null if none exists or it is malformed. */
+async function loadBaseline(baselinePath: string): Promise<SessionDiffBaseline | null> {
+  try {
+    const raw = await fs.readFile(baselinePath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as Record<string, unknown>).capturedAt === "number" &&
+      (parsed as Record<string, unknown>).files &&
+      typeof (parsed as Record<string, unknown>).files === "object"
+    ) {
+      return parsed as SessionDiffBaseline;
+    }
+  } catch {
+    // Missing or unreadable baseline is not an error.
+  }
+  return null;
+}
+
+/** Save a baseline to disk; failures are silently ignored (baseline is best-effort). */
+async function saveBaseline(baselinePath: string, baseline: SessionDiffBaseline): Promise<void> {
+  try {
+    await fs.writeFile(baselinePath, JSON.stringify(baseline), "utf8");
+  } catch {
+    // Best-effort: baseline I/O failures must not block the diff RPC.
+  }
+}
+
+/**
+ * Capture a content fingerprint of every file in the working tree.
+ * Only untracked files are fingerprinted — tracked-file diffs already
+ * compare against the correct git base.
+ */
+async function captureSessionDiffBaseline(
+  root: string,
+  realRoot: string,
+): Promise<SessionDiffBaseline> {
+  const files: Record<string, string> = {};
+  const untracked = await gitOut(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  if (untracked) {
+    const paths = untracked.split("\0").filter(Boolean);
+    for (const relPath of paths.slice(0, MAX_UNTRACKED_FILES)) {
+      if (!(await isPatchableWorkingTreePath(realRoot, relPath))) {
+        continue;
+      }
+      const absPath = nodePath.resolve(realRoot, relPath);
+      const hex = await hashFileHex(absPath);
+      if (hex) {
+        files[relPath] = hex;
+      }
+    }
+  }
+  return { files, capturedAt: Date.now() };
+}
+
+/**
+ * Removes diff entries for untracked files that are byte-identical to the
+ * session-start baseline. Files the thread actually changes remain visible.
+ */
+async function filterUntrackedAgainstBaseline(
+  untrackedFiles: SessionDiffFile[],
+  baseline: SessionDiffBaseline,
+  realRoot: string,
+): Promise<{ files: SessionDiffFile[]; filtered: number }> {
+  let filtered = 0;
+  const kept: SessionDiffFile[] = [];
+  for (const file of untrackedFiles) {
+    const baselineHash = baseline.files[file.path];
+    if (!baselineHash) {
+      kept.push(file);
+      continue;
+    }
+    const absPath = nodePath.resolve(realRoot, file.path);
+    const currentHash = await hashFileHex(absPath);
+    if (currentHash === baselineHash) {
+      filtered += 1;
+      continue;
+    }
+    kept.push(file);
+  }
+  return { files: kept, filtered };
+}
 
 type NameStatusEntry = { path: string; oldPath?: string; status: FileStatus };
 
@@ -455,6 +580,23 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
   const branchOut = (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim();
   const branch = branchOut && branchOut !== "HEAD" ? branchOut : undefined;
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
+
+  // Per-session baseline: capture the working-tree fingerprint on the first
+  // diff call so pre-existing checkout changes are not attributed to the
+  // session. Untracked files that are byte-identical to the baseline are
+  // filtered out; files the session actually changes remain visible.
+  const baselinePath = resolveBaselinePath(storePath, entry.sessionId);
+  let baseline = await loadBaseline(baselinePath);
+  let baselineSaved = baseline !== null;
+  if (!baseline) {
+    baseline = await captureSessionDiffBaseline(root, realRoot);
+    // Save after diff collection so the baseline exists before any filtering.
+    // We save early (before git operations) so even if diff collection fails,
+    // the baseline is already persisted for a retry.
+    await saveBaseline(baselinePath, baseline);
+    baselineSaved = true;
+  }
+
   // Repos before their first commit have no HEAD, so diff the index/worktree
   // against the empty tree to surface staged files (the untracked scan below
   // only covers files git does not track yet). hash-object derives the empty
@@ -466,7 +608,13 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
   const tracked = baseInfo
     ? await collectTrackedFiles(root, realRoot, baseInfo.base, budget)
     : { files: [], truncated: false };
-  const untracked = await collectUntrackedFiles(root, realRoot, budget);
+  const untrackedRaw = await collectUntrackedFiles(root, realRoot, budget);
+  const { files: filteredUntracked } = await filterUntrackedAgainstBaseline(
+    untrackedRaw.files,
+    baseline,
+    realRoot,
+  );
+  const untracked = { files: filteredUntracked, truncated: untrackedRaw.truncated };
   const files = [...tracked.files, ...untracked.files].toSorted((a, b) =>
     a.path.localeCompare(b.path),
   );
