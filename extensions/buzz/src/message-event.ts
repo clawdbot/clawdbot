@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { Event } from "nostr-tools";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const BUZZ_NORMAL_MESSAGE_KIND = 9;
 const BUZZ_RICH_MESSAGE_KIND = 40_002;
@@ -17,7 +18,9 @@ type BuzzInboundMessageKind = (typeof BUZZ_INBOUND_MESSAGE_KINDS)[number];
 const BUZZ_MESSAGE_CONTENT_MAX_BYTES = 256 * 1024;
 const BUZZ_DIFF_CONTENT_MAX_BYTES = 60 * 1024;
 const BUZZ_MENTION_MAX_COUNT = 50;
-const BUZZ_DIFF_CONTEXT_FIELD_MAX_CHARS = 1_024;
+const BUZZ_DIFF_CONTEXT_FIELD_MAX_CHARS = 256;
+const BUZZ_DIFF_AGENT_CONTEXT_MAX_CHARS = 4_000;
+const BUZZ_DIFF_AGENT_CONTEXT_TRUNCATED_SUFFIX = "\n...[Buzz diff truncated for model context]";
 const BUZZ_INBOUND_MESSAGE_KIND_SET = new Set<number>(BUZZ_INBOUND_MESSAGE_KINDS);
 
 interface BuzzDiffMetadata {
@@ -185,7 +188,23 @@ export function formatBuzzMessageForAgent(message: BuzzInboundMessage): string {
     diff.truncated ? "Truncated: yes" : undefined,
   ].filter((line): line is string => Boolean(line));
 
-  return [`[Buzz structured diff]`, ...metadata, "", "Unified diff:", message.text].join("\n");
+  const prefix = [`[Buzz structured diff]`, ...metadata, "", "Unified diff:"].join("\n");
+  const fullContext = `${prefix}\n${message.text}`;
+  if (fullContext.length <= BUZZ_DIFF_AGENT_CONTEXT_MAX_CHARS) {
+    return fullContext;
+  }
+
+  const bodyBudget =
+    BUZZ_DIFF_AGENT_CONTEXT_MAX_CHARS -
+    prefix.length -
+    1 -
+    BUZZ_DIFF_AGENT_CONTEXT_TRUNCATED_SUFFIX.length;
+  if (bodyBudget <= 0) {
+    const prefixBudget =
+      BUZZ_DIFF_AGENT_CONTEXT_MAX_CHARS - BUZZ_DIFF_AGENT_CONTEXT_TRUNCATED_SUFFIX.length;
+    return `${truncateUtf16Safe(prefix, prefixBudget).trimEnd()}${BUZZ_DIFF_AGENT_CONTEXT_TRUNCATED_SUFFIX}`;
+  }
+  return `${prefix}\n${truncateUtf16Safe(message.text, bodyBudget).trimEnd()}${BUZZ_DIFF_AGENT_CONTEXT_TRUNCATED_SUFFIX}`;
 }
 
 export function parseBuzzMessageEvent(event: Event): BuzzInboundMessage | null {

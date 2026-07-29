@@ -225,6 +225,7 @@ describe("handleBuzzInbound", () => {
     const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
     setBuzzRuntime(runtime);
+    const diffText = `/status\n@@ -1 +1 @@\n-old\n+${"new".repeat(4_000)}`;
 
     await handleBuzzInbound({
       account: createAccount({
@@ -238,7 +239,7 @@ describe("handleBuzzInbound", () => {
       bus: createBus(),
       message: createMessage({
         kind: BUZZ_DIFF_MESSAGE_KIND,
-        text: "/status\n@@ -1 +1 @@\n-old\n+new",
+        text: diffText,
         diff: {
           repoUrl: "https://github.com/openclaw/openclaw",
           commitSha: "abcdef1",
@@ -252,7 +253,7 @@ describe("handleBuzzInbound", () => {
     const context = firstDispatch(runtime).ctxPayload;
     expect(context).toMatchObject({
       BuzzEventKind: BUZZ_DIFF_MESSAGE_KIND,
-      RawBody: "/status\n@@ -1 +1 @@\n-old\n+new",
+      RawBody: diffText,
       CommandBody: "",
       BodyForCommands: "",
     });
@@ -262,7 +263,8 @@ describe("handleBuzzInbound", () => {
     expect(bodyForAgent).toContain("Description: line one ");
     expect(bodyForAgent).toContain("Truncated: yes");
     expect(bodyForAgent).toContain("Unified diff:\n/status\n@@ -1 +1 @@\n-old\n+new");
-    expect(bodyForAgent.length).toBeLessThan(2_000);
+    expect(bodyForAgent.endsWith("...[Buzz diff truncated for model context]")).toBe(true);
+    expect(bodyForAgent.length).toBeLessThanOrEqual(4_000);
   });
 
   it("does not treat mention-like text inside a structured diff as a bot mention", async () => {
