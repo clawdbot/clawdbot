@@ -366,6 +366,10 @@ describe("recoverPendingContinuationDelegates", () => {
           },
         },
       },
+      // Durable delegate encode applies the sessions_spawn attachment policy, so
+      // positive-path recovery fixtures must opt in or enqueue throws before recovery
+      // runs. Disabled-policy rejection stays owned by the attachment validator tests.
+      tools: { sessions_spawn: { attachments: { enabled: true } } },
     });
   });
 
