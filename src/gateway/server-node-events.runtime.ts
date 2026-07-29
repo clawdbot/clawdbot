@@ -24,6 +24,7 @@ export {
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
+  resolveChatAttachmentMaxImageBytes,
 } from "./chat-attachments.js";
 export { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 export {
