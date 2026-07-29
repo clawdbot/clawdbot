@@ -224,14 +224,16 @@ describe("gateway hooks helpers", () => {
     });
 
     const recipientOnly = normalizeAgentPayload({ message: "hello", to: "sensitive-recipient" });
-    expect(recipientOnly).toMatchObject({
-      ok: true,
-      value: {
-        channel: "last",
-        to: "sensitive-recipient",
-        delivery: { mode: "none" },
-      },
+    expect(recipientOnly).toEqual({
+      ok: false,
+      error: "channel and to must be set together for hook delivery",
     });
+    for (const to of [123, "   "]) {
+      expect(normalizeAgentPayload({ message: "hello", to })).toEqual({
+        ok: false,
+        error: "to must be a non-empty string for hook delivery",
+      });
+    }
 
     const channelOnly = normalizeAgentPayload({
       message: "hello",
@@ -239,15 +241,33 @@ describe("gateway hooks helpers", () => {
     });
     expect(channelOnly).toEqual({
       ok: false,
-      error: "to required when channel is set for hook delivery",
+      error: "channel and to must be set together for hook delivery",
     });
     expect(
       normalizeAgentPayload({
         message: "hello",
         deliver: false,
-        channel: "demo-alias-channel",
+        channel: "stale-channel",
       }),
-    ).toEqual(channelOnly);
+    ).toMatchObject({
+      ok: true,
+      value: {
+        deliver: false,
+        channel: "last",
+        to: undefined,
+        delivery: { mode: "none" },
+      },
+    });
+    expect(
+      normalizeAgentPayload({
+        message: "hello",
+        channel: "last",
+        to: "123456",
+      }),
+    ).toEqual({
+      ok: false,
+      error: "channel must name a concrete channel for hook delivery",
+    });
 
     const explicit = normalizeAgentPayload({
       message: "hello",

@@ -97,12 +97,16 @@ describe("hook request delivery normalization", () => {
       path: "/hooks/agent",
       payload: { message: "Recipient only", to: "sensitive-recipient" },
     });
-    expect(recipientOnly.res.statusCode).toBe(200);
-    expect(dispatchAgentHook.mock.calls[1]?.[0]).toMatchObject({
-      channel: "last",
-      to: "sensitive-recipient",
-      delivery: { mode: "none" },
+    expect(recipientOnly.res.statusCode).toBe(400);
+    expect(recipientOnly.getBody()).toContain("channel and to must be set together");
+
+    const malformedRecipient = await dispatchPayload({
+      handler,
+      path: "/hooks/agent",
+      payload: { message: "Malformed recipient", to: 123 },
     });
+    expect(malformedRecipient.res.statusCode).toBe(400);
+    expect(malformedRecipient.getBody()).toContain("to must be a non-empty string");
 
     const channelOnly = await dispatchPayload({
       handler,
@@ -110,8 +114,8 @@ describe("hook request delivery normalization", () => {
       payload: { message: "Channel only", channel: "delivery-test" },
     });
     expect(channelOnly.res.statusCode).toBe(400);
-    expect(channelOnly.getBody()).toContain("to required when channel is set");
-    expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
+    expect(channelOnly.getBody()).toContain("channel and to must be set together");
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
 
     const optedOutChannelOnly = await dispatchPayload({
       handler,
@@ -119,11 +123,17 @@ describe("hook request delivery normalization", () => {
       payload: {
         message: "Opted out channel only",
         deliver: false,
-        channel: "delivery-test",
+        channel: "stale-channel",
+        to: "sensitive-recipient",
       },
     });
-    expect(optedOutChannelOnly.res.statusCode).toBe(400);
-    expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
+    expect(optedOutChannelOnly.res.statusCode).toBe(200);
+    expect(dispatchAgentHook.mock.calls[1]?.[0]).toMatchObject({
+      deliver: false,
+      channel: "last",
+      to: undefined,
+      delivery: { mode: "none" },
+    });
 
     const explicit = await dispatchPayload({
       handler,
@@ -136,8 +146,8 @@ describe("hook request delivery normalization", () => {
     });
   });
 
-  test("fails mapped channel-only delivery before dispatch", async () => {
-    const { handler, dispatchAgentHook } = createDeliveryHandler({
+  test("preserves mapped delivery semantics while binding the CronJob target", async () => {
+    const mapped = createDeliveryHandler({
       mappings: [
         {
           id: "channel-only",
@@ -147,16 +157,63 @@ describe("hook request delivery normalization", () => {
           messageTemplate: "Mapped",
           channel: "delivery-test",
         },
+        {
+          id: "recipient-only",
+          matchPath: "recipient-only",
+          action: "agent",
+          wakeMode: "now",
+          messageTemplate: "Mapped",
+          to: "123456",
+        },
       ],
     });
 
-    const response = await dispatchPayload({
-      handler,
+    const channelOnly = await dispatchPayload({
+      handler: mapped.handler,
+      path: "/hooks/channel-only",
+      payload: {},
+    });
+    const recipientOnly = await dispatchPayload({
+      handler: mapped.handler,
+      path: "/hooks/recipient-only",
+      payload: {},
+    });
+
+    expect(channelOnly.res.statusCode).toBe(200);
+    expect(recipientOnly.res.statusCode).toBe(200);
+    expect(mapped.dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
+      delivery: { mode: "announce", channel: "delivery-test", to: undefined },
+    });
+    expect(mapped.dispatchAgentHook.mock.calls[1]?.[0]).toMatchObject({
+      delivery: { mode: "announce", channel: "last", to: "123456" },
+    });
+
+    const optedOut = createDeliveryHandler({
+      mappings: [
+        {
+          id: "channel-only",
+          matchPath: "channel-only",
+          action: "agent",
+          wakeMode: "now",
+          messageTemplate: "Mapped",
+          deliver: false,
+          channel: "delivery-test",
+        },
+      ],
+    });
+    const optedOutResponse = await dispatchPayload({
+      handler: optedOut.handler,
       path: "/hooks/channel-only",
       payload: {},
     });
 
-    expect(response.res.statusCode).toBe(400);
-    expect(dispatchAgentHook).not.toHaveBeenCalled();
+    expect(optedOutResponse.res.statusCode).toBe(200);
+    expect(optedOut.dispatchAgentHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliver: false,
+        channel: "delivery-test",
+        delivery: { mode: "none" },
+      }),
+    );
   });
 });

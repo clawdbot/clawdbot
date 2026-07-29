@@ -229,7 +229,7 @@ type HookAgentPayload = {
     | {
         mode: "announce";
         channel: HookMessageChannel;
-        to: string;
+        to?: string;
       };
   model?: string;
   thinking?: string;
@@ -250,10 +250,10 @@ const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin
 
 const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 /** Render the current hook channel validation error from registered channel plugins. */
-const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
+export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
 /** Resolve a raw hook channel value, defaulting omitted values to `last`. */
-function resolveHookChannel(raw: unknown): HookMessageChannel | null {
+export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
   if (raw === undefined) {
     return "last";
   }
@@ -268,7 +268,7 @@ function resolveHookChannel(raw: unknown): HookMessageChannel | null {
 }
 
 /** Resolve hook delivery opt-out; any value except false means deliver. */
-function resolveHookDeliver(raw: unknown): boolean {
+export function resolveHookDeliver(raw: unknown): boolean {
   return raw !== false;
 }
 
@@ -283,34 +283,53 @@ export function normalizeHookAgentDelivery(params: {
       value: Pick<HookAgentPayload, "deliver" | "channel" | "to" | "delivery">;
     }
   | { ok: false; error: string } {
+  const deliver = resolveHookDeliver(params.deliver);
+  if (!deliver) {
+    return {
+      ok: true,
+      value: {
+        deliver,
+        channel: "last",
+        to: undefined,
+        delivery: { mode: "none" },
+      },
+    };
+  }
+  const to = normalizeOptionalString(params.to);
   const channel = resolveHookChannel(params.channel);
   if (!channel) {
     return { ok: false, error: getHookChannelError() };
   }
-  const deliver = resolveHookDeliver(params.deliver);
-  const to = normalizeOptionalString(params.to);
-  if (channel !== "last") {
-    if (!to) {
-      return {
-        ok: false,
-        error: "to required when channel is set for hook delivery",
-      };
-    }
-    if (deliver) {
-      return {
-        ok: true,
-        value: {
-          deliver,
-          channel,
-          to,
-          delivery: {
-            mode: "announce",
-            channel,
-            to,
-          },
-        },
-      };
-    }
+  const hasChannel = params.channel !== undefined;
+  const hasTo = params.to !== undefined;
+  if (!hasChannel && !hasTo) {
+    return {
+      ok: true,
+      value: {
+        deliver,
+        channel,
+        to,
+        delivery: { mode: "none" },
+      },
+    };
+  }
+  if (hasTo && !to) {
+    return {
+      ok: false,
+      error: "to must be a non-empty string for hook delivery",
+    };
+  }
+  if (!hasChannel || !to) {
+    return {
+      ok: false,
+      error: "channel and to must be set together for hook delivery",
+    };
+  }
+  if (channel === "last") {
+    return {
+      ok: false,
+      error: "channel must name a concrete channel for hook delivery",
+    };
   }
   return {
     ok: true,
@@ -318,7 +337,11 @@ export function normalizeHookAgentDelivery(params: {
       deliver,
       channel,
       to,
-      delivery: { mode: "none" },
+      delivery: {
+        mode: "announce",
+        channel,
+        to,
+      },
     },
   };
 }
