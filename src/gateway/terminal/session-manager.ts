@@ -6,6 +6,7 @@ import {
   type TerminalUploadFile,
   type TerminalUploadResult,
 } from "../../infra/terminal-file-upload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   createLocalTerminalBackend,
   type LocalTerminalBackendSpawner,
@@ -31,6 +32,8 @@ import type {
   TerminalSessionManagerOptions,
   TerminalOwner,
 } from "./session-manager.types.js";
+
+const log = createSubsystemLogger("gateway/terminal");
 
 /**
  * Tracks live PTY sessions keyed by session id, with a reverse index for
@@ -88,11 +91,20 @@ export class TerminalSessionManager {
       };
     }
     if (this.sessions.size + this.opening >= this.maxSessions) {
-      return {
-        ok: false,
-        code: "limit",
-        message: `terminal session limit reached (${this.maxSessions})`,
-      };
+      // Agent-opened shells outlive their commands and have no automatic
+      // reaper, so a busy agent would otherwise exhaust the pool for the whole
+      // gateway until restart. Under pressure, reclaim the longest-idle
+      // viewer-free agent session instead of failing every later open.
+      if (
+        !this.evictLongestIdleAgentSession() ||
+        this.sessions.size + this.opening >= this.maxSessions
+      ) {
+        return {
+          ok: false,
+          code: "limit",
+          message: `terminal session limit reached (${this.maxSessions})`,
+        };
+      }
     }
     // Reserve the slot before the async spawn so it is visible to concurrent opens.
     this.opening += 1;
@@ -192,6 +204,7 @@ export class TerminalSessionManager {
       output,
       reaper: null,
       detachedAtMs: null,
+      lastActivityAtMs: Date.now(),
     };
     this.sessions.set(session.id, session);
     if (request.owner.kind === "conn") {
@@ -200,6 +213,7 @@ export class TerminalSessionManager {
 
     backend.onData((chunk) => {
       if (!session.closed) {
+        session.lastActivityAtMs = Date.now();
         session.output.push(chunk);
       }
     });
@@ -238,6 +252,7 @@ export class TerminalSessionManager {
 
   private writeSession(session: TerminalSession, data: string): boolean {
     try {
+      session.lastActivityAtMs = Date.now();
       session.output.noteInput();
       session.backend.write(data);
       return true;
@@ -560,6 +575,34 @@ export class TerminalSessionManager {
     if (sessions?.size === 0) {
       this.byConn.delete(connId);
     }
+  }
+
+  /**
+   * Reclaims the longest-idle agent-owned session when the pool is exhausted.
+   * Agent shells outlive their commands with no automatic reaper, so without
+   * eviction one busy agent bricks terminal opens gateway-wide until restart.
+   * Viewer-attached and connection-owned sessions are never evicted; an idle
+   * viewer-free background job losing its PTY under pressure is the accepted
+   * tradeoff for keeping the pool available.
+   */
+  private evictLongestIdleAgentSession(): boolean {
+    let candidate: TerminalSession | undefined;
+    for (const session of this.sessions.values()) {
+      if (session.closed || session.owner?.kind !== "agent" || session.viewers.size > 0) {
+        continue;
+      }
+      if (!candidate || session.lastActivityAtMs < candidate.lastActivityAtMs) {
+        candidate = session;
+      }
+    }
+    if (!candidate) {
+      return false;
+    }
+    log.info(
+      `evicted idle agent terminal session under pool pressure: id=${candidate.id} agent=${candidate.agentId} idleMs=${Date.now() - candidate.lastActivityAtMs}`,
+    );
+    this.finalize(candidate, "closed", {});
+    return true;
   }
 
   private removeViewer(session: TerminalSession, connId: string): boolean {

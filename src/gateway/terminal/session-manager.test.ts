@@ -694,6 +694,67 @@ describe("TerminalSessionManager agent ownership", () => {
     }
   });
 
+  it("evicts the longest-idle viewer-free agent session under pool pressure", async () => {
+    vi.useFakeTimers();
+    try {
+      const ptys: ReturnType<typeof makeFakePty>[] = [];
+      const manager = new TerminalSessionManager({
+        emit: vi.fn(),
+        spawn: async () => {
+          const pty = makeFakePty();
+          ptys.push(pty);
+          return pty;
+        },
+        maxSessions: 2,
+      });
+      const first = await manager.open(baseRequest({ owner: agentOwner }));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const second = await manager.open(baseRequest({ owner: agentOwner }));
+      if (!first.ok || !second.ok) {
+        throw new Error("expected agent opens");
+      }
+      // Freshen the second session so the first is the idle-eviction candidate.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(manager.writeAgent("agent:main:main", second.sessionId, "keepalive\r")).toBe(true);
+
+      const third = await manager.open(baseRequest({ owner: agentOwner }));
+      expect(third.ok).toBe(true);
+      expect(manager.size).toBe(2);
+      expect(expectDefined(ptys[0], "ptys[0] test invariant").killed).toBe(true);
+      expect(expectDefined(ptys[1], "ptys[1] test invariant").killed).toBe(false);
+      expect(manager.snapshotAgent("agent:main:main", first.sessionId)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never evicts viewer-attached or connection-owned sessions under pressure", async () => {
+    const ptys: ReturnType<typeof makeFakePty>[] = [];
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => {
+        const pty = makeFakePty();
+        ptys.push(pty);
+        return pty;
+      },
+      maxSessions: 2,
+    });
+    const connOwned = await manager.open(baseRequest());
+    const viewed = await manager.open(baseRequest({ owner: agentOwner }));
+    if (!connOwned.ok || !viewed.ok) {
+      throw new Error("expected opens");
+    }
+    expect(manager.attach("viewer-1", viewed.sessionId)?.sessionId).toBe(viewed.sessionId);
+
+    const denied = await manager.open(baseRequest({ owner: agentOwner }));
+    expect(denied.ok).toBe(false);
+    if (!denied.ok) {
+      expect(denied.code).toBe("limit");
+    }
+    expect(manager.size).toBe(2);
+    expect(ptys.some((pty) => pty.killed)).toBe(false);
+  });
+
   it("lets a co-attached viewer upload into an agent-owned session", async () => {
     const emit = vi.fn();
     const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
