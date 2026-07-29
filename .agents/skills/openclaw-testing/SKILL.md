@@ -456,8 +456,9 @@ fails.
 
 `pnpm openclaw qa matrix` runs every flow scenario that explicitly declares
 Matrix channel eligibility. There are no Matrix named profiles or runner-owned
-scenario-id lists. Repeat `--scenario <id>` for an explicit subset, or use
-`--shard <index>/<total>` to reproduce one deterministic CI partition.
+scenario-id lists. Repeat `--scenario <id>` for an explicit subset. CI shards
+the semantically resolved selection internally; shard placement is not a
+public Matrix selector.
 
 `QA-Lab - All Lanes` and `OpenClaw Release Checks` use the same catalog-derived
 selection and standard artifacts. CI fans the selection across five balanced

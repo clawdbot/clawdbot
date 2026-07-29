@@ -212,9 +212,8 @@ explicit subset, including portable scenarios with no channel restriction.
 
 Declarative scenario metadata is the only default-membership source. The
 Matrix runner has no named profiles or scenario-id allowlists. The run chooses
-the channel driver; deterministic `--shard <index>/<total>` partitioning only
-distributes the selected catalog and does not define semantic membership or
-execution priority.
+the channel driver. CI may partition the selected catalog after semantic
+resolution, but sharding is not a Matrix selection mode or public CLI surface.
 Their live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
@@ -230,7 +229,6 @@ Common options:
 | Flag                     | Default           | Purpose                                                                              |
 | ------------------------ | ----------------- | ------------------------------------------------------------------------------------ |
 | `--scenario <id>`        | -                 | Select one scenario; repeatable.                                                     |
-| `--shard <index/total>`  | -                 | Run one deterministic, balanced partition of the selected Matrix catalog.            |
 | `--fail-fast`            | off               | Stop after the first failed check or scenario.                                       |
 | `--allow-failures`       | off               | Write artifacts without returning a failing exit code for scenario failures.         |
 | `--provider-mode <mode>` | `live-frontier`   | Use `mock-openai` for deterministic dispatch or `live-frontier` for a live provider. |

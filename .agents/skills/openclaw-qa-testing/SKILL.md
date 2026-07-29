@@ -66,8 +66,9 @@ Langfuse, or external collector credentials.
 
 `pnpm openclaw qa matrix` derives its default set from flow scenarios that
 explicitly declare Matrix channel eligibility. It has no named profiles or
-runner-owned scenario-id list. Repeat `--scenario <id>` for a focused run, or
-use `--shard <index>/<total>` to reproduce one deterministic CI partition.
+runner-owned scenario-id list. Repeat `--scenario <id>` for a focused run. CI
+shards the semantically resolved selection internally; shard placement is not
+a public Matrix selector.
 
 `QA-Lab - All Lanes` and release checks fan the same catalog-derived selection
 across five balanced shards. Shards distribute work only; they do not define
