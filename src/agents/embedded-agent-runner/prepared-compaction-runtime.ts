@@ -322,6 +322,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           workspaceDir: effectiveWorkspace,
           spawnWorkspaceDir,
           config: params.config,
+          webSearchEnabled: params.toolOverrides?.webSearch !== false,
           abortSignal: runAbortController.signal,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           modelProvider: effectiveModel.provider,

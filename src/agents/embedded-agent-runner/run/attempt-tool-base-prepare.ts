@@ -246,6 +246,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,
           config: toolSearchRuntimeConfig,
+          webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
           abortSignal: params.runAbortController.signal,
           modelProvider: attempt.provider,
           modelId: attempt.modelId,
