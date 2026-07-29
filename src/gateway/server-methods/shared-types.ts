@@ -27,6 +27,7 @@ import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
+import type { HostGatewayPolicy } from "../host-gateway-policy.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
@@ -161,6 +162,8 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Optional host-owned server-side method policy for embedded/hosted operator clients. */
+  hostGatewayPolicy?: HostGatewayPolicy;
   controlUiSessionPullRequests?: ReturnType<
     typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
   >;
