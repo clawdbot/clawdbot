@@ -369,8 +369,13 @@ type TelegramPlainTextProjectionOptions = {
 };
 
 function hasVisibleLinkTarget(label: string, url: string): boolean {
+  const getScheme = (value: string) => /^https?:\/\//iu.exec(value)?.[0]?.toLowerCase();
   const normalize = (value: string) => value.replace(/^https?:\/\//iu, "").replace(/\/$/u, "");
-  return normalize(label) === normalize(url);
+  if (normalize(label) !== normalize(url)) {
+    return false;
+  }
+  const labelScheme = getScheme(label);
+  return labelScheme === undefined || labelScheme === getScheme(url);
 }
 
 export function richTextToPlainString(

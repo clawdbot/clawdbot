@@ -1484,12 +1484,12 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage });
     Object.assign(bot.api.raw, { sendRichMessage });
 
-    const messageId = await sendTelegramText(bot, "123", "#", runtime, {
+    const result = await sendTelegramText(bot, "123", "#", runtime, {
       richMessages: true,
       textMode: "markdown",
     });
 
-    expect(messageId).toBe(16);
+    expect(result).toEqual({ messageId: 16, deliveredText: "#" });
     expect(sendRichMessage).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
@@ -1521,6 +1521,34 @@ describe("deliverReplies", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
     );
+  });
+
+  it("records the compact body selected for an oversized link-rich fallback", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 17,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createRichEntityInvalidError("URL"));
+    const label = "a".repeat(3_950);
+    const target = `https://example.com/${"b".repeat(100)}`;
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+
+    await deliverWith({
+      replies: [{ text: `[${label}](${target})` }],
+      runtime,
+      bot,
+      richMessages: true,
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstMockCallArg(sendMessage, 1)).toBe(label);
+    expect(observer).toHaveBeenCalledWith({ messageId: 17, text: label });
   });
 
   it("falls back to plain text for other invalid rich entity validation errors", async () => {
