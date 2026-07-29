@@ -161,7 +161,11 @@ const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 
 function isStreamingToolProgressContinuationText(text: string) {
-  return QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(text.trim());
+  const trimmed = text.trim();
+  return (
+    QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(trimmed) ||
+    trimmed.startsWith(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
+  );
 }
 
 function extractLatestScenarioFamilyPrompt(texts: string[]) {
@@ -678,9 +682,9 @@ async function buildResponsesPayload(
     ]);
   }
   const toolProgressReplyDirective =
-    scenarioFamilyReplyDirective ??
     extractExactReplyDirective(toolProgressToolOutput) ??
-    extractExactMarkerDirective(toolProgressToolOutput);
+    extractExactMarkerDirective(toolProgressToolOutput) ??
+    scenarioFamilyReplyDirective;
   if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt)) {
     if (!toolProgressToolOutput) {
       return buildToolProgressReadEvents();
