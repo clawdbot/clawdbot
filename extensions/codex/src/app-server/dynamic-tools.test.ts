@@ -35,6 +35,7 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -1376,7 +1377,7 @@ describe("createCodexDynamicToolBridge", () => {
       const toolResult = textToolResult("Uploaded.", { messageId: "message-1" });
       const execute = vi.fn(async () => toolResult);
       const remotePath = `/remote/codex-workspace/${relativePath}`;
-      const readRemoteWorkspaceFile = vi.fn(async () => ({
+      const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
         dataBase64: Buffer.from(remoteContent).toString("base64"),
       }));
       const bridge = createCodexDynamicToolBridge({
