@@ -85,12 +85,20 @@ function describeSidebandClose(code: number, reason: string): string {
   return `OpenAI GPT-Live sideband closed (code ${code}${reason ? `: ${reason}` : ""})`;
 }
 
+function connectAbortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("GPT-Live gateway relay startup stopped", { cause: signal.reason });
+}
+
 function waitForConnectStep<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted();
+  if (signal.aborted) {
+    return Promise.reject(connectAbortError(signal));
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
-      reject(signal.reason);
+      reject(connectAbortError(signal));
     };
     signal.addEventListener("abort", onAbort, { once: true });
     promise.then(
@@ -98,9 +106,9 @@ function waitForConnectStep<T>(promise: Promise<T>, signal: AbortSignal): Promis
         signal.removeEventListener("abort", onAbort);
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(error);
+        reject(toError(error));
       },
     );
   });
