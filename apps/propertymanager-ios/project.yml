@@ -1,0 +1,69 @@
+name: PropertyManager
+options:
+  bundleIdPrefix: ai.openclaw
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: YES
+    DEVELOPMENT_TEAM: "ZYJVHJWT3P"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+    STRING_CATALOG_GENERATE_SYMBOLS: YES
+
+schemes:
+  PropertyManager:
+    shared: true
+    build:
+      targets:
+        PropertyManager: all
+
+targets:
+  PropertyManager:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: PropertyManager
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocalNetworkUsageDescription: PropertyManager connects to your ranch PropertyManager API on the local network or Tailscale.
+        NSMicrophoneUsageDescription: PropertyManager uses the microphone for voice meter entry.
+        NSSpeechRecognitionUsageDescription: PropertyManager converts speech to meter readings.
+        CFBundleURLTypes:
+          - CFBundleURLName: ai.openclaw.propertymanager
+            CFBundleURLSchemes:
+              - propertymanager
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            100.85.36.72:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+              NSExceptionRequiresForwardSecrecy: false
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            127.0.0.1:
+              NSExceptionAllowsInsecureHTTPLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.propertymanager
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "ZYJVHJWT3P"

@@ -41,9 +41,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from tools.ai_intelligence.ollama_config import OllamaConfig
+from tools.dashboard.pm_asset_page import register_pm_asset_routes
 from tools.dashboard.document_inventory import ensure_document_inventory
 
 app = Flask(__name__)
+register_pm_asset_routes(app)
 
 OLLAMA_CONFIG = OllamaConfig.from_env()
 OLLAMA_HOST = OLLAMA_CONFIG.base_url

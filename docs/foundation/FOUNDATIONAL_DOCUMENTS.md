@@ -83,6 +83,17 @@ standards, and production authorization boundary.
 
 ---
 
+## PropertyManager
+
+PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md
+
+Defines PropertyManager asset and meter policy, Phase 0 implementation gate,
+dev-vs-production deployment phases, audit requirements, API reliability
+contract, QR security, RanchBrain matching rules, and the pre-production test
+matrix. Pairs with PROPERTY_MANAGER_ASSET_ARCHITECTURE.md under architecture/.
+
+---
+
 ## Disaster Recovery
 
 RESTORE_MANIFEST.md
@@ -198,9 +209,11 @@ The maintained documentation library is located under `docs/`.
 - `docs/foundation/OPENCLAW_DEVELOPMENT_DIRECTIVE.md`
 - `docs/foundation/RESTORE_MANIFEST.md`
 - `docs/foundation/OPERATIONS_RUNBOOK.md`
+- `docs/foundation/PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md`
 
 ## Architecture Documents
 
+- `docs/architecture/PROPERTY_MANAGER_ASSET_ARCHITECTURE.md`
 - `docs/architecture/RANCHBOT_ARCHITECTURE.md`
 - `docs/architecture/DASHBOARD_REPORT.md`
 - `docs/architecture/PYTHON_WEB_RUNTIME_INVENTORY.md`

@@ -2,9 +2,11 @@
 
 import subprocess
 import sys
+import re
 from pathlib import Path
 
 BASE = Path("/home/gravesab/ai/projects/openclaw")
+METER_SCRIPT = BASE / "tools/property_manager/propertymanager-meter.py"
 UPDATE_SCRIPT = BASE / "tools/property_manager/propertymanager-update.py"
 SUMMARY_SCRIPT = BASE / "tools/property_manager/propertymanager-summary.sh"
 BACKUP_SCRIPT = BASE / "tools/system_manager/openclaw-backup-manager.sh"
@@ -224,6 +226,22 @@ def run_update(command: str) -> str:
 
     return "⚠️ PropertyManager command failed\n\n" + output
 
+METER_CMD = re.compile(r"\d+(?:\.\d+)?\s*(?:hours?|hrs?|miles?|mi|cycles?)", re.I)
+
+
+def run_meter_command(text: str) -> str:
+    result = subprocess.run(
+        [sys.executable, str(METER_SCRIPT), text],
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    output = (result.stdout or result.stderr or "").strip()
+    if result.returncode != 0:
+        return "⚠️ Meter update failed\n\n" + output
+    return "🌳 PropertyManager\n\n" + output
+
+
 def main() -> int:
     raw = " ".join(sys.argv[1:]).strip()
     command = normalize(raw)
@@ -296,6 +314,10 @@ def main() -> int:
 
     if command in ["ranch status", "system status"]:
         print(latest_daily_briefing())
+        return 0
+
+    if METER_CMD.search(command):
+        print(run_meter_command(raw))
         return 0
 
     # Safety: never let ranch/openclaw operational requests fall into AI fallback.
