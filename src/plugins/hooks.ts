@@ -470,8 +470,8 @@ export function createHookRunner(
     return firstLine || "unknown error";
   };
 
-  const getPluginVersion = (pluginId: string): string | undefined =>
-    registry.plugins.find((plugin) => plugin.id === pluginId)?.version;
+  const getPluginPackageVersion = (pluginId: string): string | undefined =>
+    registry.plugins.find((plugin) => plugin.id === pluginId)?.packageVersion;
 
   const isPromiseLike = (value: unknown): value is PromiseLike<unknown> => {
     if ((typeof value !== "object" && typeof value !== "function") || value === null) {
@@ -1523,37 +1523,33 @@ export function createHookRunner(
     }
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, attributed)`);
-    const outcomes: PluginHookSkillProposalEvaluationOutcome[] = [];
-
-    for (const hook of hooks) {
-      const pluginVersion = getPluginVersion(hook.pluginId);
-      const attribution = {
-        pluginId: hook.pluginId,
-        ...(pluginVersion ? { pluginVersion } : {}),
-      };
-      try {
-        const handler = hook.handler as (
-          event: PluginHookSkillProposalEvaluateEvent,
-          ctx: PluginHookSkillContext,
-        ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
-        const promise = Promise.resolve(handler(event, ctx));
-        const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
-        const result = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
-        outcomes.push(
-          result
+    return await Promise.all(
+      hooks.map(async (hook): Promise<PluginHookSkillProposalEvaluationOutcome> => {
+        const pluginVersion = getPluginPackageVersion(hook.pluginId);
+        const attribution = {
+          pluginId: hook.pluginId,
+          ...(pluginVersion ? { pluginVersion } : {}),
+        };
+        try {
+          const handler = hook.handler as (
+            event: PluginHookSkillProposalEvaluateEvent,
+            ctx: PluginHookSkillContext,
+          ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
+          const promise = Promise.resolve(handler(event, ctx));
+          const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
+          const result = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          return result
             ? { ...attribution, status: "completed", result }
-            : { ...attribution, status: "skipped" },
-        );
-      } catch (error) {
-        const message = sanitizeHookError(error);
-        logger?.error(
-          `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${formatHookErrorForLog(error)}`,
-        );
-        outcomes.push({ ...attribution, status: "error", error: message });
-      }
-    }
-
-    return outcomes;
+            : { ...attribution, status: "skipped" };
+        } catch (error) {
+          const message = sanitizeHookError(error);
+          logger?.error(
+            `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${formatHookErrorForLog(error)}`,
+          );
+          return { ...attribution, status: "error", error: message };
+        }
+      }),
+    );
   }
 
   async function runSkillProposalChanged(

@@ -73,7 +73,9 @@ describe("skill lifecycle hooks", () => {
         handler: high,
       },
     ]);
-    registry.plugins.find((plugin) => plugin.id === "high")!.version = "2.1.0";
+    const highPlugin = registry.plugins.find((plugin) => plugin.id === "high")!;
+    highPlugin.packageVersion = "2.1.0";
+    highPlugin.version = "runtime-override";
 
     const outcomes = await createHookRunner(registry).runSkillProposalEvaluate(
       evaluationEvent,
@@ -100,6 +102,52 @@ describe("skill lifecycle hooks", () => {
     ]);
     expect(high).toHaveBeenCalledTimes(1);
     expect(low).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs evaluators concurrently while retaining priority order", async () => {
+    let releaseHigh: (() => void) | undefined;
+    let releaseLow: (() => void) | undefined;
+    const highGate = new Promise<void>((resolve) => {
+      releaseHigh = resolve;
+    });
+    const lowGate = new Promise<void>((resolve) => {
+      releaseLow = resolve;
+    });
+    const high = vi.fn(async () => {
+      await highGate;
+      return { summary: "high" };
+    });
+    const low = vi.fn(async () => {
+      await lowGate;
+      return { summary: "low" };
+    });
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "skill_proposal_evaluate",
+        pluginId: "low",
+        priority: 10,
+        handler: low,
+      },
+      {
+        hookName: "skill_proposal_evaluate",
+        pluginId: "high",
+        priority: 100,
+        handler: high,
+      },
+    ]);
+
+    const evaluation = createHookRunner(registry).runSkillProposalEvaluate(evaluationEvent, ctx);
+    await vi.waitFor(() => {
+      expect(high).toHaveBeenCalledTimes(1);
+      expect(low).toHaveBeenCalledTimes(1);
+    });
+    releaseLow?.();
+    releaseHigh?.();
+
+    await expect(evaluation).resolves.toEqual([
+      { pluginId: "high", status: "completed", result: { summary: "high" } },
+      { pluginId: "low", status: "completed", result: { summary: "low" } },
+    ]);
   });
 
   it("returns evaluator failures and timeouts as attributed outcomes", async () => {
