@@ -10,6 +10,8 @@ import type {
 class FakeSocket extends EventEmitter {
   readyState = 0;
   readonly sent: string[] = [];
+  closeCalls = 0;
+  deferClose = false;
 
   open(): void {
     this.readyState = 1;
@@ -19,7 +21,7 @@ class FakeSocket extends EventEmitter {
   send(payload: string): void {
     this.sent.push(payload);
     const event = JSON.parse(payload) as { type?: string };
-    if (event.type === "session.update") {
+    if (event.type === "session.update" && this.autoStart) {
       queueMicrotask(() =>
         this.serverEvent({
           type: "session.started",
@@ -33,6 +35,17 @@ class FakeSocket extends EventEmitter {
     if (this.readyState === 3) {
       return;
     }
+    this.closeCalls += 1;
+    if (this.deferClose) {
+      return;
+    }
+    this.finishClose();
+  }
+
+  finishClose(): void {
+    if (this.readyState === 3) {
+      return;
+    }
     this.readyState = 3;
     queueMicrotask(() => this.emit("close"));
   }
@@ -40,10 +53,20 @@ class FakeSocket extends EventEmitter {
   serverEvent(event: unknown): void {
     this.emit("message", Buffer.from(JSON.stringify(event)), false);
   }
+
+  constructor(private readonly autoStart = true) {
+    super();
+  }
 }
 
-function createHarness(params?: { audioFormat?: "pcm16" | "g711_ulaw" }) {
-  const socket = new FakeSocket();
+function createHarness(params?: {
+  audioFormat?: "pcm16" | "g711_ulaw";
+  autoStart?: boolean;
+  deferClose?: boolean;
+  resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
+}) {
+  const socket = new FakeSocket(params?.autoStart);
+  socket.deferClose = params?.deferClose ?? false;
   const connections: Array<{ url: string; options: ClientOptions }> = [];
   const webSocketFactory: OpenAIQuicksilverSocketFactory = (url, options) => {
     connections.push({ url, options });
@@ -66,7 +89,7 @@ function createHarness(params?: { audioFormat?: "pcm16" | "g711_ulaw" }) {
       params?.audioFormat === "g711_ulaw"
         ? { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }
         : { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-    resolveAuth: async () => ({ type: "api-key", token: "test-key" }),
+    resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "test-key" })),
     webSocketFactory,
     onAudio,
     onClearAudio: vi.fn(),
@@ -120,6 +143,62 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
 
     harness.bridge.close();
     await vi.waitFor(() => expect(harness.onClose).toHaveBeenCalledWith("completed"));
+  });
+
+  it("keeps repeated close idempotent while the transport is still open", async () => {
+    const harness = createHarness({ deferClose: true });
+    await harness.bridge.connect();
+
+    harness.bridge.close();
+    harness.bridge.close();
+
+    expect(
+      sentEvents(harness.socket).filter((event) => event.type === "session.close"),
+    ).toHaveLength(1);
+    expect(harness.socket.closeCalls).toBe(1);
+    expect(harness.onClose).toHaveBeenCalledOnce();
+    expect(harness.onClose).toHaveBeenCalledWith("completed");
+
+    harness.socket.finishClose();
+    await Promise.resolve();
+    expect(harness.onClose).toHaveBeenCalledOnce();
+  });
+
+  it("rejects startup failures without emitting terminal callbacks", async () => {
+    const harness = createHarness({ autoStart: false });
+    const connecting = harness.bridge.connect();
+    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+
+    harness.socket.serverEvent({
+      type: "error",
+      error: { message: "invalid live session" },
+    });
+
+    await expect(connecting).rejects.toThrow("invalid live session");
+    expect(harness.onError).not.toHaveBeenCalled();
+    expect(harness.onClose).not.toHaveBeenCalled();
+    expect(harness.bridge.isConnected()).toBe(false);
+  });
+
+  it("completes once when closed while authentication is pending", async () => {
+    let resolveAuth!: (auth: { type: "api-key"; token: string }) => void;
+    const harness = createHarness({
+      resolveAuth: () =>
+        new Promise((resolve) => {
+          resolveAuth = resolve;
+        }),
+    });
+    const connecting = harness.bridge.connect();
+
+    harness.bridge.close();
+    harness.bridge.close();
+    expect(harness.onClose).toHaveBeenCalledOnce();
+    expect(harness.onClose).toHaveBeenCalledWith("completed");
+
+    resolveAuth({ type: "api-key", token: "test-key" });
+    await expect(connecting).resolves.toBeUndefined();
+    expect(harness.connections).toHaveLength(0);
+    expect(harness.onError).not.toHaveBeenCalled();
   });
 
   it("maps audio, transcripts, and delegations onto the shared bridge contract", async () => {

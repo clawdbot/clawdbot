@@ -124,6 +124,12 @@ export class OpenAIRealtimeVoiceLifecycle {
     return this.state?.phase;
   }
 
+  terminalOutcome(
+    connection: OpenAIRealtimeVoiceConnection,
+  ): OpenAIRealtimeVoiceTerminalOutcome | undefined {
+    return this.currentState(connection)?.terminalOutcome;
+  }
+
   private createConnection(controller: AbortController): OpenAIRealtimeVoiceConnection {
     return { id: Symbol("openai-realtime-voice-connection"), signal: controller.signal };
   }

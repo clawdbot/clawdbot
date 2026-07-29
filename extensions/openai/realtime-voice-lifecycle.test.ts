@@ -65,6 +65,7 @@ describe("OpenAIRealtimeVoiceLifecycle", () => {
     expect(connection.signal.aborted).toBe(true);
     expect(lifecycle.cancel()).toBe(false);
     expect(lifecycle.failure(connection)).toBe(false);
+    expect(lifecycle.terminalOutcome(connection)).toBe("completed");
     expect(lifecycle.close(connection, "error")).toBe("completed");
     expect(lifecycle.close(connection, "completed")).toBeUndefined();
   });
