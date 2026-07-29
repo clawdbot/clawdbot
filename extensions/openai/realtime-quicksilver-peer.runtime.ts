@@ -77,8 +77,10 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   static async create(params: {
     callbacks: OpenAIQuicksilverAudioPeerCallbacks;
     iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
+    signal?: AbortSignal;
   }): Promise<OpenAIQuicksilverAudioPeer> {
     const [werift, libopus] = await Promise.all([import("werift"), import("libopus-wasm")]);
+    params.signal?.throwIfAborted();
     const peer = new werift.RTCPeerConnection({
       codecs: {
         audio: [werift.useOPUS({ payloadType: 111 })],
@@ -87,26 +89,54 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       ...(params.iceServers ? { iceServers: params.iceServers } : {}),
     });
     const transceiver = peer.addTransceiver("audio", { direction: "sendrecv" });
-    const [encoder, decoder] = await Promise.all([
-      libopus.createEncoder({
+    let encoder: LibopusEncoder | undefined;
+    let decoder: LibopusDecoder | undefined;
+    let encoderFreed = false;
+    let decoderFreed = false;
+    let peerClosed = false;
+    const cleanup = async () => {
+      if (encoder && !encoderFreed) {
+        encoderFreed = true;
+        encoder.free();
+      }
+      if (decoder && !decoderFreed) {
+        decoderFreed = true;
+        decoder.free();
+      }
+      if (!peerClosed) {
+        peerClosed = true;
+        await peer.close().catch(() => undefined);
+      }
+    };
+    const onAbort = () => void cleanup();
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      encoder = await libopus.createEncoder({
         application: libopus.Application.Voip,
         channels: QUICKSILVER_CHANNELS,
         sampleRate: QUICKSILVER_SAMPLE_RATE,
         frameSize: OPUS_FRAME_SAMPLES,
-      }),
-      libopus.createDecoder({
+      });
+      params.signal?.throwIfAborted();
+      decoder = await libopus.createDecoder({
         channels: QUICKSILVER_CHANNELS,
         sampleRate: QUICKSILVER_SAMPLE_RATE,
-      }),
-    ]);
-    return new OpenAIQuicksilverAudioPeer({
-      callbacks: params.callbacks,
-      decoder,
-      encoder,
-      peer,
-      transceiver,
-      werift,
-    });
+      });
+      params.signal?.throwIfAborted();
+      params.signal?.removeEventListener("abort", onAbort);
+      return new OpenAIQuicksilverAudioPeer({
+        callbacks: params.callbacks,
+        decoder,
+        encoder,
+        peer,
+        transceiver,
+        werift,
+      });
+    } catch (error) {
+      params.signal?.removeEventListener("abort", onAbort);
+      await cleanup();
+      throw error;
+    }
   }
 
   static convertRelayPcm(pcm24kMono: Buffer): Int16Array {

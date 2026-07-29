@@ -881,6 +881,17 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       }),
     ).toBe(true);
     expect(
+      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
+        cfg,
+        providerConfig: {
+          model: "gpt-live-1-mini",
+          azureEndpoint: "https://example.openai.azure.com",
+          azureDeployment: "gpt-live",
+        },
+        agentId: "main",
+      }),
+    ).toBe(false);
+    expect(
       readInternalRealtimeVoiceProviderApi(provider).isBrowserSessionConfigured({
         cfg,
         providerConfig: { model: "gpt-live-1-mini" },

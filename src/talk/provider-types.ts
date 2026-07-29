@@ -113,6 +113,8 @@ export type RealtimeVoiceAgentConsultRunner = (params: {
 
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   cfg?: OpenClawConfig;
+  /** Host-selected agent scope for provider auth and agent-owned bridge state. */
+  agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;

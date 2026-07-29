@@ -51,9 +51,11 @@ type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
   createPeer?: (
     callbacks: OpenAIQuicksilverAudioPeerCallbacks,
+    signal: AbortSignal,
   ) => Promise<OpenAIQuicksilverAudioPeerContract>;
   fetchImpl?: typeof fetch;
   webSocketFactory?: OpenAIQuicksilverSocketFactory;
+  connectTimeoutMs?: number;
 };
 
 type ActiveSideband = {
@@ -81,6 +83,27 @@ function normalizeSidebandCloseReason(reason: Buffer | string | undefined): stri
 
 function describeSidebandClose(code: number, reason: string): string {
   return `OpenAI GPT-Live sideband closed (code ${code}${reason ? `: ${reason}` : ""})`;
+}
+
+function waitForConnectStep<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 function sendDelegationAppend(params: {
@@ -175,44 +198,62 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     reserveOpenAIQuicksilverSession(this);
     const connectSignal = AbortSignal.any([
       this.abortController.signal,
-      AbortSignal.timeout(QUICKSILVER_CONNECT_TIMEOUT_MS),
+      AbortSignal.timeout(this.config.connectTimeoutMs ?? QUICKSILVER_CONNECT_TIMEOUT_MS),
     ]);
     try {
       const createPeer =
         this.config.createPeer ??
-        (async (callbacks: OpenAIQuicksilverAudioPeerCallbacks) => {
+        (async (callbacks: OpenAIQuicksilverAudioPeerCallbacks, signal: AbortSignal) => {
           const { OpenAIQuicksilverAudioPeer } =
             await import("./realtime-quicksilver-peer.runtime.js");
-          return await OpenAIQuicksilverAudioPeer.create({ callbacks });
+          return await OpenAIQuicksilverAudioPeer.create({ callbacks, signal });
         });
-      this.peer = await createPeer({
-        onAudio: (audio) => this.config.onAudio(audio),
-        onError: (error) => this.fail(error),
-        onRtpPacket: () => this.config.onEvent?.({ direction: "server", type: "output_audio.rtp" }),
-      });
-      const offerSdp = await this.peer.createOffer();
-      const auth = await this.config.resolveAuth();
+      const peerPromise = createPeer(
+        {
+          onAudio: (audio) => this.config.onAudio(audio),
+          onError: (error) => this.fail(error),
+          onRtpPacket: () =>
+            this.config.onEvent?.({ direction: "server", type: "output_audio.rtp" }),
+        },
+        connectSignal,
+      );
+      // A factory can finish after the deadline. Close that late peer because the
+      // timed-out connect path can no longer adopt or release it synchronously.
+      void peerPromise.then(
+        (peer) => {
+          if (connectSignal.aborted || this.closed) {
+            peer.close();
+          }
+        },
+        () => undefined,
+      );
+      this.peer = await waitForConnectStep(peerPromise, connectSignal);
+      const offerSdp = await waitForConnectStep(this.peer.createOffer(), connectSignal);
+      const auth = await waitForConnectStep(this.config.resolveAuth(), connectSignal);
       const requestIds = {
         realtimeSessionId: randomUUID(),
         sessionId: randomUUID(),
         threadId: randomUUID(),
       };
-      const call = await createOpenAIQuicksilverCall({
-        auth,
-        requestIds,
-        sdp: offerSdp,
-        session: buildOpenAIQuicksilverSession({
-          model: this.config.model,
-          instructions: this.config.instructions,
-          voice: this.config.voice,
+      const call = await waitForConnectStep(
+        createOpenAIQuicksilverCall({
+          auth,
+          requestIds,
+          sdp: offerSdp,
+          session: buildOpenAIQuicksilverSession({
+            model: this.config.model,
+            instructions: this.config.instructions,
+            voice: this.config.voice,
+          }),
+          signal: connectSignal,
+          fetchImpl: this.config.fetchImpl,
         }),
-        signal: connectSignal,
-        fetchImpl: this.config.fetchImpl,
-      });
+        connectSignal,
+      );
       if (call.kind !== "gpt-live") {
         throw new Error("GPT-Live gateway relay unexpectedly used the GA realtime call shape");
       }
-      await this.peer.applyAnswer(call.answerSdp);
+      await waitForConnectStep(this.peer.applyAnswer(call.answerSdp), connectSignal);
       const createSocket =
         this.config.webSocketFactory ??
         ((url: string, options: Parameters<OpenAIQuicksilverSocketFactory>[1]) =>

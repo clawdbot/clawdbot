@@ -115,6 +115,7 @@ describe("talk realtime gateway relay", () => {
     });
 
     expect(bridgeRequest?.runAgentConsult).toEqual(expect.any(Function));
+    expect(bridgeRequest?.agentId).toBe("main");
     stopTalkRealtimeRelaySession({
       relaySessionId: session.relaySessionId,
       connId: "conn-runner",

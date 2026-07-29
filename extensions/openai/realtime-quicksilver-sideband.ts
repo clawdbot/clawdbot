@@ -175,6 +175,13 @@ export async function connectOpenAIQuicksilverSideband(params: {
     socket.on("message", bufferFrame);
     try {
       const openHandoff = await waitForSocketOpen({ socket, signal: params.signal });
+      if (params.signal.aborted) {
+        socket.off("message", bufferFrame);
+        openHandoff.detachTerminalListeners();
+        socket.on("error", () => {});
+        socket.close(1000, "sideband startup stopped");
+        throw params.signal.reason;
+      }
       return {
         socket,
         bufferedFrames,

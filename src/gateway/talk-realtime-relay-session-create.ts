@@ -104,13 +104,17 @@ export function createTalkRealtimeRelaySession(
   let failureEmitted = false;
   const relayRef: { current?: RelaySession } = {};
   let consultAgentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
+  const relaySessionKey = params.sessionKey?.trim();
+  const relayAgentId = relaySessionKey
+    ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
+    : undefined;
   const runAgentConsult = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
     const runtimeConfig = params.cfg ?? params.context.getRuntimeConfig();
-    const sessionKey = params.sessionKey?.trim();
+    const sessionKey = relaySessionKey;
     if (!sessionKey) {
       throw new Error("Realtime gateway-relay agent consult requires a pinned session key");
     }
-    const agentId = resolveTalkSessionAgentId(runtimeConfig, sessionKey);
+    const agentId = relayAgentId ?? resolveTalkSessionAgentId(runtimeConfig, sessionKey);
     consultAgentRuntime ??= createPluginRuntime().agent;
     const talkConfig = normalizeTalkSection(runtimeConfig.talk);
     return await consultRealtimeVoiceAgent({
@@ -160,7 +164,11 @@ export function createTalkRealtimeRelaySession(
   const relayProvider = {
     ...params.provider,
     createBridge: (request: Parameters<typeof params.provider.createBridge>[0]) =>
-      params.provider.createBridge({ ...request, runAgentConsult }),
+      params.provider.createBridge({
+        ...request,
+        ...(relayAgentId ? { agentId: relayAgentId } : {}),
+        runAgentConsult,
+      }),
   };
   const bridge = harness.createBridge({
     provider: relayProvider,

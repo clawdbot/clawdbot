@@ -480,8 +480,13 @@ async function requireOpenAIRealtimePlatformAuth(params: {
 async function resolveOpenAIQuicksilverBridgeAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
+  agentId?: string;
 }) {
-  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({ cfg: params.cfg });
+  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
+    cfg: params.cfg,
+    agentDir:
+      params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+  });
   if (subscriptionAuth) {
     return subscriptionAuth;
   }
@@ -1947,6 +1952,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
               resolveOpenAIQuicksilverBridgeAuth({
                 configuredApiKey: config.apiKey,
                 cfg: req.cfg,
+                agentId: req.agentId,
               }),
           });
         }
@@ -2025,6 +2031,8 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     isGatewayRelayConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       return (
+        !config.azureEndpoint &&
+        !config.azureDeployment &&
         isOpenAIGptLiveModel(config.model) &&
         hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId })
       );

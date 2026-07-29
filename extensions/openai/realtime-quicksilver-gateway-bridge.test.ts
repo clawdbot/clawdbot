@@ -6,6 +6,11 @@ import {
   type OpenAIQuicksilverAudioPeerContract,
 } from "./realtime-quicksilver-peer.runtime.js";
 import {
+  releaseOpenAIQuicksilverSession,
+  reserveOpenAIQuicksilverSession,
+} from "./realtime-quicksilver-session-limit.js";
+import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideband.js";
+import {
   createCallResponse,
   emitSideband,
   FakeSocket,
@@ -93,9 +98,153 @@ describe("GPT-Live werift audio peer", () => {
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
   });
+
+  it("releases the encoder and peer when decoder initialization fails", async () => {
+    const encoder = { free: vi.fn() };
+    vi.doMock("libopus-wasm", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("libopus-wasm")>();
+      return {
+        ...actual,
+        createEncoder: vi.fn(async () => encoder),
+        createDecoder: vi.fn(async () => {
+          throw new Error("decoder init failed");
+        }),
+      };
+    });
+    vi.resetModules();
+    const { RTCPeerConnection } = await import("werift");
+    const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
+    try {
+      const { OpenAIQuicksilverAudioPeer: ReloadedPeer } =
+        await import("./realtime-quicksilver-peer.runtime.js");
+      await expect(
+        ReloadedPeer.create({
+          callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+          iceServers: [],
+        }),
+      ).rejects.toThrow("decoder init failed");
+      expect(encoder.free).toHaveBeenCalledOnce();
+      expect(closePeer).toHaveBeenCalled();
+    } finally {
+      closePeer.mockRestore();
+      vi.doUnmock("libopus-wasm");
+      vi.resetModules();
+    }
+  });
+
+  it("releases partial peer resources when codec initialization is aborted", async () => {
+    const encoder = { free: vi.fn() };
+    const decoder = { free: vi.fn() };
+    let resolveDecoder: ((value: typeof decoder) => void) | undefined;
+    const createDecoder = vi.fn(
+      async () =>
+        await new Promise<typeof decoder>((resolve) => {
+          resolveDecoder = resolve;
+        }),
+    );
+    vi.doMock("libopus-wasm", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("libopus-wasm")>();
+      return {
+        ...actual,
+        createEncoder: vi.fn(async () => encoder),
+        createDecoder,
+      };
+    });
+    vi.resetModules();
+    const { RTCPeerConnection } = await import("werift");
+    const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
+    const controller = new AbortController();
+    try {
+      const { OpenAIQuicksilverAudioPeer: ReloadedPeer } =
+        await import("./realtime-quicksilver-peer.runtime.js");
+      const creation = ReloadedPeer.create({
+        callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+        iceServers: [],
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(createDecoder).toHaveBeenCalledOnce());
+      controller.abort(new Error("peer startup stopped"));
+      await vi.waitFor(() => expect(closePeer).toHaveBeenCalled());
+      expect(encoder.free).toHaveBeenCalledOnce();
+      resolveDecoder?.(decoder);
+      await expect(creation).rejects.toThrow("peer startup stopped");
+      expect(decoder.free).toHaveBeenCalledOnce();
+      expect(encoder.free).toHaveBeenCalledOnce();
+    } finally {
+      closePeer.mockRestore();
+      vi.doUnmock("libopus-wasm");
+      vi.resetModules();
+    }
+  });
 });
 
 describe("GPT-Live gateway relay bridge", () => {
+  it("closes a sideband that opens in the abort handoff", async () => {
+    const controller = new AbortController();
+    const socket = new FakeSocket("manual");
+    const connection = connectOpenAIQuicksilverSideband({
+      auth: { type: "api-key", token: "platform-key" },
+      createSocket: () => socket,
+      requestIds: {
+        realtimeSessionId: "realtime-session",
+        sessionId: "session",
+        threadId: "thread",
+      },
+      signal: controller.signal,
+      url: "wss://api.openai.com/v1/live/rtc_test",
+    });
+    socket.readyState = 1;
+    socket.emit("open");
+    controller.abort(new Error("sideband startup stopped"));
+
+    await expect(connection).rejects.toThrow("sideband startup stopped");
+    expect(socket.closed).toBe(true);
+  });
+
+  it("bounds peer creation and closes a peer that resolves after the deadline", async () => {
+    let resolvePeer: ((peer: OpenAIQuicksilverAudioPeerContract) => void) | undefined;
+    const peerPromise = new Promise<OpenAIQuicksilverAudioPeerContract>((resolve) => {
+      resolvePeer = resolve;
+    });
+    const closePeer = vi.fn();
+    const bridge = new OpenAIQuicksilverGatewayBridge({
+      providerConfig: {},
+      model: "gpt-live-1-codex",
+      voice: "marin",
+      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      resolveAuth: vi.fn(async () => ({
+        type: "oauth" as const,
+        token: "oauth-token",
+        accountId: "account-1",
+      })),
+      createPeer: vi.fn(() => peerPromise),
+      connectTimeoutMs: 5,
+    });
+
+    await expect(bridge.connect()).rejects.toMatchObject({ name: "TimeoutError" });
+    const reservationOwners = Array.from({ length: 8 }, () => ({}));
+    try {
+      for (const owner of reservationOwners) {
+        expect(() => reserveOpenAIQuicksilverSession(owner)).not.toThrow();
+      }
+    } finally {
+      for (const owner of reservationOwners) {
+        releaseOpenAIQuicksilverSession(owner);
+      }
+    }
+    resolvePeer?.({
+      createOffer: vi.fn(async () => "v=offer\r\n"),
+      applyAnswer: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      close: closePeer,
+    });
+    await vi.waitFor(() => expect(closePeer).toHaveBeenCalledOnce());
+  });
+
   it("signals, delegates through the injected runner, drops sideband audio, and tears down", async () => {
     let socket: FakeSocket | undefined;
     const applyAnswer = vi.fn(async () => undefined);
