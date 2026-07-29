@@ -22,7 +22,7 @@ function attachInternalRealtimeVoiceProviderApi(
     isGatewayRelayConfigured?: (ctx: {
       providerConfig: Record<string, unknown>;
       agentId?: string;
-    }) => boolean;
+    }) => boolean | undefined;
     resolveGatewayRelayCapabilities?: (ctx: {
       providerConfig: Record<string, unknown>;
       model?: string;
@@ -149,6 +149,59 @@ describe("realtime voice provider resolver", () => {
         surface: "gateway-relay",
       }).provider,
     ).toBe(relayOnly);
+  });
+
+  it("treats internal surface readiness as authoritative", () => {
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "surface-aware",
+      label: "Surface aware",
+      isConfigured: () => true,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+    attachInternalRealtimeVoiceProviderApi(provider, {
+      isBrowserSessionConfigured: () => false,
+      isGatewayRelayConfigured: () => false,
+    });
+
+    expect(() =>
+      resolveConfiguredRealtimeVoiceProvider({
+        configuredProviderId: provider.id,
+        providers: [provider],
+        surface: "browser-session",
+      }),
+    ).toThrow('Realtime voice provider "surface-aware" is not configured');
+    expect(() =>
+      resolveConfiguredRealtimeVoiceProvider({
+        configuredProviderId: provider.id,
+        providers: [provider],
+        surface: "gateway-relay",
+      }),
+    ).toThrow('Realtime voice provider "surface-aware" is not configured');
+  });
+
+  it("falls back to public readiness when a surface hook is indeterminate", () => {
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "surface-fallback",
+      label: "Surface fallback",
+      isConfigured: () => true,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+    attachInternalRealtimeVoiceProviderApi(provider, {
+      isBrowserSessionConfigured: () => false,
+      isGatewayRelayConfigured: () => undefined,
+    });
+
+    expect(
+      resolveConfiguredRealtimeVoiceProvider({
+        configuredProviderId: provider.id,
+        providers: [provider],
+        surface: "gateway-relay",
+      }).provider,
+    ).toBe(provider);
   });
 
   it("applies a default model before provider config resolution", () => {

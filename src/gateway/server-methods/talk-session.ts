@@ -69,8 +69,8 @@ import {
   normalizeTalkSessionTransport,
   resolveConfiguredRealtimeTranscriptionProvider,
   resolveTalkRealtimeProviderInstructions,
+  resolveTalkRealtimeGatewayRelayLaunch,
   talkHandoffErrorCode,
-  withRealtimeBrowserOverrides,
 } from "./talk-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -294,6 +294,17 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requested: params,
           defaults: realtimeConfig,
         });
+        const relayLaunch = resolveTalkRealtimeGatewayRelayLaunch({
+          ...resolution,
+          cfg: runtimeConfig,
+          launchOptions,
+          consultRouting: realtimeConfig.consultRouting,
+        });
+        if (relayLaunch.error) {
+          // GPT-Live delegates natively; forced transcript consults are a GA-model mode.
+          respondInvalidRequest(respond, relayLaunch.error);
+          return;
+        }
         const realtimeContext = await resolveTalkRealtimeProviderInstructions({
           config: runtimeConfig,
           configuredInstructions: realtimeConfig.instructions,
@@ -313,15 +324,14 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           connId,
           cfg: runtimeConfig,
           provider: resolution.provider,
-          providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, launchOptions),
+          providerConfig: relayLaunch.providerConfig,
           instructions: buildRealtimeInstructions(realtimeContext.instructions),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
           model: launchOptions.model,
           sessionKey,
           voice: launchOptions.voice,
           language: normalizeOptionalLowercaseString(params.language),
-          forceAgentConsultOnFinalTranscript:
-            realtimeConfig.consultRouting === "force-agent-consult",
+          forceAgentConsultOnFinalTranscript: relayLaunch.forceAgentConsultOnFinalTranscript,
         });
         rememberUnifiedTalkSession(session.relaySessionId, {
           kind: "realtime-relay",

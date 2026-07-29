@@ -16,6 +16,7 @@ import {
 import { resolveRealtimeBootstrapContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import type { RealtimeVoiceProviderPlugin } from "../../plugins/types.js";
 import {
   getRealtimeTranscriptionProvider,
   listRealtimeTranscriptionProviders,
@@ -24,6 +25,7 @@ import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcr
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../talk/agent-target.js";
+import { resolveInternalRealtimeVoiceGatewayRelayLaunchError } from "../../talk/provider-internal.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
 import type {
   RealtimeVoiceBrowserSession,
@@ -463,6 +465,28 @@ export function withRealtimeBrowserOverrides(
     overrides.reasoningEffort = reasoningEffort;
   }
   return Object.keys(overrides).length > 0 ? { ...providerConfig, ...overrides } : providerConfig;
+}
+
+export function resolveTalkRealtimeGatewayRelayLaunch(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  providerConfig: RealtimeVoiceProviderConfig;
+  cfg: OpenClawConfig;
+  launchOptions: RealtimeVoiceLaunchOptions;
+  consultRouting?: string;
+}) {
+  const forceAgentConsultOnFinalTranscript = params.consultRouting === "force-agent-consult";
+  const providerConfig = withRealtimeBrowserOverrides(params.providerConfig, params.launchOptions);
+  return {
+    providerConfig,
+    forceAgentConsultOnFinalTranscript,
+    error: resolveInternalRealtimeVoiceGatewayRelayLaunchError({
+      provider: params.provider,
+      cfg: params.cfg,
+      providerConfig,
+      model: params.launchOptions.model,
+      autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
+    }),
+  };
 }
 
 function pickRealtimeVoiceLaunchOptions(

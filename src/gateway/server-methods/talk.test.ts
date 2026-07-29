@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   resolveRealtimeVoiceProviderCapabilities: vi.fn(
     ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
   ),
+  resolveInternalRealtimeVoiceGatewayRelayLaunchError: vi.fn(),
   cancelInternalRealtimeVoiceBrowserSession: vi.fn(async () => undefined),
   createTalkRealtimeRelaySession: vi.fn(),
   sendTalkRealtimeRelayAudio: vi.fn(),
@@ -122,6 +123,8 @@ vi.mock("../../talk/provider-internal.js", async (importOriginal) => {
   return {
     ...actual,
     cancelInternalRealtimeVoiceBrowserSession: mocks.cancelInternalRealtimeVoiceBrowserSession,
+    resolveInternalRealtimeVoiceGatewayRelayLaunchError:
+      mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError,
   };
 });
 
@@ -1833,6 +1836,61 @@ describe("talk.session unified handlers", () => {
       connId: "conn-1",
     });
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("rejects forced consult routing when the provider resolves gpt-live", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { model: "gpt-live-1-codex" },
+    });
+    mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError.mockReturnValueOnce(
+      "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively",
+    );
+
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        model: "gpt-live-1-codex",
+      },
+      respond,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { model: "gpt-live-1-codex" } },
+                consultRouting: "force-agent-consult",
+              },
+            },
+          }) as OpenClawConfig,
+      },
+    });
+
+    expect(mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError).toHaveBeenCalledWith({
+      provider,
+      cfg: expect.any(Object),
+      providerConfig: { model: "gpt-live-1-codex" },
+      model: "gpt-live-1-codex",
+      autoRespondToAudio: false,
+    });
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively",
+    });
+    expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+    expect(mocks.ensureClientVoiceAgentSessionEntry).not.toHaveBeenCalled();
   });
 
   it("returns classified talk issue details when realtime relay creation fails", async () => {

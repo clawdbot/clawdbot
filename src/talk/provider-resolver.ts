@@ -73,19 +73,19 @@ export function isRealtimeVoiceProviderConfigured(params: {
   agentId?: string;
   surface?: "browser-session" | "gateway-relay" | "bridge";
 }): boolean {
-  if (
-    params.provider.isConfigured({
-      cfg: params.cfg,
-      providerConfig: params.providerConfig,
-    })
-  ) {
-    return true;
+  const internalConfigured =
+    params.surface === "browser-session"
+      ? isInternalRealtimeVoiceBrowserSessionConfigured(params)
+      : params.surface === "gateway-relay"
+        ? isInternalRealtimeVoiceGatewayRelayConfigured(params)
+        : undefined;
+  if (internalConfigured !== undefined) {
+    return internalConfigured;
   }
-  return (
-    (params.surface === "browser-session" &&
-      isInternalRealtimeVoiceBrowserSessionConfigured(params)) ||
-    (params.surface === "gateway-relay" && isInternalRealtimeVoiceGatewayRelayConfigured(params))
-  );
+  return params.provider.isConfigured({
+    cfg: params.cfg,
+    providerConfig: params.providerConfig,
+  });
 }
 
 /** Resolve the configured realtime voice provider or auto-select the first configured one. */

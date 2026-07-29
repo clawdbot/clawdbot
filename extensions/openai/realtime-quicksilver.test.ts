@@ -1,6 +1,6 @@
 // Openai tests cover GPT-Live (quicksilver) realtime voice gating.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mintSecretMock = vi.hoisted(() => vi.fn());
@@ -27,6 +27,13 @@ describe("openai gpt-live model detection", () => {
     expect(isOpenAIGptLiveModel(undefined)).toBe(false);
     expect(isOpenAIGptLiveModel("gpt-realtime-2.1")).toBe(false);
     expect(isOpenAIGptLiveModel("gpt-liveish")).toBe(false);
+  });
+
+  it("advertises only curated /v1/live models", () => {
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1-Boulder-Alpha ")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(false);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1-mini")).toBe(false);
   });
 });
 
