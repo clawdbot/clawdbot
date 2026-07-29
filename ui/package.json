@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@noble/ed25519": "3.0.1",
-    "dompurify": "^3.3.3",
+    "dompurify": "^3.4.11",
     "lit": "^3.3.2",
     "marked": "^17.0.5"
   },
@@ -18,7 +18,7 @@
     "@vitest/browser-playwright": "4.1.0",
     "jsdom": "^29.0.1",
     "playwright": "^1.58.2",
-    "vite": "8.0.5",
+    "vite": "8.0.16",
     "vitest": "4.1.0"
   }
 }
