@@ -88,6 +88,14 @@ final class AppState {
         }
     }
 
+    var nativeSettingsPanesEnabled: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.nativeSettingsPanesEnabled, forKey: nativeSettingsPanesEnabledKey)
+            }
+        }
+    }
+
     var swabbleEnabled: Bool {
         didSet {
             self.ifNotPreview {
@@ -344,6 +352,7 @@ final class AppState {
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = UserDefaults.standard.bool(forKey: debugPaneEnabledKey)
+        self.nativeSettingsPanesEnabled = UserDefaults.standard.bool(forKey: nativeSettingsPanesEnabledKey)
         let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard
@@ -1190,6 +1199,7 @@ extension AppState {
         state.launchAtLogin = true
         state.onboardingSeen = true
         state.debugPaneEnabled = true
+        state.nativeSettingsPanesEnabled = true
         state.swabbleEnabled = true
         state.swabbleTriggerWords = ["Claude", "Computer", "Jarvis"]
         state.voiceWakeTriggerChime = .system(name: "Glass")

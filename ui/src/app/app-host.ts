@@ -26,7 +26,7 @@ import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
-import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, routeIdFromPath, type RouteId } from "../app-routes.ts";
 import {
   EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT,
   type SidebarWorkboardRenderers,
@@ -753,6 +753,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
     window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
+    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
@@ -790,6 +791,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
     window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
+    window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
@@ -1269,6 +1271,26 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     const agentId = context.agentSelection.state.selectedId ?? "";
     this.openNewSession(agentId);
+  };
+
+  private readonly handleNativeNavigate = (event: Event) => {
+    const path = (event as CustomEvent<{ path?: unknown }>).detail?.path;
+    const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
+    if (
+      typeof path !== "string" ||
+      !path.startsWith("/") ||
+      path.startsWith("//") ||
+      /^[a-z][a-z\d+.-]*:/i.test(schemeCandidate)
+    ) {
+      return;
+    }
+    const routeId = routeIdFromPath(path);
+    if (!routeId || !this.context) {
+      // Leave invalid or unavailable destinations unhandled so the native host can load its URL fallback.
+      return;
+    }
+    event.preventDefault();
+    this.navigate(routeId);
   };
 
   private readonly handleNativeHistoryState = (event: Event) => {
