@@ -210,7 +210,9 @@ async function buildResponsesPayload(
     prompt;
   const scenarioFamilyReplyDirective =
     extractExactReplyDirective(scenarioFamilyPrompt) ??
-    extractExactMarkerDirective(scenarioFamilyPrompt);
+    extractExactMarkerDirective(scenarioFamilyPrompt) ??
+    extractExactReplyDirective(scenarioToolOutput) ??
+    extractExactMarkerDirective(scenarioToolOutput);
   const userExactReplyDirective =
     promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
   const userExactMarkerDirective =

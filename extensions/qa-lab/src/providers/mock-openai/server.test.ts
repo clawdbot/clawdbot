@@ -1104,6 +1104,28 @@ describe("qa mock openai server", () => {
     expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
   });
 
+  it("uses the current tool result marker after stale streaming history", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(currentPrompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_current_progress",
+          output: "Reply with only this exact marker and no other text:\nCURRENT_PROGRESS_OK",
+        },
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_PROGRESS_OK");
+  });
+
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
     const server = await startMockServer();
 
