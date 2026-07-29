@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
 import {
   isDreamingNarrativeSessionStoreKey,
+  extractAgentIdFromSessionPath,
   extractAgentIdFromSessionsDir,
   canonicalizeMainSessionAlias,
   getRuntimeConfig,
@@ -111,15 +112,6 @@ function rememberArtifactDir(dirs: Map<string, string>, dir: string): void {
   dirs.set(normalizeRealComparablePath(dir), dir);
 }
 
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
-}
-
 type ResolvedSessionStoreCorpusSource = {
   sessionFile: string;
   sessionId: string;
@@ -197,8 +189,24 @@ function resolveSessionStoreTranscriptCorpusSource(
         ? { sessionFile: candidate, sessionId, transcriptSource: "file" }
         : null;
     }
+    const canonicalAgentsRoot = path.dirname(
+      path.dirname(resolveSessionTranscriptsDirForAgent(agentId)),
+    );
+    const relativeAgentPath = path.relative(
+      normalizeComparablePath(canonicalAgentsRoot),
+      normalizeComparablePath(sessionFile),
+    );
+    const isUnderCanonicalAgentsRoot =
+      relativeAgentPath !== ".." &&
+      !relativeAgentPath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativeAgentPath);
     const pathAgentId = extractAgentIdFromSessionPath(sessionFile);
-    if (pathAgentId && normalizeAgentId(pathAgentId) !== normalizeAgentId(agentId)) {
+    // Nested and malformed canonical transcripts still have an owner; never
+    // treat them as an unowned custom store and leak across agent corpora.
+    if (
+      (!pathAgentId && isUnderCanonicalAgentsRoot) ||
+      (pathAgentId && normalizeAgentId(pathAgentId) !== normalizeAgentId(agentId))
+    ) {
       return null;
     }
     return normalizeRealComparablePath(resolved) === normalizeRealComparablePath(sessionFile)
