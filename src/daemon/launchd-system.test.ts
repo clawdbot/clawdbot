@@ -70,7 +70,6 @@ import {
   assertNoSystemLaunchDaemonOwnership,
   inspectSystemLaunchDaemonOwnership,
   renderSystemLaunchDaemonOwnershipShellProbe,
-  SystemLaunchDaemonOwnershipError,
 } from "./launchd-system.js";
 
 describe("system LaunchDaemon ownership", () => {
@@ -223,8 +222,8 @@ describe("system LaunchDaemon ownership", () => {
       (caught: unknown) => caught,
     );
 
-    expect(error).toBeInstanceOf(SystemLaunchDaemonOwnershipError);
     expect(error).toMatchObject({
+      name: "SystemLaunchDaemonOwnershipError",
       code: "SYSTEM_LAUNCH_DAEMON_OWNERSHIP",
       ownership: { status: "loaded", serviceTarget: "system/ai.openclaw.gateway" },
     });

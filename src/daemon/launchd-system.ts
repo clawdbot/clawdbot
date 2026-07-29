@@ -14,7 +14,7 @@ import {
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
 const PLUTIL_PATH = "/usr/bin/plutil";
 
-export type SystemLaunchDaemonOwnership =
+type SystemLaunchDaemonOwnership =
   | { status: "absent"; serviceTarget: string }
   | { status: "loaded"; serviceTarget: string }
   | { status: "installed"; serviceTarget: string; plistPath: string }
@@ -109,7 +109,7 @@ fi
 `;
 }
 
-export type LaunchDaemonPlistLabelResult =
+type LaunchDaemonPlistLabelResult =
   | { status: "ok"; label: string }
   | { status: "missing" }
   | { status: "unverifiable"; detail: string };
@@ -251,9 +251,7 @@ export function formatSystemLaunchDaemonOwnershipSummary(
   }
 }
 
-export function formatSystemLaunchDaemonOwnershipError(
-  ownership: SystemLaunchDaemonConflict,
-): string {
+function formatSystemLaunchDaemonOwnershipError(ownership: SystemLaunchDaemonConflict): string {
   const recovery =
     ownership.status === "loaded"
       ? `Keep it as the sole gateway manager, or unload it with \`sudo launchctl bootout ${ownership.serviceTarget}\` and remove its plist before retrying.`
@@ -268,7 +266,7 @@ export function formatSystemLaunchDaemonOwnershipError(
   ].join("\n");
 }
 
-export class SystemLaunchDaemonOwnershipError extends Error {
+class SystemLaunchDaemonOwnershipError extends Error {
   readonly code = "SYSTEM_LAUNCH_DAEMON_OWNERSHIP";
 
   constructor(readonly ownership: SystemLaunchDaemonConflict) {
