@@ -31,6 +31,12 @@ import {
   resolveMediaReferenceLocalPath,
   resolveMediaReferenceLocalPathInfo,
 } from "../media/media-reference.js";
+import {
+  PLAYBACK_TRANSCODE_POLICY,
+  replacePlaybackFileExtension,
+  resolvePlaybackMode,
+  resolvePlaybackTranscode,
+} from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
@@ -423,6 +429,7 @@ type AssistantMediaAvailability =
   | ({
       available: true;
       mimeType?: string;
+      playback?: "native" | "transcode";
       sizeBytes?: number;
     } & MediaProbeResult)
   | { available: false; reason: string; code: string };
@@ -569,9 +576,14 @@ async function resolveAssistantMediaAvailability(
         mediaKind === "audio" || mediaKind === "video"
           ? await probeMediaFileDescriptor(opened.handle.fd, mediaKind)
           : {};
+      const playback =
+        mimeType && (mediaKind === "audio" || mediaKind === "video")
+          ? resolvePlaybackMode(mimeType, PLAYBACK_TRANSCODE_POLICY[mediaKind])
+          : undefined;
       return {
         available: true,
         ...(mimeType ? { mimeType } : {}),
+        ...(playback ? { playback } : {}),
         sizeBytes,
         ...probe,
       };
@@ -667,11 +679,38 @@ export async function handleControlUiAssistantMediaRequest(
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
     });
-    const contentType = mime ?? "application/octet-stream";
-    const filename =
+    let contentType = mime ?? "application/octet-stream";
+    let filename =
       resolvedReference.kind === "inbound"
         ? extractOriginalFilename(localPath)
         : path.basename(localPath);
+    const mediaKind = kindFromMime(contentType);
+    if (
+      url.searchParams.get("playback") === "1" &&
+      (mediaKind === "audio" || mediaKind === "video")
+    ) {
+      const playback = await resolvePlaybackTranscode({
+        sourcePath: opened.realPath,
+        sourceStat: opened.stat,
+        mimeType: contentType,
+        kind: mediaKind,
+      });
+      if (playback.kind === "preparing") {
+        await closeOpenedHandle();
+        sendJson(res, 202, { status: "preparing" });
+        return true;
+      }
+      if (playback.kind === "transcoded") {
+        const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
+        if (transcoded) {
+          await closeOpenedHandle();
+          opened = transcoded;
+          handleClosed = false;
+          contentType = playback.contentType;
+          filename = replacePlaybackFileExtension(filename, playback.extension);
+        }
+      }
+    }
     res.setHeader("Content-Type", contentType);
     res.setHeader(
       "Content-Disposition",

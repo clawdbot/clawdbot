@@ -39,16 +39,30 @@ import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+type PlaybackTranscodeResolution = Awaited<
+  ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
+>;
+
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
 const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
+const resolvePlaybackTranscodeMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
+);
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
 }));
 vi.mock("../media/media-probe.js", () => ({
   probeMediaFileDescriptor: probeMediaFileDescriptorMock,
 }));
+vi.mock("../media/playback-transcode.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
+  return {
+    ...actual,
+    resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
+  };
+});
 
 const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -60,6 +74,8 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
   probeMediaFileDescriptorMock.mockReset();
   probeMediaFileDescriptorMock.mockResolvedValue({});
+  resolvePlaybackTranscodeMock.mockReset();
+  resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });
 
 describe("handleControlUiHttpRequest", () => {
@@ -221,7 +237,7 @@ describe("handleControlUiHttpRequest", () => {
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiAssistantMediaRequest(
       {
         url: params.url,
@@ -236,7 +252,7 @@ describe("handleControlUiHttpRequest", () => {
         ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   function createTrustedProxyAuth(): ResolvedGatewayAuth {
@@ -535,6 +551,49 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("returns 202 while assistant playback media is preparing", async () => {
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-playback-preparing-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.caf");
+        await fs.writeFile(filePath, Buffer.from("caff-original"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?playback=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(202);
+        expect(responseJson(end)).toEqual({ status: "preparing" });
+      },
+    });
+  });
+
+  it("falls back to original assistant media when playback transcode fails", async () => {
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "fallback" });
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-playback-fallback-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.caf");
+        await fs.writeFile(filePath, Buffer.from("caff-original"));
+        const { res, handled, setHeader } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?playback=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Type", "audio/x-caf");
+        expect(resolvePlaybackTranscodeMock).toHaveBeenCalledWith(
+          expect.objectContaining({ mimeType: "audio/x-caf", kind: "audio" }),
+        );
+      },
+    });
+  });
+
   it.each([
     { filename: "voice.ogg", disposition: "inline" },
     { filename: "clip.mp4", disposition: "inline" },
@@ -760,10 +819,34 @@ describe("handleControlUiHttpRequest", () => {
         expect(responseJson(end)).toMatchObject({
           available: true,
           mimeType: "audio/mpeg",
+          playback: "native",
           sizeBytes: contents.byteLength,
           durationMs: 2345,
         });
         expect(probeMediaFileDescriptorMock).toHaveBeenCalledWith(expect.any(Number), "audio");
+      },
+    });
+  });
+
+  it("marks exotic assistant media metadata for playback transcoding", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-transcode-meta-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.caf");
+        await fs.writeFile(filePath, Buffer.from("caff-original"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseJson(end)).toMatchObject({
+          available: true,
+          mimeType: "audio/x-caf",
+          playback: "transcode",
+        });
       },
     });
   });

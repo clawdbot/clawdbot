@@ -23,6 +23,12 @@ import {
   getImageMetadata,
   readImageProbeFromHeader,
 } from "../media/media-services.js";
+import {
+  PLAYBACK_TRANSCODE_POLICY,
+  replacePlaybackFileExtension,
+  resolvePlaybackMode,
+  resolvePlaybackTranscode,
+} from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -681,6 +687,10 @@ function buildManagedMediaBlock(record: ManagedImageRecord): ManagedMediaBlock {
   if (!kind) {
     throw new Error("Managed media record has an unsupported content type");
   }
+  const playback =
+    kind === "audio" || kind === "video"
+      ? resolvePlaybackMode(record.original.contentType, PLAYBACK_TRANSCODE_POLICY[kind])
+      : undefined;
   const fullUrl = buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full");
   return {
     type: kind,
@@ -689,6 +699,7 @@ function buildManagedMediaBlock(record: ManagedImageRecord): ManagedMediaBlock {
     openUrl: fullUrl,
     ...(kind === "image" ? { alt: record.alt } : { fileName: record.original.filename }),
     mimeType: record.original.contentType,
+    ...(playback ? { playback } : {}),
     ...(kind === "image" ? { width: record.original.width, height: record.original.height } : {}),
     sizeBytes: record.original.sizeBytes,
   };
@@ -1434,6 +1445,38 @@ export async function handleManagedOutgoingMediaHttpRequest(
     return true;
   }
 
+  let responseContentType = record.original.contentType || "application/octet-stream";
+  let responseFilename = record.original.filename;
+  const mediaKind = resolveManagedRecordKind(record);
+  if (
+    requestUrl.searchParams.get("playback") === "1" &&
+    (mediaKind === "audio" || mediaKind === "video")
+  ) {
+    const playback = await resolvePlaybackTranscode({
+      sourcePath: opened.realPath,
+      sourceStat: opened.stat,
+      mimeType: responseContentType,
+      kind: mediaKind,
+    });
+    if (playback.kind === "preparing") {
+      await opened.handle.close().catch(() => {});
+      sendJson(res, 202, { status: "preparing" });
+      return true;
+    }
+    if (playback.kind === "transcoded") {
+      const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
+      if (transcoded) {
+        await opened.handle.close().catch(() => {});
+        opened = transcoded;
+        responseContentType = playback.contentType;
+        responseFilename = replacePlaybackFileExtension(
+          responseFilename ?? "generated-media",
+          playback.extension,
+        );
+      }
+    }
+  }
+
   let handleClosed = false;
   const closeOpenedHandle = async () => {
     if (handleClosed) {
@@ -1442,7 +1485,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
     handleClosed = true;
     await opened.handle.close().catch(() => {});
   };
-  res.setHeader("content-type", record.original.contentType || "application/octet-stream");
+  res.setHeader("content-type", responseContentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader(
@@ -1453,7 +1496,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
   );
   res.setHeader(
     "content-disposition",
-    buildManagedMediaContentDisposition(record.original.filename, record.original.contentType),
+    buildManagedMediaContentDisposition(responseFilename, responseContentType),
   );
   const byteResponse = resolveByteResponse({
     file: opened.stat,
