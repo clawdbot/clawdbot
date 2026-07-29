@@ -81,6 +81,26 @@ describe("CustodianSessionStore", () => {
     await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Ready."));
   });
 
+  it("shows setup before starting chat when the default agent has no model", async () => {
+    const request = vi.fn();
+    const { context } = createContext(request, ["openclaw.chat"], {
+      agentsList: {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+        agents: [{ id: "main" }],
+      },
+    });
+    const store = new CustodianSessionStore();
+
+    store.connect(context, "caretaker");
+
+    expect(store.setupRequired).toBe(true);
+    expect(store.sending).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    await expect(store.send("should not send")).resolves.toBe("rejected");
+  });
+
   it("accepts new event nudges after a conversation variant rotates", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "shared-session",

@@ -8,7 +8,7 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
@@ -31,6 +31,7 @@ const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 type StoreListener = () => void;
+type ConfiguredInferenceState = "unresolved" | "required" | "ready";
 
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
@@ -62,8 +63,10 @@ export class CustodianSessionStore {
   private sessionOwnershipKey: string | null = null;
   private sessionStarted = false;
   private lastHelloDeviceToken = "";
+  private configuredInferenceState: ConfiguredInferenceState = "unresolved";
   private eventNudgeClosed = false;
   private gatewayCleanup: (() => void) | null = null;
+  private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
   private readonly listeners = new Set<StoreListener>();
 
@@ -80,9 +83,14 @@ export class CustodianSessionStore {
     }
     if (contextChanged) {
       this.gatewayCleanup?.();
+      this.agentCleanup?.();
       this.eventCleanup?.();
       this.context = context;
       this.gatewayCleanup = context.gateway.subscribe(() => {
+        this.synchronizeClient();
+        this.emit();
+      });
+      this.agentCleanup = context.agents.subscribe(() => {
         this.synchronizeClient();
         this.emit();
       });
@@ -313,6 +321,9 @@ export class CustodianSessionStore {
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     const chatSupported =
       client !== null && isGatewayMethodAdvertised(snapshot, "openclaw.chat") === true;
+    const configuredInferenceState = this.resolveConfiguredInferenceState();
+    const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
+    this.configuredInferenceState = configuredInferenceState;
     const variantChanged = this.sessionStarted && this.sessionVariant !== this.variant;
     const ownershipKey = this.currentSessionOwnershipKey();
     const clientReplaced =
@@ -327,7 +338,8 @@ export class CustodianSessionStore {
       !variantChanged &&
       !clientReplaced &&
       !ownershipChanged &&
-      this.chatAvailable === chatSupported
+      this.chatAvailable === (chatSupported && configuredInferenceState !== "unresolved") &&
+      !inferenceStateChanged
     ) {
       return;
     }
@@ -368,7 +380,19 @@ export class CustodianSessionStore {
       this.error = t("custodian.unsupportedGateway");
       return;
     }
+    if (configuredInferenceState === "unresolved") {
+      return;
+    }
     this.chatAvailable = true;
+    if (configuredInferenceState === "required") {
+      this.sessionStarted = false;
+      this.clearConversation();
+      this.setupRequired = true;
+      return;
+    }
+    if (inferenceStateChanged) {
+      this.setupRequired = false;
+    }
     if (this.sessionStarted) {
       if (!this.retryParams) {
         this.error = requestWasPending ? this.error : null;
@@ -377,6 +401,27 @@ export class CustodianSessionStore {
     }
     this.clearConversation();
     this.startSession(client, this.currentSessionVariant(), true);
+  }
+
+  private resolveConfiguredInferenceState(): ConfiguredInferenceState {
+    const context = this.context;
+    if (!context || context.gateway.snapshot.phase !== "connected") {
+      return "unresolved";
+    }
+    const agentsList = context.agents.state.agentsList;
+    if (!agentsList) {
+      return "unresolved";
+    }
+    const selectedId = normalizeAgentId(
+      context.gateway.snapshot.assistantAgentId ?? agentsList.defaultId ?? "",
+    );
+    const selectedAgent = agentsList.agents.find(
+      (agent) => normalizeAgentId(agent.id) === selectedId,
+    );
+    if (!selectedAgent) {
+      return "unresolved";
+    }
+    return selectedAgent.model?.primary?.trim() ? "ready" : "required";
   }
 
   private currentSessionVariant(): CustodianSessionVariant {

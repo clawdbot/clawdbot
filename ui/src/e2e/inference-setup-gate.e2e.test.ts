@@ -69,7 +69,7 @@ suite.define(() => {
     }
   });
 
-  it("replaces the custodian error and composer with a setup splash", async () => {
+  it("shows the setup splash before starting custodian chat", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -77,20 +77,14 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["openclaw.chat"],
       featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
     });
 
     try {
       await page.goto(`${suite.server.baseUrl}custodian`);
-      await gateway.waitForRequest("openclaw.chat");
-      await gateway.rejectDeferred("openclaw.chat", {
-        code: "UNAVAILABLE",
-        message: "OpenClaw requires working inference: no configured model",
-        details: { code: "system_agent_inference_unavailable" },
-      });
       await page.getByRole("heading", { name: "Connect an AI model" }).waitFor();
 
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       await expect.poll(() => page.locator(".custodian__error").count()).toBe(0);
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
