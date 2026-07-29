@@ -4,6 +4,7 @@ import { renderSessionsHubTabs, type SessionsHubTab } from "./sessions-hub-tabs.
 type SessionsHubHeaderProps = {
   active: SessionsHubTab;
   title: unknown;
+  subtitle?: unknown;
   actions?: unknown;
   onSelect: (tab: SessionsHubTab) => void;
 };
@@ -13,6 +14,7 @@ export function renderSessionsHubHeader(props: SessionsHubHeaderProps): Template
     <section class="content-header content-header--page sessions-hub-header">
       <div class="sessions-hub-header__title">
         <div class="page-title">${props.title}</div>
+        ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
       </div>
       ${renderSessionsHubTabs({ active: props.active, onSelect: props.onSelect })}
       <div class="sessions-hub-header__actions">${props.actions ?? nothing}</div>

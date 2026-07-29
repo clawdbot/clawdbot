@@ -8,7 +8,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -18,6 +18,7 @@ import type { SessionMenuAction, SessionMenuWork } from "../../components/sessio
 import "../../components/session-menu.ts";
 import { isStoppableCloudWorkerPlacement } from "../../components/session-row-badges.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
@@ -62,6 +63,8 @@ import {
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { loadStoredGroupBy, parseFilterInteger, saveStoredGroupBy } from "./page-state.ts";
 import { renderSessions, type SessionsProps, type TranscriptSearchState } from "./view.ts";
+
+const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
 
 export type SessionsRouteData = {
   // Client identity alone cannot distinguish provider replacement or reconnect epochs.
@@ -1329,6 +1332,8 @@ class SessionsPage extends OpenClawLightDomElement {
       ${renderSessionsHubHeader({
         active: "sessions",
         title: titleForRoute("sessions"),
+        subtitle: html`${subtitleForRoute("sessions")}
+        ${renderDocsLink(SESSIONS_DOCS_URL, t("common.learnMore"))}`,
         actions: renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,
