@@ -82,6 +82,15 @@ export type CliSessionReseedReceipt = {
   userTurnDisposition: "persisted" | "omitted";
 };
 
+export type SessionDiffBaseline = {
+  version: 1;
+  sessionId: string;
+  root: string;
+  files: Array<{ path: string; fingerprint: string }>;
+  /** Some checkout entries could not be fingerprinted without exceeding diff safety caps. */
+  truncated?: true;
+};
+
 export type CliSessionBinding = {
   sessionId: string;
   /** Last successful assistant boundary accepted by the backend's resume contract. */
@@ -334,6 +343,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     spawnedWorkspaceDir?: string;
     /** Task working directory inherited by spawned sessions and reused on later turns. */
     spawnedCwd?: string;
+    /** Content-free fingerprints for checkout changes that predate this session generation. */
+    sessionDiffBaseline?: SessionDiffBaseline;
     /**
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
