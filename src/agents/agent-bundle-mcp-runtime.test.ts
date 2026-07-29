@@ -1302,7 +1302,7 @@ describe("session MCP runtime", () => {
   });
 
   it("applies session tool denials to listed and synthetic MCP tools", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-session-deny-"));
+    const tempDir = tempDirTracker.make("bundle-mcp-session-deny-");
     const serverPath = path.join(tempDir, "session-deny.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({
@@ -1337,12 +1337,11 @@ describe("session MCP runtime", () => {
       ]);
     } finally {
       await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
   it("does not read inherited properties as MCP tool denials", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-own-deny-"));
+    const tempDir = tempDirTracker.make("bundle-mcp-own-deny-");
     const serverPath = path.join(tempDir, "own-deny.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({ filePath: serverPath, logPath });
@@ -1359,7 +1358,6 @@ describe("session MCP runtime", () => {
       ]);
     } finally {
       await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
