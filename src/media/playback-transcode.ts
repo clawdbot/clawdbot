@@ -10,7 +10,8 @@ import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
-import { getMediaDir, PLAYBACK_TRANSCODE_SUBDIR } from "./store.js";
+import { resolveNativePlaybackCodecCompatibility } from "./playback-codec-policy.js";
+import { getMediaDir, PLAYBACK_TRANSCODE_SUBDIR, writePlaybackTranscodeCache } from "./store.js";
 
 type PlaybackMediaKind = Extract<MediaKind, "audio" | "video">;
 type PlaybackMode = "native" | "transcode";
@@ -269,46 +270,6 @@ async function probePlaybackSource(
   }
 }
 
-function hasNativePlaybackCodecs(
-  kind: PlaybackMediaKind,
-  mimeType: string,
-  probe: PlaybackMediaProbeResult,
-): boolean | undefined {
-  if (kind === "audio") {
-    const codec = probe.audioCodec;
-    if (probe.audioStreamIndex === undefined || !codec) {
-      return undefined;
-    }
-    if (/^audio\/(?:x-wav|wav|wave)$/.test(normalizeMimeType(mimeType) ?? "")) {
-      return codec === "pcm_s16le" || codec === "pcm_u8";
-    }
-    return codec === "mp3" || (normalizeMimeType(mimeType) !== "audio/mpeg" && codec === "aac");
-  }
-  if (!probe.videoCodec || probe.videoStreamIndex === undefined) {
-    return undefined;
-  }
-  if (probe.videoCodec !== "h264") {
-    return false;
-  }
-  if (!probe.videoProfile || !probe.videoPixelFormat) {
-    return undefined;
-  }
-  const portableProfile =
-    probe.videoProfile === "baseline" ||
-    probe.videoProfile === "constrained baseline" ||
-    probe.videoProfile === "main" ||
-    probe.videoProfile === "high";
-  const portablePixelFormat =
-    probe.videoPixelFormat === "yuv420p" || probe.videoPixelFormat === "yuvj420p";
-  if (!portableProfile || !portablePixelFormat) {
-    return false;
-  }
-  if (probe.audioStreamIndex === undefined) {
-    return probe.audioCodec ? undefined : true;
-  }
-  return probe.audioCodec ? probe.audioCodec === "aac" || probe.audioCodec === "mp3" : undefined;
-}
-
 async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<PlaybackInspection> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   const containerMode = resolvePlaybackMode(params.mimeType, policy);
@@ -339,7 +300,7 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
       params.probe !== undefined ? params.probe : await probePlaybackSource(source, params.kind);
     if (containerMode === "native") {
       const nativeCodecs = probe
-        ? hasNativePlaybackCodecs(params.kind, params.mimeType, probe)
+        ? resolveNativePlaybackCodecCompatibility(params.kind, params.mimeType, probe)
         : undefined;
       if (nativeCodecs === true) {
         const inspection = { mode: "native" } as const;
@@ -656,17 +617,12 @@ async function transcodePlaybackSource(params: {
       },
     );
 
-    const store = fileStore({
-      rootDir: getMediaDir(),
-      dirMode: 0o700,
-      mode: 0o600,
+    await writePlaybackTranscodeCache({
+      buffer: outputBuffer,
+      fileName: path.basename(playbackCacheRelativePath(params.cacheKey, policy.target.extension)),
       maxBytes: params.maxBytes,
+      tempPrefix: `.${params.cacheKey}`,
     });
-    await store.write(
-      playbackCacheRelativePath(params.cacheKey, policy.target.extension),
-      outputBuffer,
-      { tempPrefix: `.${params.cacheKey}`, maxBytes: params.maxBytes },
-    );
   } finally {
     await opened.handle.close().catch(() => {});
   }

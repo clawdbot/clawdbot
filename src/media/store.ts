@@ -31,6 +31,7 @@ export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
 export const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
+let playbackCacheOperationTail = Promise.resolve();
 type RequestImpl = typeof httpRequest;
 type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 type CleanOldMediaOptions = {
@@ -237,6 +238,42 @@ async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
   }
 }
 
+async function queuePlaybackCacheOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const run = playbackCacheOperationTail.then(operation);
+  playbackCacheOperationTail = run.then(
+    () => {},
+    () => {},
+  );
+  return await run;
+}
+
+/** Serializes cache publication with quota enforcement and propagates failures to the writer. */
+export async function writePlaybackTranscodeCache(params: {
+  buffer: Buffer;
+  fileName: string;
+  maxBytes: number;
+  tempPrefix: string;
+}): Promise<string> {
+  return await queuePlaybackCacheOperation(async () => {
+    const relativePath = resolveMediaRelativePath(
+      params.fileName,
+      PLAYBACK_TRANSCODE_SUBDIR,
+      "writePlaybackTranscodeCache",
+    );
+    const filePath = await openMediaStore(params.maxBytes).write(relativePath, params.buffer, {
+      maxBytes: params.maxBytes,
+      tempPrefix: params.tempPrefix,
+    });
+    await prunePlaybackTranscodeCacheToSize();
+    return filePath;
+  });
+}
+
+/** Serializes maintenance quota scans with cache insertions. */
+export async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
+  await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
+}
+
 /** Prunes expired media files, optionally recursing into scoped media subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   await openMediaStore().pruneExpired({
@@ -245,7 +282,7 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
     recursive: options.recursive ?? true,
     pruneEmptyDirs: options.pruneEmptyDirs,
   });
-  await prunePlaybackTranscodeCacheToSize();
+  await enforcePlaybackTranscodeCacheLimit();
   // Trust metadata must not outlive the staged file that it authorizes.
   const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
   await pruneStaleTrustedGeneratedHtmlMarkers();

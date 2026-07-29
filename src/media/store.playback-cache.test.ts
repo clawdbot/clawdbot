@@ -15,7 +15,7 @@ afterAll(async () => {
   await tempHome.restore();
 });
 
-it("evicts oldest playback transcodes when the cache exceeds its byte budget", async () => {
+it("evicts oldest playback transcodes when insertion enforcement exceeds its byte budget", async () => {
   const mediaDir = await store.ensureMediaDir();
   const cacheDir = path.join(mediaDir, store.PLAYBACK_TRANSCODE_SUBDIR);
   await fs.mkdir(cacheDir, { recursive: true });
@@ -28,7 +28,7 @@ it("evicts oldest playback transcodes when the cache exceeds its byte budget", a
   await fs.utimes(oldPath, (nowMs - 2_000) / 1000, (nowMs - 2_000) / 1000);
   await fs.utimes(newPath, (nowMs - 1_000) / 1000, (nowMs - 1_000) / 1000);
 
-  await store.cleanOldMedia(60_000, { recursive: true, pruneEmptyDirs: true });
+  await store.enforcePlaybackTranscodeCacheLimit();
 
   await expect(fs.stat(oldPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.stat(newPath)).resolves.toMatchObject({ size: sparseSize });

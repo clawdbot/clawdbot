@@ -360,6 +360,25 @@ describe("resolvePlaybackTranscode", () => {
     ).resolves.toBe("transcode");
   });
 
+  it("transcodes known-incompatible MP4 audio when H.264 profile facts are unknown", async () => {
+    const source = await createSource("unknown-profile-opus.mp4");
+
+    await expect(
+      playback.resolvePlaybackModeForSource({
+        ...source,
+        mimeType: "video/mp4",
+        kind: "video",
+        probe: {
+          durationMs: 1000,
+          videoCodec: "h264",
+          videoStreamIndex: 0,
+          audioCodec: "opus",
+          audioStreamIndex: 1,
+        },
+      }),
+    ).resolves.toBe("transcode");
+  });
+
   it("does not cache native when a selected audio stream has an unknown codec", async () => {
     const source = await createSource("unknown-audio.mp4");
 
