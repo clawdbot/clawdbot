@@ -218,6 +218,11 @@ function resolveFetchHeaders(fetch?: WebFetchConfig): Record<string, string> | u
       `[web-fetch] dropped reserved, framing, or credential tools.web.fetch.headers entry: ${name}`,
     );
   }
+  for (const name of resolution.collisions) {
+    logWarn(
+      `[web-fetch] dropped case-colliding tools.web.fetch.headers entry: ${JSON.stringify(name)}`,
+    );
+  }
   for (const name of resolution.suspicious) {
     logWarn(
       `[web-fetch] tools.web.fetch.headers entry looks credential-bearing and is sent to every model-chosen URL: ${name}`,

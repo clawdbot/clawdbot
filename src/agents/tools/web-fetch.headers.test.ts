@@ -240,6 +240,7 @@ describe("web_fetch configured request headers", () => {
     // A record carrying both would be comma-appended into "staging, prod".
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Collision"));
     global.fetch = withFetchPreconnect(fetchSpy);
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
 
     const tool = createToolWithHeaders({
       "X-Routing-Target": "staging",
@@ -253,7 +254,15 @@ describe("web_fetch configured request headers", () => {
       (name) => name.toLowerCase() === "x-routing-target",
     );
     expect(routingNames).toHaveLength(1);
-    expect(headers[routingNames[0] ?? ""]).not.toContain(",");
+    expect(headers[routingNames[0] ?? ""]).toBe("prod");
+    const collisionWarnings = warnSpy.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.includes("case-colliding"));
+    expect(collisionWarnings).toEqual([
+      expect.stringContaining(JSON.stringify("X-Routing-Target")),
+    ]);
+    expect(collisionWarnings[0]).not.toContain("staging");
+    expect(collisionWarnings[0]).not.toContain("prod");
   });
 
   it("ignores entries whose name or value the request cannot carry", async () => {

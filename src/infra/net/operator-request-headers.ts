@@ -65,6 +65,8 @@ export type OperatorRequestHeaderResolution = {
   refused: string[];
   /** Accepted, but the name looks credential-bearing and deserves a warning. */
   suspicious: string[];
+  /** Earlier names replaced by a later entry with the same case-insensitive name. */
+  collisions: string[];
 };
 
 function trimHttpWhitespace(value: string): string {
@@ -91,8 +93,9 @@ export function resolveOperatorRequestHeaders(params: {
   const ignored: string[] = [];
   const refused: string[] = [];
   const suspicious: string[] = [];
+  const collisions: string[] = [];
   if (!isRecord(params.configured)) {
-    return { ignored, refused, suspicious };
+    return { ignored, refused, suspicious, collisions };
   }
   const reserved = new Set(
     [...(params.reservedNames ?? [])].map((name) => normalizeLowercaseStringOrEmpty(name)),
@@ -122,13 +125,17 @@ export function resolveOperatorRequestHeaders(params: {
     if (isLikelySensitiveModelProviderHeaderName(lowerName)) {
       suspicious.push(name);
     }
+    const existing = usable.get(lowerName);
+    if (existing) {
+      collisions.push(existing.name);
+    }
     usable.set(lowerName, { name, value });
   }
   if (usable.size === 0) {
-    return { ignored, refused, suspicious };
+    return { ignored, refused, suspicious, collisions };
   }
   const entries = [...usable.values()]
     .map(({ name, value }) => [name, value] as const)
     .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-  return { headers: Object.fromEntries(entries), ignored, refused, suspicious };
+  return { headers: Object.fromEntries(entries), ignored, refused, suspicious, collisions };
 }

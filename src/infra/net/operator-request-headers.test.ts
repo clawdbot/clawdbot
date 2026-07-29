@@ -50,8 +50,9 @@ describe("resolveOperatorRequestHeaders", () => {
   });
 
   it("keeps one entry per name regardless of case", () => {
-    const { headers } = resolve({ "X-Dup": "first", "x-dup": "second" });
-    expect(Object.keys(headers ?? {})).toHaveLength(1);
+    const { headers, collisions } = resolve({ "X-Dup": "first", "x-dup": "second" });
+    expect(headers).toEqual({ "x-dup": "second" });
+    expect(collisions).toEqual(["X-Dup"]);
   });
 
   it("refuses reserved, framing, and credential names", () => {
