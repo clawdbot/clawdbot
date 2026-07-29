@@ -11,7 +11,7 @@ Talk mode covers five runtime shapes:
 - **Native macOS/iOS/Android Talk**: native speech recognition, Gateway chat, and `talk.speak` TTS. Apple Speech recognition on macOS/iOS may use network services; Android behavior depends on the installed speech service. Nodes advertise the `talk` capability and declare which `talk.*` commands they support.
 - **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport, including framed and frameless transcript/audio events. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay; non-realtime configs use the native speech loop.
 - **Browser Talk**: `talk.client.create` for client-owned `webrtc`/`provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
-- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready; it never opens a client-owned WebRTC session. When realtime is not ready, Android stays on native speech recognition, Gateway chat, and `talk.speak`. GPT-Live uses the Gateway's direct Frameless Bidi provider WebSocket and requires Platform API-key auth.
+- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready and the configured model supports relay; it never opens a client-owned WebRTC session. Browser-only `gpt-live-*` models skip relay, so Android stays on native speech recognition, Gateway chat, and `talk.speak` just as it does when realtime is not ready.
 - **Transcription-only clients**: `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close` for captions/dictation without an assistant voice response. One-shot uploaded voice notes still use the [media understanding](/nodes/media-understanding) audio path.
 
 Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
@@ -121,7 +121,7 @@ overloaded: an invalid voice returns the same response. The legacy
 `api.openai.com/v1/live` route instead.
 
 GPT-Live also works through Gateway relay and backend voice bridges, including
-Android Talk, Discord voice, and Voice Call/telephony. Those paths keep the
+Discord voice and Voice Call/telephony. Those paths keep the
 Platform API key on the Gateway and use one direct provider WebSocket; OpenClaw
 converts telephony G.711 u-law audio to and from GPT-Live's 24 kHz PCM contract.
 The browser WebRTC path remains available for ChatGPT OAuth sessions and keeps

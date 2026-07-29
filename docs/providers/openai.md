@@ -1011,8 +1011,8 @@ compatibility fallback when the shared
     above, then verify that the selected ChatGPT OAuth profile and
     `chatgpt-account-id` belong to the same account.
 
-    The direct WebSocket bridge enables Gateway relay, Android Talk, Discord
-    voice, and Voice Call/telephony. OpenClaw converts G.711 u-law telephony
+    The direct WebSocket bridge enables Gateway relay, Discord voice, and Voice
+    Call/telephony. OpenClaw converts G.711 u-law telephony
     audio to and from GPT-Live's 24 kHz PCM stream. The Gateway routes provider
     delegations through the configured OpenClaw agent and keeps the Platform
     API key server-side. The browser WebRTC route remains available for
