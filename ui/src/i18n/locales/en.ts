@@ -871,6 +871,10 @@ export const en: TranslationMap = {
   },
   agents: {
     noAgents: "No agents",
+    defaults: {
+      title: "Agent defaults",
+      description: "Defaults every agent inherits unless overridden.",
+    },
     copyId: "Copy ID",
     copyIdTitle: "Copy agent ID to clipboard",
     default: "Default",

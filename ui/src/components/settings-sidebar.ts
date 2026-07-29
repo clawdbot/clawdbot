@@ -79,8 +79,11 @@ function filterSettingsNavigationGroups(
       items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
     }));
   }
-  const allRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-  const directRoutes = allRoutes.filter((routeId) =>
+  const sidebarRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+  const searchableRoutes = [
+    ...new Set([...sidebarRoutes, ...blockMatches.map((block) => block.routeId)]),
+  ];
+  const directRoutes = searchableRoutes.filter((routeId) =>
     [
       settingsNavigationLabelForRoute(routeId),
       titleForRoute(routeId),
@@ -128,7 +131,7 @@ function filterSettingsNavigationGroups(
           },
         ]
       : []),
-    ...allRoutes
+    ...searchableRoutes
       .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
       .map((routeId) => ({
         labelKey: null,
