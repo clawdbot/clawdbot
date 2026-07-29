@@ -569,6 +569,7 @@ describe("MemorySettingsPage catalog state", () => {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
       await waitForFast(() => expect(element.textContent).toContain("enablement rejected"));
+      expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
       expect(element.textContent).toContain("Could not update Active memory");
       expect(element.textContent).not.toContain("Could not update Memory wiki");
 
