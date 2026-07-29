@@ -95,8 +95,8 @@ describe("pre-auth input bounds", () => {
   function keyPair() {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
     return {
-      publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
-      privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
+      privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
     };
   }
 
