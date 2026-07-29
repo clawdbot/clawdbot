@@ -90,16 +90,25 @@ async function renderLinuxUserBusRepair(env: NodeJS.ProcessEnv): Promise<string>
   const expectedBusAddress = `unix:path=${expectedRuntimeDir}/bus`;
   const runtimeDir = normalizeOptionalString(env.XDG_RUNTIME_DIR);
   const busAddress = normalizeOptionalString(env.DBUS_SESSION_BUS_ADDRESS);
-  const runtimeUid = runtimeDir?.match(/^\/run\/user\/(\d+)$/)?.[1];
+  const normalizedRuntimeDir = runtimeDir ? path.posix.normalize(runtimeDir) : undefined;
+  const runtimeUid = normalizedRuntimeDir?.match(/^\/run\/user\/(\d+)\/?$/)?.[1];
   const busUid = resolveLinuxFilesystemBusUid(busAddress);
   const repairRuntimeDir = !runtimeDir || (runtimeUid !== undefined && runtimeUid !== String(uid));
-  const repairBusAddress = !busAddress || (busUid !== undefined && busUid !== String(uid));
-  if (!repairRuntimeDir && !repairBusAddress) {
+  // A custom runtime owns implicit bus discovery; inventing a standard bus
+  // would silently redirect an isolated session to the host user manager.
+  const preserveCustomRuntimeDir = Boolean(runtimeDir) && runtimeUid === undefined;
+  const repairBusAddress =
+    !preserveCustomRuntimeDir && (!busAddress || (busUid !== undefined && busUid !== String(uid)));
+  const clearEmptyCustomBusAddress =
+    preserveCustomRuntimeDir && env.DBUS_SESSION_BUS_ADDRESS !== undefined && !busAddress;
+  if (!repairRuntimeDir && !repairBusAddress && !clearEmptyCustomBusAddress) {
     return "";
   }
 
   try {
-    const stat = await fs.stat(path.join(expectedRuntimeDir, "bus"));
+    const socketRuntimeDir =
+      clearEmptyCustomBusAddress && runtimeDir ? runtimeDir : expectedRuntimeDir;
+    const stat = await fs.stat(path.join(socketRuntimeDir, "bus"));
     if (!stat.isSocket()) {
       return "";
     }
@@ -110,6 +119,7 @@ async function renderLinuxUserBusRepair(env: NodeJS.ProcessEnv): Promise<string>
   const exports = [
     repairRuntimeDir ? `export XDG_RUNTIME_DIR='${shellEscape(expectedRuntimeDir)}'` : "",
     repairBusAddress ? `export DBUS_SESSION_BUS_ADDRESS='${shellEscape(expectedBusAddress)}'` : "",
+    clearEmptyCustomBusAddress ? "unset DBUS_SESSION_BUS_ADDRESS" : "",
   ].filter(Boolean);
   return `# Repair missing or cross-user D-Bus values inherited by the updater.
 ${exports.join("\n")}
