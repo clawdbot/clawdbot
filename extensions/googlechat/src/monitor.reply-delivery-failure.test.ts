@@ -133,7 +133,10 @@ type DeliveryOutcome = {
   errorLines: string[];
 };
 
-async function runDelivery(params: { withTypingMessage?: boolean }): Promise<DeliveryOutcome> {
+async function runDelivery(params: {
+  withTypingMessage?: boolean;
+  statusSink?: Parameters<typeof deliverGoogleChatReply>[0]["statusSink"];
+}): Promise<DeliveryOutcome> {
   const errorLines: string[] = [];
   const runtime: GoogleChatRuntimeEnv = {
     error: (line: string) => {
@@ -152,6 +155,7 @@ async function runDelivery(params: { withTypingMessage?: boolean }): Promise<Del
       runtime,
       core,
       config,
+      ...(params.statusSink ? { statusSink: params.statusSink } : {}),
       ...(params.withTypingMessage
         ? {
             typingMessage: {
@@ -221,6 +225,44 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
       // The recoverable placeholder failure stays logged, not fatal; only the
       // resend failure becomes the delivery error.
       expect(result.errorLines.some((line) => line.includes("Google Chat API 404"))).toBe(true);
+    });
+  });
+
+  it("recovers from a missing typing placeholder without duplicating any chunk", async () => {
+    const stub = createStubHandler({ failCreateIndexes: new Set(), patchStatus: 404 });
+    await withServer(stub.handler, async (baseUrl) => {
+      fetchControl.pointAtStub(baseUrl);
+      const result = await runDelivery({ withTypingMessage: true });
+
+      expect(result.outcome).toBe("delivered");
+      expect(result.onErrorCalls).toHaveLength(0);
+      expect(stub.patchAttempts).toEqual(["spaces/AAA/messages/typing"]);
+      expect(stub.createAttempts.map((attempt) => attempt.status)).toEqual([200, 200, 200]);
+      expect(stub.createAttempts.map((attempt) => attempt.text)).toEqual(CHUNKS);
+      expect(result.errorLines.some((line) => line.includes("Google Chat API 404"))).toBe(true);
+    });
+  });
+
+  it("does not resend a delivered chunk when outbound status reporting fails", async () => {
+    const stub = createStubHandler({ failCreateIndexes: new Set() });
+    const statusSink = vi.fn(() => {
+      throw new Error("status unavailable");
+    });
+    await withServer(stub.handler, async (baseUrl) => {
+      fetchControl.pointAtStub(baseUrl);
+      const result = await runDelivery({ withTypingMessage: true, statusSink });
+
+      expect(result.outcome).toBe("delivered");
+      expect(result.onErrorCalls).toHaveLength(0);
+      expect(stub.patchAttempts).toEqual(["spaces/AAA/messages/typing"]);
+      expect(stub.createAttempts.map((attempt) => attempt.status)).toEqual([200, 200]);
+      expect(stub.createAttempts.map((attempt) => attempt.text)).toEqual(CHUNKS.slice(1));
+      expect(statusSink).toHaveBeenCalledTimes(CHUNKS.length);
+      expect(result.errorLines).toEqual([
+        "Google Chat outbound status update failed: Error: status unavailable",
+        "Google Chat outbound status update failed: Error: status unavailable",
+        "Google Chat outbound status update failed: Error: status unavailable",
+      ]);
     });
   });
 
