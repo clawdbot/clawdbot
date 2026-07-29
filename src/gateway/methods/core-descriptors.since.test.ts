@@ -122,7 +122,10 @@ describe("core gateway method release trains", () => {
 
   it("appends Agentic OS runtime aliases and companion methods after the existing core protocol table", () => {
     const methods = listCoreGatewayMethodMetadata().map((method) => method.name);
-    expect(methods.slice(-10)).toEqual([
+    const agenticOsStart = methods.indexOf("subagents.allowLease.acquire");
+
+    expect(agenticOsStart).toBeGreaterThan(-1);
+    expect(methods.slice(agenticOsStart, agenticOsStart + 10)).toEqual([
       "subagents.allowLease.acquire",
       "subagents.allowLease.status",
       "subagents.allowLease.release",
@@ -134,6 +137,7 @@ describe("core gateway method release trains", () => {
       "sessions.companion.state",
       "sessions.companion.reset",
     ]);
+    expect(methods.slice(agenticOsStart + 10)).toEqual(["memory.search"]);
   });
 
   it("records a valid train for every method and dates the 2026.7 families", () => {

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const findTaskByRunIdForStatusMock = vi.hoisted(() => vi.fn());
 const getLatestSubagentRunByChildSessionKeyMock = vi.hoisted(() => vi.fn());
+const getCurrentSubagentRunByChildSessionKeyAndTaskRunIdMock = vi.hoisted(() => vi.fn());
 const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../tasks/task-status-access.js", () => ({
@@ -13,6 +14,8 @@ vi.mock("../tasks/task-status-access.js", () => ({
   findSubagentTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
 }));
 vi.mock("../agents/subagent-registry-read.js", () => ({
+  getCurrentSubagentRunByChildSessionKeyAndTaskRunId:
+    getCurrentSubagentRunByChildSessionKeyAndTaskRunIdMock,
   getLatestSubagentRunByChildSessionKey: getLatestSubagentRunByChildSessionKeyMock,
 }));
 vi.mock("../agents/subagent-spawn.js", () => ({
@@ -66,6 +69,7 @@ describe("Agentic OS allow lease release persistence", () => {
     runtimeStateDir = mkdtempSync(path.join(tmpdir(), "openclaw-agentic-os-release-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", runtimeStateDir);
     findTaskByRunIdForStatusMock.mockReset();
+    getCurrentSubagentRunByChildSessionKeyAndTaskRunIdMock.mockReset();
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     spawnSubagentDirectMock.mockReset();
     spawnSubagentDirectMock.mockImplementation(async () => {
@@ -206,6 +210,15 @@ describe("Agentic OS allow lease release persistence", () => {
     });
     store.saveAgenticOsRuntimeSnapshot(snapshot);
     findTaskByRunIdForStatusMock.mockReturnValue(undefined);
+    getCurrentSubagentRunByChildSessionKeyAndTaskRunIdMock.mockImplementation(
+      (childSessionKey: string) =>
+        childSessionKey === reservedSession.sessionKey
+          ? {
+              runId: reservedSession.runId,
+              childSessionKey: reservedSession.sessionKey,
+            }
+          : null,
+    );
     getLatestSubagentRunByChildSessionKeyMock.mockImplementation((childSessionKey: string) =>
       childSessionKey === reservedSession.sessionKey
         ? {
@@ -326,6 +339,15 @@ describe("Agentic OS allow lease release persistence", () => {
     });
     store.saveAgenticOsRuntimeSnapshot(snapshot);
     findTaskByRunIdForStatusMock.mockReturnValue(undefined);
+    getCurrentSubagentRunByChildSessionKeyAndTaskRunIdMock.mockImplementation(
+      (childSessionKey: string) =>
+        childSessionKey === reservedSession.sessionKey
+          ? {
+              runId: reservedSession.runId,
+              childSessionKey: reservedSession.sessionKey,
+            }
+          : null,
+    );
     getLatestSubagentRunByChildSessionKeyMock.mockImplementation((childSessionKey: string) =>
       childSessionKey === reservedSession.sessionKey
         ? {
