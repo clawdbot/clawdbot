@@ -25,6 +25,7 @@ overrides:
   brace-expansion: 5.0.8
   file-type: 22.0.1
   form-data: 4.0.6
+  werift-ice>ip: npm:neoip@3.1.0
   ip-address: 10.3.1
   minimatch: 10.2.5
   path-to-regexp: 8.4.2
@@ -6894,9 +6895,6 @@ packages:
     resolution: {integrity: sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==}
     engines: {node: '>= 12'}
 
-  ip@2.0.1:
-    resolution: {integrity: sha512-lJUL9imLTNi1ZfXT+DU6rBBdbiKGBuay9B6xGSPVjUeQwaH1RIGqef8RZkUtHioLmSNpPR5M4HVKJGm1j8FWVQ==}
-
   ipaddr.js@1.9.1:
     resolution: {integrity: sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==}
     engines: {node: '>= 0.10'}
@@ -7710,6 +7708,9 @@ packages:
   negotiator@1.0.0:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
     engines: {node: '>= 0.6'}
+
+  neoip@3.1.0:
+    resolution: {integrity: sha512-KtkXRRp1XK2BzJpLF7PRHyndphWn/bU5XkQFUJtAdm6rdUenkJZwQDpxifG+Q/7PLpxhc+wdcZiE15L/cZhnXA==}
 
   node-addon-api@7.1.1:
     resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
@@ -14081,8 +14082,6 @@ snapshots:
 
   ip-address@10.3.1: {}
 
-  ip@2.0.1: {}
-
   ipaddr.js@1.9.1: {}
 
   ipaddr.js@2.4.0: {}
@@ -15119,6 +15118,8 @@ snapshots:
   nanoid@5.1.16: {}
 
   negotiator@1.0.0: {}
+
+  neoip@3.1.0: {}
 
   node-addon-api@7.1.1: {}
 
@@ -16806,7 +16807,7 @@ snapshots:
       buffer-crc32: 1.0.0
       debug: 4.4.3(supports-color@10.2.2)
       int64-buffer: 1.1.1
-      ip: 2.0.1
+      ip: neoip@3.1.0
       lodash: 4.18.1
       multicast-dns: 7.2.5
       p-cancelable: 2.1.1
