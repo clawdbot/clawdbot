@@ -144,6 +144,16 @@ describe("Matrix QA Lab scenario flows", () => {
     });
   });
 
+  it("isolates channel and DM approval fan-out from shared routing state", () => {
+    expect(readQaScenarioById("matrix-approval-channel-target-both").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      suiteIsolation: "isolated",
+      isolationReason:
+        "Asserts fresh channel and DM approval fan-out and cannot inherit shared Matrix approval routing state.",
+    });
+  });
+
   it("runs the allowlist scenario through its config-file reload owner", () => {
     const scenario = catalog.scenarios.find((entry) => entry.id === "matrix-allowlist-hot-reload");
     expect(scenario?.execution.kind).toBe("flow");
