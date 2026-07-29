@@ -10,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { CodexAppServerRpcError } from "./client.js";
 import type {
   CodexAppServerRequestParams,
   CodexAppServerRequestResult,
@@ -20,13 +19,12 @@ import type {
 
 /** Default app inventory cache freshness window. */
 const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
-// Codex 0.145.0 AppsReadParams rejects requests with more than 100 app IDs.
+// Codex app/read rejects metadata requests containing more than 100 app IDs.
 const CODEX_APP_READ_BATCH_LIMIT = 100;
-const CODEX_TARGETED_LEGACY_APP_INVENTORY_LIMIT = 1_000;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
 /** App-server request function used to read installed apps and their metadata. */
-export type CodexAppInventoryRequest = <Method extends "app/installed" | "app/list" | "app/read">(
+export type CodexAppInventoryRequest = <Method extends "app/installed" | "app/read">(
   method: Method,
   params: CodexAppServerRequestParams<Method>,
 ) => Promise<CodexAppServerRequestResult<Method>>;
@@ -52,7 +50,9 @@ type CodexAppInventoryCacheDiagnostic = {
 export type CodexAppInventorySnapshot = {
   key: string;
   apps: v2.AppInfo[];
-  source: "installed" | "legacy";
+  installedApps: readonly v2.InstalledApp[];
+  /** Absent for complete inventory; present for plugin-targeted snapshots. */
+  targetAppIds?: readonly string[];
   fetchedAtMs: number;
   expiresAtMs: number;
   revision: number;
@@ -85,11 +85,16 @@ type RefreshParams = {
   targetAppIds?: readonly string[];
 };
 
+type InFlightRefresh = {
+  promise: Promise<CodexAppInventorySnapshot>;
+  targetAppIds: ReadonlySet<string>;
+};
+
 /** In-memory app inventory cache with coalesced refreshes per key. */
 export class CodexAppInventoryCache {
   private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
-  private readonly inFlight = new Map<string, Promise<CodexAppInventorySnapshot>>();
+  private readonly inFlight = new Map<string, InFlightRefresh>();
   // Per-key refresh generation. Each refresh attempt claims the next token so
   // an older request that finishes late cannot overwrite a newer snapshot.
   private readonly refreshTokens = new Map<string, number>();
@@ -168,29 +173,34 @@ export class CodexAppInventoryCache {
   }
 
   private scheduleRefresh(params: RefreshParams): boolean {
-    if (this.inFlight.has(params.key) && !params.forceRefetch) {
+    const existing = this.inFlight.get(params.key);
+    if (existing && !params.forceRefetch && doesInFlightRefreshCover(existing, params)) {
       return true;
     }
     const promise = this.refresh(params);
-    this.inFlight.set(params.key, promise);
     promise.catch(() => undefined);
     return true;
   }
 
   private async refresh(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
     const existing = this.inFlight.get(params.key);
-    if (existing && !params.forceRefetch) {
-      return existing;
+    if (existing && !params.forceRefetch && doesInFlightRefreshCover(existing, params)) {
+      return existing.promise;
     }
 
     const refreshToken = (this.refreshTokens.get(params.key) ?? 0) + 1;
     this.refreshTokens.set(params.key, refreshToken);
-    const promise = this.refreshUncoalesced(params, refreshToken);
-    this.inFlight.set(params.key, promise);
+    const previousRefresh = params.forceRefetch ? undefined : existing?.promise;
+    const promise = this.refreshUncoalesced(params, refreshToken, previousRefresh);
+    const currentRefresh = {
+      promise,
+      targetAppIds: new Set(params.targetAppIds?.filter(Boolean) ?? []),
+    };
+    this.inFlight.set(params.key, currentRefresh);
     try {
       return await promise;
     } finally {
-      if (this.inFlight.get(params.key) === promise) {
+      if (this.inFlight.get(params.key) === currentRefresh) {
         this.inFlight.delete(params.key);
       }
     }
@@ -199,20 +209,37 @@ export class CodexAppInventoryCache {
   private async refreshUncoalesced(
     params: RefreshParams,
     refreshToken: number,
+    previousRefresh?: Promise<CodexAppInventorySnapshot>,
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
-      const inventory = await readInstalledApps(
-        params.request,
-        params.forceRefetch ?? false,
-        params.targetAppIds,
-      );
+      let previousRefreshSucceeded = false;
+      if (previousRefresh) {
+        try {
+          await previousRefresh;
+          previousRefreshSucceeded = true;
+        } catch {
+          // A failed narrow read does not seed Codex; let the broader read
+          // retry independently and perform the cold refresh when required.
+        }
+      }
+      const inventory = await readInstalledApps(params.request, {
+        // A cold upstream connector cache is empty until it is deliberately
+        // seeded. Later reads reuse its committed snapshot unless requested.
+        forceRefresh:
+          params.forceRefetch === true ||
+          (!this.entries.has(params.key) && !previousRefreshSucceeded),
+        targetAppIds: params.targetAppIds,
+      });
       this.revision += 1;
       const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
         key: params.key,
         apps: inventory.apps,
-        source: inventory.source,
+        installedApps: inventory.installedApps,
+        ...(params.targetAppIds?.some(Boolean)
+          ? { targetAppIds: Array.from(new Set(params.targetAppIds.filter(Boolean))).toSorted() }
+          : {}),
         fetchedAtMs: nowMs,
         expiresAtMs,
         revision: this.revision,
@@ -242,6 +269,17 @@ export class CodexAppInventoryCache {
       throw error;
     }
   }
+}
+
+function doesInFlightRefreshCover(existing: InFlightRefresh, params: RefreshParams): boolean {
+  if (existing.targetAppIds.size === 0) {
+    return true;
+  }
+  const requestedAppIds = new Set(params.targetAppIds?.filter(Boolean) ?? []);
+  return (
+    requestedAppIds.size > 0 &&
+    Array.from(requestedAppIds).every((appId) => existing.targetAppIds.has(appId))
+  );
 }
 
 /** Serializes a refresh failure without leaking large or sensitive error data. */
@@ -300,34 +338,17 @@ function normalizeRuntimeIdentityForCacheKey(
 
 async function readInstalledApps(
   request: CodexAppInventoryRequest,
-  forceRefetch: boolean,
-  targetAppIds: readonly string[] = [],
-): Promise<{ apps: v2.AppInfo[]; source: CodexAppInventorySnapshot["source"] }> {
-  let installed: v2.AppsInstalledResponse;
-  try {
-    // A non-forced installed read returns the prior committed runtime snapshot;
-    // refreshing OpenClaw's cache must refresh the upstream snapshot as well.
-    installed = await request("app/installed", { forceRefresh: true });
-  } catch (error) {
-    // OpenClaw still supports Codex 0.143.0 and 0.144.x, which do not
-    // implement the 0.145.0 installed-app lifecycle methods.
-    if (
-      !(error instanceof CodexAppServerRpcError) ||
-      error.code !== -32601 ||
-      error.method !== "app/installed"
-    ) {
-      throw error;
-    }
-    return {
-      apps: await readLegacyInstalledApps(request, forceRefetch, targetAppIds),
-      source: "legacy",
-    };
-  }
-  const targetIds = new Set(targetAppIds.filter(Boolean));
+  options: {
+    forceRefresh: boolean;
+    targetAppIds?: readonly string[];
+  },
+): Promise<{ apps: v2.AppInfo[]; installedApps: v2.InstalledApp[] }> {
+  const installed = await request("app/installed", { forceRefresh: options.forceRefresh });
+  const targetIds = new Set((options.targetAppIds ?? []).filter(Boolean));
   const apps =
     targetIds.size === 0 ? installed.apps : installed.apps.filter((app) => targetIds.has(app.id));
   if (apps.length === 0) {
-    return { apps: [], source: "installed" };
+    return { apps: [], installedApps: [] };
   }
 
   const metadataResponses = await Promise.all(
@@ -364,51 +385,16 @@ async function readInstalledApps(
           appMetadata: null,
           labels: null,
           installUrl: metadata.installUrl ?? null,
-          isAccessible: installedApp.callable,
+          // app/read proves account authorization, while runtime callability
+          // remains separately visible in installedApps for thread admission.
+          isAccessible: true,
           isEnabled: installedApp.enabled,
           pluginDisplayNames: metadata.pluginDisplayNames,
         },
       ];
     }),
-    source: "installed",
+    installedApps: apps,
   };
-}
-
-async function readLegacyInstalledApps(
-  request: CodexAppInventoryRequest,
-  forceRefetch: boolean,
-  targetAppIds: readonly string[],
-): Promise<v2.AppInfo[]> {
-  const apps: v2.AppInfo[] = [];
-  const remainingTargetIds = new Set(targetAppIds.filter(Boolean));
-  const seenCursors = new Set<string>();
-  let cursor: string | null | undefined;
-
-  do {
-    const response = await request("app/list", {
-      cursor,
-      limit: remainingTargetIds.size > 0 ? CODEX_TARGETED_LEGACY_APP_INVENTORY_LIMIT : 100,
-      forceRefetch,
-    });
-    for (const app of response.data) {
-      // Legacy accessibility predates installed callability; disabled apps
-      // must obey the same fail-closed runtime contract as modern snapshots.
-      apps.push(app.isEnabled ? app : { ...app, isAccessible: false });
-      remainingTargetIds.delete(app.id);
-    }
-    if (targetAppIds.length > 0 && remainingTargetIds.size === 0) {
-      break;
-    }
-    cursor = response.nextCursor;
-    if (cursor && seenCursors.has(cursor)) {
-      throw new Error(`app/list returned repeated cursor ${cursor}`);
-    }
-    if (cursor) {
-      seenCursors.add(cursor);
-    }
-  } while (cursor);
-
-  return apps;
 }
 
 function stripEntryState(entry: CacheEntry): CodexAppInventorySnapshot {

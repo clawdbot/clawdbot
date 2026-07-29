@@ -438,6 +438,135 @@ describe("chat media resource lifecycle", () => {
     expect(secondTicket).toBe("ticket-after-refresh");
   });
 
+  it("stops polling after a definitive ticket refresh rejection and one unavailable retry", async () => {
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.mp3`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          available: true,
+          mediaTicket: "ticket-before-definitive-rejection",
+          mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString(),
+        }),
+      })
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ available: false, reason: "Attachment removed" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
+    const rerender = observeSubscriber(() => {
+      latest = resolveAssistantAttachmentAvailability(
+        source,
+        ["/tmp/openclaw"],
+        "/openclaw",
+        "definitive-rejection-token",
+        rerender,
+      );
+    });
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(latest?.status).toBe("unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(latest?.status).toBe("unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds transient ticket refresh failures before using the unavailable retry", async () => {
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.mp3`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          available: true,
+          mediaTicket: "ticket-before-transient-failures",
+          mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      })
+      .mockRejectedValueOnce(new Error("refresh unavailable 1"))
+      .mockRejectedValueOnce(new Error("refresh unavailable 2"))
+      .mockRejectedValueOnce(new Error("refresh unavailable 3"))
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ available: false }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
+    const rerender = observeSubscriber(() => {
+      latest = resolveAssistantAttachmentAvailability(
+        source,
+        ["/tmp/openclaw"],
+        "/openclaw",
+        "transient-refresh-token",
+        rerender,
+      );
+    });
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(latest?.status).toBe("available");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(latest?.status).toBe("available");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(latest?.status).toBe("unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(latest?.status).toBe("unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("transitions an expired ticket to unavailable instead of retrying it", async () => {
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.mp3`;
+    const expiredAt = new Date(Date.now() + 31_000);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          available: true,
+          mediaTicket: "ticket-that-will-expire",
+          mediaTicketExpiresAt: expiredAt.toISOString(),
+        }),
+      })
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(expiredAt.getTime() + 1));
+        throw new Error("refresh completed after ticket expiry");
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
+    const rerender = observeSubscriber(() => {
+      latest = resolveAssistantAttachmentAvailability(
+        source,
+        ["/tmp/openclaw"],
+        "/openclaw",
+        "expired-refresh-token",
+        rerender,
+      );
+    });
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(latest?.status).toBe("unavailable");
+  });
+
   it("shares the one bounded assistant attachment retry across split panes", async () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
     const fetchMock = vi

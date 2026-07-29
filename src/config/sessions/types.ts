@@ -28,6 +28,13 @@ export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
+export type SessionToolOverrides = {
+  mcpServers?: Record<string, boolean>;
+  mcpToolsDeny?: Record<string, string[]>;
+  skills?: Record<string, boolean>;
+  webSearch?: boolean;
+};
+
 export type SessionOrigin = {
   label?: string;
   provider?: string;
@@ -445,6 +452,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
       };
     };
     fastMode?: FastMode;
+    toolOverrides?: SessionToolOverrides;
     /** Swarm group for collector-mode child sessions. */
     swarmGroupId?: string;
     /** Marks non-interactive collector-mode child sessions. */

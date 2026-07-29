@@ -15,6 +15,9 @@ const saveMediaBufferMock = vi.hoisted(() =>
 const deleteMediaBufferMock = vi.hoisted(() =>
   vi.fn(async (_id: string, _subdir?: string) => undefined),
 );
+const probeMediaFilesWithinBudgetMock = vi.hoisted(() =>
+  vi.fn(async (inputs: readonly unknown[]) => inputs.map(() => ({}))),
+);
 
 vi.mock("../media/store.js", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -24,6 +27,9 @@ vi.mock("../media/store.js", async (importOriginal) => {
     deleteMediaBuffer: deleteMediaBufferMock,
   };
 });
+vi.mock("../media/media-probe.js", () => ({
+  probeMediaFilesWithinBudget: probeMediaFilesWithinBudgetMock,
+}));
 
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -131,6 +137,10 @@ async function expectUnsupportedAttachmentReason(
 beforeEach(() => {
   saveMediaBufferMock.mockClear();
   deleteMediaBufferMock.mockClear();
+  probeMediaFilesWithinBudgetMock.mockReset();
+  probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
+    inputs.map(() => ({})),
+  );
 });
 
 afterEach(() => {
@@ -443,6 +453,29 @@ describe("parseMessageWithAttachments validation errors", () => {
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
     expect(saveMediaBufferMock).toHaveBeenCalledOnce();
+  });
+
+  it("adds best-effort metadata to offloaded audio facts", async () => {
+    probeMediaFilesWithinBudgetMock.mockResolvedValueOnce([{ durationMs: 2345 }]);
+    const { parsed } = await parseWithWarnings(
+      "listen",
+      [
+        {
+          type: "audio",
+          mimeType: "audio/mpeg",
+          fileName: "song.mp3",
+          content: Buffer.from("audio-fixture").toString("base64"),
+        },
+      ],
+      { supportsInlineImages: false },
+    );
+
+    expect(probeMediaFilesWithinBudgetMock).toHaveBeenCalledWith(
+      [{ filePath: parsed.offloadedRefs[0]?.path, kind: "audio" }],
+      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+    );
+    expect(parsed.offloadedRefs[0]).toMatchObject({ durationMs: 2345 });
+    expect(parsed.media[0]).toMatchObject({ durationMs: 2345 });
   });
 
   it("passes through unchanged on text-only session with no attachments", async () => {

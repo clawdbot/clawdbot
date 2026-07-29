@@ -515,7 +515,10 @@ export async function executePreparedCliRun(
     if (!runOutput) {
       throw new Error("CLI run completed without output");
     }
-    return toolTracking.withExecutionEvidence(runOutput);
+    return toolTracking.withExecutionEvidence({
+      ...runOutput,
+      toolSummary: events.getToolSummary(),
+    });
   };
   try {
     completedOutput = await enqueueCliRun(queueKey, async () => {

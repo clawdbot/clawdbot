@@ -649,6 +649,14 @@ function classifySessionMessageOrigin(
   turnOrigin: MemoryOriginClass,
 ): MemoryOriginClass {
   if (message.role === "assistant") {
+    const openClawMetadata = message["__openclaw"];
+    if (
+      openClawMetadata &&
+      typeof openClawMetadata === "object" &&
+      (openClawMetadata as { turnTainted?: unknown }).turnTainted === true
+    ) {
+      return "untrusted";
+    }
     return turnOrigin === "owner" ? "agent" : turnOrigin;
   }
   const provenance = message.provenance as { kind?: unknown } | undefined;

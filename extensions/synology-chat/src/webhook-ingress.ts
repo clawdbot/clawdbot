@@ -1,5 +1,6 @@
 // Synology Chat plugin owns raw webhook durable admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -11,14 +12,7 @@ import { getSynologyRuntime } from "./runtime.js";
 
 const SYNOLOGY_INGRESS_PAYLOAD_VERSION = 1;
 const SYNOLOGY_INGRESS_POLL_INTERVAL_MS = 500;
-const SYNOLOGY_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const SYNOLOGY_INGRESS_MAX_CONCURRENT_DELIVERIES = 8;
-const SYNOLOGY_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-// Synology does not publish a webhook retry horizon. Keep the fleet's conservative
-// webhook cap so any duplicate POST retains its post_id tombstone.
-const SYNOLOGY_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const SYNOLOGY_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const SYNOLOGY_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
 export type SynologyWebhookRawEvent = {
   bodyFields: Record<string, unknown>;
@@ -39,16 +33,10 @@ type SynologyIngressDispatch = (
   lifecycle: SynologyIngressLifecycle,
 ) => Promise<SynologyIngressDispatchResult | void> | SynologyIngressDispatchResult | void;
 
-export class SynologyIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "synology-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "SynologyIngressPermanentError";
-  }
-}
+export const SynologyIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "synology-auth"
+>("SynologyIngressPermanentError", { withReason: true });
+export type SynologyIngressPermanentError = InstanceType<typeof SynologyIngressPermanentError>;
 
 function firstNonEmptyString(value: unknown): string | undefined {
   if (Array.isArray(value)) {
@@ -190,13 +178,8 @@ export function createSynologyIngressMonitor(options: {
     },
     deliver: (rawEvent, lifecycle) => options.dispatch(rawEvent, lifecycle),
     pollIntervalMs: options.pollIntervalMs ?? SYNOLOGY_INGRESS_POLL_INTERVAL_MS,
-    retention: {
-      pruneIntervalMs: SYNOLOGY_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: SYNOLOGY_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: SYNOLOGY_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SYNOLOGY_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: SYNOLOGY_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    // Synology has no published retry horizon; keep the conservative 30-day / 20k cap.
+    retention: "standard",
     drain: {
       resolveNonRetryableFailure: resolveSynologyIngressNonRetryableFailure,
       startLimit: SYNOLOGY_INGRESS_MAX_CONCURRENT_DELIVERIES,

@@ -1271,7 +1271,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
     if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
-      this.navigate("config");
+      this.navigate("appearance");
       return;
     }
     const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;

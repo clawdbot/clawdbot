@@ -18,10 +18,28 @@ import {
 import "../../components/tooltip.ts";
 import { renderSettingsRow, renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { renderLanguageSelect } from "./language-select.ts";
 import { renderSessionObserverSettings } from "./session-observer-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
+
+export function renderLanguageSection(props: ConfigProps) {
+  return html`
+    <section id=${APPEARANCE_SETTINGS_TARGET_IDS.language} class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("quickSettings.language")}</h2>
+      </div>
+      <div class="settings-group">
+        ${renderSettingsRow({
+          title: t("quickSettings.language"),
+          description: t("configView.syncedHint"),
+          control: renderLanguageSelect(props.locale, props.onLocaleChange),
+        })}
+      </div>
+    </section>
+  `;
+}
 
 function renderSettingsMediaDeviceField(options: {
   state: ConfigProps["microphone"];

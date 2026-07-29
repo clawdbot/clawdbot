@@ -65,7 +65,7 @@ describeControlUiE2e("Control UI Models settings behavior persistence mocked Gat
     await server?.close();
   });
 
-  it("links General to the Models page", async () => {
+  it("redirects the legacy General model deep link to Models", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -75,12 +75,9 @@ describeControlUiE2e("Control UI Models settings behavior persistence mocked Gat
     const gateway = await installMockGateway(page);
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/general`);
+      const response = await page.goto(`${server.baseUrl}settings/general#settings-general-model`);
       expect(response?.status()).toBe(200);
 
-      const modelsRow = page.getByRole("button", { name: /Models/ });
-      await modelsRow.waitFor();
-      await modelsRow.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
     } finally {

@@ -42,8 +42,12 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
+const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
+}));
+vi.mock("../media/media-probe.js", () => ({
+  probeMediaFileDescriptor: probeMediaFileDescriptorMock,
 }));
 
 const REAL_PNG = Buffer.from(
@@ -54,6 +58,8 @@ const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  probeMediaFileDescriptorMock.mockReset();
+  probeMediaFileDescriptorMock.mockResolvedValue({});
 });
 
 describe("handleControlUiHttpRequest", () => {
@@ -731,6 +737,33 @@ describe("handleControlUiHttpRequest", () => {
         expect(payload.available).toBe(true);
         expect(payload.mediaTicket).toMatch(/^v1\./);
         expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
+      },
+    });
+  });
+
+  it("reports assistant audio size, type, and probed duration metadata", async () => {
+    probeMediaFileDescriptorMock.mockResolvedValueOnce({ durationMs: 2345 });
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-audio-meta-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.mp3");
+        const contents = Buffer.from("ID3audio-fixture");
+        await fs.writeFile(filePath, contents);
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseJson(end)).toMatchObject({
+          available: true,
+          mimeType: "audio/mpeg",
+          sizeBytes: contents.byteLength,
+          durationMs: 2345,
+        });
+        expect(probeMediaFileDescriptorMock).toHaveBeenCalledWith(expect.any(Number), "audio");
       },
     });
   });

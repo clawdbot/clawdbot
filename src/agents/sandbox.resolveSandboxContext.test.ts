@@ -279,6 +279,71 @@ describe("resolveSandboxContext", () => {
     }
   }, 15_000);
 
+  it("passes one workspace-qualified scope key through backend and browser setup", async () => {
+    ensureSandboxBrowserMock.mockClear();
+    const scopeKeys: string[] = [];
+    const restore = registerSandboxBackend("workspace-scope-backend", async (params) => {
+      scopeKeys.push(params.scopeKey);
+      return {
+        id: "workspace-scope-backend",
+        runtimeId: `runtime-${params.scopeKey}`,
+        runtimeLabel: "Workspace Scope Runtime",
+        workdir: "/workspace",
+        capabilities: { browser: true },
+        buildExecSpec: async () => ({
+          argv: ["workspace-scope-backend", "exec"],
+          env: process.env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
+      };
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "workspace-scope-backend",
+              scope: "agent",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+              browser: { enabled: true },
+            },
+          },
+        },
+      };
+      const firstWorkspace = await createSandboxFixtureDir("workspace-scope-a");
+      const secondWorkspace = await createSandboxFixtureDir("workspace-scope-b");
+
+      await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:poly:msteams:channel-1",
+        workspaceDir: firstWorkspace,
+      });
+      await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:poly:msteams:channel-1",
+        workspaceDir: secondWorkspace,
+      });
+
+      expect(scopeKeys).toHaveLength(2);
+      expect(scopeKeys[0]).toMatch(/^agent:poly:workspace:[a-f0-9]{32}$/);
+      expect(scopeKeys[1]).toMatch(/^agent:poly:workspace:[a-f0-9]{32}$/);
+      expect(scopeKeys[0]).not.toBe(scopeKeys[1]);
+      const browserCalls = ensureSandboxBrowserMock.mock.calls as unknown as Array<
+        [{ scopeKey: string }]
+      >;
+      expect(browserCalls.map(([params]) => params.scopeKey)).toEqual(scopeKeys);
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
   it("types backend creation failures as sandbox provisioning errors", async () => {
     const backendFailure = new Error("Sandbox image not found: missing:test");
     const restore = registerSandboxBackend("broken-backend", async () => {
@@ -639,7 +704,7 @@ describe("resolveSandboxContext", () => {
       path.join(".openclaw", "sandbox", "skills-workspaces"),
     );
     expect(syncOptions?.targetWorkspaceDir).toMatch(
-      /[\\/]agent-main-main-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+      /[\\/]workspace-[a-f0-9]{32}[\\/]\.openclaw[\\/]sandbox-skills$/,
     );
     expect(syncOptions?.targetWorkspaceDir).not.toBe(
       path.join(workspaceDir, ".openclaw", "sandbox-skills"),
@@ -692,7 +757,7 @@ describe("resolveSandboxContext", () => {
 
     expect(result?.workspaceDir).toBe(workspaceDir);
     expect(result?.containerWorkdir).toMatch(
-      /^\/remote\/openclaw\/openclaw-ssh-agent-main-main-[a-f0-9]{8}\/workspace$/,
+      /^\/remote\/openclaw\/openclaw-ssh-workspace-[a-f0-9]{32}\/workspace$/,
     );
     expect(result?.containerWorkdir).not.toBe("/workspace");
     expect(result?.skillsWorkspaceDir).toContain(

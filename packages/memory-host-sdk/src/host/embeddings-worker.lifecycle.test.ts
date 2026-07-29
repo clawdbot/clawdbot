@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const forkMock = vi.hoisted(() => vi.fn());
+const accessMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -12,10 +13,75 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: { ...actual, access: accessMock },
+    access: accessMock,
+  };
+});
+
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
 
 beforeEach(() => {
   forkMock.mockReset();
+  accessMock.mockReset().mockRejectedValue(new Error("missing"));
+});
+
+it("forks workers through a stable Homebrew Node path", async () => {
+  const originalExecPath = process.execPath;
+  Object.defineProperty(process, "execPath", {
+    configurable: true,
+    value: "/opt/homebrew/Cellar/node/26.5.0/bin/node",
+  });
+  accessMock.mockImplementation(async (candidate: string) => {
+    if (candidate === "/opt/homebrew/opt/node/bin/node") {
+      return;
+    }
+    throw new Error("missing");
+  });
+  const child = Object.assign(new EventEmitter(), {
+    connected: true,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    disconnect: vi.fn(function (this: { connected: boolean }) {
+      this.connected = false;
+    }),
+    kill: vi.fn(function (this: EventEmitter, signal: NodeJS.Signals) {
+      queueMicrotask(() => this.emit("close", null, signal));
+      return true;
+    }),
+    send: vi.fn(function (
+      this: EventEmitter,
+      message: { id: number },
+      callback: (err?: Error | null) => void,
+    ) {
+      callback();
+      queueMicrotask(() => this.emit("message", { id: message.id, ok: true }));
+      return true;
+    }),
+  });
+  forkMock.mockReturnValue(child);
+
+  try {
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: "/mock/worker.cjs" },
+    );
+
+    expect(forkMock).toHaveBeenCalledWith(
+      "/mock/worker.cjs",
+      [],
+      expect.objectContaining({ execPath: "/opt/homebrew/opt/node/bin/node" }),
+    );
+    await expect(provider.close?.()).resolves.toBeUndefined();
+  } finally {
+    Object.defineProperty(process, "execPath", {
+      configurable: true,
+      value: originalExecPath,
+    });
+  }
 });
 
 it("keeps an active worker alive when a queued embedding request is aborted", async () => {

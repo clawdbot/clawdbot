@@ -164,43 +164,6 @@ describe("ConfigPage moved section routes", () => {
 
     expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
   });
-
-  it("redirects the former General model scroll target to the Models behavior section", () => {
-    const navigate = vi.fn();
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: { navigate: typeof navigate };
-      pageId: "config";
-      routeData: {
-        pathname: string;
-        search: string;
-        hash: string;
-        section: string | null;
-        advanced: boolean;
-        tab: string | null;
-        targetBlockId: string | null;
-      };
-      syncRouteData: () => void;
-    };
-    state.context = { navigate };
-    state.pageId = "config";
-    state.routeData = {
-      pathname: "/settings/general",
-      search: "",
-      hash: "#settings-general-model",
-      section: null,
-      advanced: false,
-      tab: null,
-      targetBlockId: "settings-general-model",
-    };
-
-    state.syncRouteData();
-
-    expect(navigate).toHaveBeenCalledWith("model-providers", {
-      search: "",
-      hash: "#settings-model-behavior",
-    });
-  });
 });
 
 describe("ConfigPage advanced selection guard", () => {

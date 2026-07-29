@@ -701,6 +701,39 @@ describe("handleFeishuMessage ACP routing", () => {
       to: "user:ou_sender_1",
       accountId: "default",
     });
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "oc_dm",
+        sendTarget: "chat:oc_dm",
+      }),
+    );
+  });
+
+  it("keeps synthetic Feishu DM reply targets sender-scoped", async () => {
+    setFeishuRuntime(createFeishuBotRuntime());
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-dm-synthetic-target",
+          chat_id: "p2p:ou_sender_1",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "p2p:ou_sender_1",
+        sendTarget: "user:ou_sender_1",
+      }),
+    );
   });
 
   it("pins shared Feishu DM last-route updates to the configured owner", async () => {
