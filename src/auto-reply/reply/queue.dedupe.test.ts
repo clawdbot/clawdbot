@@ -1,8 +1,14 @@
 // Tests follow-up queue message-id dedupe and drain scheduling behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  admitFollowupRunLifecycle,
+  clearSessionQueues,
+  completeFollowupRunLifecycle,
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import {
   createDeferred,
   createQueueTestRun as createRun,
@@ -202,7 +208,6 @@ describe("followup queue deduplication", () => {
       import.meta.url,
       "./queue/enqueue.js?scope=dedupe-b",
     );
-    const { clearSessionQueues } = await import("./queue.js");
     const key = `test-dedup-cross-module-${Date.now()}`;
     const { calls, done, runFollowup } = createFollowupCollector();
 
@@ -340,6 +345,102 @@ describe("followup queue deduplication", () => {
       collectSettings,
     );
     expect(second).toBe(true);
+  });
+
+  it("allows re-enqueueing a message whose queued run was abandoned before admission", () => {
+    const key = `test-dedup-abandoned-retry-${Date.now()}`;
+    const onAbandoned = vi.fn();
+    const first = createRun({
+      prompt: "first",
+      messageId: "same-id",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+    });
+    first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
+    expect(enqueueFollowupRun(key, first, collectSettings)).toBe(true);
+
+    // Queue teardown drops the un-admitted run; durable ingress releases the
+    // claim for retry when onAbandoned fires.
+    clearSessionQueues([key]);
+    expect(onAbandoned).toHaveBeenCalledTimes(1);
+
+    // The ingress retry redelivers the same message id on the same route. It
+    // must be admitted again instead of silently rejected as a duplicate.
+    const retry = createRun({
+      prompt: "first",
+      messageId: "same-id",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+    });
+    retry.turnAdoptionLifecycle = { onAdopted: () => {} };
+    expect(enqueueFollowupRun(key, retry, collectSettings)).toBe(true);
+    clearSessionQueues([key]);
+  });
+
+  it("allows re-enqueueing a message evicted by old-item queue overflow", () => {
+    const key = `test-dedup-evicted-retry-${Date.now()}`;
+    const evictSettings: QueueSettings = { mode: "collect", cap: 1, dropPolicy: "old" };
+    const onAbandoned = vi.fn();
+    const first = createRun({
+      prompt: "first",
+      messageId: "m1",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+    });
+    first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
+    expect(enqueueFollowupRun(key, first, evictSettings)).toBe(true);
+
+    // A newer message overflows the cap; the oldest un-admitted run is evicted
+    // and its claim is released for retry.
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "second",
+          messageId: "m2",
+          originatingChannel: "line",
+          originatingTo: "group:G1",
+        }),
+        evictSettings,
+      ),
+    ).toBe(true);
+    expect(onAbandoned).toHaveBeenCalledTimes(1);
+
+    const retry = createRun({
+      prompt: "first",
+      messageId: "m1",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+    });
+    retry.turnAdoptionLifecycle = { onAdopted: () => {} };
+    expect(enqueueFollowupRun(key, retry, evictSettings)).toBe(true);
+    clearSessionQueues([key]);
+  });
+
+  it("still deduplicates redelivery of a message whose queued run was admitted", async () => {
+    const key = `test-dedup-admitted-redelivery-${Date.now()}`;
+    const onAbandoned = vi.fn();
+    const run = createRun({
+      prompt: "first",
+      messageId: "same-id",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+    });
+    run.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
+    expect(enqueueFollowupRun(key, run, collectSettings)).toBe(true);
+
+    await admitFollowupRunLifecycle(run);
+    completeFollowupRunLifecycle(run);
+    expect(onAbandoned).not.toHaveBeenCalled();
+    clearSessionQueues([key]);
+
+    const redelivery = createRun({
+      prompt: "first-redelivery",
+      messageId: "same-id",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+    });
+    expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
   });
 
   it("can opt-in to prompt-based dedupe when message id is absent", () => {
