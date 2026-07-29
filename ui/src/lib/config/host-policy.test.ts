@@ -23,7 +23,7 @@ describe("runtime config host policy", () => {
       defaults: { route: "enabled", setting: "editable", action: "enabled" },
       routes: {},
       settings: {
-        "agents.*": { state: "readOnly", reason: "deployment owned" },
+        "*": { state: "readOnly", reason: "deployment owned" },
       },
       actions: {},
     });
@@ -38,7 +38,7 @@ describe("runtime config host policy", () => {
     expect(runtimeConfig.state.lastError).toBe("deployment owned");
   });
 
-  it("allows exact editable overrides under a wildcard read-only setting", () => {
+  it("ignores child editable overrides in the coarse V1 settings policy", () => {
     const hostPolicy = createHostPolicyCapability({
       version: 1,
       host: { id: "lobster", mode: "hosted" },
@@ -46,7 +46,7 @@ describe("runtime config host policy", () => {
       defaults: { route: "enabled", setting: "editable", action: "enabled" },
       routes: {},
       settings: {
-        "agents.*": "readOnly",
+        "*": "readOnly",
         "agents.defaults.model": "editable",
       },
       actions: {},
@@ -57,8 +57,10 @@ describe("runtime config host policy", () => {
     runtimeConfig.patchForm(["agents", "defaults", "model"], "gpt-6");
 
     expect(runtimeConfig.state.configForm).toEqual({
-      agents: { defaults: { model: "gpt-6" } },
+      agents: { defaults: { model: "gpt-5" } },
     });
-    expect(runtimeConfig.state.lastError).toBeNull();
+    expect(runtimeConfig.state.lastError).toBe(
+      "Setting 'agents.defaults.model' is locked/read-only by the host.",
+    );
   });
 });

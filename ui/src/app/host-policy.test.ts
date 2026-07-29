@@ -16,7 +16,7 @@ describe("createHostPolicyCapability", () => {
     expect(policy.preflightAction("sessions.delete")).toEqual({ ok: true });
   });
 
-  it("normalizes routes, settings, and actions from a host policy wrapper", () => {
+  it("normalizes routes, coarse settings, and actions from a host policy wrapper", () => {
     const policy = createHostPolicyCapability({
       hostControlPolicy: {
         version: 1,
@@ -31,7 +31,7 @@ describe("createHostPolicyCapability", () => {
           logs: "readOnly",
         },
         settings: {
-          "agents.*": { state: "readOnly", reason: "deployment owned" },
+          "*": { state: "readOnly", reason: "deployment owned" },
           "agents.list.0.model": "editable",
         },
         actions: {
@@ -44,7 +44,7 @@ describe("createHostPolicyCapability", () => {
     expect(policy.snapshot.host).toMatchObject({ id: "lobster", mode: "hosted" });
     expect(policy.isRouteEnabled("debug")).toBe(false);
     expect(policy.routeState("logs")).toBe("readOnly");
-    expect(policy.settingState(["agents", "list", "0", "model"])).toBe("editable");
+    expect(policy.settingState(["agents", "list", "0", "model"])).toBe("readOnly");
     expect(policy.settingState(["agents", "defaults", "model"])).toBe("readOnly");
     expect(policy.canInvokeAction("sessions.delete")).toBe(false);
     expect(policy.preflightAction("config.save")).toMatchObject({
@@ -65,7 +65,7 @@ describe("createHostPolicyCapability", () => {
           gateway: { path: "/v1/openclaw-gateway", scopes: ["operator.read"] },
           defaults: { route: "enabled", setting: "editable", action: "enabled" },
           routes: { channels: "disabled" },
-          settings: {},
+          settings: { "*": "locked" },
           actions: {},
         },
       }),
@@ -79,5 +79,6 @@ describe("createHostPolicyCapability", () => {
       credentials: "same-origin",
     });
     expect(policy.isRouteEnabled("channels")).toBe(false);
+    expect(policy.isSettingEditable("*")).toBe(false);
   });
 });

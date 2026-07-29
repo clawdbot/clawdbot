@@ -36,6 +36,11 @@ export type HostControlPolicyV1 = {
     action: HostControlActionState;
   };
   routes: Readonly<Record<string, HostControlRoutePolicy>>;
+  /**
+   * V1 supports a coarse settings lock through the "*" entry or the
+   * defaults.setting value. Field-level ownership is intentionally left to a
+   * later, server-enforced settings contract.
+   */
   settings: Readonly<Record<string, HostControlSettingPolicy>>;
   actions: Readonly<Record<string, HostControlActionPolicy>>;
 };
@@ -160,6 +165,13 @@ function normalizePolicyMap<T>(
   return Object.fromEntries(entries);
 }
 
+function normalizeSettingsPolicyMap(
+  value: unknown,
+): Readonly<Record<string, HostControlSettingPolicy>> {
+  const wildcard = isObject(value) ? normalizeSettingPolicy(value["*"]) : null;
+  return wildcard ? { "*": wildcard } : {};
+}
+
 function normalizeHostControlPolicy(value: unknown): HostControlPolicyV1 {
   const root = isObject(value) ? value : {};
   const policyRoot =
@@ -196,7 +208,7 @@ function normalizeHostControlPolicy(value: unknown): HostControlPolicyV1 {
       action: actionDefault,
     },
     routes: normalizePolicyMap(policyRoot.routes, normalizeRoutePolicy),
-    settings: normalizePolicyMap(policyRoot.settings, normalizeSettingPolicy),
+    settings: normalizeSettingsPolicyMap(policyRoot.settings),
     actions: normalizePolicyMap(policyRoot.actions, normalizeActionPolicy),
   };
 }
@@ -262,10 +274,8 @@ export function createHostPolicyCapability(initialPolicy?: unknown): HostPolicyC
 
   const routePolicy = (routeId: RouteId | string): HostControlRoutePolicy =>
     snapshot.routes[routeId] ?? { state: snapshot.defaults.route };
-  const settingPolicy = (path: string | readonly string[]): HostControlSettingPolicy =>
-    lookupHierarchicalPolicy(snapshot.settings, policyPath(path)) ?? {
-      state: snapshot.defaults.setting,
-    };
+  const settingPolicy = (_path: string | readonly string[]): HostControlSettingPolicy =>
+    snapshot.settings["*"] ?? { state: snapshot.defaults.setting };
   const actionPolicy = (action: string): HostControlActionPolicy =>
     lookupHierarchicalPolicy(snapshot.actions, action) ?? { state: snapshot.defaults.action };
 
