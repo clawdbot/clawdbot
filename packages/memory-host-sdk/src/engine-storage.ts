@@ -17,6 +17,7 @@ export {
   remapChunkLines,
   runWithConcurrency,
   splitCuratedMarkdownEntries,
+  stripMemoryAnnotationCarriers,
   type CuratedMarkdownEntry,
   type CuratedProjectAnnotations,
   type MemoryChunk,

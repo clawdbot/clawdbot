@@ -834,16 +834,33 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
       },
     },
   };
+  const get = {
+    path: "~/.openclaw/openclaw.json",
+    exists: true,
+    raw: `${JSON.stringify(config, null, 2)}\n`,
+    hash: "mock-config-hash",
+    appliedConfigHash: "mock-config-hash",
+    valid: true,
+    config,
+    issues: [],
+  };
+  const writeAck = { ok: true, path: get.path, hash: get.hash, config };
   return {
-    get: {
-      path: "~/.openclaw/openclaw.json",
-      exists: true,
-      raw: `${JSON.stringify(config, null, 2)}\n`,
-      hash: "mock-config-hash",
-      appliedConfigHash: "mock-config-hash",
-      valid: true,
-      config,
-      issues: [],
+    get,
+    set: writeAck,
+    apply: {
+      ...writeAck,
+      sentinel: {
+        persisted: true,
+        payload: {
+          kind: "config-apply",
+          status: "ok",
+          ts: 0,
+          message: null,
+          doctorHint: "openclaw doctor --non-interactive",
+          stats: { mode: "config.apply", root: get.path, requiresRestart: false },
+        },
+      },
     },
     schema: {
       schema,
@@ -1620,6 +1637,8 @@ async function createChatPickerScenario(
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
+      "config.set": configMocks.set,
+      "config.apply": configMocks.apply,
       "config.schema": configMocks.schema,
       "openclaw.chat.history": custodianHistory,
       "openclaw.changes.list": custodianChanges,

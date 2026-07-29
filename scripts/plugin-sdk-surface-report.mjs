@@ -197,7 +197,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +5: pinned secret create/read functions and their options contract.
       // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
-      4757,
+      // +11: attributed skill proposal evaluation and committed skill lifecycle contracts.
+      4768,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

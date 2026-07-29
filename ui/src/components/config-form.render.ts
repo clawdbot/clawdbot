@@ -45,7 +45,8 @@ function renderAdvancedDivider(onHideAdvanced: (() => void) | undefined) {
     ${onHideAdvanced
       ? html`<button
           type="button"
-          class="config-advanced-divider__toggle"
+          class="config-advanced-divider__toggle config-show-advanced active"
+          aria-pressed="true"
           @click=${() => onHideAdvanced()}
         >
           ${t("common.hideAdvanced")}
@@ -91,7 +92,8 @@ export function renderConfigTierGroups(params: {
           : html`
               <button
                 type="button"
-                class="config-advanced-ghost"
+                class="config-advanced-ghost config-show-advanced"
+                aria-pressed="false"
                 @click=${() => params.onShowAdvanced()}
               >
                 <span class="config-advanced-ghost__count">

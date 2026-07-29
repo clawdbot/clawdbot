@@ -8,7 +8,7 @@ import {
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
 import {
-  dropDisabledMemoryChunkFts,
+  dropDisabledMemoryFts,
   dropMemoryPathFtsTriggers,
   ensureMemoryPathFtsSchema,
   ensureMemoryPathFtsTriggers,
@@ -654,7 +654,7 @@ export function ensureMemoryIndexSchema(params: {
   `);
   migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable, ftsTable);
   provenanceSchema.ensureMemoryChunkProvenance(params.db);
-  dropDisabledMemoryChunkFts(params.db, ftsTable, params.ftsEnabled);
+  dropDisabledMemoryFts(params.db, ftsTable, params.ftsEnabled);
   if (params.cacheEnabled) {
     const updatedAtIndex =
       embeddingCacheTable === MEMORY_EMBEDDING_CACHE_TABLE

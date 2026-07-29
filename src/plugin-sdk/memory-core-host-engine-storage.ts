@@ -49,6 +49,7 @@ export {
   runWithConcurrency,
   splitCuratedMarkdownEntries,
   statRegularFile,
+  stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export type {
