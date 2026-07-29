@@ -124,6 +124,7 @@ function resolveSessionStoreTranscriptCorpusSource(
   sessionsDir: string,
   storePath: string,
   entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
+  configuredStoreRootIsAgentScoped: boolean,
 ): ResolvedSessionStoreCorpusSource | null {
   const sessionFile =
     typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0
@@ -215,8 +216,10 @@ function resolveSessionStoreTranscriptCorpusSource(
     const pathAgentId = extractAgentIdFromSessionPath(canonicalSessionFile);
     // Authorize real paths so a junction below one agent cannot redirect
     // indexing into a sibling agent's canonical or custom transcript store.
+    // A shared parent of `{agentId}.json` is not an agent-owned directory.
     if (
-      (!isUnderConfiguredStoreRoot && !isUnderCanonicalAgentsRoot) ||
+      (!isUnderCanonicalAgentsRoot &&
+        (!isUnderConfiguredStoreRoot || !configuredStoreRootIsAgentScoped)) ||
       (isUnderCanonicalAgentsRoot &&
         (!rootAgentId || normalizeAgentId(rootAgentId) !== normalizeAgentId(agentId))) ||
       (pathAgentId && normalizeAgentId(pathAgentId) !== normalizeAgentId(agentId))
@@ -325,6 +328,7 @@ function toSessionStoreCorpusEntry(
   storePath: string,
   summary: SessionEntrySummary,
   cronGeneratedSessionKeys: ReadonlySet<string>,
+  configuredStoreRootIsAgentScoped: boolean,
 ): SessionTranscriptCorpusEntry | null {
   const source = resolveSessionStoreTranscriptCorpusSource(
     agentId,
@@ -332,6 +336,7 @@ function toSessionStoreCorpusEntry(
     sessionsDir,
     storePath,
     summary.entry,
+    configuredStoreRootIsAgentScoped,
   );
   if (!source) {
     return null;
@@ -503,6 +508,12 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
     agentId: normalizedAgentId,
   });
   const sessionsDir = path.dirname(storePath);
+  const configuredStoreRootIsAgentScoped =
+    typeof configuredStore === "string" &&
+    path
+      .dirname(configuredStore)
+      .split(path.sep)
+      .some((segment) => segment.includes("{agentId}"));
   const fixedStoreOwnerAgentId = extractAgentIdFromSessionsDir(sessionsDir);
   const isAgentOwnedFixedStore =
     fixedStoreOwnerAgentId !== null &&
@@ -554,6 +565,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       storePath,
       summary,
       cronGeneratedSessionKeys,
+      configuredStoreRootIsAgentScoped,
     );
     if (!entry) {
       continue;
