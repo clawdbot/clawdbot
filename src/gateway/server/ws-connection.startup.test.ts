@@ -23,6 +23,66 @@ import {
 } from "./ws-connection.test-helpers.js";
 
 describe("attachGatewayWsConnectionHandler startup readiness", () => {
+  it("admits only one of two connect frames that race during lazy handler loading", async () => {
+    const sent: unknown[] = [];
+    const clients = new Set<unknown>();
+    const socket = createGatewayWsTestSocket({
+      onSend: (data) => {
+        sent.push(JSON.parse(data));
+      },
+    });
+
+    attachGatewayWsForTest({
+      attach: attachGatewayWsConnectionHandler,
+      clients,
+      socket,
+      options: {
+        resolvedAuth: { mode: "token", allowTailscale: false, token: "test-token" },
+        buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+      },
+    });
+    const connectFrame = (id: string) =>
+      JSON.stringify({
+        type: "req",
+        id,
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "gateway-client",
+            version: "dev",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          },
+          role: "operator",
+          scopes: [],
+          caps: [],
+          auth: { token: "test-token" },
+        },
+      });
+
+    socket.emit("message", connectFrame("connect-1"));
+    socket.emit("message", connectFrame("connect-2"));
+    await vi.dynamicImportSettled();
+
+    await vi.waitFor(() => {
+      expect(clients.size).toBe(1);
+      expect(
+        sent.filter(
+          (frame) =>
+            typeof frame === "object" &&
+            frame !== null &&
+            (frame as { type?: unknown; ok?: unknown }).type === "res" &&
+            (frame as { ok?: unknown }).ok === true,
+        ),
+      ).toHaveLength(1);
+    });
+
+    socket.emit("close", 1000, Buffer.from("done"));
+    expect(clients.size).toBe(0);
+  });
+
   it.each([GATEWAY_STARTUP_CLOSE_CODE, 1006])(
     "keeps startup-unavailable close code %i at debug level",
     async (observedCloseCode) => {

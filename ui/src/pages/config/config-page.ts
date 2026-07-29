@@ -50,7 +50,7 @@ import {
 } from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
 import { renderMemoryPage } from "./memory-page.ts";
-import { memoryTabForRoute, narrowMemorySchema } from "./memory-schema.ts";
+import { narrowMemorySchema } from "./memory-schema.ts";
 import { renderQuickSettings } from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
@@ -1042,7 +1042,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         configObject,
         pluginsHref: pathForRoute("plugins", this.context.basePath),
         memoryImportHref: pathForRoute("memory-import", this.context.basePath),
-        tab: memoryTabForRoute(this.routeData ?? {}),
+        routeData: this.routeData,
         // Memory's engine and backend are product decisions, not power-user
         // knobs: this page forces the advanced tier open so they never hide
         // behind the global Advanced toggle.

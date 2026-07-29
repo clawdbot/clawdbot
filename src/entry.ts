@@ -213,7 +213,11 @@ export async function tryHandleRootHelpFastPath(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<boolean> {
-  if (resolveCliContainerTarget(argv, deps.env)) {
+  const env = deps.env ?? process.env;
+  if (
+    env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1" ||
+    resolveCliContainerTarget(argv, env)
+  ) {
     return false;
   }
   if (!isRootHelpInvocation(argv)) {
@@ -230,7 +234,7 @@ export async function tryHandleRootHelpFastPath(
     const loadRootHelpRenderOptionsForConfigSensitivePlugins =
       deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
       (await loadRootHelpLiveConfigModule()).loadRootHelpRenderOptionsForConfigSensitivePlugins;
-    const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(deps.env);
+    const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(env);
     if (!liveRootHelpOptions) {
       const outputPrecomputedRootHelpText =
         deps.outputPrecomputedRootHelpText ??
@@ -265,7 +269,10 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
   }
 }
 
-async function runMainOrRootHelp(argv: string[]): Promise<void> {
+export async function runMainOrRootHelp(
+  argv: string[],
+  deps: RunMainOrRootHelpDeps = {},
+): Promise<void> {
   await runCliWithExitFinalization({
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
@@ -285,9 +292,13 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(
         "run-main-import",
-        () => import("./cli/run-main.js"),
+        deps.loadRunCli ?? (() => import("./cli/run-main.js")),
       );
-      await runCli(argv, { additionalStartupTrace: gatewayEntryStartupTrace });
+      await runCli(argv, {
+        additionalStartupTrace: gatewayEntryStartupTrace,
+        // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
+        retainConsoleRoutingUntilProcessExit: true,
+      });
     },
     onError: async (error) => {
       const { loadCliDotEnvForEarlyDiagnostic } = await import("./cli/dotenv.js");
@@ -307,3 +318,7 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     },
   });
 }
+
+type RunMainOrRootHelpDeps = {
+  loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
+};

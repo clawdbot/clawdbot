@@ -141,6 +141,53 @@
   flex: 0 0 auto;
 }
 
+.settings-section__docs {
+  display: inline-flex;
+  align-items: center;
+}
+
+.settings-section__help-button {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: 600 var(--control-ui-text-xs) / 1 var(--font-sans);
+  cursor: pointer;
+}
+
+.settings-section__help-button:hover,
+.settings-section__help-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--accent);
+}
+
+.settings-section__help-popover::part(body) {
+  max-width: 280px;
+  padding: var(--space-3) var(--space-4);
+}
+
+.settings-section__help-panel {
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.settings-section__help-panel p {
+  margin: 0;
+  color: var(--muted-strong);
+}
+
+.settings-section__help-panel a {
+  width: fit-content;
+  font-weight: 600;
+}
+
 /* ── Group (the only surface) ── */
 
 .settings-group {

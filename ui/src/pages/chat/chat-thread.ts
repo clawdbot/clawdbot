@@ -229,7 +229,6 @@ function sameChatItemsStructuralInput(
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
-    previous.waitingApproval === next.waitingApproval &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
     Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&

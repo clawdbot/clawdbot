@@ -2305,6 +2305,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Common issues
   - H2: Related pages
 
+## concepts/agent-bindings.md
+
+- Route: /concepts/agent-bindings
+- Headings:
+  - H2: When to use a binding
+  - H2: Route an account to an agent
+  - H2: Match a specific conversation
+  - H2: Match fields and precedence
+  - H2: Common mistakes
+  - H3: Omitting accountId to mean every account
+  - H3: Binding to an unknown agent
+  - H3: Treating bindings as access control
+  - H2: Related
+
 ## concepts/agent-loop.md
 
 - Route: /concepts/agent-loop
@@ -2614,6 +2628,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Recall: two lanes
   - H3: Lane 1: always on, zero model calls
   - H3: Lane 2: escalation
+  - H2: Project-scoped memory
   - H2: The user model
   - H2: Standing intents: prospective memory
   - H2: The security model
@@ -5401,6 +5416,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Media codecs
   - H3: Quick Chat
   - H3: Canvas
   - H2: CLI and SSH alternative
@@ -10288,6 +10304,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Logs and expected behavior
   - H2: Related
 
+## tools/mcp.md
+
+- Route: /tools/mcp
+- Headings:
+  - H2: Add a server from Settings
+  - H2: Add a server from the CLI
+  - H2: Configure a server directly
+  - H2: Troubleshooting
+  - H3: The server appears in Settings but exposes no tools
+  - H3: A stdio server does not start
+  - H3: An HTTP server needs authorization
+  - H3: Changes do not reach an active agent
+  - H2: Related
+
 ## tools/media-overview.md
 
 - Route: /tools/media-overview
@@ -10457,19 +10487,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /tools/self-learning
 - Headings:
-  - H2: Enable self-learning
-  - H2: Review past sessions manually
-  - H2: What OpenClaw can learn
-  - H2: When experience review runs
+  - H2: Capture paths
+  - H3: Deterministic correction capture
+  - H3: Experience review
+  - H2: Mode policy
+  - H2: Why auto is safe to default
   - H2: Runtime support
-  - H2: What the reviewer receives
-  - H2: Proposal safety
-  - H2: Review learned proposals
-  - H2: Configuration
+  - H2: Cost and privacy
+  - H2: Review and revert learning
+  - H2: Configuration reference
   - H2: Troubleshooting
-  - H3: No proposal appears after a long turn
-  - H3: Doctor reports that the Workshop tool is hidden
-  - H3: Too many low-value proposals appear
+  - H3: No capture appears
+  - H3: Doctor reports that Workshop is hidden
+  - H3: A proposal remains pending in auto mode
+  - H3: Too many low-value captures appear
   - H2: Related
 
 ## tools/show-widget.md
@@ -10918,6 +10949,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: The Lobsterdex
   - H2: Field notes
   - H2: Privacy
+
+## web/notifications.md
+
+- Route: /web/notifications
+- Headings:
+  - H2: Which surface you get
+  - H2: Enable browser notifications
+  - H2: Enable notifications in the macOS app
+  - H2: Troubleshooting
+  - H3: Enable is unavailable
+  - H3: Browser permission is blocked
+  - H3: Service worker is not ready
+  - H3: Web Push asks for a Doctor migration
+  - H2: Related
 
 ## web/tui.md
 

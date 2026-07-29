@@ -17,6 +17,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
@@ -312,10 +313,16 @@ function resolveGatewayAgentModel(
   cfg: OpenClawConfig,
   agentId: string,
 ): GatewayAgentRow["model"] | undefined {
-  const primary = resolveAgentEffectiveModelPrimary(cfg, agentId)?.trim();
+  // Agent rows expose model identity to clients; credential-profile binding stays in
+  // canonical config and is consumed only by execution-time model selection.
+  const primary = splitTrailingAuthProfile(
+    resolveAgentEffectiveModelPrimary(cfg, agentId) ?? "",
+  ).model;
   const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-  const fallbacks = normalizeFallbackList(fallbackOverride ?? defaultFallbacks);
+  const fallbacks = normalizeFallbackList(
+    (fallbackOverride ?? defaultFallbacks).map((value) => splitTrailingAuthProfile(value).model),
+  );
   if (!primary && fallbacks.length === 0) {
     return undefined;
   }

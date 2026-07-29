@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   deliveryContextFromSession,
   normalizeSessionDeliveryState,
@@ -2027,17 +2028,24 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       kind: "persisted",
       sessionEntry: state.sessionEntryMock,
     });
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: "hello", idempotencyKey: "canonical-user:user" },
+      target: () => undefined,
+    });
 
     await (canonicalUserRecorder
       ? agentCommand({
           message: "hello",
           to: "+1234567890",
-          userTurnTranscriptRecorder: {} as NonNullable<
-            Parameters<typeof agentCommand>[0]["userTurnTranscriptRecorder"]
-          >,
+          userTurnTranscriptRecorder,
         })
       : runBasicAgentCommand());
 
+    if (canonicalUserRecorder) {
+      expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({
+        userTurnTranscriptRecorder,
+      });
+    }
     expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
       embeddedAssistantGapFill,
     });

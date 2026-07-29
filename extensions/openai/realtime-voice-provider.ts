@@ -1685,7 +1685,34 @@ async function createOpenAIRealtimeBrowserSession(
     cfg: req.cfg,
   });
   if (auth.status === "missing") {
-    throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+    if (
+      hasOpenAIRealtimePlatformAuthInput({
+        configuredApiKey: config.apiKey,
+        cfg: req.cfg,
+      })
+    ) {
+      throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+    }
+    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
+      cfg: req.cfg,
+      agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
+    });
+    if (!subscriptionAuth) {
+      throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+    }
+    if (!quicksilverBroker) {
+      throw new Error("OpenAI realtime browser session broker is unavailable");
+    }
+    const session = await quicksilverBroker.createBrowserSession(
+      {
+        ...req,
+        model,
+        voice: normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy",
+      },
+      subscriptionAuth,
+    );
+    quicksilverBrokerBySession.set(session, quicksilverBroker);
+    return session;
   }
 
   const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
@@ -1828,7 +1855,10 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
             hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
         );
       }
-      return false;
+      return (
+        options?.quicksilverBrowserSessionBroker !== undefined &&
+        hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId })
+      );
     },
     resolveBrowserSessionCapabilities: ({ providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);

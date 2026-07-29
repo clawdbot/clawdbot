@@ -164,6 +164,18 @@ describe("memoryTabForRoute", () => {
     expect(memoryTabForRoute({ targetBlockId: "config-section-memory" })).toBe("settings");
     expect(memoryTabForRoute({})).toBeNull();
   });
+
+  it("prefers an explicit canonical path over stale legacy route state", () => {
+    expect(
+      memoryTabForRoute({
+        pathname: "/settings/memory/dreams",
+        tab: "settings",
+        section: "memory",
+        targetBlockId: "memory-backend",
+      }),
+    ).toBe("dreams");
+    expect(memoryTabForRoute({ pathname: "/settings/memory" })).toBe("overview");
+  });
 });
 
 describe("memorySchemaKeysForTab", () => {

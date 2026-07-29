@@ -70,6 +70,7 @@ export const en: TranslationMap = {
     settingsSections: "Settings sections",
     version: "Version",
     docs: "Docs",
+    learnMore: "Learn more",
     theme: "Theme",
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
@@ -982,6 +983,8 @@ export const en: TranslationMap = {
     noEvents: "No events yet.",
   },
   configForm: {
+    sectionHelp: "Help for {section}",
+    readGuide: "Read the guide",
     showAdvanced: "Show advanced",
     advancedHidden: "{count} advanced setting hidden",
     advancedHiddenPlural: "{count} advanced settings hidden",
@@ -1177,6 +1180,7 @@ export const en: TranslationMap = {
       lobsterdexOpen: "Open Lobsterdex",
     },
     security: {
+      intro: "Review gateway access, tool policy, device authentication, and approvals.",
       title: "Security",
       gatewayAuth: "Gateway auth",
       execPolicy: "Exec policy",
@@ -2135,12 +2139,14 @@ export const en: TranslationMap = {
     working: "Working…",
   },
   mcpPage: {
+    intro: "Connect and manage MCP servers that provide tools to OpenClaw.",
     connectorsLink: "Discover one-click connectors on the Plugins page.",
     servers: "Servers",
     oauth: "OAuth",
     filtered: "Filtered",
     configuredServers: "Configured servers",
     noServers: "No MCP servers configured.",
+    setUpFirstServer: "Set up your first MCP server",
     operatorCommands: "MCP operator commands",
     operatorCommandsHint: "Status, diagnostics, auth, probing, and runtime reload.",
     runtimeHint:
@@ -2151,6 +2157,7 @@ export const en: TranslationMap = {
     mtls: "mTLS",
   },
   talkPage: {
+    intro: "Configure realtime voice providers, models, and speaker voices.",
     voiceSection: {
       title: "Realtime voice",
       description:
@@ -2183,11 +2190,12 @@ export const en: TranslationMap = {
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed. Browser Talk only. Delegated work runs under the agent's standard approval policy; the spoken-confirmation gate does not apply to GPT-Live yet.",
+      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed. Browser Talk only. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },
   memoryPage: {
+    intro: "Choose how OpenClaw stores, searches, and maintains agent memory.",
     tablistLabel: "Memory sections",
     tabs: {
       overview: "Overview",
@@ -2741,9 +2749,9 @@ export const en: TranslationMap = {
       useCurrentChatTooltip:
         "Send revision requests to the current chat thread instead of the proposal's workshop thread.",
       selfLearning: "Self-learning",
-      selfLearningAria: "Toggle self-learning skill proposals",
+      selfLearningAria: "Toggle autonomous self-learning",
       selfLearningTooltip:
-        "Capture corrections and review substantial completed work into pending skill proposals. Spends extra background tokens; drafts land on this board as pending proposals.",
+        "Capture corrections and review substantial completed work as reusable skills. The default automatic mode applies scanner-approved captures and shows them on this board.",
       view: "Workshop view",
       board: "Board",
       today: "Today",
@@ -2826,7 +2834,7 @@ export const en: TranslationMap = {
     selfLearning: {
       pitchTitle: "Turn on self-learning",
       pitchBody:
-        "OpenClaw reviews corrections and substantial completed runs, then drafts skill proposals for this board. It spends extra background tokens and drafts arrive as pending proposals.",
+        "OpenClaw reviews corrections and substantial completed runs, then applies scanner-approved skills and shows them on this board. Experience review spends extra background tokens.",
       enable: "Enable self-learning",
       enabling: "Enabling…",
       updateError: "Could not update the self-learning setting.",

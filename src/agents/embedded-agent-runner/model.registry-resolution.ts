@@ -45,6 +45,7 @@ export function resolveExplicitModelWithRegistry(params: {
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
   preparedInlineProviderModels?: readonly InlineModelEntry[];
+  preparedStaticCatalogModel?: StaticCatalogFallbackModel;
 }): ExplicitModelResolution | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
@@ -75,13 +76,15 @@ export function resolveExplicitModelWithRegistry(params: {
     ) {
       return { kind: "suppressed" };
     }
-    const staticCatalogModel = resolveBundledStaticCatalogModel({
-      provider,
-      modelId,
-      cfg,
-      workspaceDir,
-      includeRuntimeDiscovery: true,
-    }) as StaticCatalogFallbackModel | undefined;
+    const staticCatalogModel =
+      params.preparedStaticCatalogModel ??
+      (resolveBundledStaticCatalogModel({
+        provider,
+        modelId,
+        cfg,
+        workspaceDir,
+        includeRuntimeDiscovery: true,
+      }) as StaticCatalogFallbackModel | undefined);
     return {
       kind: "resolved",
       source: "configured",
@@ -100,6 +103,7 @@ export function resolveExplicitModelWithRegistry(params: {
           runtimeHooks,
           workspaceDir,
           preferDiscoveredTransport: true,
+          staticCatalogModel,
         }),
         runtimeHooks,
       }),

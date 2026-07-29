@@ -430,6 +430,7 @@ export async function attachWebInboxToSocket(
   type QueuedInboundMessageMetadata = {
     admission: AdmittedWebInboundCallbackMessage["admission"];
     debounceKey?: string;
+    debounceKeyTracked?: boolean;
     turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     readReceipt?: WhatsAppReadReceiptTarget;
     receiveOrder?: number;
@@ -438,7 +439,7 @@ export async function attachWebInboxToSocket(
   const durableInboundQueue =
     options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
-  const pendingDebounceKeys = new Set<string>();
+  const pendingDebounceKeys = new Map<string, number>();
   const activeInboundFlushes = new Set<Promise<void>>();
   const pendingMessageHandlers = new Set<Promise<void>>();
   let durableIngressActive = false;
@@ -499,6 +500,20 @@ export async function attachWebInboxToSocket(
   };
   const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
+  const trackPendingDebounceKey = (key: string) => {
+    pendingDebounceKeys.set(key, (pendingDebounceKeys.get(key) ?? 0) + 1);
+  };
+  const releasePendingDebounceKey = (entry: QueuedInboundMessage) => {
+    if (!entry.debounceKey || entry.debounceKeyTracked !== true) {
+      return;
+    }
+    const remaining = (pendingDebounceKeys.get(entry.debounceKey) ?? 0) - 1;
+    if (remaining > 0) {
+      pendingDebounceKeys.set(entry.debounceKey, remaining);
+      return;
+    }
+    pendingDebounceKeys.delete(entry.debounceKey);
+  };
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
       const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
@@ -512,96 +527,95 @@ export async function attachWebInboxToSocket(
     debounceMs: inboundDebounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
     shouldDebounce: shouldDebounceInboundMessage,
-    onFlush: async (entries) => {
-      let finishFlush!: () => void;
-      const flushTask = new Promise<void>((resolve) => {
-        finishFlush = resolve;
-      });
-      activeInboundFlushes.add(flushTask);
-      publishPendingWorkState();
-      notifyDebounceWork();
-      try {
-        const orderedEntries = orderDebouncedInboundEntries(entries);
-        const last = orderedEntries.at(-1);
-        if (!last) {
-          return;
-        }
-        const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
-          orderedEntries.map((entry) => entry.turnAdoptionLifecycle),
-        );
-        try {
-          if (orderedEntries.length === 1) {
-            await options.onMessage(attachWhatsAppIngressLifecycle(last, lifecycle));
+    onFlush: (entries, createFlush) => {
+      for (const entry of entries) {
+        releasePendingDebounceKey(entry);
+      }
+      const orderedEntries = orderDebouncedInboundEntries(entries);
+      const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
+        orderedEntries.map((entry) => entry.turnAdoptionLifecycle),
+      );
+      const flush = createFlush({
+        lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          const last = orderedEntries.at(-1);
+          if (!last) {
+            return;
+          }
+          try {
+            if (orderedEntries.length === 1) {
+              await options.onMessage(attachWhatsAppIngressLifecycle(last, admissionLifecycle));
+              await settle();
+              await Promise.all(
+                orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
+              );
+              return;
+            }
+            const mentioned = new Set<string>();
+            for (const entry of orderedEntries) {
+              for (const jid of entry.group?.mentions?.jids ?? []) {
+                mentioned.add(jid);
+              }
+            }
+            const combinedBody = orderedEntries
+              .map((entry) => entry.payload.body)
+              .filter(Boolean)
+              .join("\n");
+            const combinedCommandBody = orderedEntries
+              .map((entry) => entry.payload.commandBody ?? entry.payload.body)
+              .filter(Boolean)
+              .join("\n");
+            const combinedMentions =
+              mentioned.size > 0
+                ? {
+                    ...last.group?.mentions,
+                    jids: Array.from(mentioned),
+                  }
+                : last.group?.mentions;
+            const combinedGroup =
+              last.group || combinedMentions
+                ? {
+                    ...last.group,
+                    mentions: combinedMentions,
+                  }
+                : undefined;
+            const combinedMessage: QueuedInboundMessage = attachWhatsAppIngressLifecycle(
+              withDeprecatedWebInboundMessageFlatAliases({
+                ...last,
+                turnAdoptionLifecycle: admissionLifecycle,
+                payload: {
+                  ...last.payload,
+                  body: combinedBody,
+                  commandBody: combinedCommandBody,
+                },
+                group: combinedGroup,
+                event: {
+                  ...last.event,
+                  isBatched: true,
+                },
+              }),
+              admissionLifecycle,
+            );
+            await options.onMessage(combinedMessage);
             await settle();
             await Promise.all(
               orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
             );
-            return;
+          } catch (error) {
+            await abandon();
+            throw error;
           }
-          const mentioned = new Set<string>();
-          for (const entry of orderedEntries) {
-            for (const jid of entry.group?.mentions?.jids ?? []) {
-              mentioned.add(jid);
-            }
-          }
-          const combinedBody = orderedEntries
-            .map((entry) => entry.payload.body)
-            .filter(Boolean)
-            .join("\n");
-          const combinedCommandBody = orderedEntries
-            .map((entry) => entry.payload.commandBody ?? entry.payload.body)
-            .filter(Boolean)
-            .join("\n");
-          const combinedMentions =
-            mentioned.size > 0
-              ? {
-                  ...last.group?.mentions,
-                  jids: Array.from(mentioned),
-                }
-              : last.group?.mentions;
-          const combinedGroup =
-            last.group || combinedMentions
-              ? {
-                  ...last.group,
-                  mentions: combinedMentions,
-                }
-              : undefined;
-          const combinedMessage: QueuedInboundMessage = attachWhatsAppIngressLifecycle(
-            withDeprecatedWebInboundMessageFlatAliases({
-              ...last,
-              ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
-              payload: {
-                ...last.payload,
-                body: combinedBody,
-                commandBody: combinedCommandBody,
-              },
-              group: combinedGroup,
-              event: {
-                ...last.event,
-                isBatched: true,
-              },
-            }),
-            lifecycle,
-          );
-          await options.onMessage(combinedMessage);
-          await settle();
-          await Promise.all(
-            orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
-          );
-        } catch (error) {
-          await abandon();
-          throw error;
-        }
-      } finally {
-        for (const entry of entries) {
-          if (entry.debounceKey) {
-            pendingDebounceKeys.delete(entry.debounceKey);
-          }
-        }
-        activeInboundFlushes.delete(flushTask);
-        finishFlush();
+        },
+      });
+      activeInboundFlushes.add(flush.completion);
+      publishPendingWorkState();
+      notifyDebounceWork();
+      const cleanup = () => {
+        activeInboundFlushes.delete(flush.completion);
         publishPendingWorkState();
-      }
+      };
+      void flush.completion.then(cleanup, cleanup);
+      return flush;
     },
     onError: (err) => {
       inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
@@ -1391,7 +1405,8 @@ export async function attachWebInboxToSocket(
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
       if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
-        pendingDebounceKeys.add(debounceKey);
+        inboundMessage.debounceKeyTracked = true;
+        trackPendingDebounceKey(debounceKey);
         publishPendingWorkState();
         notifyDebounceWork();
       }
@@ -1617,15 +1632,12 @@ export async function attachWebInboxToSocket(
   };
   const drainDebouncedInboundMessages = async () => {
     while (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
-      const debounceKeys = Array.from(pendingDebounceKeys);
+      const debounceKeys = Array.from(pendingDebounceKeys.keys());
       if (debounceKeys.length > 0) {
         await Promise.all(debounceKeys.map((key) => debouncer.flushKey(key)));
       }
 
-      const flushes = Array.from(activeInboundFlushes);
-      if (flushes.length > 0) {
-        await Promise.allSettled(flushes);
-      }
+      await debouncer.drain();
 
       await Promise.resolve();
     }

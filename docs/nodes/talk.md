@@ -9,18 +9,18 @@ title: "Talk mode"
 Talk mode covers five runtime shapes:
 
 - **Native macOS/iOS/Android Talk**: native speech recognition, Gateway chat, and `talk.speak` TTS. Apple Speech recognition on macOS/iOS may use network services; Android behavior depends on the installed speech service. Nodes advertise the `talk` capability and declare which `talk.*` commands they support.
-- **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay; non-realtime configs use the native speech loop.
+- **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport, including framed and frameless transcript/audio events. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay; non-realtime configs use the native speech loop.
 - **Browser Talk**: `talk.client.create` for client-owned `webrtc`/`provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
-- **Android Talk (realtime)**: Android always uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready; it never opens a client-owned WebRTC session. When realtime is not ready, Android stays on native speech recognition, Gateway chat, and `talk.speak`. Caveat: readiness is computed for the configured transport's surface, so a browser-only model such as `gpt-live-*` can read ready while the relay session Android opens is rejected with an explicit error; an Android-side gate is a tracked follow-up.
+- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready and the configured model supports relay; it never opens a client-owned WebRTC session. Browser-only `gpt-live-*` models skip relay, so Android stays on native speech recognition, Gateway chat, and `talk.speak` just as it does when realtime is not ready.
 - **Transcription-only clients**: `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close` for captions/dictation without an assistant voice response. One-shot uploaded voice notes still use the [media understanding](/nodes/media-understanding) audio path.
 
 Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
 
-Client-owned realtime Talk forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`. GPT-Live is the exception: its delegations run on the Gateway-owned sideband rather than through `talk.client.toolCall`, so `talk.client.steer` does not reach them yet — a newer spoken task supersedes the running delegation instead.
+Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live delegates on a Gateway-owned sideband, and the Gateway binds each delegation to the browser connection that owns the Talk session. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`. A newer GPT-Live spoken task also supersedes the running delegation.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
-Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. This gate binds to runs started through `talk.client.toolCall` or the Gateway relay; GPT-Live sideband delegations do not register that binding yet, so they run under the agent's normal (non-voice) approval policy instead. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
+Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. The gate applies to runs started through `talk.client.toolCall`, the Gateway relay, and GPT-Live sideband delegations. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
 
@@ -124,10 +124,20 @@ The Gateway owns the authenticated sideband and routes delegated work through
 the configured OpenClaw agent; the browser receives neither the OAuth token nor
 a Platform API key.
 
-For GA `gpt-realtime-*` browser and iOS WebRTC sessions, Platform credentials
-remain required in this order: the configured realtime API key, an `openai`
-API-key profile, then `OPENAI_API_KEY`. ChatGPT OAuth does not configure those
-GA sessions, Voice Call, Gateway relay, or Discord realtime voice.
+For GA `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, and `gpt-realtime-2`
+browser sessions, Platform credentials remain preferred in this order: the
+configured realtime API key, an `openai` API-key profile, then
+`OPENAI_API_KEY`. With none configured, browser Talk falls back to an OpenClaw
+ChatGPT OAuth profile and exchanges SDP through the Gateway's single-use offer
+broker, so the OAuth token never reaches the browser. A configured Platform
+credential that cannot be resolved fails closed instead of silently falling
+through to OAuth.
+
+iOS client-owned WebRTC, Voice Call, Gateway relay, provider WebSocket
+transports, Discord realtime voice, and Android realtime remain
+Platform-key-only. GA browser Talk keeps the existing client-owned data channel
+and `talk.client.toolCall` loop; only the credential owner and SDP exchange path
+change under OAuth.
 
 | Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

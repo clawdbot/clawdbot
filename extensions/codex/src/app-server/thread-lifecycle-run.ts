@@ -159,6 +159,7 @@ export async function startOrResumeThread(
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
         webSearchAllowed: params.webSearchAllowed,
         environmentSelection: params.environmentSelection,
+        provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
         throwIfAborted,
         lifecycleTiming,

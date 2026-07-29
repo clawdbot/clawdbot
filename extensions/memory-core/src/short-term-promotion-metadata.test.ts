@@ -34,4 +34,23 @@ describe("promotion recall metadata", () => {
     expect(annotations).not.toContain("\n");
     expect(annotations.match(/-->/gu)).toHaveLength(2);
   });
+
+  it("re-emits the ingested project annotation on promotion", () => {
+    expect(
+      buildPromotionRecallAnnotations({
+        conceptTags: ["memory"],
+        score: 0.8,
+        projectKey: "github.com/openclaw/openclaw",
+      }),
+    ).toBe(
+      "<!-- trigger: memory --> <!-- importance: 8 --> <!-- project: github.com/openclaw/openclaw -->",
+    );
+    expect(
+      buildPromotionRecallAnnotations({
+        conceptTags: ["memory"],
+        score: 0.8,
+        projectKey: "path:/tmp/unsafe-->note",
+      }),
+    ).not.toContain("project:");
+  });
 });

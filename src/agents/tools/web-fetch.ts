@@ -12,6 +12,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
@@ -611,7 +612,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     throw new Error("Invalid URL: must be http or https");
   }
   const cacheKey = normalizeCacheKey(
-    `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
+    `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}:user-agent:${sha256Hex(params.userAgent)}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {

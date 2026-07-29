@@ -13,7 +13,9 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  extractProjectKeysFromCuratedEntry,
   hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
@@ -98,6 +100,7 @@ type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 type IndexedMemoryChunk = MemoryChunk & {
   importance: number | null;
   triggers: string | null;
+  projectKey: string | null;
 };
 
 type PreparedMemoryIndexEntry = {
@@ -109,34 +112,50 @@ type PreparedMemoryIndexEntry = {
 
 function resolveChunkRecallMetadata(params: {
   curatedRoot: boolean;
+  projectScopeEligible: boolean;
   content?: string;
   chunk: MemoryChunk;
-}): Pick<IndexedMemoryChunk, "importance" | "triggers"> {
-  if (!params.curatedRoot || params.content === undefined) {
-    return { importance: null, triggers: null };
+}): Pick<IndexedMemoryChunk, "importance" | "triggers" | "projectKey"> {
+  if ((!params.curatedRoot && !params.projectScopeEligible) || params.content === undefined) {
+    return { importance: null, triggers: null, projectKey: null };
   }
 
   const phrases = new Set<string>();
   let importance: number | null = null;
   const lines = params.content.replace(/\r\n/gu, "\n").split("\n");
-  for (const line of lines.slice(params.chunk.startLine - 1, params.chunk.endLine)) {
+  const annotationStartLine = params.chunk.entryStartLine ?? params.chunk.startLine;
+  const annotationEndLine = params.chunk.entryEndLine ?? params.chunk.endLine;
+  const annotationLines = lines.slice(annotationStartLine - 1, annotationEndLine);
+  const projectAnnotations = params.projectScopeEligible
+    ? extractProjectKeysFromCuratedEntry(annotationLines.join("\n"))
+    : { annotated: false, valid: true, keys: [] };
+  for (const line of annotationLines) {
     const annotationSuffix = line.match(
-      /(?:\s*<!--\s*(?:trigger|importance)\s*:[\s\S]*?-->\s*)+$/iu,
+      /(?:\s*<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->\s*)+$/iu,
     )?.[0];
     if (!annotationSuffix) {
       continue;
     }
     for (const match of annotationSuffix.matchAll(
-      /<!--\s*(trigger|importance)\s*:\s*([\s\S]*?)\s*-->/giu,
+      /<!--\s*(trigger|importance|project)\s*:\s*([\s\S]*?)\s*-->/giu,
     )) {
       const kind = match[1]?.toLowerCase();
       const value = match[2]?.trim() ?? "";
       if (kind === "trigger") {
+        if (!params.curatedRoot) {
+          continue;
+        }
         for (const phrase of value.split(/[,;]/u).map((entry) => entry.trim())) {
           if (phrase) {
             phrases.add(phrase);
           }
         }
+        continue;
+      }
+      if (kind === "project") {
+        continue;
+      }
+      if (!params.curatedRoot) {
         continue;
       }
       if (/^\d+$/u.test(value)) {
@@ -153,6 +172,14 @@ function resolveChunkRecallMetadata(params: {
   return {
     importance,
     triggers: phrases.size > 0 ? [...phrases].join("; ") : null,
+    // Invalid annotations remain scoped but unsatisfiable; treating them as NULL
+    // would make malformed project memory global and leak it into every project.
+    projectKey:
+      projectAnnotations.annotated && !projectAnnotations.valid
+        ? INVALID_PROJECT_ANNOTATION_KEY
+        : projectAnnotations.keys.length > 0
+          ? projectAnnotations.keys.join("; ")
+          : null,
   };
 }
 
@@ -969,8 +996,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
         this.db
           .prepare(
-            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                hash=excluded.hash,
                model=excluded.model,
@@ -978,7 +1005,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                embedding=excluded.embedding,
                updated_at=excluded.updated_at,
                importance=excluded.importance,
-               triggers=excluded.triggers`,
+               triggers=excluded.triggers,
+               project_key=excluded.project_key`,
           )
           .run(
             id,
@@ -993,6 +1021,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             now,
             chunk.importance,
             chunk.triggers,
+            chunk.projectKey,
           );
         const provenance = chunk.provenance ?? {
           originClass: "untrusted" as const,
@@ -1070,6 +1099,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         ...multimodalChunk.chunk,
         importance: null,
         triggers: null,
+        projectKey: null,
       };
       chunk.provenance = this.resolveChunkProvenance(
         entry,
@@ -1092,7 +1122,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         () => fs.readFile(entry.absPath, "utf-8"),
         `read memory markdown for indexing ${entry.absPath}`,
       ));
-    const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
+    const normalizedEntryPath = entry.path.replaceAll("\\", "/");
+    const perEntry =
+      options.source === "memory" &&
+      (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
+    const baseChunks = filterNonEmptyMemoryChunks(
+      chunkMarkdown(content, {
+        ...this.settings.chunking,
+        perEntry,
+      }),
+    );
     for (const chunk of baseChunks) {
       chunk.provenance = this.resolveChunkProvenance(
         entry,
@@ -1115,6 +1154,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           chunk,
           resolveChunkRecallMetadata({
             curatedRoot: pathClassification.curatedRoot,
+            projectScopeEligible:
+              options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
             content,
             chunk,
           }),

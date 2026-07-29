@@ -7,6 +7,8 @@ import { resolveContextEngineOwnerPluginId } from "../../../context-engine/regis
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import {
+  AgentRunTerminalOutcomeError,
+  buildAgentRunTerminalOutcomeFromAttempt,
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
@@ -490,6 +492,15 @@ export async function runEmbeddedAttempt(
         }),
       });
     }
+  } catch (error) {
+    const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
+      terminal: executionState.terminal,
+      abortSignal: params.abortSignal,
+    });
+    if (terminalOutcome.status === "timeout") {
+      throw new AgentRunTerminalOutcomeError(error, terminalOutcome);
+    }
+    throw error;
   } finally {
     externalAbortController.dispose();
     clearToolActivityRun(params.runId);

@@ -116,11 +116,15 @@ function vitestSteps(
   scenario: QaTestFileScenario,
   context: { outputDir: string },
 ): QaScenarioCommandStep[] {
+  const e2eConfigArgs = scenario.execution.path.endsWith(".e2e.test.ts")
+    ? ["run", "--config", "test/vitest/vitest.e2e.config.ts"]
+    : [];
   return [
     {
       command: process.execPath,
       args: [
         "scripts/run-vitest.mjs",
+        ...e2eConfigArgs,
         scenario.execution.path,
         ...vitestReporterArgs(scenario, context),
       ],

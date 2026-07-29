@@ -14,6 +14,7 @@ import {
   renderMessageGroup,
   renderStreamGroup,
 } from "./chat-message.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const localStorageValues = new Map<string, string>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
@@ -1609,7 +1610,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
     expect(container.querySelector(".chat-working-indicator")).toBeNull();
     expect(container.querySelector(".chat-turn-recap--continuation")?.textContent).toContain(
-      "Done in 5s",
+      "Done in 5 seconds",
     );
     expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
   });
@@ -1635,6 +1636,31 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector(".chat-working-indicator__status > .agent-chat__sr-only"),
     ).toBeNull();
+  });
+
+  it("formats terminal recap durations with full localized units", () => {
+    const cases = [
+      { runtimeMs: 3_600_000, expected: "Done in 1 hour" },
+      { runtimeMs: 10 * 60_000, expected: "Done in 10 minutes" },
+      { runtimeMs: 30_000, expected: "Done in 30 seconds" },
+      { runtimeMs: 86_400_000, expected: "Done in 1 day" },
+      {
+        runtimeMs: 4 * 3_600_000 + 2 * 60_000,
+        expected: "Done in 4 hours, 2 minutes",
+      },
+    ];
+
+    for (const { runtimeMs, expected } of cases) {
+      const container = document.createElement("div");
+      render(renderTurnRecapRow({ runtimeMs, outputTokens: null }), container);
+      expect(container.querySelector(".chat-turn-recap")?.textContent?.trim()).toBe(expected);
+    }
+
+    const withTokens = document.createElement("div");
+    render(renderTurnRecapRow({ runtimeMs: 30_000, outputTokens: 2_400 }), withTokens);
+    expect(
+      withTokens.querySelector(".chat-turn-recap")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("Done in 30 seconds · 2.4k tokens");
   });
 
   it("shows live output usage beside elapsed time", () => {
@@ -1714,7 +1740,9 @@ describe("grouped chat rendering", () => {
     const group = container.querySelector(".chat-group.assistant");
     expect(group?.classList.contains("chat-group--working")).toBe(false);
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
-    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 
   it("seeds at most one stable claw surprise per reading-indicator key", () => {

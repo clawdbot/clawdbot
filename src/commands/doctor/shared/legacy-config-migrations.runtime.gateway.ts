@@ -41,41 +41,24 @@ const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
   match: (value) => typeof value === "boolean",
 };
 
+const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
+  ["0.0.0.0", "lan"],
+  ["::", "lan"],
+  ["[::]", "lan"],
+  ["*", "lan"],
+  ["127.0.0.1", "loopback"],
+  ["localhost", "loopback"],
+  ["::1", "loopback"],
+  ["[::1]", "loopback"],
+]);
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   return normalizeLegacyGatewayBindHostAlias(value) !== null;
 }
 
 function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return null;
-  }
-  if (
-    normalized === "auto" ||
-    normalized === "loopback" ||
-    normalized === "lan" ||
-    normalized === "tailnet" ||
-    normalized === "custom"
-  ) {
-    return null;
-  }
-  if (
-    normalized === "0.0.0.0" ||
-    normalized === "::" ||
-    normalized === "[::]" ||
-    normalized === "*"
-  ) {
-    return "lan";
-  }
-  if (
-    normalized === "127.0.0.1" ||
-    normalized === "localhost" ||
-    normalized === "::1" ||
-    normalized === "[::1]"
-  ) {
-    return "loopback";
-  }
-  return null;
+  return normalized ? (LEGACY_GATEWAY_BIND_HOST_ALIASES.get(normalized) ?? null) : null;
 }
 
 function escapeControlForLog(value: string): string {

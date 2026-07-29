@@ -451,6 +451,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("describes the actual Code Mode control surface", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "wait"],
+      codeModeActive: true,
+    });
+
+    expect(prompt).toContain(
+      "- exec: Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
+    );
+    expect(prompt).toContain("- wait: Resume a suspended Code Mode exec");
+    expect(prompt).not.toContain("- exec: Run shell");
+    expect(prompt).not.toContain("Use exec yieldMs");
+  });
+
   it("uses provider-neutral web_search prompt metadata", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

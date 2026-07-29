@@ -15,6 +15,7 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-outcome.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
@@ -41,6 +42,7 @@ import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
+import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import { resolveSessionSuspensionReason } from "./session-suspension.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -1712,6 +1714,39 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not run a second candidate after a canonical hard run timeout", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const timeoutError = new AgentRunTerminalOutcomeError(
+      new Error("attempt aborted before prompt submission"),
+      {
+        reason: "hard_timeout",
+        status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    );
+    const run = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValueOnce("too late");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(timeoutError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts the fallback chain on embedded session takeover instead of trying every model (#83510)", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1795,6 +1830,40 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toBe(preflightError);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spend model fallbacks on sandbox provisioning failures", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const provisioningError = toSandboxProvisioningError(
+      new Error("Sandbox image not found: openclaw-sandbox:analyst. Build or pull it first."),
+      "docker",
+    );
+    const run = vi.fn().mockRejectedValue(provisioningError);
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+        onError,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(provisioningError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFallbackStep).not.toHaveBeenCalled();
   });
 
   it("aborts fallback when a provider prompt error carries cleanup session takeover", async () => {

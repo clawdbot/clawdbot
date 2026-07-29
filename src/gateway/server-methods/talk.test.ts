@@ -80,7 +80,7 @@ const mocks = vi.hoisted(() => ({
   assertClientVoiceSessionOpen: vi.fn(),
   registerClientVoiceConsultRun: vi.fn(),
   resolveOpenClientVoiceSessionId: vi.fn(),
-  consultRealtimeVoiceAgent: vi.fn(async () => ({ text: "agent answer" })),
+  consultRealtimeVoiceAgent: vi.fn(async (_params?: unknown) => ({ text: "agent answer" })),
   agentRuntime: {},
 }));
 
@@ -269,6 +269,14 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
     throw new Error(`Expected mock call ${callIndex}`);
   }
   return call.at(argIndex);
+}
+
+function createDeferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function expectRespondOk(mock: ReturnType<typeof vi.fn>, expected?: Record<string, unknown>) {
@@ -2982,6 +2990,123 @@ describe("talk.client.create handler", () => {
     });
     expect(createInput).not.toHaveProperty("tools");
     expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
+  });
+
+  it("binds GPT-Live delegations to the voice session and browser-owned steer lifecycle", async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const chatAbortControllers = new Map();
+    const config = {
+      talk: { realtime: { provider: "openai", model: "gpt-live-1" } },
+    } as OpenClawConfig;
+    const context = {
+      chatAbortControllers,
+      getRuntimeConfig: () => config,
+      logGateway: { warn: vi.fn() },
+    };
+    const createBrowserSession = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "secret",
+    }));
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: {
+        id: "openai",
+        label: "OpenAI Realtime",
+        isConfigured: () => true,
+        createBrowserSession,
+        createBridge: vi.fn(),
+      },
+      providerConfig: { model: "gpt-live-1" },
+    });
+    mocks.resolveRealtimeVoiceProviderCapabilities.mockReturnValueOnce({
+      transports: ["webrtc"],
+      handlesAgentConsult: true,
+      supportsToolCalls: false,
+      supportsVideoFrames: false,
+    });
+    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (rawParams?: unknown) => {
+      const params = rawParams as {
+        onRunStarted?: (params: {
+          runId: string;
+          sessionId: string;
+          timeoutMs: number;
+        }) => { cleanup?: () => void } | void;
+      };
+      const registration = params.onRunStarted?.({
+        runId: "talk-realtime-consult:gpt-live",
+        sessionId: "session-main",
+        timeoutMs: 30_000,
+      });
+      started.resolve();
+      try {
+        await release.promise;
+        return { text: "Done" };
+      } finally {
+        registration?.cleanup?.();
+      }
+    });
+
+    const createRespond = vi.fn();
+    await callTalkHandler("talk.client.create", {
+      params: {
+        sessionKey: "main",
+        model: "gpt-live-1",
+        capabilities: ["voice-transcript"],
+      },
+      respond: createRespond,
+      context,
+    });
+    const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
+    const consult = (
+      createInput.runAgentConsult as (params: { prompt: string }) => Promise<{ text: string }>
+    )({ prompt: "Check the release" });
+    await started.promise;
+
+    expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "main",
+      voiceSessionId: "voice-test",
+      runId: "talk-realtime-consult:gpt-live",
+      config,
+    });
+    expect(chatAbortControllers.get("talk-realtime-consult:gpt-live")).toMatchObject({
+      sessionId: "session-main",
+      sessionKey: "main",
+      agentId: "main",
+      ownerConnId: "conn-1",
+      controlUiVisible: false,
+      kind: "chat-send",
+    });
+
+    mocks.controlRealtimeVoiceAgentRun.mockResolvedValueOnce({
+      ok: true,
+      mode: "steer",
+      sessionKey: "main",
+      active: true,
+      queued: true,
+      target: "current",
+      message: "Got it.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    const steerRespond = vi.fn();
+    await callTalkHandler("talk.client.steer", {
+      params: { sessionKey: "main", text: "Use the safer plan", mode: "steer" },
+      respond: steerRespond,
+      context,
+    });
+    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
+      sessionKey: "main",
+      text: "Use the safer plan",
+      mode: "steer",
+    });
+    expectRespondOk(steerRespond, { ok: true, mode: "steer" });
+
+    release.resolve();
+    await expect(consult).resolves.toEqual({ text: "Done" });
+    expect(chatAbortControllers.has("talk-realtime-consult:gpt-live")).toBe(false);
   });
 
   it("lets native agent handoff own the Codex OAuth prompt and omits direct tools", async () => {

@@ -133,6 +133,7 @@ type SettingsNavigationGroup = {
 export type SettingsSearchBlock = {
   routeId: RouteId;
   label: string;
+  pathname?: string;
   search?: string;
   hash: string;
 };

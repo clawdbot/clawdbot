@@ -7,6 +7,7 @@ import { InsertQueryNode, Kysely as KyselyInstance, SqliteDialect } from "kysely
 // going through Kysely's async driver path.
 
 const kyselyByDatabase = new WeakMap<DatabaseSync, Kysely<unknown>>();
+const queryErrorHandlerByDatabase = new WeakMap<DatabaseSync, (error: unknown) => void>();
 // Cached statements retain their database. Per-instance lifecycle wrappers clear
 // both caches before the native database handle closes.
 const statementCacheSymbol = Symbol("openclaw.kyselySyncStatementCache");
@@ -52,6 +53,22 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
   });
   kyselyByDatabase.set(db, kysely as Kysely<unknown>);
   return kysely;
+}
+
+/** Register the lifecycle owner's handler for synchronous Kysely query failures. */
+export function registerNodeSqliteKyselyQueryErrorHandler(
+  db: DatabaseSync,
+  handler: (error: unknown) => void,
+): void {
+  queryErrorHandlerByDatabase.set(db, handler);
+}
+
+function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
+  try {
+    queryErrorHandlerByDatabase.get(db)?.(error);
+  } catch {
+    // Lifecycle cleanup must never replace the database error seen by the caller.
+  }
 }
 
 function installStatementInvalidation(owner: StatementCacheOwner): void {
@@ -217,36 +234,41 @@ function executeCompiledSqliteQuerySync<Row>(
   compiledQuery: CompiledQuery<Row>,
 ): QueryResult<Row> {
   const parameters = compiledQuery.parameters as SQLInputValue[];
-  return executeWithCachedStatement(db, compiledQuery.sql, parameters, (statement) => {
-    if (statement.columns().length > 0) {
-      // Node's all() snapshots the column count before SQLite can reprepare
-      // an expired statement. Eagerly consuming iterate() reads it after step.
-      const iterator = statement.iterate(...parameters);
-      try {
-        return { rows: [...iterator] as Row[] };
-      } catch (error) {
+  try {
+    return executeWithCachedStatement(db, compiledQuery.sql, parameters, (statement) => {
+      if (statement.columns().length > 0) {
+        // Node's all() snapshots the column count before SQLite can reprepare
+        // an expired statement. Eagerly consuming iterate() reads it after step.
+        const iterator = statement.iterate(...parameters);
         try {
-          iterator.return?.();
-        } catch {
-          // Preserve the step error if iterator cleanup itself fails.
+          return { rows: [...iterator] as Row[] };
+        } catch (error) {
+          try {
+            iterator.return?.();
+          } catch {
+            // Preserve the step error if iterator cleanup itself fails.
+          }
+          throw error;
         }
-        throw error;
       }
-    }
 
-    const { changes, lastInsertRowid } = statement.run(...parameters);
-    const result: QueryResult<Row> = {
-      numAffectedRows: BigInt(changes),
-      rows: [],
-    };
-    if (InsertQueryNode.is(compiledQuery.query) && changes > 0) {
-      return {
-        ...result,
-        insertId: BigInt(lastInsertRowid),
+      const { changes, lastInsertRowid } = statement.run(...parameters);
+      const result: QueryResult<Row> = {
+        numAffectedRows: BigInt(changes),
+        rows: [],
       };
-    }
-    return result;
-  });
+      if (InsertQueryNode.is(compiledQuery.query) && changes > 0) {
+        return {
+          ...result,
+          insertId: BigInt(lastInsertRowid),
+        };
+      }
+      return result;
+    });
+  } catch (error) {
+    reportNodeSqliteKyselyQueryError(db, error);
+    throw error;
+  }
 }
 
 /** Compile and execute a Kysely query synchronously. */
@@ -263,14 +285,29 @@ export function* iterateSqliteQuerySync<Row>(
   query: Compilable<Row>,
 ): IterableIterator<Row> {
   const compiledQuery = query.compile();
-  // Iterators keep statement state across yields. A private statement prevents
-  // nested iteration of identical SQL from resetting an earlier iterator.
-  const statement = db.prepare(compiledQuery.sql);
-  if (statement.columns().length === 0) {
-    return;
+  try {
+    // Iterators keep statement state across yields. A private statement prevents
+    // nested iteration of identical SQL from resetting an earlier iterator.
+    const statement = db.prepare(compiledQuery.sql);
+    if (statement.columns().length === 0) {
+      return;
+    }
+    const parameters = compiledQuery.parameters as SQLInputValue[];
+    const iterator = statement.iterate(...parameters);
+    try {
+      yield* iterator as Iterable<Row>;
+    } catch (error) {
+      try {
+        iterator.return?.();
+      } catch {
+        // Preserve the step error if iterator cleanup itself fails.
+      }
+      throw error;
+    }
+  } catch (error) {
+    reportNodeSqliteKyselyQueryError(db, error);
+    throw error;
   }
-  const parameters = compiledQuery.parameters as SQLInputValue[];
-  yield* statement.iterate(...parameters) as Iterable<Row>;
 }
 
 /** Execute a Kysely query synchronously and return its first row. */
@@ -287,4 +324,5 @@ export function clearNodeSqliteKyselyCacheForDatabase(db: DatabaseSync): void {
   // native database backreferences instead of recreating the WeakMap leak.
   delete (db as StatementCacheOwner)[statementCacheSymbol];
   kyselyByDatabase.delete(db);
+  queryErrorHandlerByDatabase.delete(db);
 }

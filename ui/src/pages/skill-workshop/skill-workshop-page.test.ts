@@ -614,12 +614,12 @@ describe("SkillWorkshopPage self-learning toggle", () => {
   it("reflects the config value in the header toggle and hides it without a snapshot", async () => {
     const enabledPage = createLoadedPage(
       createRuntimeConfigStub({
-        sourceConfig: { skills: { workshop: { autonomous: { enabled: true } } } },
+        sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
       }),
     );
     await enabledPage.updateComplete;
     const toggle = enabledPage.querySelector<HTMLInputElement>(
-      ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+      ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
     );
     expect(toggle?.checked).toBe(true);
     document.body.replaceChildren();
@@ -628,14 +628,17 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     await noSnapshotPage.updateComplete;
     expect(
       noSnapshotPage.querySelector(
-        ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+        ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
       ),
     ).toBeNull();
   });
 
   it("enables self-learning from the empty-state pitch via a config merge patch", async () => {
     const patch = vi.fn(async () => true);
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {}, patch });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+      patch,
+    });
     const page = createLoadedPage(runtimeConfig);
     await page.updateComplete;
 
@@ -645,7 +648,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
 
     await waitForSkillWorkshop(() =>
       expect(patch).toHaveBeenCalledWith({
-        raw: { skills: { workshop: { autonomous: { enabled: true } } } },
+        raw: { skills: { workshop: { autonomous: { mode: "auto" } } } },
         note: "Enable Skill Workshop self-learning",
       }),
     );
@@ -653,7 +656,9 @@ describe("SkillWorkshopPage self-learning toggle", () => {
   });
 
   it("refreshes a stale config snapshot and retries the self-learning toggle", async () => {
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {} });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+    });
     runtimeConfig.patch = vi
       .fn()
       .mockImplementationOnce(async () => {
@@ -670,7 +675,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
       if (runtimeConfig.patch.mock.calls.length === 2) {
         runtimeConfig.state.configSnapshot = {
           hash: "hash-3",
-          sourceConfig: { skills: { workshop: { autonomous: { enabled: true } } } },
+          sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
         };
       }
     });
@@ -685,14 +690,17 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     expect(page.querySelector(".sw-error")).toBeNull();
     expect(
       page.querySelector<HTMLInputElement>(
-        ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+        ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
       )?.checked,
     ).toBe(true);
   });
 
   it("surfaces a patch failure and keeps the toggle off", async () => {
     const patch = vi.fn(async () => false);
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {}, patch });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+      patch,
+    });
     const page = createLoadedPage(runtimeConfig);
     await page.updateComplete;
 
@@ -704,7 +712,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     );
     expect(runtimeConfig.refresh).not.toHaveBeenCalled();
     const toggle = page.querySelector<HTMLInputElement>(
-      ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+      ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
     );
     expect(toggle?.checked).toBe(false);
   });
