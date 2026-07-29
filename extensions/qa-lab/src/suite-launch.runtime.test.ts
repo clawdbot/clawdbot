@@ -490,9 +490,10 @@ describe("qa suite runtime launcher", () => {
     });
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
-    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual(
-      [...sharedScenarioIds.map((scenarioId) => [scenarioId]), [isolatedScenarioId]],
-    );
+    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
+      ...sharedScenarioIds.map((scenarioId) => [scenarioId]),
+      [isolatedScenarioId],
+    ]);
     expect(maxActive()).toBe(6);
   });
 
