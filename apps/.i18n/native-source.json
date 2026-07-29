@@ -30291,7 +30291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 419,
+      "line": 429,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Repairing the OpenClaw Gateway update…",
       "surface": "apple",
@@ -30299,7 +30299,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 420,
+      "line": 430,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
       "surface": "apple",
@@ -30307,7 +30307,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 441,
+      "line": 451,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update needs attention.",
       "surface": "apple",
@@ -30315,7 +30315,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 443,
+      "line": 453,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update failed.",
       "surface": "apple",
@@ -30323,7 +30323,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 458,
+      "line": 468,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update finished, but verification failed.",
       "surface": "apple",
@@ -30331,7 +30331,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 465,
+      "line": 475,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "OpenClaw Gateway \\(installedVersion) is installed.",
       "surface": "apple",
