@@ -177,7 +177,7 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
       ${snapshot.gateways.map((gateway) => {
         const selected = gateway.id === snapshot.currentId;
         return html`<wa-dropdown-item
-          class="chat-pane__gateway-item"
+          class="chat-pane__gateway-menu-item chat-pane__gateway-item"
           type="checkbox"
           role="menuitemradio"
           aria-checked=${String(selected)}
@@ -212,11 +212,14 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
       })}
       <div class="chat-pane__gateway-divider" role="separator"></div>
       <wa-dropdown-item
+        class="chat-pane__gateway-menu-item"
         ?disabled=${setPrimaryDisabled}
         @click=${() => !setPrimaryDisabled && capability.setPrimary(current.id)}
         >${t("chat.sessionHeader.gatewayPicker.setPrimary")}</wa-dropdown-item
       >
-      <wa-dropdown-item @click=${() => capability.openSettings()}
+      <wa-dropdown-item
+        class="chat-pane__gateway-menu-item"
+        @click=${() => capability.openSettings()}
         >${t("chat.sessionHeader.gatewayPicker.openSettings")}</wa-dropdown-item
       >
     </wa-dropdown>
