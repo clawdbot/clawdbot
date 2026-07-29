@@ -1,0 +1,209 @@
+import { describe, expect, it } from "vitest";
+import {
+  collectChangedConfigPaths,
+  hasConfigPathValue,
+  readConfigPathValue,
+  resolveIncludeWriteBoundary,
+  writeConfigPathValue,
+} from "./include-write-boundary.js";
+
+const alphaInclude = {
+  path: ["agents", "entries", "alpha"],
+  kind: "single" as const,
+  hasSiblingOverrides: false,
+  targetPath: "/cfg/alpha.json5",
+};
+
+describe("collectChangedConfigPaths", () => {
+  it("reports keyed leaf paths", () => {
+    expect(collectChangedConfigPaths({ a: { b: 1, c: 2 } }, { a: { b: 9, c: 2 } })).toEqual({
+      paths: [["a", "b"]],
+      rootChanged: false,
+    });
+  });
+
+  it("reports added and removed keys", () => {
+    expect(collectChangedConfigPaths({ a: { b: 1 } }, { a: {} })).toEqual({
+      paths: [["a", "b"]],
+      rootChanged: false,
+    });
+  });
+
+  it("reports no change for equal values", () => {
+    expect(collectChangedConfigPaths({ a: 1 }, { a: 1 })).toEqual({
+      paths: [],
+      rootChanged: false,
+    });
+  });
+
+  it("marks non-record replacements as a root change", () => {
+    expect(collectChangedConfigPaths({ a: 1 }, null)).toEqual({ paths: [], rootChanged: true });
+  });
+
+  it("compares arrays whole instead of per index", () => {
+    expect(collectChangedConfigPaths({ a: [1, 2] }, { a: [1, 3] })).toEqual({
+      paths: [["a"]],
+      rootChanged: false,
+    });
+  });
+});
+
+describe("resolveIncludeWriteBoundary", () => {
+  it("resolves a nested include that owns every change", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude],
+        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      }),
+    ).toEqual({ boundaryPath: alphaInclude.path, includePath: "/cfg/alpha.json5" });
+  });
+
+  it("prefers the deepest owning include over its sole-owner parent", () => {
+    const outer = {
+      path: ["agents"],
+      kind: "single" as const,
+      hasSiblingOverrides: false,
+      targetPath: "/cfg/agents.json5",
+    };
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude, outer],
+        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      })?.includePath,
+    ).toBe("/cfg/alpha.json5");
+  });
+
+  it("falls back to the parent include when changes span nested siblings", () => {
+    const outer = {
+      path: ["agents"],
+      kind: "single" as const,
+      hasSiblingOverrides: false,
+      targetPath: "/cfg/agents.json5",
+    };
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude, outer],
+        changed: {
+          paths: [
+            ["agents", "entries", "alpha", "model"],
+            ["agents", "entries", "beta", "model"],
+          ],
+          rootChanged: false,
+        },
+      })?.includePath,
+    ).toBe("/cfg/agents.json5");
+  });
+
+  it("declines a nested include enclosed by a merged parent", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [
+          alphaInclude,
+          { path: ["agents"], kind: "multiple" as const, hasSiblingOverrides: false },
+        ],
+        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines when a change falls outside the include", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude],
+        changed: {
+          paths: [
+            ["agents", "entries", "alpha", "model"],
+            ["agents", "entries", "beta", "model"],
+          ],
+          rootChanged: false,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines an include merged from several files", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [{ ...alphaInclude, kind: "multiple", targetPath: undefined }],
+        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines an include with sibling overrides", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [{ ...alphaInclude, hasSiblingOverrides: true }],
+        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines an include owned by an outer merged directive", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [
+          alphaInclude,
+          { path: [], kind: "multiple" as const, hasSiblingOverrides: false },
+        ],
+        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines an array-entry include", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [{ ...alphaInclude, path: ["agents", "list", "0"] }],
+        changed: { paths: [["agents", "list", "0", "model"]], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines a root change and an empty change set", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude],
+        changed: { paths: [], rootChanged: true },
+      }),
+    ).toBeNull();
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude],
+        changed: { paths: [], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines when provenance is unavailable", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: undefined,
+        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("keyed config path helpers", () => {
+  it("reads, writes, and probes keyed paths", () => {
+    const value = { agents: { entries: { alpha: { model: "old" } } } };
+    expect(readConfigPathValue(value, ["agents", "entries", "alpha"])).toEqual({ model: "old" });
+    expect(readConfigPathValue(value, ["agents", "missing", "alpha"])).toBeUndefined();
+    expect(hasConfigPathValue(value, ["agents", "entries", "alpha"])).toBe(true);
+    expect(hasConfigPathValue(value, ["agents", "entries", "beta"])).toBe(false);
+    expect(writeConfigPathValue(value, ["agents", "entries", "alpha"], { model: "new" })).toEqual({
+      agents: { entries: { alpha: { model: "new" } } },
+    });
+  });
+
+  it("leaves the source value untouched when writing", () => {
+    const value = { agents: { entries: { alpha: { model: "old" } } } };
+    writeConfigPathValue(value, ["agents", "entries", "alpha", "model"], "new");
+    expect(value.agents.entries.alpha.model).toBe("old");
+  });
+
+  it("returns the replacement for an empty path", () => {
+    expect(writeConfigPathValue({ a: 1 }, [], { b: 2 })).toEqual({ b: 2 });
+  });
+});

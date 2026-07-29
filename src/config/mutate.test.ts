@@ -866,6 +866,140 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.installs).toBeUndefined();
   });
 
+  it("writes a nested single-file agent entry include through to its own file", async () => {
+    const home = await suiteRootTracker.make("nested-include");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const agentPath = path.join(home, ".openclaw", "config", "agent-alpha.json5");
+    await fs.mkdir(path.dirname(agentPath), { recursive: true });
+    const authoredRoot = {
+      agents: {
+        entries: {
+          alpha: { $include: "./config/agent-alpha.json5" },
+          beta: { model: "beta-model" },
+        },
+      },
+    };
+    await fs.writeFile(configPath, `${JSON.stringify(authoredRoot, null, 2)}\n`, "utf-8");
+    await fs.writeFile(
+      agentPath,
+      `${JSON.stringify({ model: "old-model", workspace: "/w/alpha" }, null, 2)}\n`,
+      "utf-8",
+    );
+    const sourceConfig = {
+      agents: {
+        entries: {
+          alpha: { model: "old-model", workspace: "/w/alpha" },
+          beta: { model: "beta-model" },
+        },
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      agents: {
+        entries: {
+          alpha: { model: "new-model", workspace: "/w/alpha" },
+          beta: { model: "beta-model" },
+        },
+      },
+    } as OpenClawConfig;
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-nested-include",
+        path: configPath,
+        parsed: authoredRoot,
+        sourceConfig,
+      }),
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          targetPath: agentPath,
+        },
+      ],
+    };
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: configPath,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [agentPath]: await resolveIncludeTarget(agentPath) },
+        },
+      })
+      .mockResolvedValueOnce({
+        snapshot: createSnapshot({
+          hash: "hash-nested-include-refreshed",
+          path: configPath,
+          parsed: authoredRoot,
+          sourceConfig: nextConfig,
+        }),
+        writeOptions: { expectedConfigPath: configPath },
+      });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig,
+      writeOptions: { expectedConfigPath: configPath },
+      io: {
+        readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+        writeConfigFile: ioMocks.writeConfigFile,
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
+      '"$include": "./config/agent-alpha.json5"',
+    );
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"beta-model"');
+    expect(JSON.parse(await fs.readFile(agentPath, "utf-8"))).toEqual({
+      model: "new-model",
+      workspace: "/w/alpha",
+    });
+  });
+
+  it("does not write through when a change falls outside the nested include", async () => {
+    const authoredRoot = {
+      agents: {
+        entries: {
+          alpha: { $include: "./config/agent-alpha.json5" },
+          beta: { model: "beta-model" },
+        },
+      },
+    };
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-nested-include-outside",
+        parsed: authoredRoot,
+        sourceConfig: {
+          agents: { entries: { alpha: { model: "old" }, beta: { model: "beta-model" } } },
+        } as OpenClawConfig,
+      }),
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          targetPath: "/tmp/agent-alpha.json5",
+        },
+      ],
+    };
+    const nextConfig = {
+      agents: { entries: { alpha: { model: "new" }, beta: { model: "beta-changed" } } },
+    } as OpenClawConfig;
+
+    await replaceConfigFile({
+      snapshot,
+      nextConfig,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(nextConfig, {
+      baseSnapshot: snapshot,
+      expectedConfigPath: snapshot.path,
+      afterWrite: { mode: "auto" },
+    });
+  });
+
   it.each([
     {
       name: "repairs a malformed single-file top-level include",
