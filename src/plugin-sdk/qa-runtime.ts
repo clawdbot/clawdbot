@@ -16,6 +16,9 @@ import { normalizeStringEntries } from "./string-coerce-runtime.js";
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 
 type QaRuntimeSurface = {
+  acquireQaCredentialLease: <TPayload>(
+    options: AcquireQaCredentialLeaseOptions<TPayload>,
+  ) => Promise<QaCredentialLease<TPayload>>;
   defaultQaRuntimeModelForMode: (
     mode: string,
     options?: {
@@ -24,6 +27,14 @@ type QaRuntimeSurface = {
     },
   ) => string;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  runLiveTransportQaSuiteCommand: (params: LiveTransportQaSuiteCommandOptions) => Promise<unknown>;
+  startQaCredentialLeaseHeartbeat: (
+    lease: Pick<
+      QaCredentialLease<unknown>,
+      "heartbeat" | "heartbeatIntervalMs" | "kind" | "source"
+    >,
+    options?: QaCredentialLeaseHeartbeatOptions,
+  ) => QaCredentialLeaseHeartbeat;
 };
 
 function isMissingQaRuntimeError(error: unknown) {
@@ -71,9 +82,80 @@ export type LiveTransportQaCommandOptions = {
   scenarioIds?: string[];
   listScenarios?: boolean;
   sutAccountId?: string;
+  credentialFile?: string;
   credentialSource?: string;
   credentialRole?: string;
 };
+
+export type QaCredentialLease<TPayload> = {
+  credentialId?: string;
+  heartbeat(): Promise<void>;
+  heartbeatIntervalMs: number;
+  kind: string;
+  leaseToken?: string;
+  leaseTtlMs: number;
+  ownerId?: string;
+  payload: TPayload;
+  release(): Promise<void>;
+  role?: "ci" | "maintainer";
+  source: "convex" | "env";
+};
+
+export type AcquireQaCredentialLeaseOptions<TPayload> = {
+  kind: string;
+  parsePayload: (payload: unknown) => TPayload;
+  resolveEnvPayload: () => TPayload;
+  role?: string;
+  source?: string;
+};
+
+export type QaCredentialLeaseHeartbeat = {
+  getFailure(): Error | null;
+  stop(): Promise<void>;
+  throwIfFailed(): void;
+};
+
+export type QaCredentialLeaseHeartbeatOptions = {
+  intervalMs?: number;
+  retryDelaysMs?: readonly number[];
+  setTimeoutImpl?: typeof setTimeout;
+  clearTimeoutImpl?: typeof clearTimeout;
+};
+
+/** Acquire a live QA credential lease without exposing broker mechanics to runner plugins. */
+export async function acquireQaCredentialLease<TPayload>(
+  options: AcquireQaCredentialLeaseOptions<TPayload>,
+): Promise<QaCredentialLease<TPayload>> {
+  return await loadQaRuntimeModule().acquireQaCredentialLease(options);
+}
+
+/** Keep a shared QA credential lease alive until the runner finishes cleanup. */
+export function startQaCredentialLeaseHeartbeat(
+  lease: Pick<QaCredentialLease<unknown>, "heartbeat" | "heartbeatIntervalMs" | "kind" | "source">,
+  options?: QaCredentialLeaseHeartbeatOptions,
+): QaCredentialLeaseHeartbeat {
+  return loadQaRuntimeModule().startQaCredentialLeaseHeartbeat(lease, options);
+}
+
+export type LiveTransportQaSuiteCommandOptions = {
+  channelId: string;
+  credentialMode?: "env-only" | "shared-lease";
+  defaultProviderMode: string;
+  envCredentialReason?: string;
+  laneLabel?: string;
+  options: LiveTransportQaCommandOptions;
+  selectScenarioIds: (params: {
+    profile?: string;
+    primaryModel: string;
+    providerMode: string;
+    scenarioIds?: readonly string[];
+  }) => string[];
+};
+
+/** Run a plugin-owned transport adapter through QA Lab's shared suite host. */
+export async function runLiveTransportQaSuiteCommand(params: LiveTransportQaSuiteCommandOptions) {
+  return await loadQaRuntimeModule().runLiveTransportQaSuiteCommand(params);
+}
 
 type LiveTransportQaCommanderOptions = {
   repoRoot?: string;
@@ -88,6 +170,7 @@ type LiveTransportQaCommanderOptions = {
   failFast?: boolean;
   profile?: string;
   sutAccount?: string;
+  credentialFile?: string;
   credentialSource?: string;
   credentialRole?: string;
 };
@@ -104,6 +187,7 @@ export type LiveTransportQaCredentialCliOptions = {
 /** Declarative command metadata and runner used to install a live-transport QA CLI. */
 export type LiveTransportQaCliRegistrationOptions = {
   commandName: string;
+  credentialFileHelp?: string;
   credentialOptions?: LiveTransportQaCredentialCliOptions;
   defaultProviderMode: string;
   description: string;
@@ -149,6 +233,7 @@ function mapLiveTransportQaCommanderOptions(
     scenarioIds: opts.scenario,
     listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccount,
+    credentialFile: opts.credentialFile,
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
   };
@@ -176,6 +261,10 @@ function registerLiveTransportQaCli(
   }
 
   command.option("--sut-account <id>", params.sutAccountHelp, "sut");
+
+  if (params.credentialFileHelp) {
+    command.option("--credential-file <path>", params.credentialFileHelp);
+  }
 
   if (params.listScenariosHelp) {
     command.option("--list-scenarios", params.listScenariosHelp, false);

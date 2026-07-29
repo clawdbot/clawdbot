@@ -58,6 +58,7 @@ export async function runLiveTransportQaSuiteCommand(params: {
     concurrency: 1,
     scenarioIds: selectedScenarioIds,
     sutAccountId: options.sutAccountId,
+    ...(options.credentialFile ? { credentialFile: options.credentialFile } : {}),
     ...(params.credentialMode === "env-only"
       ? {}
       : {

@@ -26,6 +26,24 @@ describe("gateway log redaction", () => {
     expect(formatQaGatewayLogsForError(raw)).not.toContain(token);
   });
 
+  it("redacts Buzz QA private keys and authorization tags", () => {
+    const privateKey = "01".repeat(32);
+    const authTag = '["auth","pubkey","conditions","signature"]';
+    const jsonAuthTag = "authorization-tag-value";
+    const raw = [
+      `privateKey: ${privateKey}`,
+      `authTag: ${authTag}`,
+      `{"privateKey":"${privateKey}"}`,
+      `{"authTag":"${jsonAuthTag}"}`,
+    ].join("\n");
+
+    const redacted = redactQaGatewayDebugText(raw);
+    expect(redacted).not.toContain(privateKey);
+    expect(redacted).not.toContain(authTag);
+    expect(redacted).not.toContain(jsonAuthTag);
+    expect(redacted.match(/<redacted>/gu)).toHaveLength(4);
+  });
+
   it("neutralizes GitHub workflow commands at every line boundary", () => {
     const raw = [
       "::set-output name=output_dir::/tmp/attacker",

@@ -1,0 +1,73 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { z } from "zod";
+import { parseBuzzAuthTag } from "../relay-auth.js";
+import { parseBuzzTarget } from "../target.js";
+import { resolveBuzzPublicKey } from "../types.js";
+
+const buzzQaCredentialPayloadSchema = z
+  .object({
+    relayUrl: z
+      .string()
+      .url()
+      .regex(/^[wW][sS][sS]?:\/\//u),
+    roomId: z.string().min(1),
+    driverPrivateKey: z.string().min(1),
+    sutPrivateKey: z.string().min(1),
+    driverAuthTag: z.string().optional(),
+    sutAuthTag: z.string().optional(),
+  })
+  .strict();
+
+export type BuzzQaCredentials = z.output<typeof buzzQaCredentialPayloadSchema> & {
+  driverPublicKey: string;
+  sutPublicKey: string;
+};
+
+export function parseBuzzQaCredentialPayload(payload: unknown): BuzzQaCredentials {
+  const parsed = buzzQaCredentialPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error("Buzz QA credentials are missing or malformed.");
+  }
+  let roomId: string;
+  let driverPublicKey: string;
+  let sutPublicKey: string;
+  try {
+    roomId = parseBuzzTarget(parsed.data.roomId);
+    driverPublicKey = resolveBuzzPublicKey(parsed.data.driverPrivateKey);
+    sutPublicKey = resolveBuzzPublicKey(parsed.data.sutPrivateKey);
+    parseBuzzAuthTag(parsed.data.driverAuthTag ?? "");
+    parseBuzzAuthTag(parsed.data.sutAuthTag ?? "");
+  } catch {
+    throw new Error("Buzz QA credentials are missing or malformed.");
+  }
+  if (driverPublicKey === sutPublicKey) {
+    throw new Error("Buzz QA requires distinct driver and SUT identities.");
+  }
+  return {
+    ...parsed.data,
+    roomId,
+    driverPublicKey,
+    sutPublicKey,
+  };
+}
+
+export async function readBuzzQaCredentialFile(params: {
+  filePath: string;
+  repoRoot?: string;
+}): Promise<BuzzQaCredentials> {
+  const resolvedPath = path.resolve(params.repoRoot ?? process.cwd(), params.filePath);
+  let raw: string;
+  try {
+    raw = await fs.readFile(resolvedPath, "utf8");
+  } catch (error) {
+    throw new Error(`Unable to read Buzz QA credential file ${resolvedPath}.`, { cause: error });
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Buzz QA credential file ${resolvedPath} is not valid JSON.`, { cause: error });
+  }
+  return parseBuzzQaCredentialPayload(payload);
+}

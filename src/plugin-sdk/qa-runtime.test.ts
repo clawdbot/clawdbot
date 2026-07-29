@@ -118,6 +118,64 @@ describe("plugin-sdk qa-runtime", () => {
     expect(module.isQaRuntimeAvailable()).toBe(false);
   });
 
+  it("runs a plugin-owned transport through the private QA suite host", async () => {
+    const runLiveTransportQaSuiteCommand = vi.fn(async () => {});
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      runLiveTransportQaSuiteCommand,
+    });
+    const module = await import("./qa-runtime.js");
+    const options = { providerMode: "mock-openai" };
+    const selectScenarioIds = vi.fn(() => ["channel-canary"]);
+
+    await module.runLiveTransportQaSuiteCommand({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options,
+      selectScenarioIds,
+    });
+
+    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options,
+      selectScenarioIds,
+    });
+  });
+
+  it("leases plugin-owned transport credentials through the private QA host", async () => {
+    const lease = {
+      source: "env" as const,
+      kind: "buzz",
+      payload: { roomId: "qa-room" },
+      heartbeatIntervalMs: 0,
+      leaseTtlMs: 0,
+      heartbeat: vi.fn(async () => {}),
+      release: vi.fn(async () => {}),
+    };
+    const acquireQaCredentialLease = vi.fn(async () => lease);
+    const heartbeat = {
+      getFailure: vi.fn(() => null),
+      stop: vi.fn(async () => {}),
+      throwIfFailed: vi.fn(),
+    };
+    const startQaCredentialLeaseHeartbeat = vi.fn(() => heartbeat);
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      acquireQaCredentialLease,
+      startQaCredentialLeaseHeartbeat,
+    });
+    const module = await import("./qa-runtime.js");
+    const options = {
+      kind: "buzz",
+      parsePayload: (payload: unknown) => payload as { roomId: string },
+      resolveEnvPayload: () => ({ roomId: "qa-room" }),
+    };
+
+    await expect(module.acquireQaCredentialLease(options)).resolves.toBe(lease);
+    expect(module.startQaCredentialLeaseHeartbeat(lease)).toBe(heartbeat);
+    expect(acquireQaCredentialLease).toHaveBeenCalledWith(options);
+    expect(startQaCredentialLeaseHeartbeat).toHaveBeenCalledWith(lease, undefined);
+  });
+
   it("registers shared live transport QA CLI options", async () => {
     const module = await import("./qa-runtime.js");
     const run = vi.fn(async () => {});
@@ -126,6 +184,7 @@ describe("plugin-sdk qa-runtime", () => {
     module
       .createLiveTransportQaCliRegistration({
         commandName: "telegram",
+        credentialFileHelp: "Private JSON credential file",
         credentialOptions: {
           sourceDescription: "Credential source for Telegram QA",
           roleDescription: "Credential role for Telegram QA",
@@ -172,6 +231,8 @@ describe("plugin-sdk qa-runtime", () => {
       "--fail-fast",
       "--sut-account",
       "sut-2",
+      "--credential-file",
+      "/secure/telegram-qa.json",
       "--credential-source",
       "convex",
       "--credential-role",
@@ -191,6 +252,7 @@ describe("plugin-sdk qa-runtime", () => {
       scenarioIds: ["alpha", "beta"],
       listScenarios: true,
       sutAccountId: "sut-2",
+      credentialFile: "/secure/telegram-qa.json",
       credentialSource: "convex",
       credentialRole: "maintainer",
     });

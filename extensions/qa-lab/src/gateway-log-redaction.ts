@@ -20,6 +20,8 @@ const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
   "client_secret",
   "cookie",
   "driverToken",
+  "privateKey",
+  "authTag",
   "sutToken",
   "leaseToken",
   "refreshToken",
@@ -71,6 +73,14 @@ function redactSecretValueKey(text: string, key: string) {
     .replace(new RegExp(`("${escapedKey}"\\s*:\\s*)"[^"]*"`, "gi"), `$1"<redacted>"`);
 }
 
+function redactStructuredSecretLine(text: string, key: string) {
+  const escapedKey = escapeRegExp(key);
+  return text.replace(
+    new RegExp(`(^|[\\r\\n])(\\s*"?${escapedKey}"?\\s*[:=]\\s*).*$`, "gim"),
+    `$1$2<redacted>`,
+  );
+}
+
 export function redactQaGatewayDebugText(text: string) {
   let redacted = redactSensitiveText(redactTelegramBotTokens(text), { mode: "tools" });
   for (const key of QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS) {
@@ -96,6 +106,9 @@ export function redactQaGatewayDebugText(text: string) {
   }
   for (const key of QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS) {
     redacted = redactSecretValueKey(redacted, key);
+  }
+  for (const key of ["authTag", "privateKey"]) {
+    redacted = redactStructuredSecretLine(redacted, key);
   }
   return redacted
     .replaceAll(/\bsk-ant-oat01-[A-Za-z0-9_-]+\b/g, "<redacted>")

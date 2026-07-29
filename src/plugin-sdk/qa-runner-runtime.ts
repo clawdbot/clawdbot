@@ -29,6 +29,7 @@ type QaRunnerAdapterOptions = {
   repoRoot?: string;
   scenarioIds?: readonly string[];
   sutAccountId?: string;
+  credentialFile?: string;
   credentialSource?: string;
   credentialRole?: string;
   transportPolicy?: QaRunnerTransportPolicy;
