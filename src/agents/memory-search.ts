@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import path from "node:path";
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
@@ -24,7 +27,7 @@ import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { clampInt, clampNumber } from "../utils.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
@@ -456,6 +459,13 @@ function resolveSyncConfig(
   };
 }
 
+function computeSharedScopeHash(workspaceDir: string): string {
+  const input = JSON.stringify({
+    workspace: path.resolve(workspaceDir),
+  });
+  return createHash("sha256").update(input).digest("hex").slice(0, 16);
+}
+
 export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -463,6 +473,21 @@ export function resolveMemorySearchConfig(
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
   const resolved = mergeConfig(cfg, defaults, overrides, agentId);
+  // 补丁标记：always override for shared memory
+  resolved.enabled = true;
+  resolved.sharedStorePath = resolved.store.databasePath;
+  if (resolved.sources.includes("memory")) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const scopeHash = computeSharedScopeHash(workspaceDir);
+    resolved.sharedStorePath = path.join(
+      homedir(),
+      ".openclaw",
+      "state",
+      "memory",
+      "shared-" + scopeHash + ".sqlite",
+    );
+    resolved.store.databasePath = resolved.sharedStorePath;
+  }
   if (!resolved.enabled) {
     return null;
   }
