@@ -13,11 +13,7 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import {
-  UPDATE_HANDOFF_POLL_MS,
-  UPDATE_HANDOFF_STARTED_REASON,
-  UPDATE_RESTART_VERIFICATION_TIMEOUT_MS,
-} from "./update-overlay-helpers.ts";
+import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
@@ -29,6 +25,9 @@ const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
 vi.mock("../lib/nodes/index.ts", () => ({
   peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
 }));
+
+const HANDOFF_POLL_MS = 1_000;
+const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
 
 function installUpdateTranslations() {
   const translations: Record<string, string> = {
@@ -975,13 +974,13 @@ describe("application update overlays", () => {
       expect(statusRequests).toBe(1);
 
       harness.update({ sessionKey: "agent:main:next" });
-      await vi.advanceTimersByTimeAsync(UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(RESTART_VERIFICATION_TIMEOUT_MS);
       await flushMicrotasks();
 
       expect(statusRequests).toBe(11);
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(UPDATE_HANDOFF_POLL_MS);
+      await vi.advanceTimersByTimeAsync(HANDOFF_POLL_MS);
       await flushMicrotasks();
 
       expect(statusRequests).toBe(12);
