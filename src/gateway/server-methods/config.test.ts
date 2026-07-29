@@ -6,6 +6,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   clearConfigSchemaResponseCacheForTests,
@@ -139,6 +141,7 @@ async function invokeConfigOpenFile() {
 afterEach(() => {
   vi.useRealTimers();
   clearConfigSchemaResponseCacheForTests();
+  resetPluginRuntimeStateForTest();
   vi.clearAllMocks();
 });
 
@@ -258,11 +261,9 @@ describe("config schema response cache", () => {
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache schema responses when cache expiry would exceed Date range", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-
+  it("rebuilds when the active plugin registry generation changes", () => {
     loadConfigSchemaResponseForTests();
+    setActivePluginRegistry(createTestRegistry([]));
     loadConfigSchemaResponseForTests();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);

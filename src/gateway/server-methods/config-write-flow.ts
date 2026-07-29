@@ -18,6 +18,7 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
+import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
@@ -304,6 +305,7 @@ export async function commitGatewayConfigWrite(params: {
     },
     afterWrite: { mode: "auto" },
   });
+  invalidateConfigGetResponseCache();
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
