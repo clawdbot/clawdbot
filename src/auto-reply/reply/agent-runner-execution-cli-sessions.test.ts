@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
@@ -596,6 +597,75 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(sessionEntry.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("media-session");
     expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBe("media-session");
     expect(sessionEntry.claudeCliSessionId).toBe("media-session");
+  });
+
+  it("does not attribute media from an earlier admitted turn to a queued failure", async () => {
+    const sessionKey = "agent:main:cron:media-job:run:run-queued";
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-8"),
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("queued session expired", {
+        reason: "session_expired",
+        provider: "claude-cli",
+        model: "claude-opus-4-8",
+      }),
+    );
+
+    let releaseAdmission!: () => void;
+    const admissionGate = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    let notifyAdmissionWait!: () => void;
+    const admissionWait = new Promise<void>((resolve) => {
+      notifyAdmissionWait = resolve;
+    });
+    const restoreAdmission = installSessionPlacementAdmissionProvider({
+      executeLocalTurn: async (_claim, runLocal) => {
+        notifyAdmissionWait();
+        await admissionGate;
+        return await runLocal();
+      },
+      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-8";
+    const sessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: "queued-stale-session" } },
+      cliSessionIds: { "claude-cli": "queued-stale-session" },
+      claudeCliSessionId: "queued-stale-session",
+    } as SessionEntry;
+    const activeSessionStore = { [sessionKey]: sessionEntry };
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+    try {
+      const runPromise = executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        sessionKey,
+        activeSessionStore,
+        getActiveSessionEntry: () => sessionEntry,
+      });
+      await admissionWait;
+      registerGeneratedMediaTaskActivity("tool:image_generate:earlier-turn", sessionKey);
+      releaseAdmission();
+      const result = await runPromise;
+
+      expect(result.kind).toBe("final");
+      expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(sessionEntry.claudeCliSessionId).toBeUndefined();
+    } finally {
+      releaseAdmission();
+      restoreAdmission();
+    }
   });
 
   it("clears a reused binding after a real CLI subprocess reports an expired session", async () => {

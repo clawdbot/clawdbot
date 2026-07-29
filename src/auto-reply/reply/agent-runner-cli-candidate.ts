@@ -87,7 +87,6 @@ export async function runCliFallbackCandidate(params: {
     turn.getActiveSessionEntry(),
     params.cliExecutionProvider,
   );
-  const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
   const cliLifecycleStartedAt = Date.now();
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
@@ -142,8 +141,11 @@ export async function runCliFallbackCandidate(params: {
         agentId: turn.followupRun.run.agentId,
         runId: params.runId,
       },
-      () =>
-        runCliAgentWithLifecycle({
+      () => {
+        // Admission may wait behind another turn that starts detached media.
+        // Snapshot only after this turn owns the session placement.
+        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
+        return runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
           provider: params.cliExecutionProvider,
@@ -372,7 +374,8 @@ export async function runCliFallbackCandidate(params: {
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,
           },
-        }),
+        });
+      },
     ),
   );
   if (droppedCliSessionReplacement) {
