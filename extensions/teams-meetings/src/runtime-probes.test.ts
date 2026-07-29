@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "./config.js";
+import { teamsMeetingsConfig } from "./config.js";
 import {
   testTeamsMeetingListening,
   testTeamsMeetingSpeech,
   type TeamsMeetingsProbeContext,
 } from "./runtime-probes.js";
 import type { TeamsMeetingsSession } from "./transports/types.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 
 const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_probe%40thread.v2/0";
 

@@ -355,6 +355,52 @@ describe("openrouter video generation provider", () => {
     });
   });
 
+  it("keeps valid rows when OpenRouter video catalog data is mixed with malformed entries", async () => {
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
+      releasedJson({
+        data: [null, "malformed-row", ["nested-array"], { id: "google/veo-3.1", name: "Veo 3.1" }],
+      }),
+    );
+
+    const rows = await listOpenRouterVideoModelCatalog({
+      config: {} as never,
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "k",
+        discoveryApiKey: "d",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "k",
+        discoveryApiKey: "d",
+        mode: "api_key" as const,
+        source: "env" as const,
+      }),
+    });
+
+    expect(rows?.map((row) => row.model)).toEqual(["google/veo-3.1"]);
+  });
+
+  it("returns an empty catalog for a malformed OpenRouter video catalog envelope", async () => {
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson(null));
+
+    const rows = await listOpenRouterVideoModelCatalog({
+      config: {} as never,
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "k",
+        discoveryApiKey: "d",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "k",
+        discoveryApiKey: "d",
+        mode: "api_key" as const,
+        source: "env" as const,
+      }),
+    });
+
+    expect(rows).toEqual([]);
+  });
+
   it("lets configured auth replace the OpenRouter catalog default", async () => {
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson({ data: [] }));
 

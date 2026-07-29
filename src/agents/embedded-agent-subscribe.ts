@@ -376,21 +376,23 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
+    const taggedPayload =
+      options?.assistantMessageIndex !== undefined
+        ? setReplyPayloadMetadata(withToolMedia, {
+            assistantMessageIndex: options.assistantMessageIndex,
+            ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
+          })
+        : withToolMedia;
     if (state.deferBlockReplyDelivery) {
-      const deferredPayload =
-        options?.assistantMessageIndex !== undefined
-          ? setReplyPayloadMetadata(withToolMedia, {
-              assistantMessageIndex: options.assistantMessageIndex,
-            })
-          : withToolMedia;
       if (consumesPendingToolMedia) {
-        deferredToolMediaReplies.add(deferredPayload);
+        deferredToolMediaReplies.add(taggedPayload);
       }
-      state.deferredBlockReplies.push(deferredPayload);
+      state.deferredBlockReplies.push(taggedPayload);
       return;
     }
-    const emitted = emitBlockReplySafely(withToolMedia, options);
-    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+    const emitted = emitBlockReplySafely(taggedPayload, options);
+    if (emitted && !taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
       state.visibleBlockReplyCount += 1;
       if (consumesPendingToolMedia) {
         state.hasToolMediaBlockReply = true;

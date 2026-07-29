@@ -8,6 +8,10 @@ import {
   type ChannelIngressMonitorLifecycle,
 } from "./ingress-monitor.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
+import {
+  ChannelIngressUnavailableError,
+  isChannelIngressUnavailableError,
+} from "./ingress-unavailable.js";
 
 type RawEvent = { id: string; lane: string; text: string };
 type StoredEvent = { version: 1; rawEvent: string };
@@ -494,6 +498,22 @@ describe("channel ingress monitor", () => {
     });
   });
 
+  it("can prepare the durable queue before starting the drain", async () => {
+    await withQueue(async (queue) => {
+      const queueFactory = vi.fn(() => queue);
+      const monitor = createMonitor(queueFactory, vi.fn());
+
+      monitor.ensureQueueAvailable();
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(monitor.isRunning()).toBe(false);
+
+      monitor.start();
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(monitor.isRunning()).toBe(true);
+      await monitor.stop();
+    });
+  });
+
   it("fails start once when the durable queue cannot be opened", async () => {
     const denial = new Error(
       'openChannelIngressQueue is only available for trusted plugins in this release. Plugin "slack" loaded with origin "config"',
@@ -504,7 +524,24 @@ describe("channel ingress monitor", () => {
     const onError = vi.fn();
     const monitor = createMonitor(queueFactory, vi.fn(), undefined, onError, undefined, 1);
 
-    expect(() => monitor.start()).toThrow(denial);
+    // The typed rethrow is the gateway's only way to tell dead inbound apart from
+    // an ordinary channel crash; the denial stays reachable as the cause.
+    const startError = (() => {
+      try {
+        monitor.start();
+        return expect.unreachable("start must fail while the durable queue is denied");
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(startError).toBeInstanceOf(ChannelIngressUnavailableError);
+    expect((startError as Error).cause).toBe(denial);
+    expect(isChannelIngressUnavailableError(startError)).toBe(true);
+    // A channel plugin is free to wrap the start failure in its own error.
+    expect(
+      isChannelIngressUnavailableError(new Error("slack start failed", { cause: startError })),
+    ).toBe(true);
+    expect(isChannelIngressUnavailableError(denial)).toBe(false);
     expect(monitor.isRunning()).toBe(false);
     // An armed poll timer would have retried the denied factory many times over this window.
     await sleep(25);

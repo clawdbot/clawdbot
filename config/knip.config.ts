@@ -52,6 +52,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs!",
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
+  "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -248,6 +249,7 @@ const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
   "@lit-labs/signals",
   "@lit/context",
+  "@lit/task",
   // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",

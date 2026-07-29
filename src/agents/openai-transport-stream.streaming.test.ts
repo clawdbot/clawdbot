@@ -276,9 +276,15 @@ describe("openai transport stream", () => {
   it.each(["reasoning_content", "reasoning"] as const)(
     "keeps hidden local %s streams alive beyond the model idle timeout",
     async (reasoningField) => {
-      const reasoningChunkCount = 5;
-      const reasoningChunkDelayMs = 35;
-      const idleTimeoutMs = 100;
+      // The regression under guard is "hidden reasoning stops resetting the idle
+      // watchdog", so the hidden phase has to outlast idleTimeoutMs or a broken
+      // build would pass. Pace chunks far below that budget instead of near it:
+      // a loaded runner stretches every inter-chunk gap, and one gap wider than
+      // the timeout inverts the ratio into a false idle timeout.
+      const idleTimeoutMs = 1_000;
+      const reasoningChunkDelayMs = 5;
+      const hiddenReasoningDurationMs = idleTimeoutMs + 200;
+      let hiddenReasoningElapsedMs = 0;
       const server = createServer((req, res) => {
         req.resume();
         req.on("end", () => {
@@ -288,13 +294,13 @@ describe("openai transport stream", () => {
             connection: "keep-alive",
           });
 
-          let reasoningChunksSent = 0;
+          const hiddenReasoningStartedAt = Date.now();
           const writeNextChunk = () => {
             if (res.destroyed) {
               return;
             }
-            if (reasoningChunksSent < reasoningChunkCount) {
-              reasoningChunksSent += 1;
+            hiddenReasoningElapsedMs = Date.now() - hiddenReasoningStartedAt;
+            if (hiddenReasoningElapsedMs < hiddenReasoningDurationMs) {
               const reasoningChunk = {
                 id: "chatcmpl-local-reasoning",
                 object: "chat.completion.chunk",
@@ -370,6 +376,9 @@ describe("openai transport stream", () => {
         expect(text).toBe("OK");
         expect(thinking).toBe("");
         expect(onIdleTimeout).not.toHaveBeenCalled();
+        // Without this the assertions above could pass on a run whose hidden
+        // phase never reached the watchdog deadline, i.e. proving nothing.
+        expect(hiddenReasoningElapsedMs).toBeGreaterThan(idleTimeoutMs);
       } finally {
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));

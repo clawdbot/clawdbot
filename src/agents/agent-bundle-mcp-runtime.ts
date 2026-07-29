@@ -1,6 +1,9 @@
 /** Session-scoped MCP runtime catalog loader and transport lifecycle. */
 import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   ErrorCode,
@@ -183,7 +186,7 @@ function isMcpMethodNotFoundError(error: unknown): boolean {
     return true;
   }
   const message = String(error);
-  return message.includes("-32601") || /method not found/i.test(message);
+  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
 }
 
 async function listAllToolsBestEffort(params: {
@@ -587,20 +590,37 @@ export function createSessionMcpRuntime(params: {
       }
       return result;
     } catch (error) {
-      if (tracksFailureBackoff) {
+      // A stateful server uses HTTP 404 to invalidate an expired MCP session.
+      // Reinitialize a fresh client, but never replay a possibly mutating call.
+      const sessionExpired =
+        session.transportType === "streamable-http" &&
+        session.transport instanceof StreamableHTTPClientTransport &&
+        session.transport.sessionId !== undefined &&
+        error instanceof StreamableHTTPError &&
+        error.code === 404;
+      let recycleReason: "expired HTTP session" | "repeated request timeouts" | undefined;
+      if (sessionExpired) {
+        recycleReason = "expired HTTP session";
+      } else if (tracksFailureBackoff) {
         const failures = recordServerToolFailure(serverName, session, nowMs);
         const requestTimedOut =
           error !== null && typeof error === "object" && localRequestTimeouts.has(error);
         if (requestTimedOut && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
-          serverBackoff.delete(serverName);
-          scheduleCatalogServerRetry(serverName, "repeated request timeouts");
-          logWarn(`bundle-mcp: recycling server "${serverName}" after repeated timeouts`);
-          void retireSessionIfCurrent(serverName, session).catch((retireError: unknown) => {
-            logWarn(
-              `bundle-mcp: failed to retire timed-out server "${serverName}": ${redactMcpDiagnosticError(retireError)}`,
-            );
-          });
+          recycleReason = "repeated request timeouts";
         }
+      }
+      if (recycleReason) {
+        serverBackoff.delete(serverName);
+        scheduleCatalogServerRetry(serverName, recycleReason);
+        const timedOut = recycleReason === "repeated request timeouts";
+        logWarn(
+          `bundle-mcp: recycling server "${serverName}" after ${timedOut ? "repeated timeouts" : "an expired HTTP session"}`,
+        );
+        void retireSessionIfCurrent(serverName, session).catch((retireError: unknown) => {
+          logWarn(
+            `bundle-mcp: failed to retire ${timedOut ? "timed-out" : "expired-session"} server "${serverName}": ${redactMcpDiagnosticError(retireError)}`,
+          );
+        });
       }
       throw error;
     }

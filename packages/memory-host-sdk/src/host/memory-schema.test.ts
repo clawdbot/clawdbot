@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
+  readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,
 } from "./memory-recall-metadata.js";
@@ -39,6 +40,7 @@ describe("memory index schema", () => {
         .map((row) => (row as { name: string }).name);
       expect(columns).toContain("importance");
       expect(columns).toContain("triggers");
+      expect(columns).toContain("project_key");
       expect(() =>
         db
           .prepare(
@@ -50,13 +52,14 @@ describe("memory index schema", () => {
       ).toThrow();
       db.prepare(
         `INSERT INTO memory_index_chunks
-         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers)
-         VALUES ('good', 'MEMORY.md', 1, 1, 'h', 'm', 't', '[]', 1, 9, 'when flying')`,
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+         VALUES ('good', 'MEMORY.md', 1, 1, 'h', 'm', 't', '[]', 1, 9, 'when flying', 'github.com/openclaw/openclaw')`,
       ).run();
       expect(readMemoryRecallMetadata(db, ["good"]).get("good")).toEqual({
         id: "good",
         importance: 9,
         triggers: "when flying",
+        project_key: "github.com/openclaw/openclaw",
       });
       expect(readCuratedMemoryTriggerCandidates(db, 10)).toEqual([
         {
@@ -68,8 +71,89 @@ describe("memory index schema", () => {
           text: "t",
           importance: 9,
           triggers: "when flying",
+          project_key: "github.com/openclaw/openclaw",
         },
       ]);
+      const insertDaily = db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, project_key)
+         VALUES (?, ?, 1, 1, ?, 'm', 'daily', '[]', 2, 'github.com/openclaw/openclaw')`,
+      );
+      for (let index = 0; index < 80; index += 1) {
+        const id = `daily-${String(index).padStart(3, "0")}`;
+        insertDaily.run(id, `memory/2026-07-${String(index + 1).padStart(3, "0")}.md`, id);
+      }
+      expect(readCuratedProjectMemoryCandidates(db, 1, ["github.com/openclaw/openclaw"])).toEqual([
+        {
+          id: "good",
+          path: "MEMORY.md",
+          source: "memory",
+          start_line: 1,
+          end_line: 1,
+          text: "t",
+          importance: 9,
+          triggers: "when flying",
+          project_key: "github.com/openclaw/openclaw",
+        },
+      ]);
+      const insertBootstrapCandidate = db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, project_key)
+         VALUES (?, 'MEMORY.md', ?, ?, ?, 'm', ?, '[]', 2, ?, 'github.com/openclaw/openclaw')`,
+      );
+      for (let index = 0; index < 64; index += 1) {
+        const id = `bootstrap-low-${String(index).padStart(3, "0")}`;
+        insertBootstrapCandidate.run(id, index + 2, index + 2, id, "low", 1);
+      }
+      insertBootstrapCandidate.run(
+        "bootstrap-high",
+        100,
+        100,
+        "bootstrap-high",
+        "high-priority bootstrap fact",
+        10,
+      );
+      expect(readCuratedProjectMemoryCandidates(db, 48, ["github.com/openclaw/openclaw"])).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "bootstrap-high",
+            text: "high-priority bootstrap fact",
+            importance: 10,
+          }),
+        ]),
+      );
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+         VALUES ('a-foreign', 'MEMORY.md', 2, 2, 'h2', 'm', 'foreign', '[]', 2, 9, 'when flying', 'github.com/example/other')`,
+      ).run();
+      expect(readCuratedMemoryTriggerCandidates(db, 1, ["github.com/openclaw/openclaw"])).toEqual([
+        {
+          id: "good",
+          path: "MEMORY.md",
+          source: "memory",
+          start_line: 1,
+          end_line: 1,
+          text: "t",
+          importance: 9,
+          triggers: "when flying",
+          project_key: "github.com/openclaw/openclaw",
+        },
+      ]);
+      expect(readCuratedMemoryTriggerCandidates(db, 1, [])).toEqual([]);
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+         VALUES ('a-fourth', 'MEMORY.md', 3, 3, 'h3', 'm', 'fourth', '[]', 3, 8, 'when flying', 'project/d')`,
+      ).run();
+      expect(
+        readCuratedMemoryTriggerCandidates(db, 1, [
+          "project/a",
+          "project/b",
+          "project/c",
+          "project/d",
+        ])[0],
+      ).toMatchObject({ id: "a-fourth", project_key: "project/d" });
     } finally {
       db.close();
     }

@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell dock suppression", () => {
-  it("suppresses docked panels only while a settings route owns the viewport", () => {
+  it("keeps Ask OpenClaw on settings pages and suppresses it only on its full page", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal(
       "matchMedia",
@@ -38,7 +38,7 @@ describe("OpenClaw shell dock suppression", () => {
           assistantAgentId: "main",
           hello: {
             auth: { role: "operator", scopes: ["operator.admin"] },
-            features: { methods: ["terminal.open", "browser.request"] },
+            features: { methods: ["terminal.open", "browser.request", "openclaw.chat"] },
           },
           lastError: null,
           offlineStable: false,
@@ -97,6 +97,23 @@ describe("OpenClaw shell dock suppression", () => {
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          suppressed: boolean;
+        }
+      ).suppressed,
+    ).toBe(true);
+    expect(
+      (
+        container.querySelector("openclaw-custodian-panel") as HTMLElement & {
+          suppressed: boolean;
+        }
+      ).suppressed,
+    ).toBe(false);
+
+    shell.routeState = { routeId: "custodian" };
+    renderLit(shell.render(), container);
+    expect(
+      (
+        container.querySelector("openclaw-custodian-panel") as HTMLElement & {
           suppressed: boolean;
         }
       ).suppressed,

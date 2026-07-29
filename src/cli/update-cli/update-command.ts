@@ -181,7 +181,10 @@ async function updateCommandInternal(
     return;
   }
 
-  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  let configSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: true,
+    ...(opts.dryRun === true ? { observe: false } : {}),
+  });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,
@@ -573,6 +576,7 @@ async function updateCommandInternal(
   await finishUpdate({
     result,
     root,
+    installKindChanged: switchToGit || switchToPackage,
     configSnapshot,
     requestedChannel,
     storedChannel,

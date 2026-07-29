@@ -6,22 +6,15 @@ import {
   resolveAccountWithDefaultFallback,
 } from "openclaw/plugin-sdk/account-core";
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveNextcloudTalkApiCredentialsResult,
   type NextcloudTalkCredentialUnavailableDiagnostic,
 } from "./api-credentials.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
-
-function isTruthyEnvValue(value?: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
-}
 
 const debugAccounts = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_NEXTCLOUD_TALK_ACCOUNTS)) {

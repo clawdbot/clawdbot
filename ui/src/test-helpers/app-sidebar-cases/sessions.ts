@@ -17,7 +17,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "./session-pagination.ts";
 
 describe("AppSidebar session indicators", () => {
   it("keeps one leading slot across neutral, running, open, and merged states", async () => {

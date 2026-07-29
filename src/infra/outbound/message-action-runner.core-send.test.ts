@@ -344,6 +344,67 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    "agent:main:subagent:worker",
+    "agent:main:cron:job:run:turn",
+    "channel:agent:main:main",
+  ])(
+    "rejects implicit delivery to internal session %s before sending",
+    async (currentChannelId) => {
+      const sendText = registerSlackTextPlugin();
+
+      await expect(
+        runMessageAction({
+          cfg: slackConfig,
+          action: "send",
+          params: {
+            channel: "slack",
+            message: "do not deliver to a session key",
+          },
+          toolContext: {
+            currentChannelProvider: "slack",
+            currentChannelId,
+          },
+          sessionKey: "agent:main:subagent:worker",
+          dryRun: false,
+        }),
+      ).rejects.toThrow(/requires a target/i);
+
+      expect(sendText).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivers to a real current conversation instead of an internal session channel", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        message: "deliver to the actual conversation",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "agent:main:subagent:worker",
+        currentMessagingTarget: "channel:C123",
+      },
+      sessionKey: "agent:main:subagent:worker",
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "slack",
+      to: "channel:C123",
+    });
+    expect(firstMockArg(sendText, "send text")).toMatchObject({
+      to: "channel:C123",
+      text: "deliver to the actual conversation",
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+  });
+
   it("carries a prepared conversation-turn id to the channel send", async () => {
     const sendText = registerSlackTextPlugin();
 

@@ -35,10 +35,13 @@ type InternalRealtimeVoiceProviderApi = {
   isBrowserSessionConfigured: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
+    agentId?: string;
   }) => boolean;
   resolveBrowserSessionCapabilities?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
+    /** Effective per-session model after request overrides. */
+    model?: string;
   }) => InternalRealtimeVoiceProviderCapabilities;
   cancelBrowserSession?: (
     request: InternalRealtimeVoiceBrowserSessionCreateRequest,
@@ -63,11 +66,13 @@ export function isInternalRealtimeVoiceBrowserSessionConfigured(params: {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
+  agentId?: string;
 }): boolean {
   return (
     readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
       cfg: params.cfg,
       providerConfig: params.providerConfig,
+      agentId: params.agentId,
     }) === true
   );
 }
@@ -76,11 +81,13 @@ export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
+  model?: string;
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveBrowserSessionCapabilities?.(
     {
       cfg: params.cfg,
       providerConfig: params.providerConfig,
+      model: params.model,
     },
   );
 }

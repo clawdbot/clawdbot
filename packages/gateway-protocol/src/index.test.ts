@@ -48,6 +48,7 @@ import type {
 } from "./index.js";
 import * as schemaExportRegistry from "./schema-export-registry.js";
 import type * as Schema from "./schema.js";
+import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import * as validatorRegistry from "./validator-registry.js";
 
 /**
@@ -86,9 +87,42 @@ describe("protocol export registries", () => {
     expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
     expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
   });
+
+  it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
+    expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
+      schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
+      schemaExportRegistry.SkillsProposalEvaluateResultSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
+      schemaExportRegistry.SkillsProposalEventsListParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
+      schemaExportRegistry.SkillsProposalEventsListResultSchema,
+    );
+  });
 });
 
 describe("lazy protocol validators", () => {
+  it("accepts bounded request-frame trace context metadata", () => {
+    const request = {
+      type: "req",
+      id: "request-1",
+      method: "status.summary",
+      params: {},
+    };
+
+    expect(protocol.validateRequestFrame(request)).toBe(true);
+    expect(
+      protocol.validateRequestFrame({
+        ...request,
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      }),
+    ).toBe(true);
+    expect(protocol.validateRequestFrame({ ...request, traceparent: "x".repeat(129) })).toBe(false);
+  });
+
   it("validates through exported lazy validators", () => {
     expect(validateCommandsListParams({})).toBe(true);
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
@@ -385,6 +419,7 @@ describe("lazy protocol validators", () => {
     expect(
       protocol.validateSkillsProposalRequestRevisionParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
         targetAgentId: "writer",
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
@@ -408,6 +443,52 @@ describe("lazy protocol validators", () => {
         hiddenPrompt: "do not accept caller-provided hidden prompts",
       }),
     ).toBe(false);
+  });
+
+  it("accepts support-file-only Skill Workshop revisions", () => {
+    expect(
+      protocol.validateSkillsProposalReviseParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
+        supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("validates Skill Workshop evaluation and event replay params", () => {
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "b".repeat(64),
+        correlationId: "evaluation-1",
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "stale",
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "x".repeat(257),
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "😀".repeat(200),
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalEventsListParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        afterSequence: 41,
+        limit: 200,
+      }),
+    ).toBe(true);
+    expect(protocol.validateSkillsProposalEventsListParams({ limit: 201 })).toBe(false);
   });
 
   it("can still compile every exported protocol validator", () => {

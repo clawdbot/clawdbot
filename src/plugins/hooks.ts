@@ -15,6 +15,7 @@ import {
   type InputGateDecision,
   isHookDecision,
 } from "./hook-decision-types.js";
+import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -91,6 +92,12 @@ import type {
   PluginHookBeforeInstallResult,
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
+  PluginHookSkillChangedEvent,
+  PluginHookSkillContext,
+  PluginHookSkillProposalChangedEvent,
+  PluginHookSkillProposalEvaluateEvent,
+  PluginHookSkillProposalEvaluateResult,
+  PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
 
 // Re-export types for consumers
@@ -147,6 +154,8 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   // and compaction proceeds.
   before_compaction: 30_000,
   after_compaction: 30_000,
+  skill_changed: 30_000,
+  skill_proposal_changed: 30_000,
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   before_agent_run: 15_000,
@@ -160,7 +169,23 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   message_sending: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
+  skill_proposal_evaluate: 120_000,
 };
+
+function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return value;
+  }
+  const object = value as object;
+  if (seen.has(object)) {
+    return value;
+  }
+  seen.add(object);
+  for (const child of Object.values(object)) {
+    deepFreezeHookValue(child, seen);
+  }
+  return Object.freeze(value);
+}
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   mergeResults?: (
@@ -168,6 +193,7 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
     next: TResult,
     registration: PluginHookRegistration<K>,
   ) => TResult;
+  isolateEventPerHandler?: boolean;
   mergeNullResults?: boolean;
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
@@ -463,6 +489,9 @@ export function createHookRunner(
     return firstLine || "unknown error";
   };
 
+  const getPluginPackageVersion = (pluginId: string): string | undefined =>
+    registry.plugins.find((plugin) => plugin.id === pluginId)?.packageVersion;
+
   const isPromiseLike = (value: unknown): value is PromiseLike<unknown> => {
     if ((typeof value !== "object" && typeof value !== "function") || value === null) {
       return false;
@@ -586,7 +615,10 @@ export function createHookRunner(
     for (const hook of hooks) {
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
-        const promise = Promise.resolve(handler(event, ctx));
+        const handlerEvent = policy.isolateEventPerHandler
+          ? cloneHookIsolationValue(hookName, event)
+          : event;
+        const promise = Promise.resolve(handler(handlerEvent, ctx));
         const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
 
@@ -609,6 +641,9 @@ export function createHookRunner(
           }
         }
       } catch (err) {
+        if (err instanceof HookIsolationError) {
+          throw err;
+        }
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
     }
@@ -1184,17 +1219,24 @@ export function createHookRunner(
       event,
       ctx,
       {
+        // A plugin may mutate its local event, but direct writes must not alter
+        // the caller's params or the event observed by another plugin.
+        isolateEventPerHandler: true,
         mergeResults: (acc, next, reg) => {
           if (acc?.block === true) {
             return acc;
           }
-          const approvalPluginId = acc?.requireApproval?.pluginId;
-          const freezeParamsForDifferentPlugin =
-            Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
+          const approvalAlreadyRequested = acc?.requireApproval !== undefined;
+          let params = lastDefined(acc?.params, next.params);
+          if (approvalAlreadyRequested) {
+            params = acc?.params;
+          } else if (next.requireApproval && params !== undefined) {
+            // Approval covers one detached snapshot. Later hooks may still
+            // block, but they cannot change what the operator reviewed.
+            params = cloneHookIsolationValue("before_tool_call", params);
+          }
           return {
-            params: freezeParamsForDifferentPlugin
-              ? acc?.params
-              : lastDefined(acc?.params, next.params),
+            params,
             block: stickyTrue(acc?.block, next.block),
             blockReason: lastDefined(acc?.blockReason, next.blockReason),
             requireApproval:
@@ -1493,6 +1535,74 @@ export function createHookRunner(
   }
 
   // =========================================================================
+  // Skill Hooks
+  // =========================================================================
+
+  /**
+   * Run every registered proposal evaluator and retain its attribution.
+   *
+   * Evaluator failures are returned as data so Workshop can persist and show
+   * them. A broken optional evaluator must not make proposal state unreadable.
+   */
+  async function runSkillProposalEvaluate(
+    event: PluginHookSkillProposalEvaluateEvent,
+    ctx: PluginHookSkillContext,
+  ): Promise<PluginHookSkillProposalEvaluationOutcome[]> {
+    const hookName = "skill_proposal_evaluate";
+    const hooks = getHooksForName(registry, hookName);
+    if (hooks.length === 0) {
+      return [];
+    }
+
+    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, attributed)`);
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
+    return await Promise.all(
+      hooks.map(async (hook): Promise<PluginHookSkillProposalEvaluationOutcome> => {
+        const pluginVersion = getPluginPackageVersion(hook.pluginId);
+        const attribution = {
+          evaluatorId: hook.registrationId ?? hook.pluginId,
+          pluginId: hook.pluginId,
+          ...(pluginVersion ? { pluginVersion } : {}),
+        };
+        try {
+          const handler = hook.handler as (
+            event: PluginHookSkillProposalEvaluateEvent,
+            ctx: PluginHookSkillContext,
+          ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
+          const promise = Promise.resolve(handler(immutableEvent, ctx));
+          const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
+          const result = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          return result
+            ? Object.assign({}, attribution, { status: "completed" as const, result })
+            : Object.assign({}, attribution, { status: "skipped" as const });
+        } catch (error) {
+          const message = sanitizeHookError(error);
+          logger?.error(
+            `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${formatHookErrorForLog(error)}`,
+          );
+          return Object.assign({}, attribution, { status: "error" as const, error: message });
+        }
+      }),
+    );
+  }
+
+  async function runSkillProposalChanged(
+    event: PluginHookSkillProposalChangedEvent,
+    ctx: PluginHookSkillContext,
+  ): Promise<void> {
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
+    return runVoidHook("skill_proposal_changed", immutableEvent, ctx);
+  }
+
+  async function runSkillChanged(
+    event: PluginHookSkillChangedEvent,
+    ctx: PluginHookSkillContext,
+  ): Promise<void> {
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
+    return runVoidHook("skill_changed", immutableEvent, ctx);
+  }
+
+  // =========================================================================
   // Skill Install Hooks
   // =========================================================================
 
@@ -1605,6 +1715,10 @@ export function createHookRunner(
     runHeartbeatPromptContribution,
     runCronReconciled,
     runCronChanged,
+    // Skill hooks
+    runSkillProposalEvaluate,
+    runSkillProposalChanged,
+    runSkillChanged,
     // Install hooks
     runBeforeInstall,
     runResolveExecEnv,

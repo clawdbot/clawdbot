@@ -11,7 +11,7 @@ import type {
   CodeModeConfig,
   CodeModeNamespaceDescriptor,
   CodeModeWorkerPayload,
-  CodeModeWorkerResult,
+  CodeModeWorkerThreadResult as CodeModeWorkerResult,
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
@@ -482,6 +482,8 @@ async function main(): Promise<CodeModeWorkerResult> {
       status: "failed",
       error: "invalid code mode worker input",
       code: "invalid_input",
+      failurePhase: "input",
+      bridgeDispatchStarted: false,
       output: [],
     };
   }
@@ -518,18 +520,23 @@ async function main(): Promise<CodeModeWorkerResult> {
       status: "failed",
       error: "invalid code mode worker input",
       code: "invalid_input",
+      failurePhase: "input",
+      bridgeDispatchStarted: false,
       output: [],
     };
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
+    const code = timedOut
+      ? "timeout"
+      : error instanceof CodeModeWorkerFailure
+        ? error.code
+        : "internal_error";
     return {
       status: "failed",
       error: timedOut ? "code mode timeout exceeded" : errorMessage(error),
-      code: timedOut
-        ? "timeout"
-        : error instanceof CodeModeWorkerFailure
-          ? error.code
-          : "internal_error",
+      code,
+      failurePhase: code === "invalid_input" ? "input" : "guest",
+      bridgeDispatchStarted: false,
       output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }

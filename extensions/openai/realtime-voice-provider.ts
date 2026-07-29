@@ -1,6 +1,7 @@
 // Openai provider module implements model/runtime integration.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   isProviderAuthProfileConfigured,
@@ -43,10 +44,15 @@ import {
   resolveOpenAIProviderConfigRecord,
   trimToUndefined,
 } from "./realtime-provider-shared.js";
+import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
+import {
+  createOpenAIQuicksilverBrowserSessionBroker,
+  OPENAI_QUICKSILVER_CAPABILITIES,
+  resolveOpenAIChatGptSubscriptionAuth,
+} from "./realtime-quicksilver-session.js";
 import {
   isOpenAIGptLiveModel,
   OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE,
-  OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE,
 } from "./realtime-quicksilver.js";
 
 type OpenAIRealtimeVoice =
@@ -94,6 +100,15 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
 };
 
 const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
+// Picker suggestions surfaced through talk.catalog; each value is live-verified
+// against the OpenAI realtime APIs. Free-form model values are still accepted.
+const OPENAI_REALTIME_MODELS = [
+  "gpt-realtime-2.1",
+  "gpt-realtime-2.1-mini",
+  "gpt-realtime-2",
+  "gpt-live-1-codex",
+  "gpt-live-1-boulder-alpha",
+] as const;
 const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   transports: ["webrtc", "gateway-relay"],
@@ -273,6 +288,10 @@ type OpenAIRealtimeApiKeyResolution =
 
 const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
+const OPENAI_GPT_LIVE_AUTH_REQUIRED =
+  "GPT-Live Talk requires either an OpenAI Platform API key or a ChatGPT OAuth subscription profile";
+const OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE =
+  "GPT-Live Talk requires a working OpenAI Platform API key or ChatGPT OAuth subscription profile. The selected Platform API-key source could not be resolved, so OAuth fallback was not used; fix or remove it.";
 const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
   "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
@@ -472,6 +491,20 @@ function hasOpenAIRealtimePlatformAuthInput(params: {
     return true;
   }
   return hasOpenAIRealtimeApiKeyInput(undefined);
+}
+
+function hasOpenAIChatGptSubscriptionAuthInput(params: {
+  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  agentId?: string;
+}): boolean {
+  return isProviderAuthProfileConfigured({
+    provider: "openai",
+    cfg: params.cfg,
+    agentDir:
+      params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+    profileTypes: ["oauth"],
+    includeExternalCliAuth: false,
+  });
 }
 
 function isOpenAIRealtimeMaxSessionDurationError(detail: string): boolean {
@@ -1549,9 +1582,9 @@ function resolveOpenAIRealtimeBrowserOfferHeaders(): Record<string, string> | un
   return Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
 }
 
-type CodexRealtimeBrowserSessionFallback = NonNullable<
-  ReturnType<typeof readCodexRealtimeBrowserSessionFallback>
->;
+type OpenAIQuicksilverBrowserSessionBroker = ReturnType<
+  typeof createOpenAIQuicksilverBrowserSessionBroker
+>["broker"];
 
 type OpenAIInternalRealtimeBrowserSessionCreateRequest =
   RealtimeVoiceBrowserSessionCreateRequest & {
@@ -1571,10 +1604,12 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
   isBrowserSessionConfigured: (ctx: {
     cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
     providerConfig: RealtimeVoiceProviderConfig;
+    agentId?: string;
   }) => boolean;
   resolveBrowserSessionCapabilities?: (ctx: {
     cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
     providerConfig: RealtimeVoiceProviderConfig;
+    model?: string;
   }) => OpenAIInternalRealtimeVoiceCapabilities;
   cancelBrowserSession?: (
     request: OpenAIInternalRealtimeBrowserSessionCreateRequest,
@@ -1582,78 +1617,104 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
   ) => Promise<void> | void;
 };
 
-type CodexRealtimeGlobalState = {
-  version: 1;
-  fallback?: {
-    capabilities: Partial<OpenAIInternalRealtimeVoiceCapabilities>;
-    isConfigured: () => boolean;
-    createBrowserSession: (
-      request: OpenAIInternalRealtimeBrowserSessionCreateRequest,
-    ) => Promise<RealtimeVoiceBrowserSession>;
-    cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
-  };
-};
-
-const CODEX_REALTIME_GLOBAL_STATE = Symbol.for("openclaw.codex.realtime-voice.v1");
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 
-function readCodexRealtimeBrowserSessionFallback() {
-  const state = (
-    globalThis as typeof globalThis & {
-      [CODEX_REALTIME_GLOBAL_STATE]?: CodexRealtimeGlobalState;
-    }
-  )[CODEX_REALTIME_GLOBAL_STATE];
-  return state?.version === 1 ? state.fallback : undefined;
-}
-
-const codexFallbackBySession = new WeakMap<
+const quicksilverBrokerBySession = new WeakMap<
   RealtimeVoiceBrowserSession,
-  CodexRealtimeBrowserSessionFallback
+  OpenAIQuicksilverBrowserSessionBroker
 >();
-
-function resolveConfiguredCodexRealtimeFallback(
-  resolveFallback: () => CodexRealtimeBrowserSessionFallback | undefined,
-): CodexRealtimeBrowserSessionFallback | undefined {
-  const fallback = resolveFallback();
-  return fallback?.isConfigured() === true ? fallback : undefined;
-}
 
 async function createOpenAIRealtimeBrowserSession(
   req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
-  resolveCodexFallback: () => CodexRealtimeBrowserSessionFallback | undefined,
+  quicksilverBroker: OpenAIQuicksilverBrowserSessionBroker | undefined,
 ): Promise<RealtimeVoiceBrowserSession> {
+  const rawConfig = resolveOpenAIProviderConfigRecord(req.providerConfig);
   const config = normalizeProviderConfig(req.providerConfig);
   if (config.azureEndpoint || config.azureDeployment) {
     throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
   }
 
+  const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+  if (isOpenAIGptLiveModel(model)) {
+    if (!quicksilverBroker) {
+      throw new Error("OpenAI GPT-Live browser session broker is unavailable");
+    }
+    const configuredVoice = trimToUndefined(rawConfig?.speakerVoice ?? rawConfig?.voice);
+    const quicksilverRequest = {
+      ...req,
+      model,
+      instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+      ...(req.voice ? {} : configuredVoice ? { voice: configuredVoice } : {}),
+    };
+    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
+      cfg: req.cfg,
+      agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
+    });
+    if (subscriptionAuth) {
+      const session = await quicksilverBroker.createBrowserSession(
+        quicksilverRequest,
+        subscriptionAuth,
+      );
+      quicksilverBrokerBySession.set(session, quicksilverBroker);
+      return session;
+    }
+    const auth = await resolveOpenAIRealtimePlatformAuth({
+      configuredApiKey: config.apiKey,
+      cfg: req.cfg,
+    });
+    if (auth.status === "available") {
+      const session = await quicksilverBroker.createBrowserSession(quicksilverRequest, {
+        type: "api-key",
+        token: auth.value,
+      });
+      quicksilverBrokerBySession.set(session, quicksilverBroker);
+      return session;
+    }
+    if (
+      hasOpenAIRealtimePlatformAuthInput({
+        configuredApiKey: config.apiKey,
+        cfg: req.cfg,
+      })
+    ) {
+      throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
+    }
+    throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
+  }
   const auth = await resolveOpenAIRealtimePlatformAuth({
     configuredApiKey: config.apiKey,
     cfg: req.cfg,
   });
   if (auth.status === "missing") {
-    // An authored Platform credential stays authoritative even when it cannot
-    // be resolved. Falling through would hide a broken key behind OAuth.
     if (
-      !hasOpenAIRealtimePlatformAuthInput({
+      hasOpenAIRealtimePlatformAuthInput({
         configuredApiKey: config.apiKey,
         cfg: req.cfg,
       })
     ) {
-      const fallback = resolveConfiguredCodexRealtimeFallback(resolveCodexFallback);
-      if (fallback) {
-        const session = await fallback.createBrowserSession(req);
-        codexFallbackBySession.set(session, fallback);
-        return session;
-      }
+      throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
     }
-    throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
+      cfg: req.cfg,
+      agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
+    });
+    if (!subscriptionAuth) {
+      throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+    }
+    if (!quicksilverBroker) {
+      throw new Error("OpenAI realtime browser session broker is unavailable");
+    }
+    const session = await quicksilverBroker.createBrowserSession(
+      {
+        ...req,
+        model,
+        voice: normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy",
+      },
+      subscriptionAuth,
+    );
+    quicksilverBrokerBySession.set(session, quicksilverBroker);
+    return session;
   }
 
-  const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-  if (isOpenAIGptLiveModel(model)) {
-    throw new Error(OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE);
-  }
   const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
   const tools = normalizeOpenAIRealtimeTools(req.tools);
   const session: Record<string, unknown> = {
@@ -1714,22 +1775,22 @@ async function cancelOpenAIRealtimeBrowserSession(
   _req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
   session: RealtimeVoiceBrowserSession,
 ): Promise<void> {
-  const fallback = codexFallbackBySession.get(session);
-  codexFallbackBySession.delete(session);
-  await fallback?.cancelBrowserSession(session);
+  const quicksilverBroker = quicksilverBrokerBySession.get(session);
+  quicksilverBrokerBySession.delete(session);
+  quicksilverBroker?.cancelBrowserSession(session);
 }
 
 export function buildOpenAIRealtimeVoiceProvider(options?: {
-  resolveCodexRealtimeBrowserSessionFallback?: () =>
-    | CodexRealtimeBrowserSessionFallback
-    | undefined;
+  quicksilverBrowserSessionBroker?: OpenAIQuicksilverBrowserSessionBroker;
 }): RealtimeVoiceProviderPlugin {
-  const resolveCodexFallback =
-    options?.resolveCodexRealtimeBrowserSessionFallback ?? readCodexRealtimeBrowserSessionFallback;
   const provider: RealtimeVoiceProviderPlugin = {
     id: "openai",
     label: "OpenAI Realtime Voice",
     defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
+    // GA and GPT-Live accept the same ten voices; quicksilver validates at call
+    // creation because voice is immutable once the session starts.
+    models: OPENAI_REALTIME_MODELS,
+    voices: OPENAI_REALTIME_VOICES,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
@@ -1738,10 +1799,15 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
-      return hasOpenAIRealtimePlatformAuthInput({
-        configuredApiKey: config.apiKey,
-        cfg,
-      });
+      if (
+        hasOpenAIRealtimePlatformAuthInput({
+          configuredApiKey: config.apiKey,
+          cfg,
+        })
+      ) {
+        return true;
+      }
+      return false;
     },
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
@@ -1769,47 +1835,40 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     createBrowserSession: (req) =>
       createOpenAIRealtimeBrowserSession(
         req as OpenAIInternalRealtimeBrowserSessionCreateRequest,
-        resolveCodexFallback,
+        options?.quicksilverBrowserSessionBroker,
       ),
   };
   const internalApi: OpenAIInternalRealtimeVoiceProviderApi = {
-    isBrowserSessionConfigured: ({ cfg, providerConfig }) => {
+    isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (
-        config.azureEndpoint ||
-        config.azureDeployment ||
-        hasOpenAIRealtimePlatformAuthInput({
-          configuredApiKey: config.apiKey,
-          cfg,
-        })
-      ) {
+      if (config.azureEndpoint || config.azureDeployment) {
         return false;
       }
-      return resolveConfiguredCodexRealtimeFallback(resolveCodexFallback) !== undefined;
+      const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+      if (isOpenAIGptLiveModel(model)) {
+        return (
+          options?.quicksilverBrowserSessionBroker !== undefined &&
+          (hasOpenAIRealtimePlatformAuthInput({
+            configuredApiKey: config.apiKey,
+            cfg,
+          }) ||
+            hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
+        );
+      }
+      return (
+        options?.quicksilverBrowserSessionBroker !== undefined &&
+        hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId })
+      );
     },
-    resolveBrowserSessionCapabilities: ({ cfg, providerConfig }) => {
+    resolveBrowserSessionCapabilities: ({ providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (
-        config.azureEndpoint ||
-        config.azureDeployment ||
-        hasOpenAIRealtimePlatformAuthInput({
-          configuredApiKey: config.apiKey,
-          cfg,
-        })
-      ) {
-        return OPENAI_REALTIME_CAPABILITIES;
+      if (isOpenAIGptLiveModel(model ?? config.model)) {
+        return {
+          ...OPENAI_REALTIME_CAPABILITIES,
+          ...OPENAI_QUICKSILVER_CAPABILITIES,
+        };
       }
-      const fallback = resolveConfiguredCodexRealtimeFallback(resolveCodexFallback);
-      if (!fallback) {
-        return OPENAI_REALTIME_CAPABILITIES;
-      }
-      return {
-        ...OPENAI_REALTIME_CAPABILITIES,
-        handlesAgentConsult: true,
-        supportsToolCalls: false,
-        supportsVideoFrames: false,
-        ...fallback.capabilities,
-      };
+      return OPENAI_REALTIME_CAPABILITIES;
     },
     cancelBrowserSession: cancelOpenAIRealtimeBrowserSession,
   };

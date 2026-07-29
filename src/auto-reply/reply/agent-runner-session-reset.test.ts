@@ -102,16 +102,14 @@ describe("resetReplyRunSession", () => {
         unwindowedMessageCount: 10,
         sessionId: "session",
       },
-      fallbackNoticeSelectedModel: "anthropic/claude",
-      fallbackNoticeActiveModel: "openai/gpt",
-      fallbackNoticeReason: "rate limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "anthropic/claude",
+        activeModel: "openai/gpt",
+        reason: "rate limit",
+      },
       compactionCount: 4,
-      memoryFlushAt: 50,
-      memoryFlushCompactionCount: 3,
-      memoryFlushContextHash: "context-hash",
-      memoryFlushFailureCount: 2,
-      memoryFlushLastFailedAt: 60,
-      memoryFlushLastFailureError: "memory failed",
+      memoryFlush: { kind: "failed", compactionCount: 3, failureCount: 2 },
       systemPromptReport: {
         source: "run",
         generatedAt: 1,
@@ -158,24 +156,12 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.model).toBeUndefined();
     expect(activeSessionEntry?.contextTokens).toBeUndefined();
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeActiveModel).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeReason).toBeUndefined();
+    expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
-    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
-    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "main",
       previousSessionId: "session",
@@ -194,12 +180,9 @@ describe("resetReplyRunSession", () => {
     const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted?.contextBudgetStatus).toBeUndefined();
-    expect(persisted?.fallbackNoticeReason).toBeUndefined();
+    expect(persisted?.fallbackNotice).toBeUndefined();
     expect(persisted?.compactionCount).toBe(0);
-    expect(persisted?.memoryFlushAt).toBeUndefined();
-    expect(persisted?.memoryFlushFailureCount).toBeUndefined();
-    expect(persisted?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(persisted?.memoryFlushLastFailureError).toBeUndefined();
+    expect(persisted?.memoryFlush).toBeUndefined();
   });
 
   it("rejects automatic recovery rotation for a model-locked session", async () => {

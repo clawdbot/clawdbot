@@ -397,19 +397,21 @@ export async function invokeNodeSystemRunDirect(params: {
   target: NodeExecutionTarget;
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
-  const raw = await callGatewayTool(
-    "node.invoke",
-    { timeoutMs: params.target.invokeTimeoutMs },
-    buildNodeSystemRunInvoke({
-      target: params.target,
-      command: params.target.argv,
-      rawCommand: params.request.command,
-      cwd: params.request.workdir,
-      agentId: params.request.agentId,
-      sessionKey: params.request.sessionKey,
-      notifyOnExit: params.request.notifyOnExit,
-    }),
-  );
+  const invoke = buildNodeSystemRunInvoke({
+    target: params.target,
+    command: params.target.argv,
+    rawCommand: params.request.command,
+    cwd: params.request.workdir,
+    agentId: params.request.agentId,
+    sessionKey: params.request.sessionKey,
+    notifyOnExit: params.request.notifyOnExit,
+  });
+  params.request.signal?.throwIfAborted();
+  const raw = params.request.signal
+    ? await callGatewayTool("node.invoke", { timeoutMs: params.target.invokeTimeoutMs }, invoke, {
+        signal: params.request.signal,
+      })
+    : await callGatewayTool("node.invoke", { timeoutMs: params.target.invokeTimeoutMs }, invoke);
   return formatNodeRunToolResult({
     raw,
     startedAt,

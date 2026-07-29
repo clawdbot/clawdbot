@@ -8,7 +8,8 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { AgentsRouteData } from "./agents-page.ts";
+import type { AgentsPanel } from "../../lib/agents/panels.ts";
+import type { AgentsRouteData } from "./route.ts";
 import "./agents-page.ts";
 
 type TestAgentsPage = HTMLElement & {
@@ -23,7 +24,7 @@ type TestAgentsPage = HTMLElement & {
   agentFileActive: string | null;
   agentFileContents: Record<string, string>;
   agentIdentityLoading: boolean;
-  agentsPanel: string;
+  readonly agentsPanel: AgentsPanel;
   toolsEffectiveLoading: boolean;
   toolsEffectiveResult: ToolsEffectiveResult | null;
   requestGeneration: number;
@@ -146,6 +147,9 @@ describe("AgentsPage gateway lifecycle", () => {
     page.routeData = {
       gateway: currentGateway,
       gatewaySnapshot: currentGateway.snapshot,
+      location: { pathname: "/settings/agents/main", search: "", hash: "" },
+      requestedAgentId: "main",
+      panel: "files",
       agentsList: preloadedAgents,
       selectedAgentId: "main",
       error: null,
@@ -181,6 +185,9 @@ describe("AgentsPage gateway lifecycle", () => {
     page.routeData = {
       gateway: preloadedGateway,
       gatewaySnapshot: preloadedSnapshot,
+      location: { pathname: "/settings/agents/main", search: "", hash: "" },
+      requestedAgentId: "main",
+      panel: "files",
       agentsList,
       selectedAgentId: "main",
       error: null,
@@ -440,8 +447,6 @@ describe("AgentsPage gateway lifecycle", () => {
     const context = pageContext(currentGateway, agents, { sessions: oldSessions });
     page.context = context;
     page.subscriptions.hostConnected();
-    page.agentsPanel = "overview";
-
     page.loadEffectiveToolsForAgent("main");
     expect(page.toolsEffectiveLoading).toBe(true);
 
@@ -461,5 +466,34 @@ describe("AgentsPage gateway lifecycle", () => {
     await vi.waitFor(() => expect(page.toolsEffectiveResult?.profile).toBe("new"));
     expect(page.toolsEffectiveLoading).toBe(false);
     page.subscriptions.hostDisconnected();
+  });
+});
+
+describe("AgentsPage routing", () => {
+  it("derives the panel from route data", () => {
+    const currentGateway = gateway(snapshot(null, false));
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = {
+      basePath: "/ui",
+      gateway: currentGateway,
+    } as unknown as ApplicationContext;
+    page.agentsList = {
+      ...agentsList,
+      agents: [...agentsList.agents, { id: "research", name: "Research" }],
+    };
+    page.agentsSelectedId = "main";
+    page.routeData = {
+      gateway: currentGateway,
+      gatewaySnapshot: currentGateway.snapshot,
+      location: { pathname: "/ui/settings/agents/main/tools", search: "", hash: "" },
+      requestedAgentId: "main",
+      panel: "tools",
+      agentsList: page.agentsList as AgentsListResult,
+      selectedAgentId: "main",
+      error: null,
+    };
+
+    expect(page.agentsPanel).toBe("tools");
+    expect(page.agentsSelectedId).toBe("main");
   });
 });

@@ -26,6 +26,7 @@ import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
+import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
 type StandingIntentToolModule = typeof import("./src/standing-intents-tool.js");
@@ -38,6 +39,7 @@ type MemoryToolOptions = {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
 };
@@ -238,6 +240,7 @@ function resolveMemoryToolOptions(
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
     conversationRecall: ctx.conversationRecall,
+    activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
     ...(host.withLease ? { withLease: host.withLease } : {}),
   };
@@ -320,6 +323,7 @@ export default definePluginEntry({
     );
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);
+    registerSessionBackfillGatewayMethods(api);
     registerMemoryManagerWarmup(api, memoryRuntime);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,

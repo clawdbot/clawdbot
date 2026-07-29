@@ -18,6 +18,7 @@
     "@create-markdown/preview": "2.0.3",
     "@lezer/highlight": "1.2.3",
     "@lit/context": "1.1.6",
+    "@lit/task": "1.0.3",
     "@modelcontextprotocol/ext-apps": "1.7.4",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@noble/ed25519": "3.1.0",

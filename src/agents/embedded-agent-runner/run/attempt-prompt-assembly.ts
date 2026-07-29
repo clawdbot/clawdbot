@@ -108,6 +108,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     sessionKey: attempt.sessionKey,
     sessionId: attempt.sessionId,
     workspaceDir: attempt.workspaceDir,
+    activeProjectKeys: attempt.preparedModelRuntime?.projectKey
+      ? [attempt.preparedModelRuntime.projectKey]
+      : [],
     modelProviderId: attempt.model.provider,
     modelId: attempt.model.id,
     trigger: attempt.trigger,

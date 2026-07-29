@@ -14,15 +14,57 @@ function makeStream() {
   };
 }
 
+function makeAcknowledgedStream() {
+  type ChunkActivity = {
+    id?: string;
+    type?: string;
+    text?: string;
+    channelData?: { streamType?: string };
+  };
+  const handlers = new Map<number, (activity: ChunkActivity) => void>();
+  let nextSubscriptionId = 0;
+  const stream = {
+    ...makeStream(),
+    events: {
+      on: vi.fn((_event: "chunk", handler: (activity: ChunkActivity) => void) => {
+        const subscriptionId = nextSubscriptionId++;
+        handlers.set(subscriptionId, handler);
+        return subscriptionId;
+      }),
+      off: vi.fn((subscriptionId: number) => {
+        handlers.delete(subscriptionId);
+      }),
+    },
+    acknowledge(text: string, overrides: Partial<ChunkActivity> = {}) {
+      const activity: ChunkActivity = {
+        id: "stream-acknowledged",
+        type: "typing",
+        text,
+        channelData: { streamType: "streaming" },
+        ...overrides,
+      };
+      for (const handler of handlers.values()) {
+        handler(activity);
+      }
+    },
+  };
+  return stream;
+}
+
 function makeContext(stream?: ReturnType<typeof makeStream>) {
   return { activity: { type: "message" }, stream } as never;
 }
 
 function makeController(
-  opts: { conversationType?: string; stream?: ReturnType<typeof makeStream> } = {},
+  opts: {
+    allowProviderPreview?: boolean;
+    conversationType?: string;
+    stream?: ReturnType<typeof makeStream>;
+  } = {},
 ) {
   const stream = opts.stream;
   return createTeamsReplyStreamController({
+    allowProviderPreview: opts.allowProviderPreview ?? true,
     conversationType: opts.conversationType ?? "personal",
     context: makeContext(stream),
     feedbackLoopEnabled: false,
@@ -35,6 +77,19 @@ describe("createTeamsReplyStreamController", () => {
     const ctrl = makeController({ stream });
     ctrl.onPartialReply({ text: "hello" });
     expect(stream.emit).toHaveBeenCalledWith("hello");
+  });
+
+  it("falls back to normal delivery when provider previews are disabled", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ allowProviderPreview: false, stream });
+
+    ctrl.onPartialReply({ text: "original partial" });
+
+    expect(ctrl.hasStream()).toBe(false);
+    expect(stream.emit).not.toHaveBeenCalled();
+    expect(ctrl.preparePayload({ text: "authoritative final" })).toEqual({
+      text: "authoritative final",
+    });
   });
 
   it("emits only the delta when openclaw sends cumulative text on each chunk", () => {
@@ -270,6 +325,7 @@ describe("createTeamsReplyStreamController", () => {
     const stream = makeStream();
     try {
       const ctrl = createTeamsReplyStreamController({
+        allowProviderPreview: true,
         conversationType: "personal",
         context: makeContext(stream),
         feedbackLoopEnabled: false,
@@ -300,6 +356,7 @@ describe("createTeamsReplyStreamController", () => {
   it("replaces Teams plan snapshots and keeps the explanation", async () => {
     const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
       conversationType: "personal",
       context: makeContext(stream),
       feedbackLoopEnabled: false,
@@ -327,6 +384,7 @@ describe("createTeamsReplyStreamController", () => {
     const stream = makeStream();
     try {
       const ctrl = createTeamsReplyStreamController({
+        allowProviderPreview: true,
         conversationType: "personal",
         context: makeContext(stream),
         feedbackLoopEnabled: false,
@@ -354,6 +412,7 @@ describe("createTeamsReplyStreamController", () => {
   it("suppresses block delivery when progress final text is emitted to the stream", () => {
     const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
       conversationType: "personal",
       context: makeContext(stream),
       feedbackLoopEnabled: false,
@@ -367,6 +426,7 @@ describe("createTeamsReplyStreamController", () => {
   it("ignores plan updates after final answer streaming starts", async () => {
     const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
       conversationType: "personal",
       context: makeContext(stream),
       feedbackLoopEnabled: false,
@@ -385,6 +445,7 @@ describe("createTeamsReplyStreamController", () => {
       throw new Error("progress final failed");
     });
     const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
       conversationType: "personal",
       context: makeContext(stream),
       feedbackLoopEnabled: false,
@@ -432,6 +493,7 @@ describe("createTeamsReplyStreamController", () => {
         throw makeCancelError();
       });
       const ctrl = createTeamsReplyStreamController({
+        allowProviderPreview: true,
         conversationType: "personal",
         context: makeContext(stream),
         feedbackLoopEnabled: false,
@@ -482,6 +544,150 @@ describe("createTeamsReplyStreamController", () => {
       // With the latch, block delivery sends the full final reply.
       const result = ctrl.preparePayload({ text: "hello world final" });
       expect(result).toEqual(expect.objectContaining({ text: "hello world final" }));
+    });
+
+    it("redelivers only the prefix Teams actually acknowledged after a later stream failure", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(ctrl.preparePayload({ text: "hello world final" })).toEqual({
+        text: " world final",
+      });
+    });
+
+    it("preserves the full fallback when a failed stream has no provider acknowledgement", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(ctrl.preparePayload({ text: "hello world final" })).toEqual({
+        text: "hello world final",
+      });
+    });
+
+    it("does not trim an independent later payload using a previous stream acknowledgement", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(ctrl.preparePayload({ text: "hello world" })).toEqual({
+        text: " world",
+      });
+      expect(ctrl.preparePayload({ text: "hello again" })).toEqual({
+        text: "hello again",
+      });
+      expect(stream.events.off).toHaveBeenCalledOnce();
+    });
+
+    it("ignores unrelated, informative, and out-of-order stream acknowledgements", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello", { type: "message" });
+      stream.acknowledge("hello", { channelData: { streamType: "informative" } });
+      stream.acknowledge("unrelated");
+      stream.acknowledge("he");
+      stream.acknowledge("hello", { id: "different-stream" });
+      stream.acknowledge("h");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(ctrl.preparePayload({ text: "hello world" })).toEqual({
+        text: "llo world",
+      });
+    });
+
+    it("suppresses a failed fallback when Teams already acknowledged the entire text", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(ctrl.preparePayload({ text: "hello" })).toBeUndefined();
+    });
+
+    it("retains media when Teams already acknowledged all fallback text", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(
+        ctrl.preparePayload({ text: "hello", mediaUrl: "https://example.com/image.png" }),
+      ).toEqual({
+        text: undefined,
+        mediaUrl: "https://example.com/image.png",
+      });
+    });
+
+    it("redelivers only unacknowledged text when stream close fails", async () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
+      stream.close.mockRejectedValueOnce(new Error("close failed"));
+
+      await expect(ctrl.finalize()).resolves.toEqual({ text: " world" });
+      expect(stream.events.off).toHaveBeenCalledWith(0);
+    });
+
+    it("does not redeliver an acknowledged final when stream close produces no activity", async () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      expect(ctrl.preparePayload({ text: "hello" })).toBeUndefined();
+      stream.close.mockResolvedValueOnce(undefined);
+
+      await expect(ctrl.finalize()).resolves.toBeUndefined();
+      expect(stream.events.off).toHaveBeenCalledWith(0);
+    });
+
+    it("honors cancellation after an acknowledged stream prefix", async () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      stream.canceled = true;
+
+      expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toBeUndefined();
+      expect(stream.events.off).toHaveBeenCalledWith(0);
     });
 
     it("preserves the no-duplicate behavior for the active streamed segment", () => {

@@ -1625,7 +1625,7 @@ jobs:
           if-no-files-found: error
 
   qa_live_release_checks:
-    name: Run QA Live Matrix profile
+    name: Run QA Live Matrix catalog
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
     permissions:
@@ -1635,13 +1635,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
-      matrix_profile: release
-      matrix_provider_mode: mock-openai
-      matrix_primary_model: mock-openai/gpt-5.6-luna
-      matrix_alternate_model: mock-openai/gpt-5.6-luna-alt
-      matrix_attempts: 2
       run_matrix: true
-      matrix_advisory: true
 
   # The dispatched child owns Telegram evidence/status artifacts; this blocking job
   # carries its exact conclusion into the parent summary without copying secrets or artifacts.
@@ -2130,7 +2124,7 @@ jobs:
           QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_report_release_checks.result }}
           QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_runtime_parity_release_checks.result }}
           RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: ${{ needs.runtime_tool_coverage_release_checks.result }}
-          QA_LIVE_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_release_checks.result == 'skipped' && 'skipped' || needs.qa_live_release_checks.outputs.matrix_status || 'failure' }}
+          QA_LIVE_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_release_checks.result }}
           QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
           QA_LIVE_TELEGRAM_SELECTED: ${{ contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
           QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}

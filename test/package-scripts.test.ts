@@ -197,6 +197,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs the native OpenSSH resolver proof in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/ssh-client.windows.test.ts",
+    );
+  });
+
   it("runs shared test-state cleanup coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/test-utils/openclaw-test-state.test.ts",

@@ -82,6 +82,25 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
+  it("enables workspace suggestions by default and allows disabling them", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--non-interactive", "--yes"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, defaultOptions] = commandCall(doctorCommand);
+    expect(defaultOptions.workspaceSuggestions).toBe(true);
+
+    vi.clearAllMocks();
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--non-interactive", "--yes", "--no-workspace-suggestions"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, disabledOptions] = commandCall(doctorCommand);
+    expect(disabledOptions.workspaceSuggestions).toBe(false);
+  });
+
   it("exits with code 1 when doctor fails", async () => {
     doctorCommand.mockRejectedValue(new Error("doctor failed"));
 

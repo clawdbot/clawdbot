@@ -12,7 +12,6 @@ import {
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   filterRecallEntriesWithinLookback,
@@ -168,17 +167,11 @@ async function seedDreamingSessionTranscript(params: {
   // retaining per-message timestamps as the dreaming corpus clock.
   const updatedAt = Math.max(Date.now(), ...timestamps);
   await fs.mkdir(sessionsDir, { recursive: true });
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: params.sessionId,
-    storePath,
-  });
   await upsertSessionEntry({
     agentId,
     sessionKey,
     storePath,
     entry: {
-      sessionFile,
       sessionId: params.sessionId,
       updatedAt,
       ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
@@ -203,7 +196,6 @@ async function seedDreamingSessionTranscript(params: {
     sessionKey,
     storePath,
     entry: {
-      sessionFile,
       sessionId: params.sessionId,
       updatedAt,
       ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
@@ -289,6 +281,7 @@ function createHarness(
       },
     };
     await runDreamingSweepPhases({
+      agentId: "main",
       workspaceDir: activeWorkspace,
       pluginConfig: selectedPluginConfig,
       cfg: resolvedConfig,
@@ -514,9 +507,10 @@ describe("memory-core dreaming phases", () => {
     };
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-light-${workspaceHash}`;
 
     await runDreamingSweepPhases({
+      agentId: "main",
       workspaceDir,
       cfg: testConfig,
       pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
@@ -584,6 +578,7 @@ describe("memory-core dreaming phases", () => {
 
     await expect(
       runDreamingSweepPhases({
+        agentId: "main",
         workspaceDir,
         cfg: testConfig,
         pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
@@ -818,6 +813,7 @@ describe("memory-core dreaming phases", () => {
     };
 
     await runDreamingSweepPhases({
+      agentId: "main",
       workspaceDir,
       cfg: testConfig,
       pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
@@ -3046,6 +3042,7 @@ describe("memory-core dreaming phases", () => {
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
       await runDreamingSweepPhases({
+        agentId: "main",
         workspaceDir,
         pluginConfig: {
           dreaming: {

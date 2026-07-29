@@ -202,7 +202,7 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
     action: "add" as const,
     job: {
       name,
-      schedule: { kind: "at" as const, atMs },
+      schedule: { kind: "at" as const, at: new Date(atMs).toISOString() },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       deleteAfterRun: true,

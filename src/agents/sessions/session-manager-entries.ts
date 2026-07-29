@@ -5,7 +5,7 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
-import { isIndexedSessionEntry } from "./session-manager-codec.js";
+import { isIndexedSessionEntry, isSessionContextMetadataEntry } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionManagerPersistence } from "./session-manager-persistence.js";
 import type {
@@ -60,6 +60,29 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
+    if (
+      options?.idempotencyLookup !== "caller-checked" &&
+      message.role === "user" &&
+      "idempotencyKey" in message &&
+      typeof message.idempotencyKey === "string" &&
+      message.idempotencyKey.length > 0
+    ) {
+      let parent = this.appendParentId ? this.byId.get(this.appendParentId) : undefined;
+      let remainingAncestors = this.byId.size;
+      while (parent && remainingAncestors-- > 0 && isSessionContextMetadataEntry(parent)) {
+        parent = parent.parentId ? this.byId.get(parent.parentId) : undefined;
+      }
+      if (
+        parent?.type === "message" &&
+        parent.message.role === "user" &&
+        "idempotencyKey" in parent.message &&
+        parent.message.idempotencyKey === message.idempotencyKey
+      ) {
+        // Session setup may insert context-free metadata after the ingress-persisted user.
+        // Keep that metadata as the append parent while adopting the canonical user once.
+        return parent.id;
+      }
+    }
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateSessionEntryId(this.byId),

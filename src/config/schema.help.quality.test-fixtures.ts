@@ -340,7 +340,6 @@ export const TARGET_KEYS = [
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
-  "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
@@ -349,6 +348,7 @@ export const TARGET_KEYS = [
 ] as const;
 
 export const ENUM_EXPECTATIONS: Record<string, string[]> = {
+  "skills.workshop.autonomous.mode": ['"off"', '"propose"', '"auto"'],
   "memory.citations": ['"auto"', '"on"', '"off"'],
   "memory.backend": ['"builtin"', '"qmd"'],
   "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],

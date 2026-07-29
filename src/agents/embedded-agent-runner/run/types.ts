@@ -137,8 +137,6 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
-  /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */
-  trajectorySessionFile?: string;
   /** Storage-aware trajectory recorder owned by the OpenClaw host. */
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -242,6 +240,8 @@ export type EmbeddedRunAttemptResult = {
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
+  /** Exact provider-response count when the harness can observe model iterations directly. */
+  modelIterations?: number;
   messagesSnapshot: AgentMessage[];
   /**
    * Complete application transcript frozen through a settled tool boundary.

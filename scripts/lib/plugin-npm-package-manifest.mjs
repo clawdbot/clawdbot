@@ -375,7 +375,11 @@ function installPackageLocalBundledDependencies(params) {
     fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
   }
   try {
-    fs.writeFileSync(packageLockPath, generateNpmPackageLock(params.packageDir), "utf8");
+    fs.writeFileSync(
+      packageLockPath,
+      generateNpmPackageLock(params.packageDir, { installStrategy: "shallow" }),
+      "utf8",
+    );
     const result = spawnNpmSync(
       [
         "ci",

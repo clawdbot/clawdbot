@@ -183,7 +183,7 @@ export function looksLikeMSTeamsConversationId(raw: string): boolean {
  * can forward verbatim to the channel adapter.
  */
 export function looksLikeMSTeamsTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
+  const trimmed = stripProviderPrefix(raw.trim()).trim();
   if (looksLikeMSTeamsConversationId(trimmed)) {
     return true;
   }

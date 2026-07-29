@@ -70,6 +70,9 @@ const CURRENT_TRAIN_METHODS = [
   "channels.pairing.dismiss",
   "cron.scratch.get",
   "cron.scratch.set",
+  "memory.search",
+  "skills.proposals.evaluate",
+  "skills.proposals.events.list",
 ] as const;
 
 describe("core gateway method release trains", () => {

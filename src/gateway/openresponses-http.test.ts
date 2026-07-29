@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import OpenAI from "openai";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
@@ -305,6 +306,77 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
+  it.each([false, true])(
+    "accepts the official OpenAI SDK plain-text response format (stream: %s)",
+    async (stream) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "SDK plain-text response" }],
+      } as never);
+
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+      });
+      const request = {
+        model: "openclaw",
+        input: "Return the plain-text response.",
+        text: { format: { type: "text" as const } },
+      };
+
+      if (stream) {
+        const events = await client.responses.create({ ...request, stream: true });
+        const eventTypes: string[] = [];
+        const textDeltas: string[] = [];
+        for await (const event of events) {
+          eventTypes.push(event.type);
+          if (event.type === "response.output_text.delta") {
+            textDeltas.push(event.delta);
+          }
+        }
+        expect(textDeltas.join("")).toBe("SDK plain-text response");
+        expect(eventTypes).toContain("response.completed");
+      } else {
+        const response = await client.responses.create({ ...request, stream: false });
+        expect(response.status).toBe("completed");
+        expect(response.output_text).toBe("SDK plain-text response");
+      }
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { name: "JSON-object output", text: { format: { type: "json_object" } } },
+    {
+      name: "JSON-schema output",
+      text: {
+        format: {
+          type: "json_schema",
+          name: "value",
+          schema: { type: "object" },
+        },
+      },
+    },
+    {
+      name: "unenforced verbosity",
+      text: { format: { type: "text" }, verbosity: "high" },
+    },
+  ])("rejects unsupported SDK text options ($name)", async ({ text }) => {
+    agentCommand.mockClear();
+
+    const res = await postResponses(enabledPort, {
+      model: "openclaw",
+      input: "Return the plain-text response.",
+      text,
+    });
+
+    await expectInvalidRequest(res, /text/);
+    expect(agentCommand).toHaveBeenCalledTimes(0);
+  });
+
   it("handles OpenResponses request parsing and validation", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>, meta?: unknown) => {

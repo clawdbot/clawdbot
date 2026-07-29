@@ -15,6 +15,7 @@ export async function buildSglangProvider(params?: {
     baseUrl,
     apiKey: params?.apiKey,
     label: SGLANG_PROVIDER_LABEL,
+    discoverRuntimeContext: false,
   });
   return {
     baseUrl,

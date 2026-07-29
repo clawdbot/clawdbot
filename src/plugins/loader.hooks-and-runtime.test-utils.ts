@@ -1634,6 +1634,13 @@ describe("loadOpenClawPlugins", () => {
       plugin,
       pluginConfig: {
         allow: ["hook-policy-default"],
+        entries: {
+          "hook-policy-default": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
       },
     });
 
@@ -1834,6 +1841,8 @@ describe("loadOpenClawPlugins", () => {
       filename: "conversation-hooks.cjs",
       body: `module.exports = { id: "conversation-hooks", register(api) {
     api.on("before_model_resolve", () => undefined);
+    api.on("agent_turn_prepare", () => undefined);
+    api.on("before_prompt_build", () => undefined);
     api.on("before_agent_reply", () => undefined);
     api.on("llm_input", () => undefined);
     api.on("llm_output", () => undefined);
@@ -1856,7 +1865,7 @@ describe("loadOpenClawPlugins", () => {
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(7);
+    expect(blockedDiagnostics).toHaveLength(9);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -1866,6 +1875,8 @@ describe("loadOpenClawPlugins", () => {
       filename: "conversation-hooks-allowed.cjs",
       body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
     api.on("before_model_resolve", () => undefined);
+    api.on("agent_turn_prepare", () => undefined);
+    api.on("before_prompt_build", () => undefined);
     api.on("before_agent_reply", () => undefined);
     api.on("llm_input", () => undefined);
     api.on("llm_output", () => undefined);
@@ -1891,6 +1902,8 @@ describe("loadOpenClawPlugins", () => {
 
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
       "before_model_resolve",
+      "agent_turn_prepare",
+      "before_prompt_build",
       "before_agent_reply",
       "llm_input",
       "llm_output",

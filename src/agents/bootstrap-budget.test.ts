@@ -46,6 +46,39 @@ describe("buildBootstrapInjectionStats", () => {
     expect(stats[1]?.injectedChars).toBe(20);
     expect(stats[1]?.truncated).toBe(true);
   });
+
+  it("derives names for path-only files supplied by bootstrap hooks", () => {
+    const pathOnlyFile = {
+      path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+      content: "remember",
+      missing: false,
+    } as unknown as WorkspaceBootstrapFile;
+    const injectedFiles = [
+      {
+        path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+        content: "remember",
+      },
+    ];
+
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles: [pathOnlyFile],
+      injectedFiles,
+    });
+    const analysis = analyzeBootstrapBudget({
+      files: stats,
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 60_000,
+    });
+
+    expect(analysis.files).toEqual([
+      expect.objectContaining({
+        name: "SELF_IMPROVEMENT_REMINDER.md",
+        path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
+        injectedChars: 8,
+        truncated: false,
+      }),
+    ]);
+  });
 });
 
 describe("analyzeBootstrapBudget", () => {

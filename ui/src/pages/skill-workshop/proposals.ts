@@ -2,6 +2,7 @@
 import { formatByteSize } from "@openclaw/normalization-core";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -9,6 +10,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type {
   SkillWorkshopAction,
+  SkillWorkshopEvaluation,
   SkillWorkshopProposal,
   SkillWorkshopProposalStatus,
 } from "../../lib/skill-workshop/index.ts";
@@ -66,6 +68,8 @@ type SkillProposalRecord = {
   createdAt: string;
   updatedAt: string;
   proposedVersion: string;
+  draftHash: string;
+  evaluation?: SkillWorkshopEvaluation;
   origin?: SkillProposalOrigin;
   supportFiles?: SkillProposalSupportFileRecord[];
   target: {
@@ -81,8 +85,14 @@ type SkillProposalSupportFile = {
 
 type SkillProposalInspectResult = {
   record: SkillProposalRecord;
+  revisionHash?: string;
   content: string;
   supportFiles?: SkillProposalSupportFile[];
+};
+
+type SkillProposalEvaluateResult = {
+  record: SkillProposalRecord;
+  evaluation: SkillWorkshopEvaluation;
 };
 
 export type SkillWorkshopContext = {
@@ -229,6 +239,8 @@ function proposalFromManifest(
     status: entry.status,
     ...(previousIsCurrent && previous.origin ? { origin: previous.origin } : {}),
     version: previousIsCurrent ? previous.version : 1,
+    revisionHash: previousIsCurrent ? previous.revisionHash : null,
+    ...(previousIsCurrent && previous.evaluation ? { evaluation: previous.evaluation } : {}),
     createdAt,
     updatedAt,
     recencyGroup: recencyGroup(updatedAt || createdAt),
@@ -245,6 +257,13 @@ function proposalFromInspect(
   const record = result.record;
   const updatedAt = parseDateMs(record.updatedAt);
   const createdAt = parseDateMs(record.createdAt);
+  const revisionHash = result.revisionHash?.trim() || null;
+  const evaluation =
+    record.evaluation?.revisionHash === revisionHash
+      ? record.evaluation
+      : previous?.evaluation?.revisionHash === revisionHash
+        ? previous.evaluation
+        : undefined;
   return {
     key: record.id,
     slug: record.target.skillKey,
@@ -254,12 +273,45 @@ function proposalFromInspect(
     status: record.status,
     ...(record.origin ? { origin: record.origin } : {}),
     version: proposedVersionNumber(record.proposedVersion),
+    revisionHash,
+    ...(evaluation ? { evaluation } : {}),
     createdAt,
     updatedAt,
     recencyGroup: recencyGroup(updatedAt || createdAt),
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: supportFilesFromInspect(result),
     isNew: previous?.isNew ?? false,
+  };
+}
+
+function proposalFromEvaluation(
+  result: SkillProposalEvaluateResult,
+  previous: SkillWorkshopProposal,
+): SkillWorkshopProposal {
+  const record = result.record;
+  const updatedAt = parseDateMs(record.updatedAt);
+  const createdAt = parseDateMs(record.createdAt);
+  return {
+    key: record.id,
+    slug: record.target.skillKey,
+    name: record.title || record.target.skillName,
+    oneLine: record.description,
+    body: previous.body,
+    status: record.status,
+    ...(record.origin
+      ? { origin: record.origin }
+      : previous.origin
+        ? { origin: previous.origin }
+        : {}),
+    version: proposedVersionNumber(record.proposedVersion),
+    revisionHash: result.evaluation.revisionHash,
+    evaluation: result.evaluation,
+    createdAt,
+    updatedAt,
+    recencyGroup: recencyGroup(updatedAt || createdAt),
+    ageLabel: compactAgeLabel(updatedAt || createdAt),
+    supportFiles: previous.supportFiles,
+    isNew: previous.isNew,
   };
 }
 
@@ -479,6 +531,72 @@ export async function runSkillWorkshopLifecycleAction(
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&
       state.skillWorkshopActionBusy.action === action
+    ) {
+      state.skillWorkshopActionBusy = null;
+    }
+  }
+}
+
+export async function runSkillWorkshopEvaluation(
+  state: SkillWorkshopState,
+  context: SkillWorkshopContext,
+  proposalId: string,
+): Promise<boolean> {
+  const snapshot = context.gateway.snapshot;
+  const client = snapshot.client;
+  if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
+    return false;
+  }
+  const previous = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+  if (!previous || previous.status !== "pending") {
+    return false;
+  }
+  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  if (state.skillWorkshopAgentId === null) {
+    state.skillWorkshopAgentId = requestAgentId;
+  }
+  state.skillWorkshopActionBusy = { key: proposalId, action: "evaluate" };
+  state.skillWorkshopActionNotice = null;
+  state.skillWorkshopError = null;
+  try {
+    const loaded = await loadSkillWorkshopProposalDetail(state, context, proposalId, {
+      force: true,
+    });
+    if (!loaded || state.skillWorkshopAgentId !== requestAgentId) {
+      return false;
+    }
+    const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+    if (!current || current.status !== "pending" || !current.revisionHash) {
+      throw new Error(t("skillWorkshop.evaluation.errors.revisionHashUnavailable"));
+    }
+    const result = await client.request<SkillProposalEvaluateResult>("skills.proposals.evaluate", {
+      agentId: requestAgentId,
+      proposalId,
+      expectedRevisionHash: current.revisionHash,
+    });
+    if (state.skillWorkshopAgentId !== requestAgentId) {
+      return false;
+    }
+    if (result.evaluation.revisionHash !== current.revisionHash) {
+      throw new Error(t("skillWorkshop.evaluation.errors.revisionChanged"));
+    }
+    mergeProposal(state, proposalFromEvaluation(result, current));
+    await loadSkillWorkshopProposalDetail(state, context, proposalId, { force: true });
+    showActionNotice(
+      state,
+      state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId) ?? previous,
+      t("skillWorkshop.actions.evaluated"),
+    );
+    return true;
+  } catch (err) {
+    if (state.skillWorkshopAgentId === requestAgentId) {
+      state.skillWorkshopError = getErrorMessage(err);
+    }
+    return false;
+  } finally {
+    if (
+      state.skillWorkshopActionBusy?.key === proposalId &&
+      state.skillWorkshopActionBusy.action === "evaluate"
     ) {
       state.skillWorkshopActionBusy = null;
     }

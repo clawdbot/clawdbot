@@ -451,6 +451,6 @@ export type OpenClawPluginApi = {
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: { priority?: number; registrationId?: string; timeoutMs?: number },
   ) => void;
 };

@@ -108,7 +108,9 @@ const mocks = vi.hoisted(() => ({
     model: "gpt-4.1-mini",
   })),
   generateImage: vi.fn(),
+  listRuntimeImageGenerationProviders: vi.fn(() => []),
   generateVideo: vi.fn(),
+  listRuntimeVideoGenerationProviders: vi.fn(() => []),
   transcribeAudioFile: vi.fn(async () => ({ text: "meeting notes" })),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -119,6 +121,8 @@ const mocks = vi.hoisted(() => ({
     attempts: [],
   })),
   setTtsProvider: vi.fn(),
+  getTtsProvider: vi.fn(() => "openai"),
+  listSpeechProviders: vi.fn(() => []),
   setTtsPersona: vi.fn(),
   resolveTtsConfig: vi.fn(() => ({})),
   resolveExplicitTtsOverrides: vi.fn(
@@ -370,17 +374,17 @@ vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
 
 vi.mock("../image-generation/runtime.js", () => ({
   generateImage: (...args: unknown[]) => mocks.generateImage(...args),
-  listRuntimeImageGenerationProviders: vi.fn(() => []),
+  listRuntimeImageGenerationProviders: mocks.listRuntimeImageGenerationProviders,
 }));
 
 vi.mock("../video-generation/runtime.js", () => ({
   generateVideo: mocks.generateVideo,
-  listRuntimeVideoGenerationProviders: vi.fn(() => []),
+  listRuntimeVideoGenerationProviders: mocks.listRuntimeVideoGenerationProviders,
 }));
 
 vi.mock("../tts/tts.js", () => ({
   getTtsPersona: vi.fn(() => undefined),
-  getTtsProvider: vi.fn(() => "openai"),
+  getTtsProvider: mocks.getTtsProvider,
   listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig:
@@ -396,7 +400,7 @@ vi.mock("../tts/tts.js", () => ({
 
 vi.mock("../tts/provider-registry.js", () => ({
   canonicalizeSpeechProviderId: vi.fn((provider: string) => provider),
-  listSpeechProviders: vi.fn(() => []),
+  listSpeechProviders: mocks.listSpeechProviders,
   normalizeSpeechProviderId: vi.fn(
     (provider: string | undefined) => provider?.trim().toLowerCase() || undefined,
   ),
@@ -554,12 +558,20 @@ describe("capability cli", () => {
     mocks.describePreparedImageWithModel.mockClear();
     mocks.describeImageFileWithModel.mockClear();
     mocks.generateImage.mockReset();
+    mocks.listRuntimeImageGenerationProviders.mockReset().mockReturnValue([]);
     mocks.generateVideo.mockReset();
+    mocks.listRuntimeVideoGenerationProviders.mockReset().mockReturnValue([]);
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
+    mocks.getTtsProvider.mockReset().mockReturnValue("openai");
+    mocks.listSpeechProviders.mockReset().mockReturnValue([]);
     mocks.resolveExplicitTtsOverrides.mockClear();
-    mocks.getProviderEnvVars.mockClear();
+    mocks.getProviderEnvVars
+      .mockReset()
+      .mockImplementation((providerId: string) => [
+        `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
+      ]);
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.inspectLocalAudioSelection.mockReset().mockResolvedValue({ candidates: [], entries: [] });
     mocks.convertHeicToJpeg.mockClear();
@@ -1108,6 +1120,30 @@ describe("capability cli", () => {
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["local", "gateway"] as const)(
+    "rejects malformed explicit model refs before %s dispatch",
+    async (transport) => {
+      await expect(
+        runCap(
+          "capability",
+          "model",
+          "run",
+          "--model",
+          "not-a-provider/",
+          "--prompt",
+          "hello",
+          ...(transport === "gateway" ? ["--gateway"] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
+      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
     },
   );
 
@@ -2943,6 +2979,34 @@ describe("capability cli", () => {
     expect(firstEmbeddingProviderCall()?.model).toBe("text-embedding-3-large");
   });
 
+  it.each([
+    {
+      name: "embedding create",
+      argv: ["capability", "embedding", "create", "--text", "hello"],
+    },
+    {
+      name: "image generate",
+      argv: ["capability", "image", "generate", "--prompt", "portrait"],
+    },
+    {
+      name: "image edit",
+      argv: ["capability", "image", "edit", "--file", "photo.png", "--prompt", "crop it"],
+    },
+    {
+      name: "video generate",
+      argv: ["capability", "video", "generate", "--prompt", "clip"],
+    },
+  ])("rejects malformed model refs before $name provider dispatch", async ({ argv }) => {
+    for (const model of ["openai/", "/gpt-4.1-mini"]) {
+      await expect(runCap(...argv, "--model", model, "--json")).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+    }
+  });
+
   it("cleans provider auth profiles and usage stats on logout", async () => {
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue({
       profiles: {
@@ -3141,6 +3205,77 @@ describe("capability cli", () => {
         capabilities: ["audio"],
         defaultModels: { audio: "whisper-large-v3-turbo" },
       },
+    ]);
+  });
+
+  it("marks env-backed image providers as configured", async () => {
+    vi.stubEnv("FAL_KEY", "fal-test-key");
+    mocks.getProviderEnvVars.mockReturnValueOnce(["FAL_KEY"]);
+    mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
+      { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
+    ] as never);
+
+    await runCap("capability", "image", "providers", "--json");
+
+    expect(firstJsonOutput()).toMatchObject([
+      { id: "fal", available: true, configured: true, selected: false },
+    ]);
+  });
+
+  it("marks env-backed video generation and description providers as configured", async () => {
+    vi.stubEnv("RUNWAYML_API_SECRET", "runway-test-key");
+    vi.stubEnv("GEMINI_API_KEY", "gemini-test-key");
+    mocks.getProviderEnvVars.mockImplementation((providerId: string) =>
+      providerId === "runway" ? ["RUNWAYML_API_SECRET"] : ["GEMINI_API_KEY"],
+    );
+    mocks.listRuntimeVideoGenerationProviders.mockReturnValueOnce([
+      { id: "runway", label: "Runway", defaultModel: "gen4", models: [] },
+    ] as never);
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "google",
+          {
+            id: "google",
+            capabilities: ["video"],
+            defaultModels: { video: "gemini-3-flash-preview" },
+          },
+        ],
+      ]),
+    );
+
+    await runCap("capability", "video", "providers", "--json");
+
+    expect(firstJsonOutput()).toMatchObject({
+      generation: [{ id: "runway", configured: true }],
+      description: [{ id: "google", configured: true }],
+    });
+  });
+
+  it("marks env-backed TTS providers as configured", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-test-key");
+    mocks.getProviderEnvVars.mockReturnValueOnce(["XAI_API_KEY"]);
+    mocks.listSpeechProviders.mockReturnValueOnce([
+      { id: "xai", label: "xAI", models: [], voices: [] },
+    ] as never);
+
+    await runCap("capability", "tts", "providers", "--local", "--json");
+
+    expect(firstJsonOutput()).toMatchObject({
+      providers: [{ id: "xai", configured: true, selected: false }],
+    });
+  });
+
+  it("marks env-backed embedding providers as configured", async () => {
+    vi.stubEnv("DEEPINFRA_API_KEY", "deepinfra-test-key");
+    mocks.listMemoryEmbeddingProviders.mockReturnValueOnce([
+      { id: "deepinfra", defaultModel: "BAAI/bge-m3", transport: "remote" },
+    ]);
+
+    await runCap("capability", "embedding", "providers", "--json");
+
+    expect(firstJsonOutput()).toMatchObject([
+      { id: "deepinfra", configured: true, selected: false },
     ]);
   });
 
