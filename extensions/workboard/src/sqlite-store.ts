@@ -932,12 +932,12 @@ function insertChildren<T>(
   entries?.forEach(insert);
 }
 
-function assertPersistedProofHistoryTransition(db: DatabaseSync, card: WorkboardCard): void {
-  assertProofHistoryTransition(
-    readProof(db, card.id),
-    card.metadata?.proof,
-    "persisted card update",
-  );
+function assertPersistedProofHistoryTransition(
+  db: DatabaseSync,
+  card: WorkboardCard,
+  context: string,
+): void {
+  assertProofHistoryTransition(readProof(db, card.id), card.metadata?.proof, context);
 }
 
 function insertCard(db: DatabaseSync, card: WorkboardCard): void {
@@ -1281,10 +1281,14 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
         // Child rows are rewritten from the card snapshot. Both guards run before any DELETE so
         // stale snapshots and proof-history rewrites fail the entire transaction. CAS runs first
         // so semantic metadata mutations can retry from the current canonical card.
-        assertPersistedProofHistoryTransition(this.db, value.card);
       } else if (expected || cardSnapshot(value.card)) {
         throw new WorkboardStaleSnapshotError(key);
       }
+      assertPersistedProofHistoryTransition(
+        this.db,
+        value.card,
+        currentRow ? "persisted card update" : "persisted card create",
+      );
       insertCard(this.db, value.card);
       const persistedRow = this.db
         .prepare("SELECT * FROM workboard_cards WHERE id = ?")

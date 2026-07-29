@@ -7,6 +7,7 @@ import {
 } from "./card-output.js";
 
 const EMBEDDED_PROOF_BYTES = 24 * 1024;
+const CARD_ID = "card-1";
 
 function createProof(count: number, note?: string): WorkboardProof[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -18,9 +19,9 @@ function createProof(count: number, note?: string): WorkboardProof[] {
   }));
 }
 
-function createCard(proof: WorkboardProof[]): WorkboardCard {
+function createCard(proof: WorkboardProof[], id = CARD_ID): WorkboardCard {
   return {
-    id: "card-1",
+    id,
     title: "Projected proof",
     status: "review",
     priority: "normal",
@@ -89,14 +90,16 @@ describe("Workboard card output projection", () => {
 
   it("uses opaque stable cursors to drain older proof in chronological pages", () => {
     const proof = createProof(100);
-    const first = paginateWorkboardProof(proof, readWorkboardProofPageRequest());
+    const first = paginateWorkboardProof(CARD_ID, proof, readWorkboardProofPageRequest(CARD_ID));
     const second = paginateWorkboardProof(
+      CARD_ID,
       proof,
-      readWorkboardProofPageRequest({ cursor: first.nextCursor }),
+      readWorkboardProofPageRequest(CARD_ID, { cursor: first.nextCursor }),
     );
     const third = paginateWorkboardProof(
+      CARD_ID,
       proof,
-      readWorkboardProofPageRequest({ cursor: second.nextCursor }),
+      readWorkboardProofPageRequest(CARD_ID, { cursor: second.nextCursor }),
     );
 
     expect(first.proof.map((entry) => entry.id)).toEqual(
@@ -120,11 +123,16 @@ describe("Workboard card output projection", () => {
     }
     latest.id = `proof-${"x".repeat(5000)}`;
 
-    const first = paginateWorkboardProof(proof, readWorkboardProofPageRequest({ limit: 1 }));
+    const first = paginateWorkboardProof(
+      CARD_ID,
+      proof,
+      readWorkboardProofPageRequest(CARD_ID, { limit: 1 }),
+    );
     expect(first.nextCursor?.length).toBeGreaterThan(4096);
     const second = paginateWorkboardProof(
+      CARD_ID,
       proof,
-      readWorkboardProofPageRequest({ cursor: first.nextCursor, limit: 1 }),
+      readWorkboardProofPageRequest(CARD_ID, { cursor: first.nextCursor, limit: 1 }),
     );
 
     expect(second.proof.map((entry) => entry.id)).toEqual(["proof-0"]);
@@ -139,10 +147,15 @@ describe("Workboard card output projection", () => {
     }
     latest.id = "\ud800";
 
-    const first = paginateWorkboardProof(proof, readWorkboardProofPageRequest({ limit: 1 }));
-    const second = paginateWorkboardProof(
+    const first = paginateWorkboardProof(
+      CARD_ID,
       proof,
-      readWorkboardProofPageRequest({ cursor: first.nextCursor, limit: 1 }),
+      readWorkboardProofPageRequest(CARD_ID, { limit: 1 }),
+    );
+    const second = paginateWorkboardProof(
+      CARD_ID,
+      proof,
+      readWorkboardProofPageRequest(CARD_ID, { cursor: first.nextCursor, limit: 1 }),
     );
 
     expect(first.proof[0]?.id).toBe("\ud800");
@@ -162,35 +175,28 @@ describe("Workboard card output projection", () => {
     expect(view.metadata?.proof).toBeUndefined();
     expect(view.proofPage).toEqual({ total: 1, hasMore: true });
 
-    const page = paginateWorkboardProof(proof, readWorkboardProofPageRequest());
+    const page = paginateWorkboardProof(CARD_ID, proof, readWorkboardProofPageRequest(CARD_ID));
     expect(page).toMatchObject({ total: 1, hasMore: false });
     expect(page.proof).toEqual(proof);
   });
 
-  it("rejects invalid limits and foreign cursors", () => {
-    expect(() => readWorkboardProofPageRequest({ limit: 0 })).toThrow(
+  it("rejects invalid limits and cursors issued for another card", () => {
+    expect(() => readWorkboardProofPageRequest(CARD_ID, { limit: 0 })).toThrow(
       "limit must be an integer from 1 to 40",
     );
-    expect(() => readWorkboardProofPageRequest({ limit: 41 })).toThrow(
+    expect(() => readWorkboardProofPageRequest(CARD_ID, { limit: 41 })).toThrow(
       "limit must be an integer from 1 to 40",
     );
-    expect(() => readWorkboardProofPageRequest({ limit: 1.5 })).toThrow(
+    expect(() => readWorkboardProofPageRequest(CARD_ID, { limit: 1.5 })).toThrow(
       "limit must be an integer from 1 to 40",
     );
-    expect(() => readWorkboardProofPageRequest({ cursor: "proof-1" })).toThrow(
+    expect(() => readWorkboardProofPageRequest(CARD_ID, { cursor: "proof-1" })).toThrow(
       "invalid proof cursor",
     );
-    const foreignProof = createProof(41);
-    for (const entry of foreignProof) {
-      entry.id = `foreign-${entry.id}`;
-    }
     expect(() =>
-      paginateWorkboardProof(
-        createProof(2),
-        readWorkboardProofPageRequest({
-          cursor: toBoundedWorkboardCard(createCard(foreignProof)).proofPage.nextCursor,
-        }),
-      ),
+      readWorkboardProofPageRequest(CARD_ID, {
+        cursor: toBoundedWorkboardCard(createCard(createProof(41), "card-2")).proofPage.nextCursor,
+      }),
     ).toThrow("proof cursor does not belong to this card");
   });
 });

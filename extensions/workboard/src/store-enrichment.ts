@@ -52,19 +52,19 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!cardId) {
       throw new Error("id is required.");
     }
-    const request = readWorkboardProofPageRequest(options);
+    const request = readWorkboardProofPageRequest(cardId, options);
     if (this.proofPageReader) {
       const page = await this.proofPageReader(cardId, request);
       if (!page) {
         throw new Error(`card not found: ${cardId}`);
       }
-      return createWorkboardProofPage(page);
+      return createWorkboardProofPage(cardId, page);
     }
     const card = await this.get(cardId);
     if (!card) {
       throw new Error(`card not found: ${cardId}`);
     }
-    return paginateWorkboardProof(card.metadata?.proof ?? [], request);
+    return paginateWorkboardProof(cardId, card.metadata?.proof ?? [], request);
   }
 
   async addProof(

@@ -9,7 +9,7 @@ import { redactClaimToken } from "./card-redaction.js";
 const WORKBOARD_PROOF_VIEW_LIMIT = 40;
 const WORKBOARD_EMBEDDED_PROOF_BYTES = 24 * 1024;
 
-const WORKBOARD_PROOF_CURSOR_PREFIX = "proof-v1.";
+const WORKBOARD_PROOF_CURSOR_PREFIX = "proof-v2.";
 
 export type WorkboardProofPageRequest = {
   beforeProofId?: string;
@@ -20,28 +20,37 @@ function proofBytes(proof: readonly WorkboardProof[]): number {
   return Buffer.byteLength(JSON.stringify(proof), "utf8");
 }
 
-function encodeProofCursor(proofId: string): string {
-  return `${WORKBOARD_PROOF_CURSOR_PREFIX}${Buffer.from(JSON.stringify(proofId), "utf8").toString("base64url")}`;
+function encodeProofCursor(cardId: string, proofId: string): string {
+  return `${WORKBOARD_PROOF_CURSOR_PREFIX}${Buffer.from(JSON.stringify([cardId, proofId]), "utf8").toString("base64url")}`;
 }
 
-function decodeProofCursor(cursor: string): string {
+function decodeProofCursor(cursor: string): { cardId: string; proofId: string } {
   if (!cursor.startsWith(WORKBOARD_PROOF_CURSOR_PREFIX)) {
     throw new Error("invalid proof cursor.");
   }
   const encoded = cursor.slice(WORKBOARD_PROOF_CURSOR_PREFIX.length);
-  let proofId: unknown;
+  let payload: unknown;
   try {
-    proofId = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
   } catch {
     throw new Error("invalid proof cursor.");
   }
-  if (typeof proofId !== "string" || !proofId || encodeProofCursor(proofId) !== cursor) {
+  if (
+    !Array.isArray(payload) ||
+    payload.length !== 2 ||
+    typeof payload[0] !== "string" ||
+    !payload[0] ||
+    typeof payload[1] !== "string" ||
+    !payload[1] ||
+    encodeProofCursor(payload[0], payload[1]) !== cursor
+  ) {
     throw new Error("invalid proof cursor.");
   }
-  return proofId;
+  return { cardId: payload[0], proofId: payload[1] };
 }
 
 export function readWorkboardProofPageRequest(
+  cardId: string,
   options: { cursor?: unknown; limit?: unknown } = {},
 ): WorkboardProofPageRequest {
   const limit = options.limit === undefined ? WORKBOARD_PROOF_VIEW_LIMIT : options.limit;
@@ -59,25 +68,33 @@ export function readWorkboardProofPageRequest(
   if (typeof options.cursor !== "string") {
     throw new Error("invalid proof cursor.");
   }
-  return { beforeProofId: decodeProofCursor(options.cursor), limit };
+  const cursor = decodeProofCursor(options.cursor);
+  if (cursor.cardId !== cardId) {
+    throw new Error("proof cursor does not belong to this card.");
+  }
+  return { beforeProofId: cursor.proofId, limit };
 }
 
-export function createWorkboardProofPage(params: {
-  proof: WorkboardProof[];
-  total: number;
-  hasMore: boolean;
-}): WorkboardProofPage {
+export function createWorkboardProofPage(
+  cardId: string,
+  params: {
+    proof: WorkboardProof[];
+    total: number;
+    hasMore: boolean;
+  },
+): WorkboardProofPage {
   return {
     proof: params.proof,
     total: params.total,
     hasMore: params.hasMore,
     ...(params.hasMore && params.proof[0]
-      ? { nextCursor: encodeProofCursor(params.proof[0].id) }
+      ? { nextCursor: encodeProofCursor(cardId, params.proof[0].id) }
       : {}),
   };
 }
 
 export function paginateWorkboardProof(
+  cardId: string,
   proof: readonly WorkboardProof[],
   request: WorkboardProofPageRequest,
 ): WorkboardProofPage {
@@ -89,7 +106,7 @@ export function paginateWorkboardProof(
     throw new Error("proof cursor does not belong to this card.");
   }
   const start = Math.max(0, end - request.limit);
-  return createWorkboardProofPage({
+  return createWorkboardProofPage(cardId, {
     proof: structuredClone(proof.slice(start, end)),
     total: proof.length,
     hasMore: start > 0,
@@ -117,7 +134,7 @@ export function toBoundedWorkboardCard(card: WorkboardCard): WorkboardCardView {
     proofPage: {
       total: canonicalProof.length,
       hasMore,
-      ...(hasMore && proof[0] ? { nextCursor: encodeProofCursor(proof[0].id) } : {}),
+      ...(hasMore && proof[0] ? { nextCursor: encodeProofCursor(card.id, proof[0].id) } : {}),
     },
   };
   // Structured cloning strips SQLite's private snapshot symbol and prevents output consumers from

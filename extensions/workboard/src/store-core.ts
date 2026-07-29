@@ -160,9 +160,11 @@ export class WorkboardCoreStore {
   }
 
   protected async persistCard(card: WorkboardCard, existing?: WorkboardCard): Promise<void> {
-    if (existing) {
-      assertProofHistoryTransition(existing.metadata?.proof, card.metadata?.proof);
-    }
+    assertProofHistoryTransition(
+      existing?.metadata?.proof,
+      card.metadata?.proof,
+      existing ? "card update" : "card create",
+    );
     const value = { version: 1 as const, card };
     if (existing && this.store.compareAndSwap) {
       await this.store.compareAndSwap(card.id, { version: 1, card: existing }, value);

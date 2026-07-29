@@ -1354,6 +1354,51 @@ describe("WorkboardStore", () => {
     expect(saved?.events?.filter((event) => event.kind === "proof_added")).toHaveLength(45);
   });
 
+  it("rejects duplicate proof ids when creating a card", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = { id: "proof-duplicate", status: "passed" as const, createdAt: 1 };
+
+    await expect(
+      store.create({
+        title: "Reject ambiguous proof history",
+        metadata: { proof: [proof, { ...proof, createdAt: 2 }] },
+      }),
+    ).rejects.toThrow("card create cannot contain duplicate proof ids");
+    await expect(store.list()).resolves.toEqual([]);
+  });
+
+  it("rejects duplicate proof ids before a direct sqlite import writes the card", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-import-"));
+    const stores = createWorkboardSqliteStores({ dbPath: path.join(dir, "workboard.sqlite") });
+    const card: PersistedWorkboardCard["card"] = {
+      id: "card-duplicate-proof",
+      title: "Reject malformed import",
+      status: "todo",
+      priority: "normal",
+      labels: [],
+      position: 1000,
+      createdAt: 1,
+      updatedAt: 1,
+      metadata: {
+        proof: [
+          { id: "proof-duplicate", status: "passed", createdAt: 1 },
+          { id: "proof-duplicate", status: "failed", createdAt: 2 },
+        ],
+      },
+    };
+
+    try {
+      await expect(stores.cards.register(card.id, { version: 1, card })).rejects.toThrow(
+        "persisted card create cannot contain duplicate proof ids",
+      );
+      await expect(stores.cards.lookup(card.id)).resolves.toBeUndefined();
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("pages memory proof history and rejects projected create, update, and bulk inputs", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const proof = Array.from({ length: 45 }, (_, index) => ({
@@ -1374,6 +1419,13 @@ describe("WorkboardStore", () => {
     expect(second.proof.map((entry) => entry.id)).toEqual(
       Array.from({ length: 10 }, (_, index) => `proof-${index + 25}`),
     );
+    const foreign = await store.create({
+      title: "Same proof ids on another card",
+      metadata: { proof },
+    });
+    await expect(
+      store.listProof(foreign.id, { limit: 10, cursor: first.nextCursor }),
+    ).rejects.toThrow("proof cursor does not belong to this card");
 
     await expect(store.create(view as never)).rejects.toThrow(
       "projected Workboard cards are read-only",
