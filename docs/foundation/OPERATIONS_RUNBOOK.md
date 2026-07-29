@@ -99,6 +99,46 @@ For any unexpected issue:
 
 ---
 
+# PropertyManager API WSGI Operations (development VM)
+
+The PropertyManager REST API runs as the user service
+`propertymanager-api.service`. Gunicorn is the WSGI master; Flask remains the
+application framework. See
+[PropertyManager API Development Runbook](PROPERTY_MANAGER_API_DEVELOPMENT_RUNBOOK.md)
+for install, bind/port, worker policy, and acceptance checks.
+
+Standard health checks:
+
+```text
+systemctl --user is-active propertymanager-api.service
+systemctl --user status propertymanager-api.service
+curl --fail http://127.0.0.1:5062/health
+```
+
+Recent logs:
+
+```text
+journalctl --user -u propertymanager-api.service -n 100 --no-pager
+```
+
+Graceful configuration reload:
+
+```text
+systemctl --user reload propertymanager-api.service
+```
+
+Controlled restart:
+
+```text
+systemctl --user restart propertymanager-api.service
+```
+
+Do **not** deploy or restart this stack on the production Intel Mini without
+explicit operator approval. Direct Flask (`PROPERTYMANAGER_ALLOW_FLASK_DEV=1`)
+is an emergency rollback path only.
+
+---
+
 # Dashboard WSGI Operations
 
 The dashboard normally runs as the user service

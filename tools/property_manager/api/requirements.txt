@@ -1,0 +1,4 @@
+# PropertyManager REST API (development VM / Gunicorn WSGI)
+Flask>=3,<4
+gunicorn>=22,<27
+psycopg2-binary>=2.9,<3

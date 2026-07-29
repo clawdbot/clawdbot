@@ -1,0 +1,40 @@
+# Development VM only — PropertyManager API via Gunicorn.
+# Do NOT install this unit on the production Intel Mini without explicit operator approval.
+#
+# Install (dev VM):
+#   mkdir -p ~/.config/systemd/user
+#   cp tools/property_manager/deploy/propertymanager-api.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now propertymanager-api.service
+#
+# Paths target the isolated worktree used for this migration branch.
+
+[Unit]
+Description=OpenClaw PropertyManager API (Gunicorn WSGI) — development VM
+After=network.target docker.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ai/projects/openclaw-cursor-propertymanager/tools/property_manager/api
+Environment=PYTHONUNBUFFERED=1
+Environment=PROPERTYMANAGER_API_PORT=5062
+Environment=PROPERTYMANAGER_DB_VIA_DOCKER=1
+Environment=PROPERTYMANAGER_AUTH_DISABLED=0
+Environment=PROPERTYMANAGER_ATTACHMENTS_ROOT=/mnt/ai-storage/openclaw-documents/Property/attachments
+Environment=PROPERTYMANAGER_DB_ENV_FILE=%h/.config/openclaw/db.env
+Environment=PROPERTYMANAGER_PID_DIR=/tmp/pm-dev
+Environment=OPENCLAW_BASE=%h/ai/projects/openclaw-cursor-propertymanager
+ExecStart=%h/ai/projects/openclaw-cursor-propertymanager/tools/property_manager/api/run_api.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+KillSignal=SIGQUIT
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0027
+
+[Install]
+WantedBy=default.target

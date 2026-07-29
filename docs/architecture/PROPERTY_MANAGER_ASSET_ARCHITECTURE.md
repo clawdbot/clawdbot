@@ -323,7 +323,22 @@ Lists: cursor pagination `?cursor=<opaque>&limit=50`.
 
 ### Health
 
-- `GET /health` — includes `api_version`, `schema_version` (`006` as of Phase 1)
+- `GET /health` — includes `api_version`, `schema_version` (`006` as of Phase 1), `api_process`, `postgres_reachable`, and `schema_available` (required tables present). Returns HTTP 503 when Postgres or schema checks fail; client body stays sanitized (diagnostics in logs).
+
+### WSGI runtime (development VM)
+
+Flask remains the app framework. Normal service operation uses **Gunicorn** (not Flask `app.run` / debug / reloader):
+
+| Piece            | Path                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| WSGI entry       | `tools/property_manager/api/wsgi.py` → `application`                                                 |
+| Gunicorn target  | `wsgi:application` (WorkingDirectory = `tools/property_manager/api`)                                 |
+| Config           | `tools/property_manager/api/gunicorn.conf.py` (2 sync workers, bind `:5062`, timeout 120s)           |
+| Launcher         | `tools/property_manager/api/run_api.sh`                                                              |
+| Dev systemd unit | `tools/property_manager/deploy/propertymanager-api.service`                                          |
+| Runbook          | [PropertyManager API Development Runbook](../foundation/PROPERTY_MANAGER_API_DEVELOPMENT_RUNBOOK.md) |
+
+DB default is docker-exec-per-query (process-safe across workers). Migrations stay explicit operator actions — never on worker import. Production Intel Mini units are unchanged until operator approval.
 
 ### Phase 1 implementation notes (dev VM)
 
@@ -390,6 +405,7 @@ Task→asset linking uses the mapping proposal workflow; see [RanchBrain Archite
 ## Related documents
 
 - [PropertyManager Foundational Requirements](../foundation/PROPERTY_MANAGER_FOUNDATIONAL_REQUIREMENTS.md)
+- [PropertyManager API Development Runbook](../foundation/PROPERTY_MANAGER_API_DEVELOPMENT_RUNBOOK.md)
 - [RanchBrain Architecture](../RanchBrain-Architecture.md)
 - [OpenClaw Development Directive](../foundation/OPENCLAW_DEVELOPMENT_DIRECTIVE.md)
 - Deprecated alias: [PROPERTYMANAGER_ASSETS_AND_METERS.md](PROPERTYMANAGER_ASSETS_AND_METERS.md) (pointer only)

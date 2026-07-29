@@ -2,6 +2,21 @@
 
 Prefers TCP via env password. When no password is configured, falls back to
 `docker exec postgres psql` (same pattern as export/import scripts on IntelMini).
+
+Process / Gunicorn safety
+-------------------------
+Default path (``PROPERTYMANAGER_DB_VIA_DOCKER=1`` or no password) is
+**docker-exec-per-query**: each call spawns ``docker exec … psql`` and does not
+keep a shared DB connection. That is safe across Gunicorn sync workers and
+forks (no connection pool, no post-fork shared sockets).
+
+TCP mode (``psycopg2.connect`` via ``connect()``) opens a **new** connection per
+``connect()`` call. Callers must not cache connections across requests or share
+them across worker processes. Prefer short-lived connections inside the request
+handler; do not store connections on module globals.
+
+Importing this module does not open connections, run migrations, or mutate data.
+Migrations remain an explicit operator action.
 """
 
 from __future__ import annotations
