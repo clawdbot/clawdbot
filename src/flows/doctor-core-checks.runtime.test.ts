@@ -58,6 +58,10 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: () => [],
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
+}));
+
+vi.mock("../plugins/provider-hook-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-hook-runtime.js")>()),
   resolveProviderToolSchemaNormalizeCacheKey: () => null,
 }));
 
