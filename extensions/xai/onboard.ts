@@ -9,11 +9,12 @@ import {
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
 } from "./model-definitions.js";
+import { XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
 
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
-// xAI's subscription OAuth surface follows Grok Build's current default.
-// Keep API-key setup on the regional-safe provider default above.
-export const XAI_OAUTH_DEFAULT_MODEL_REF = "xai/grok-4.5";
+// OAuth resolves this stable ref against xAI's authenticated catalog and
+// remote default setting. API-key setup stays on the pinned default above.
+export const XAI_OAUTH_DEFAULT_MODEL_REF = `xai/${XAI_OAUTH_AUTO_MODEL_ID}`;
 
 function createXaiPresetAppliers(primaryModelRef: string) {
   return createModelCatalogPresetAppliers<["openai-completions" | "openai-responses"]>({

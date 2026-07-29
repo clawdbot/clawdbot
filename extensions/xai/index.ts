@@ -6,7 +6,6 @@ import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-mod
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
 import {
-  applyXaiRuntimeModelCompat,
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
@@ -22,7 +21,11 @@ import {
   buildXaiProvider,
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
-import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import {
+  isModernXaiModel,
+  normalizeXaiResolvedModel,
+  resolveXaiForwardCompatModel,
+} from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -267,7 +270,7 @@ export default defineSingleProviderPluginEntry({
         mode: "api-key" as const,
       };
     },
-    normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
+    normalizeResolvedModel: ({ model }) => normalizeXaiResolvedModel(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
