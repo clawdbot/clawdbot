@@ -149,6 +149,39 @@ function primeBlockedUpdateConfig(section: "hooks" | "plugins", config: OpenClaw
   });
 }
 
+function primeBravePluginRecordUpdate(config: OpenClawConfig) {
+  const previousRecords = {
+    brave: {
+      source: "npm",
+      spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
+      installPath: "/tmp/brave-beta",
+      resolvedName: "@openclaw/brave-plugin",
+      resolvedVersion: "2026.6.11-beta.2",
+    },
+  } as const;
+  const nextRecords = {
+    brave: {
+      ...previousRecords.brave,
+      spec: "@openclaw/brave-plugin@2026.6.11",
+      installPath: "/tmp/brave-stable",
+      resolvedVersion: "2026.6.11",
+    },
+  } as const;
+  setInstalledPluginIndexInstallRecords(previousRecords);
+  updateNpmInstalledPlugins.mockResolvedValue({
+    config: {
+      ...config,
+      plugins: {
+        ...config.plugins,
+        installs: nextRecords,
+      },
+    } as OpenClawConfig,
+    changed: true,
+    outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+  });
+  return { previousRecords, nextRecords };
+}
+
 describe("plugins cli update", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
@@ -489,41 +522,13 @@ describe("plugins cli update", () => {
     } as OpenClawConfig;
     const sourceCfg = structuredClone(cfg);
     delete sourceCfg.gateway;
-    const previousRecords = {
-      brave: {
-        source: "npm",
-        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
-        installPath: "/tmp/brave-beta",
-        resolvedName: "@openclaw/brave-plugin",
-        resolvedVersion: "2026.6.11-beta.2",
-      },
-    } as const;
-    const nextRecords = {
-      brave: {
-        ...previousRecords.brave,
-        spec: "@openclaw/brave-plugin@2026.6.11",
-        installPath: "/tmp/brave-stable",
-        resolvedVersion: "2026.6.11",
-      },
-    } as const;
     primeUpdateConfigSnapshot({
       config: cfg,
       parsed: sourceCfg as Record<string, unknown>,
       runtimeConfig: cfg,
       sourceConfig: sourceCfg,
     });
-    setInstalledPluginIndexInstallRecords(previousRecords);
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          installs: nextRecords,
-        },
-      } as OpenClawConfig,
-      changed: true,
-      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
-    });
+    const { nextRecords } = primeBravePluginRecordUpdate(cfg);
 
     await runPluginsCommand(["plugins", "update", "brave"]);
 
@@ -622,23 +627,6 @@ describe("plugins cli update", () => {
         port: 18890,
       },
     } as OpenClawConfig;
-    const previousRecords = {
-      brave: {
-        source: "npm",
-        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
-        installPath: "/tmp/brave-beta",
-        resolvedName: "@openclaw/brave-plugin",
-        resolvedVersion: "2026.6.11-beta.2",
-      },
-    } as const;
-    const nextRecords = {
-      brave: {
-        ...previousRecords.brave,
-        spec: "@openclaw/brave-plugin@2026.6.11",
-        installPath: "/tmp/brave-stable",
-        resolvedVersion: "2026.6.11",
-      },
-    } as const;
     const initialSnapshot = primeUpdateConfigSnapshot({ config: cfg });
     const changedSnapshot = {
       ...initialSnapshot,
@@ -656,18 +644,7 @@ describe("plugins cli update", () => {
     readConfigFileSnapshotForWrite
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(changedSnapshot);
-    setInstalledPluginIndexInstallRecords(previousRecords);
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          installs: nextRecords,
-        },
-      } as OpenClawConfig,
-      changed: true,
-      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
-    });
+    const { previousRecords, nextRecords } = primeBravePluginRecordUpdate(cfg);
 
     await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
       "config changed since last load",
@@ -697,23 +674,6 @@ describe("plugins cli update", () => {
         },
       },
     } as OpenClawConfig;
-    const previousRecords = {
-      brave: {
-        source: "npm",
-        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
-        installPath: "/tmp/brave-beta",
-        resolvedName: "@openclaw/brave-plugin",
-        resolvedVersion: "2026.6.11-beta.2",
-      },
-    } as const;
-    const nextRecords = {
-      brave: {
-        ...previousRecords.brave,
-        spec: "@openclaw/brave-plugin@2026.6.11",
-        installPath: "/tmp/brave-stable",
-        resolvedVersion: "2026.6.11",
-      },
-    } as const;
     const initialSnapshot = primeUpdateConfigSnapshot({
       config: cfg,
       parsed: {
@@ -740,18 +700,7 @@ describe("plugins cli update", () => {
     readConfigFileSnapshotForWrite
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(changedSnapshot);
-    setInstalledPluginIndexInstallRecords(previousRecords);
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          installs: nextRecords,
-        },
-      } as OpenClawConfig,
-      changed: true,
-      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
-    });
+    const { previousRecords, nextRecords } = primeBravePluginRecordUpdate(cfg);
 
     await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
       "included config changed since last load",
@@ -783,23 +732,6 @@ describe("plugins cli update", () => {
         },
       },
     } as OpenClawConfig;
-    const previousRecords = {
-      brave: {
-        source: "npm",
-        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
-        installPath: "/tmp/brave-beta",
-        resolvedName: "@openclaw/brave-plugin",
-        resolvedVersion: "2026.6.11-beta.2",
-      },
-    } as const;
-    const nextRecords = {
-      brave: {
-        ...previousRecords.brave,
-        spec: "@openclaw/brave-plugin@2026.6.11",
-        installPath: "/tmp/brave-stable",
-        resolvedVersion: "2026.6.11",
-      },
-    } as const;
     const initialSnapshot = primeUpdateConfigSnapshot({ config: cfg });
     const invalidSnapshot = {
       ...initialSnapshot,
@@ -817,18 +749,7 @@ describe("plugins cli update", () => {
     readConfigFileSnapshotForWrite
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(invalidSnapshot);
-    setInstalledPluginIndexInstallRecords(previousRecords);
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          installs: nextRecords,
-        },
-      } as OpenClawConfig,
-      changed: true,
-      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
-    });
+    const { previousRecords, nextRecords } = primeBravePluginRecordUpdate(cfg);
 
     await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
       "invalid config for plugin brave",
