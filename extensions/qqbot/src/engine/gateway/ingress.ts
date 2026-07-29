@@ -1,5 +1,6 @@
 // QQBot plugin module owns raw gateway-envelope durable ingress and replay.
 import {
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
   createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
@@ -14,11 +15,9 @@ import type { EngineLogger, GatewayPluginRuntime, QQBotIngressLifecycle } from "
 
 const QQBOT_INGRESS_PAYLOAD_VERSION = 1;
 const QQBOT_INGRESS_POLL_INTERVAL_MS = 1_000;
-const QQBOT_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-export const QQBOT_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-export const QQBOT_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const QQBOT_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const QQBOT_INGRESS_FAILED_MAX_ENTRIES = 20_000;
+export const QQBOT_INGRESS_COMPLETED_TTL_MS = CHANNEL_INGRESS_RETENTION_DEFAULTS.completedTtlMs;
+export const QQBOT_INGRESS_COMPLETED_MAX_ENTRIES =
+  CHANNEL_INGRESS_RETENTION_DEFAULTS.completedMaxEntries;
 
 type QQBotIngressPayload = {
   version: 1;
@@ -112,13 +111,7 @@ export function createQQBotIngressMonitor(options: {
       return await options.dispatch(mapped.msg, lifecycle, claim.id);
     },
     pollIntervalMs: options.pollIntervalMs ?? QQBOT_INGRESS_POLL_INTERVAL_MS,
-    retention: {
-      pruneIntervalMs: QQBOT_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: QQBOT_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: QQBOT_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: QQBOT_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: QQBOT_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    retention: "standard",
     drain: {
       orderBy: "received",
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
