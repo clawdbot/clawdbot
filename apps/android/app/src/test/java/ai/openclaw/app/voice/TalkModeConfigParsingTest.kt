@@ -63,6 +63,23 @@ class TalkModeConfigParsingTest {
   }
 
   @Test
+  fun gatesAndroidRealtimeRelayFromProviderLevelModel() {
+    val providerLevelBrowserOnly =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"provider":"openai","providers":{"openai":{"model":"gpt-live-1-codex"}}}}}""",
+        ).jsonObject
+    val topLevelWins =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"provider":"openai","model":"gpt-realtime-2.1","providers":{"openai":{"model":"gpt-live-1-codex"}}}}}""",
+        ).jsonObject
+
+    assertFalse(TalkModeGatewayConfigParser.parse(providerLevelBrowserOnly).realtimeRelayModelSupported)
+    assertTrue(TalkModeGatewayConfigParser.parse(topLevelWins).realtimeRelayModelSupported)
+  }
+
+  @Test
   fun resolvesRealtimeLanguageFromConfigThenWatchThenPhone() {
     assertEquals(
       "de",
