@@ -12,6 +12,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 // Research autocapture helpers coordinate replay-safe capture and suggestion state.
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
+import { autoApplySkillProposal } from "../workshop/auto-apply.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../workshop/frontmatter.js";
 import {
@@ -274,7 +275,7 @@ export async function runSkillResearchAutoCapture(params: {
 
     const manifest = await listSkillProposals({ workspaceDir });
     const allInstructionSignalHashes = instructionSignalHashes(instructions);
-    if (!workshopConfig.autonomous.enabled) {
+    if (workshopConfig.autonomous.mode === "off") {
       const proposal = proposals.at(-1);
       if (!proposal) {
         return;
@@ -407,6 +408,7 @@ export async function runSkillResearchAutoCapture(params: {
                 description: proposal.description,
                 content: proposal.content,
                 createdBy: "skill-workshop",
+                autonomousCapture: true,
                 origin: buildProposalOrigin(params.ctx),
                 goal: proposal.goal,
                 evidence: proposal.evidence,
@@ -419,6 +421,7 @@ export async function runSkillResearchAutoCapture(params: {
                 description: proposal.description,
                 content: buildAutoCaptureUpdateContent(existingSkill, proposal.content),
                 createdBy: "skill-workshop",
+                autonomousCapture: true,
                 origin: buildProposalOrigin(params.ctx),
                 goal: proposal.goal,
                 evidence: proposal.evidence,
@@ -426,6 +429,15 @@ export async function runSkillResearchAutoCapture(params: {
         log.info(
           `skill research auto-capture queued workshop proposal ${result.record.target.skillKey}`,
         );
+        if (workshopConfig.autonomous.mode === "auto") {
+          await autoApplySkillProposal({
+            workspaceDir,
+            ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+            ...(params.config ? { config: params.config } : {}),
+            proposalId: result.record.id,
+            skillName: result.record.target.skillName,
+          });
+        }
       } catch (error) {
         await releaseSessionSkillCaptureSignals({
           ...sessionScope,
