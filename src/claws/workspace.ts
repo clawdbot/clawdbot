@@ -425,6 +425,37 @@ export async function createClawWorkspaceFiles(
       }
       if (await workspace.exists(targetRelative)) {
         if (!existingRecord || existingRecord.status === "failed") {
+          if (action.action === "adopt") {
+            const adoptedTarget = await workspace.read(targetRelative, {
+              hardlinks: "reject",
+              maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
+              symlinks: "reject",
+            });
+            if (contentDigest(adoptedTarget.buffer) !== expectedRecord.contentDigest) {
+              throw new ClawWorkspaceWriteError(
+                [
+                  diagnostic(
+                    action,
+                    "workspace_file_conflict",
+                    `Adoptable workspace destination ${JSON.stringify(targetRelative)} changed after planning; adoption never overwrites existing files.`,
+                  ),
+                ],
+                createdFiles,
+              );
+            }
+            const adoptedRecord = existingRecord ?? expectedRecord;
+            if (existingRecord) {
+              const previousStatus = existingRecord.status;
+              existingRecord.status = "complete";
+              existingRecord.updatedAtMs = nowMs;
+              updateWorkspaceFileStatus(existingRecord, [previousStatus], options);
+            } else {
+              adoptedRecord.status = "complete";
+              persistWorkspaceFile(adoptedRecord, options);
+            }
+            createdFiles.push(adoptedRecord);
+            continue;
+          }
           throw new ClawWorkspaceWriteError(
             [
               diagnostic(

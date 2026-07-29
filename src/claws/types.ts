@@ -193,7 +193,7 @@ export type ClawReadResult =
 export type ClawAddPlanAction = {
   kind: "agent" | "workspace" | "workspaceFile" | "package" | "mcpServer" | "cronJob";
   id: string;
-  action: "create" | "write" | "install" | "configure" | "schedule";
+  action: "create" | "write" | "adopt" | "install" | "configure" | "schedule";
   target: string;
   source?: string;
   sourceKind?: "clawMarkdownBody";

@@ -1,6 +1,6 @@
 // Builds complete read-only Claw add plans without mutating local state.
 import { createHash } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { stableStringify } from "../agents/stable-stringify.js";
@@ -43,6 +43,7 @@ export type ClawAddPlanContext = {
   agentId?: string;
   workspace?: string;
   resumableWorkspace?: string;
+  adoptExistingWorkspace?: boolean;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
@@ -207,7 +208,10 @@ export async function buildClawAddPlan(params: {
   const packageRoot = await realpath(params.source.packageRoot).catch(
     () => params.source.packageRoot,
   );
-  const source = { ...params.source, packageRoot };
+  const manifestPath = await realpath(params.source.manifestPath).catch(
+    () => params.source.manifestPath,
+  );
+  const source = { ...params.source, packageRoot, manifestPath };
   const sourceRoot = await fsSafeRoot(packageRoot);
   const blockers: ClawDiagnostic[] = [];
   const actions: ClawAddPlanAction[] = [];
@@ -273,34 +277,58 @@ export async function buildClawAddPlan(params: {
     [...(context.existingWorkspacePaths ?? [])].map((path) => canonicalWorkspacePath(path)),
   );
   const configuredWorkspaceConflict = configuredWorkspacePaths.has(workspace);
-  const workspaceExistsOnDisk = await lstat(workspace)
-    .then(() => true)
-    .catch(() => false);
+  const workspaceDiskState = await lstat(workspace).catch(() => undefined);
+  const workspaceExistsOnDisk = workspaceDiskState !== undefined;
   const resumableWorkspace = context.resumableWorkspace
     ? canonicalWorkspacePath(context.resumableWorkspace)
     : undefined;
+  const workspaceAdoption =
+    context.adoptExistingWorkspace === true &&
+    workspaceExistsOnDisk &&
+    workspaceDiskState.isDirectory() &&
+    !configuredWorkspaceConflict;
   const workspaceBlocked =
-    configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace);
+    !workspaceAdoption &&
+    (configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace));
   if (workspaceBlocked) {
     blockers.push(
       blocker(
         "workspace_collision",
         "$.workspace",
-        `Workspace ${JSON.stringify(workspace)} already exists; a Claw requires a new workspace.`,
+        context.adoptExistingWorkspace === true && workspaceExistsOnDisk
+          ? `Workspace ${JSON.stringify(workspace)} cannot be adopted; it is ${
+              configuredWorkspaceConflict
+                ? "already configured for another agent"
+                : "not a directory"
+            }.`
+          : `Workspace ${JSON.stringify(workspace)} already exists; a Claw requires a new workspace.`,
       ),
     );
   }
   actions.push({
     kind: "workspace",
     id: finalId,
-    action: "create",
+    action: workspaceAdoption ? "adopt" : "create",
     target: workspace,
-    details: { expectedState: "absent" },
+    details: { expectedState: workspaceAdoption ? "existing-directory" : "absent" },
     blocked: workspaceBlocked,
     ...(workspaceBlocked
       ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
       : {}),
   });
+  if (workspaceAdoption) {
+    capabilityChanges.push(
+      capabilityChange({
+        kind: "agent",
+        id: finalId,
+        path: "workspace",
+        action: "configure",
+        reason:
+          "The Claw adopts an existing workspace directory; declared files must already match or be absent.",
+        effect: { workspace, adoptExistingWorkspace: true },
+      }),
+    );
+  }
 
   const pendingWorkspaceFiles: PendingWorkspaceFileAction[] = [];
   async function addWorkspaceFileInspection(fileParams: {
@@ -439,6 +467,46 @@ export async function buildClawAddPlan(params: {
         pending.action.reason = diagnostic.message;
         blockers.push(diagnostic);
       }
+    }
+  }
+
+  if (workspaceAdoption) {
+    for (const pending of pendingWorkspaceFiles) {
+      if (pending.action.blocked || !pending.action.digest) {
+        continue;
+      }
+      const targetState = await lstat(pending.action.target).catch(() => undefined);
+      if (!targetState) {
+        continue;
+      }
+      if (!targetState.isFile() || targetState.size > MAX_MANAGED_FILE_BYTES) {
+        const diagnostic = blocker(
+          "workspace_file_conflict",
+          pending.manifestPath,
+          `Adoptable workspace destination ${JSON.stringify(pending.action.target)} must be a regular file within managed size limits.`,
+        );
+        pending.action.blocked = true;
+        pending.action.reason = diagnostic.message;
+        blockers.push(diagnostic);
+        continue;
+      }
+      const existingContent = await readFile(pending.action.target).catch(() => undefined);
+      const existingDigest = existingContent
+        ? `sha256:${createHash("sha256").update(existingContent).digest("hex")}`
+        : undefined;
+      if (existingDigest === pending.action.digest) {
+        pending.action.action = "adopt";
+        pending.action.details = { ...pending.action.details, expectedState: "existing-identical" };
+        continue;
+      }
+      const diagnostic = blocker(
+        "workspace_file_conflict",
+        pending.manifestPath,
+        `Workspace destination ${JSON.stringify(pending.action.target)} exists with different content; adoption never overwrites existing files.`,
+      );
+      pending.action.blocked = true;
+      pending.action.reason = diagnostic.message;
+      blockers.push(diagnostic);
     }
   }
 

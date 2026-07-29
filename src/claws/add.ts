@@ -242,6 +242,33 @@ export async function applyClawAddPlan(
   }
   let workspaceCreated = workspaceState?.isDirectory() ?? false;
   let configCommitted = statusAtLeast(installRecord.status, "config_committed");
+  const workspaceAdoption = plan.actions.some(
+    (action) => action.kind === "workspace" && action.action === "adopt",
+  );
+  if (workspaceAdoption && !workspaceCreated) {
+    const adoptedState = await lstat(workspace).catch(() => undefined);
+    if (!adoptedState?.isDirectory()) {
+      clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
+      throw new ClawAddMutationError(
+        "workspace_collision",
+        `Adoptable workspace ${JSON.stringify(workspace)} is no longer an existing directory.`,
+      );
+    }
+    workspaceCreated = true;
+    if (!workspacePhaseRecorded) {
+      try {
+        markInstallStatus(
+          plan.agent.finalId,
+          "workspace_ready",
+          ["pending", "partial", "workspace_ready"],
+          options,
+        );
+      } catch (error) {
+        clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
+        throw new ClawAddMutationError("provenance_failed", (error as Error).message);
+      }
+    }
+  }
 
   try {
     assertWorkspacePathUnchanged(workspace);

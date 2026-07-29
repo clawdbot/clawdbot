@@ -14,6 +14,7 @@ export type ClawsAddOptions = {
   json?: boolean;
   agentId?: string;
   workspace?: string;
+  adoptExistingWorkspace?: boolean;
 };
 
 export type ClawsStatusOptions = { json?: boolean };
@@ -64,6 +65,11 @@ export function registerClawsCli(program: Command) {
     .option("--plan-integrity <digest>", "Bind consent to an exact dry-run plan")
     .option("--agent-id <id>", "Override the requested id with an unused local agent id")
     .option("--workspace <path>", "Override the derived new workspace path")
+    .option(
+      "--adopt-existing-workspace",
+      "Adopt an existing workspace directory; declared files must already match or be absent",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .action(async (source: string, opts: ClawsAddOptions) => {
       const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
