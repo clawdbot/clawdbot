@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawIPC
+import Subprocess
 
 enum ShellExecutor {
     struct ShellResult: Sendable {
@@ -41,53 +42,70 @@ enum ShellExecutor {
                 String(bytes: stdoutData, encoding: .utf8) ?? "",
                 String(bytes: stderrData, encoding: .utf8) ?? "")
         }
-    }
 
-    private final class CompletionBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var finished = false
-        private let continuation: CheckedContinuation<ShellResult, Never>
-        private let output: OutputFiles
-
-        init(continuation: CheckedContinuation<ShellResult, Never>, output: OutputFiles) {
-            self.continuation = continuation
-            self.output = output
+        var subprocessStandardOutput: FileDescriptorOutput {
+            .fileDescriptor(
+                .init(rawValue: self.stdout.fileDescriptor),
+                closeAfterSpawningProcess: false)
         }
 
-        func finish(
-            status: Int?,
-            timedOut: Bool,
-            errorMessage: String?,
-            beforeCapture: (@Sendable () -> Void)? = nil)
-        {
-            self.lock.lock()
-            guard !self.finished else {
-                self.lock.unlock()
-                return
+        var subprocessStandardError: FileDescriptorOutput {
+            .fileDescriptor(
+                .init(rawValue: self.stderr.fileDescriptor),
+                closeAfterSpawningProcess: false)
+        }
+    }
+
+    private enum RunOutcome: Sendable {
+        case completed(TerminationStatus)
+        case timedOut
+    }
+
+    private static func environment(from values: [String: String]?) -> Environment {
+        guard let values else { return .inherit }
+        var converted: [Environment.Key: String] = [:]
+        converted.reserveCapacity(values.count)
+        for (key, value) in values {
+            guard let environmentKey = Environment.Key(rawValue: key) else { continue }
+            converted[environmentKey] = value
+        }
+        return .custom(converted)
+    }
+
+    private static func runSubprocess(
+        configuration: Configuration,
+        output: OutputFiles) async throws -> TerminationStatus
+    {
+        let result = try await Subprocess.run(
+            configuration,
+            output: output.subprocessStandardOutput,
+            error: output.subprocessStandardError)
+        return result.terminationStatus
+    }
+
+    private static func execute(
+        configuration: Configuration,
+        output: OutputFiles,
+        timeout: Double?) async throws -> RunOutcome
+    {
+        guard let timeout, timeout > 0 else {
+            return try await .completed(self.runSubprocess(configuration: configuration, output: output))
+        }
+
+        return try await withThrowingTaskGroup(of: RunOutcome.self) { group in
+            group.addTask {
+                try await .completed(self.runSubprocess(configuration: configuration, output: output))
             }
-            self.finished = true
-            self.lock.unlock()
-            beforeCapture?()
-            let captured = self.output.readAndRemove()
-            self.continuation.resume(returning: ShellResult(
-                stdout: captured.stdout,
-                stderr: captured.stderr,
-                exitCode: status,
-                timedOut: timedOut,
-                success: status == 0 && !timedOut && errorMessage == nil,
-                errorMessage: errorMessage ?? status.flatMap { $0 == 0 ? nil : "exit \($0)" }))
-        }
-    }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                return .timedOut
+            }
 
-    private static func completedResult(status: Int, output: OutputFiles) -> ShellResult {
-        let captured = output.readAndRemove()
-        return ShellResult(
-            stdout: captured.stdout,
-            stderr: captured.stderr,
-            exitCode: status,
-            timedOut: false,
-            success: status == 0,
-            errorMessage: status == 0 ? nil : "exit \(status)")
+            // Group scope waits for swift-subprocess cancellation teardown, including
+            // SIGKILL escalation and reaping, before a timeout result reaches callers.
+            defer { group.cancelAll() }
+            return try await group.next() ?? .timedOut
+        }
     }
 
     static func runDetailed(
@@ -106,16 +124,6 @@ enum ShellExecutor {
                 errorMessage: "empty command")
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = command
-        if let cwd {
-            process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        }
-        if let env {
-            process.environment = env
-        }
-
         let output: OutputFiles
         do {
             output = try OutputFiles()
@@ -128,42 +136,50 @@ enum ShellExecutor {
                 success: false,
                 errorMessage: "failed to capture output: \(error.localizedDescription)")
         }
-        process.standardOutput = output.stdout
-        process.standardError = output.stderr
 
-        if let timeout, timeout > 0 {
-            return await withCheckedContinuation { continuation in
-                let completion = CompletionBox(continuation: continuation, output: output)
-
-                process.terminationHandler = { terminatedProcess in
-                    let status = Int(terminatedProcess.terminationStatus)
-                    completion.finish(status: status, timedOut: false, errorMessage: nil)
-                }
-
-                do {
-                    try process.run()
-                } catch {
-                    completion.finish(
-                        status: nil,
-                        timedOut: false,
-                        errorMessage: "failed to start: \(error.localizedDescription)")
-                    return
-                }
-
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
-                    guard process.isRunning else { return }
-                    // Claim timeout classification before SIGTERM can trigger the termination handler.
-                    completion.finish(
-                        status: nil,
-                        timedOut: true,
-                        errorMessage: "timeout",
-                        beforeCapture: { process.terminate() })
-                }
-            }
-        }
+        var platformOptions = PlatformOptions()
+        platformOptions.qualityOfService = .userInitiated
+        platformOptions.createSession = true
+        platformOptions.teardownSequence = [
+            .gracefulShutDown(
+                toProcessGroup: true,
+                allowedDurationToNextStep: .milliseconds(100)),
+        ]
+        let configuration = Configuration(
+            .path(.init("/usr/bin/env")),
+            arguments: Arguments(command),
+            environment: self.environment(from: env),
+            workingDirectory: cwd.map { .init($0) },
+            platformOptions: platformOptions)
 
         do {
-            try process.run()
+            let outcome = try await self.execute(
+                configuration: configuration,
+                output: output,
+                timeout: timeout)
+            let captured = output.readAndRemove()
+            switch outcome {
+            case .timedOut:
+                return ShellResult(
+                    stdout: captured.stdout,
+                    stderr: captured.stderr,
+                    exitCode: nil,
+                    timedOut: true,
+                    success: false,
+                    errorMessage: "timeout")
+            case let .completed(terminationStatus):
+                let status = switch terminationStatus {
+                case let .exited(code), let .signaled(code):
+                    Int(code)
+                }
+                return ShellResult(
+                    stdout: captured.stdout,
+                    stderr: captured.stderr,
+                    exitCode: status,
+                    timedOut: false,
+                    success: terminationStatus.isSuccess,
+                    errorMessage: terminationStatus.isSuccess ? nil : "exit \(status)")
+            }
         } catch {
             let captured = output.readAndRemove()
             return ShellResult(
@@ -174,9 +190,6 @@ enum ShellExecutor {
                 success: false,
                 errorMessage: "failed to start: \(error.localizedDescription)")
         }
-
-        process.waitUntilExit()
-        return self.completedResult(status: Int(process.terminationStatus), output: output)
     }
 
     static func run(command: [String], cwd: String?, env: [String: String]?, timeout: Double?) async -> Response {
