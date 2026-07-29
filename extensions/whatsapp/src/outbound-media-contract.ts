@@ -138,7 +138,12 @@ function normalizeWhatsAppLoadedMedia(
 ): CanonicalWhatsAppLoadedMedia {
   const kind = inferWhatsAppMediaKind(media);
   const mimetype =
-    kind === "audio" && isWhatsAppNativeVoiceAudio({ contentType: media.contentType, mediaUrl })
+    kind === "audio" &&
+    isWhatsAppNativeVoiceAudio({
+      contentType: media.contentType,
+      fileName: media.fileName,
+      mediaUrl,
+    })
       ? WHATSAPP_VOICE_MIMETYPE
       : (media.contentType ?? "application/octet-stream");
   const fileName =
