@@ -140,6 +140,7 @@ export async function runEmbeddedAttemptSettledPhase(
     queueHandle,
     stopAcceptingSteerMessages,
     getBeforeAgentFinalizeRevisionReason,
+    getBeforeAgentFinalizeRevisionEntryId,
   } = preparedStream;
   const { unsubscribe, waitForPendingEvents } = subscription;
   const {
@@ -321,6 +322,7 @@ export async function runEmbeddedAttemptSettledPhase(
       shouldFlushForContextEngine: () =>
         Boolean(input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason()),
       getBeforeAgentFinalizeRevisionReason,
+      getBeforeAgentFinalizeRevisionEntryId,
       getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
       onSettleErrorState: (settleState) => {
         setFailure(settleState.promptError, settleState.promptErrorSource);
