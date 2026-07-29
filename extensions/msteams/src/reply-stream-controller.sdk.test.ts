@@ -176,7 +176,11 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
     expect(acknowledgements).toEqual([{ id: "stream-size-limit", text: acknowledgedPrefix }]);
     expect(controller.preparePayload({ text: completeReply })).toBeUndefined();
 
-    await expect(controller.finalize()).resolves.toEqual({ text: "b".repeat(200) });
+    await expect(controller.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: completeReply,
+      fallbackPayload: { text: "b".repeat(200) },
+    });
     // Finalization queues its own metadata activity; this is a second
     // provider operation, not a retry of the rejected streaming chunk.
     expect(
@@ -214,7 +218,10 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
     });
 
     expect(controller.preparePayload({ text: completeReply })).toBeUndefined();
-    await expect(controller.finalize()).resolves.toBeUndefined();
+    await expect(controller.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: acknowledgedPrefix,
+    });
     expect(requests.filter((request) => request.scenario === "cancel")).toHaveLength(2);
   });
 });
