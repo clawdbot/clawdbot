@@ -486,10 +486,12 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.addonErrors = new Map(this.addonErrors).set(pluginId, errorMessage(error));
         return;
       }
-      await Promise.allSettled([
-        this.context.runtimeConfig.refresh(),
-        this.loadCatalog(client, connection),
-      ]);
+      const currentConnection = this.connection;
+      const catalogReload =
+        currentConnection?.connected && currentConnection.client
+          ? this.loadCatalog(currentConnection.client, currentConnection)
+          : Promise.resolve();
+      await Promise.allSettled([this.context.runtimeConfig.refresh(), catalogReload]);
     } finally {
       const busy = new Set(this.addonBusy);
       busy.delete(pluginId);

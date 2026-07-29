@@ -558,6 +558,41 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
+  it("does not let a stale mutation supersede a reconnect catalog reload", async () => {
+    const mutation = deferred<unknown>();
+    const mutationReload = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+    const initial = [addon("active-memory", true), addon("memory-wiki", false)];
+    const { element, request, setPhase } = createPage({
+      configObject: {},
+      listCatalog: (call) =>
+        call < 2 ? Promise.resolve({ plugins: initial }) : mutationReload.promise,
+      setEnabled: () => mutation.promise,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      toggleAddon(element, "Active memory", false);
+
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
+      );
+
+      mutation.resolve({});
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
+      );
+
+      mutationReload.resolve({
+        plugins: [addon("active-memory", false), addon("memory-wiki", false)],
+      });
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
+    } finally {
+      element.remove();
+    }
+  });
+
   it("reconciles the catalog without reporting a rejected toggle when config refresh fails", async () => {
     const refresh = vi.fn(() => Promise.reject(new Error("config refresh failed")));
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
