@@ -102,6 +102,13 @@ type PendingUpdateReconciliation = {
   kind: "ambiguous" | "handoff" | "restart";
 };
 
+function resolvePendingUpdateOutcomeUnknownBanner(): ApplicationStatusBanner {
+  return {
+    tone: "danger",
+    text: t("updates.outcomeUnknown"),
+  };
+}
+
 export function createApplicationOverlays(
   gateway: ApplicationGateway,
   hooks: {
@@ -353,10 +360,7 @@ export function createApplicationOverlays(
         : reconciliationKind === "handoff"
           ? resolvePendingUpdateHandoffTimeoutBanner()
           : reconciliationKind === "ambiguous"
-            ? {
-                tone: "danger",
-                text: t("updates.outcomeUnknown"),
-              }
+            ? resolvePendingUpdateOutcomeUnknownBanner()
             : null,
     );
   };
@@ -387,7 +391,11 @@ export function createApplicationOverlays(
       pairingPendingCount.invalidate({ clear: true });
       if (accessTransition.adminRevoked) {
         updateRunGeneration += 1;
-        snapshot = { ...snapshot, updateRunning: false };
+        const updateStatusBanner = pendingUpdateReconciliation
+          ? resolvePendingUpdateOutcomeUnknownBanner()
+          : snapshot.updateStatusBanner;
+        pendingUpdateReconciliation = null;
+        snapshot = { ...snapshot, updateRunning: false, updateStatusBanner };
       }
     }
     if (accessTransition.pairingChanged) {

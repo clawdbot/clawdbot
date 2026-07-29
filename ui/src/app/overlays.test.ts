@@ -1044,6 +1044,47 @@ describe("application update overlays", () => {
     }
   });
 
+  it("releases ambiguous reconciliation when update status access is revoked", async () => {
+    installUpdateTranslations();
+    const updateRun = deferred();
+    const request = vi.fn<RequestFn>((method) =>
+      method === "update.run" ? updateRun.promise : Promise.resolve([]),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    try {
+      const running = overlays.runUpdate();
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+
+      harness.update({
+        hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+
+      expect(overlays.snapshot.updateRunning).toBe(false);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
+      });
+
+      updateRun.resolve({});
+      await running;
+      expect(request).not.toHaveBeenCalledWith("update.status", {});
+    } finally {
+      updateRun.resolve({});
+      overlays.dispose();
+    }
+  });
+
   it("ignores a status response from a retired reconnect", async () => {
     const retiredStatus = deferred();
     const firstRequest = vi.fn<RequestFn>((method) => {
