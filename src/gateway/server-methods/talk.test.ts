@@ -1838,6 +1838,87 @@ describe("talk.session unified handlers", () => {
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it.each([
+    {
+      label: "request override from a configured GA model",
+      configuredModel: "gpt-realtime-2.1",
+      requestedModel: "gpt-live-1-codex",
+    },
+    {
+      label: "configured supported model without an override",
+      configuredModel: "gpt-live-1-codex",
+      requestedModel: undefined,
+    },
+  ])("resolves relay readiness from the effective model: $label", async (testCase) => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => false,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementationOnce((input) => {
+      expect(input).toEqual(
+        expect.objectContaining({
+          providerConfigOverrides: { model: "gpt-live-1-codex" },
+          defaultModel: testCase.configuredModel,
+          surface: "gateway-relay",
+        }),
+      );
+      return {
+        provider,
+        providerConfig: { model: "gpt-live-1-codex" },
+      } as never;
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValueOnce({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-effective-model",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      model: "gpt-live-1-codex",
+      voice: "marin",
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        ...(testCase.requestedModel ? { model: testCase.requestedModel } : {}),
+      },
+      respond,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                model: testCase.configuredModel,
+                providers: { openai: {} },
+              },
+            },
+          }) as OpenClawConfig,
+        logGateway: { warn: vi.fn() },
+      },
+    });
+
+    expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider,
+        providerConfig: { model: "gpt-live-1-codex" },
+        model: "gpt-live-1-codex",
+      }),
+    );
+    expectRespondOk(respond, { relaySessionId: "relay-effective-model" });
+  });
+
   it("rejects forced consult routing when the provider resolves gpt-live", async () => {
     const provider = {
       id: "openai",

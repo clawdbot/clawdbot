@@ -281,18 +281,18 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         }
         const runtimeConfig = context.getRuntimeConfig();
         const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
-        const resolution = resolveConfiguredRealtimeVoiceProvider({
-          configuredProviderId: realtimeConfig.provider,
-          providerConfigs: realtimeConfig.providers,
-          cfg: runtimeConfig,
-          cfgForResolve: runtimeConfig,
-          defaultModel: realtimeConfig.model,
-          surface: "gateway-relay",
-          noRegisteredProviderMessage: "No realtime voice provider registered",
-        });
         const launchOptions = buildRealtimeVoiceLaunchOptions({
           requested: params,
           defaults: realtimeConfig,
+        });
+        const resolution = resolveConfiguredRealtimeVoiceProvider({
+          configuredProviderId: realtimeConfig.provider,
+          providerConfigs: realtimeConfig.providers,
+          providerConfigOverrides: launchOptions.model ? { model: launchOptions.model } : {},
+          cfg: runtimeConfig,
+          defaultModel: realtimeConfig.model,
+          surface: "gateway-relay",
+          noRegisteredProviderMessage: "No realtime voice provider registered",
         });
         const relayLaunch = resolveTalkRealtimeGatewayRelayLaunch({
           ...resolution,
