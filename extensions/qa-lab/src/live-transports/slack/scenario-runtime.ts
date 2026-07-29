@@ -15,26 +15,6 @@ import {
   collectSlackBlockText,
   sendSlackChannelMessage,
 } from "./slack-live.observations.js";
-import {
-  slackQaAllowlistBlockScenario,
-  slackQaApprovalExecNativeScenario,
-  slackQaApprovalPluginNativeScenario,
-  slackQaCanaryScenario,
-  slackQaChannelDisabledWarningScenario,
-  slackQaChartPresentationNativeScenario,
-  slackQaCodexApprovalExecNativeScenario,
-  slackQaCodexApprovalPluginNativeScenario,
-  slackQaMentionGatingScenario,
-  slackQaMpimAppMentionDedupeScenario,
-  slackQaProgressCommentaryFalseScenario,
-  slackQaProgressCommentaryOmittedScenario,
-  slackQaProgressCommentaryTrueScenario,
-  slackQaProgressCommentaryVerboseDedupeScenario,
-  slackQaReactionGlyphNativeScenario,
-  slackQaTableInvalidBlocksFallbackScenario,
-  slackQaTablePresentationNativeScenario,
-  slackQaTopLevelReplyShapeScenario,
-} from "./slack-live.scenario-implementations.js";
 
 async function runSlackMessageScenario(params: {
   environment: SlackQaScenarioEnvironment;
@@ -130,7 +110,7 @@ async function runSlackMessageScenario(params: {
   }
 }
 
-async function runSlackScenario(
+export async function runSlackScenario(
   environment: SlackQaScenarioEnvironment,
   implementation: SlackQaScenarioImplementation,
 ) {
@@ -203,41 +183,3 @@ async function runSlackScenario(
     timeoutMs: scenario.timeoutMs,
   });
 }
-
-export const runSlackCanaryScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaCanaryScenario);
-export const runSlackMentionGatingScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaMentionGatingScenario);
-export const runSlackMpimAppMentionDedupeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaMpimAppMentionDedupeScenario);
-export const runSlackAllowlistBlockScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaAllowlistBlockScenario);
-export const runSlackChannelDisabledWarningScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaChannelDisabledWarningScenario);
-export const runSlackTopLevelReplyShapeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaTopLevelReplyShapeScenario);
-export const runSlackProgressCommentaryTrueScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaProgressCommentaryTrueScenario);
-export const runSlackProgressCommentaryFalseScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaProgressCommentaryFalseScenario);
-export const runSlackProgressCommentaryOmittedScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaProgressCommentaryOmittedScenario);
-export const runSlackProgressCommentaryVerboseDedupeScenario = (
-  context: SlackQaScenarioEnvironment,
-) => runSlackScenario(context, slackQaProgressCommentaryVerboseDedupeScenario);
-export const runSlackChartPresentationNativeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaChartPresentationNativeScenario);
-export const runSlackTablePresentationNativeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaTablePresentationNativeScenario);
-export const runSlackTableInvalidBlocksFallbackScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaTableInvalidBlocksFallbackScenario);
-export const runSlackReactionGlyphNativeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaReactionGlyphNativeScenario);
-export const runSlackApprovalExecNativeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaApprovalExecNativeScenario);
-export const runSlackApprovalPluginNativeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaApprovalPluginNativeScenario);
-export const runSlackCodexApprovalExecNativeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaCodexApprovalExecNativeScenario);
-export const runSlackCodexApprovalPluginNativeScenario = (context: SlackQaScenarioEnvironment) =>
-  runSlackScenario(context, slackQaCodexApprovalPluginNativeScenario);

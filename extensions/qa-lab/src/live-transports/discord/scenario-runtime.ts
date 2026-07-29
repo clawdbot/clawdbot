@@ -1,17 +1,11 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  discordQaCanaryScenario,
-  discordQaMentionGatingScenario,
-  discordQaNativeHelpCommandRegistrationScenario,
   discordQaScenarioSupport,
-  discordQaStatusReactionsToolOnlyScenario,
-  discordQaThreadReplyFilepathAttachmentScenario,
-  discordQaVoiceAutojoinScenario,
   type DiscordQaScenarioImplementation,
 } from "./discord-live.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
-async function runDiscordScenario(
+export async function runDiscordScenario(
   environment: DiscordQaScenarioEnvironment,
   implementation: DiscordQaScenarioImplementation,
 ) {
@@ -125,18 +119,3 @@ async function runDiscordScenario(
     throw error;
   }
 }
-
-export const runDiscordCanaryScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, discordQaCanaryScenario);
-export const runDiscordMentionGatingScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, discordQaMentionGatingScenario);
-export const runDiscordNativeHelpCommandRegistrationScenario = (
-  context: DiscordQaScenarioEnvironment,
-) => runDiscordScenario(context, discordQaNativeHelpCommandRegistrationScenario);
-export const runDiscordVoiceAutojoinScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, discordQaVoiceAutojoinScenario);
-export const runDiscordStatusReactionsToolOnlyScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, discordQaStatusReactionsToolOnlyScenario);
-export const runDiscordThreadReplyFilepathAttachmentScenario = (
-  context: DiscordQaScenarioEnvironment,
-) => runDiscordScenario(context, discordQaThreadReplyFilepathAttachmentScenario);

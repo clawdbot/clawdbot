@@ -22,52 +22,6 @@ import {
   waitForNoWhatsAppReply,
   waitForWhatsAppScenarioSutMessage,
 } from "./whatsapp-live.operations.js";
-import {
-  whatsappQaGroupAudioGatingScenario,
-  whatsappQaGroupOutboundAudioScenario,
-  whatsappQaGroupOutboundMediaScenario,
-  whatsappQaGroupOutboundPollScenario,
-  whatsappQaInboundStructuredMessagesScenario,
-  whatsappQaMessageActionsScenario,
-  whatsappQaOutboundDocumentPreservesFilenameScenario,
-  whatsappQaOutboundPollScenario,
-  whatsappQaOutboundSendSerializationScenario,
-} from "./whatsapp-live.scenario-implementations.capabilities.js";
-import {
-  whatsappQaBroadcastGroupFanoutScenario,
-  whatsappQaCanaryScenario,
-  whatsappQaGroupActivationAlwaysScenario,
-  whatsappQaGroupPendingHistoryContextScenario,
-  whatsappQaGroupReplyToBotTriggersScenario,
-  whatsappQaGroupReplyToMessageScenario,
-  whatsappQaMentionGatingScenario,
-  whatsappQaReplyToMessageScenario,
-  whatsappQaReplyToModeBatchedScenario,
-  whatsappQaTopLevelReplyShapeScenario,
-} from "./whatsapp-live.scenario-implementations.conversation.js";
-import {
-  whatsappQaApprovalExecDenyNativeScenario,
-  whatsappQaApprovalExecGroupReactionNativeScenario,
-  whatsappQaApprovalExecNativeScenario,
-  whatsappQaApprovalExecReactionNativeScenario,
-  whatsappQaApprovalPluginNativeScenario,
-  whatsappQaGroupAllowlistBlockScenario,
-  whatsappQaReplyDeliveryShapeScenario,
-  whatsappQaStatusReactionLifecycleScenario,
-  whatsappQaStatusReactionsScenario,
-  whatsappQaStreamFinalMessageAccountingScenario,
-} from "./whatsapp-live.scenario-implementations.delivery.js";
-import {
-  whatsappQaAgentMessageActionReactScenario,
-  whatsappQaAgentMessageActionUploadFileScenario,
-  whatsappQaAudioPreflightScenario,
-  whatsappQaGroupAgentMessageActionReactScenario,
-  whatsappQaGroupAgentMessageActionUploadFileScenario,
-  whatsappQaInboundImageCaptionScenario,
-  whatsappQaInboundReactionNoTriggerScenario,
-  whatsappQaOutboundMediaMatrixScenario,
-  whatsappQaReplyContextIsolationScenario,
-} from "./whatsapp-live.scenario-implementations.user-path.js";
 import { waitForWhatsAppChannelStable } from "./whatsapp-live.setup.js";
 
 async function runWhatsAppScenarioAttempt(params: {
@@ -252,7 +206,7 @@ async function runWhatsAppScenarioAttempt(params: {
   };
 }
 
-async function runWhatsAppScenario(
+export async function runWhatsAppScenario(
   environment: WhatsAppQaScenarioEnvironment,
   implementation: WhatsAppQaScenarioImplementation,
 ) {
@@ -285,94 +239,3 @@ async function runWhatsAppScenario(
   }
   throw new Error(`WhatsApp scenario ${scenario.id} exhausted driver retries`);
 }
-
-export const runWhatsAppCanaryScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaCanaryScenario);
-export const runWhatsAppMentionGatingScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaMentionGatingScenario);
-export const runWhatsAppGroupPendingHistoryContextScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaGroupPendingHistoryContextScenario);
-export const runWhatsAppBroadcastGroupFanoutScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaBroadcastGroupFanoutScenario);
-export const runWhatsAppGroupActivationAlwaysScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaGroupActivationAlwaysScenario);
-export const runWhatsAppGroupReplyToBotTriggersScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaGroupReplyToBotTriggersScenario);
-export const runWhatsAppTopLevelReplyShapeScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaTopLevelReplyShapeScenario);
-export const runWhatsAppReplyToMessageScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaReplyToMessageScenario);
-export const runWhatsAppGroupReplyToMessageScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaGroupReplyToMessageScenario);
-export const runWhatsAppReplyToModeBatchedScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaReplyToModeBatchedScenario);
-export const runWhatsAppAgentMessageActionReactScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaAgentMessageActionReactScenario);
-export const runWhatsAppAgentMessageActionUploadFileScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaAgentMessageActionUploadFileScenario);
-export const runWhatsAppGroupAgentMessageActionReactScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaGroupAgentMessageActionReactScenario);
-export const runWhatsAppGroupAgentMessageActionUploadFileScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaGroupAgentMessageActionUploadFileScenario);
-export const runWhatsAppInboundReactionNoTriggerScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaInboundReactionNoTriggerScenario);
-export const runWhatsAppReplyContextIsolationScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaReplyContextIsolationScenario);
-export const runWhatsAppInboundImageCaptionScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaInboundImageCaptionScenario);
-export const runWhatsAppAudioPreflightScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaAudioPreflightScenario);
-export const runWhatsAppOutboundMediaMatrixScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaOutboundMediaMatrixScenario);
-export const runWhatsAppOutboundDocumentPreservesFilenameScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaOutboundDocumentPreservesFilenameScenario);
-export const runWhatsAppOutboundSendSerializationScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaOutboundSendSerializationScenario);
-export const runWhatsAppOutboundPollScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaOutboundPollScenario);
-export const runWhatsAppGroupOutboundMediaScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaGroupOutboundMediaScenario);
-export const runWhatsAppGroupOutboundAudioScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaGroupOutboundAudioScenario);
-export const runWhatsAppGroupOutboundPollScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaGroupOutboundPollScenario);
-export const runWhatsAppMessageActionsScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaMessageActionsScenario);
-export const runWhatsAppInboundStructuredMessagesScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaInboundStructuredMessagesScenario);
-export const runWhatsAppGroupAudioGatingScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaGroupAudioGatingScenario);
-export const runWhatsAppReplyDeliveryShapeScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaReplyDeliveryShapeScenario);
-export const runWhatsAppStreamFinalMessageAccountingScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaStreamFinalMessageAccountingScenario);
-export const runWhatsAppApprovalExecDenyNativeScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaApprovalExecDenyNativeScenario);
-export const runWhatsAppStatusReactionsScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaStatusReactionsScenario);
-export const runWhatsAppStatusReactionLifecycleScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaStatusReactionLifecycleScenario);
-export const runWhatsAppGroupAllowlistBlockScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaGroupAllowlistBlockScenario);
-export const runWhatsAppApprovalExecNativeScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaApprovalExecNativeScenario);
-export const runWhatsAppApprovalExecReactionNativeScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaApprovalExecReactionNativeScenario);
-export const runWhatsAppApprovalExecGroupReactionNativeScenario = (
-  context: WhatsAppQaScenarioEnvironment,
-) => runWhatsAppScenario(context, whatsappQaApprovalExecGroupReactionNativeScenario);
-export const runWhatsAppApprovalPluginNativeScenario = (context: WhatsAppQaScenarioEnvironment) =>
-  runWhatsAppScenario(context, whatsappQaApprovalPluginNativeScenario);

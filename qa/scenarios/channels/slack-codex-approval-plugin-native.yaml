@@ -16,5 +16,7 @@ scenario:
     suiteIsolation: isolated
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackCodexApprovalPluginNativeScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - expr: "(await qaImport('./live-transports/slack/slack-live.scenario-implementations.js')).slackQaCodexApprovalPluginNativeScenario"

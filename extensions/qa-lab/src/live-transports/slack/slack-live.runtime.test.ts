@@ -50,12 +50,11 @@ function findScenario(ids?: string[]) {
       throw new Error(`missing Slack test implementation for ${id}`);
     }
     const scenario = requireFlowScenario(readQaScenarioById(id));
-    return {
-      ...implementation,
+    return Object.assign({}, implementation, {
       id,
       timeoutMs: scenario.execution.timeoutMs ?? 60_000,
       title: scenario.title,
-    };
+    });
   });
 }
 

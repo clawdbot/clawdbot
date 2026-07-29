@@ -74,10 +74,22 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
     import("./live-transports/matrix/scenarios/scenario-runtime-room.js"),
   "./live-transports/discord/scenario-runtime.js": () =>
     import("./live-transports/discord/scenario-runtime.js"),
+  "./live-transports/discord/discord-live.runtime.js": () =>
+    import("./live-transports/discord/discord-live.runtime.js"),
   "./live-transports/slack/scenario-runtime.js": () =>
     import("./live-transports/slack/scenario-runtime.js"),
+  "./live-transports/slack/slack-live.scenario-implementations.js": () =>
+    import("./live-transports/slack/slack-live.scenario-implementations.js"),
   "./live-transports/whatsapp/scenario-runtime.js": () =>
     import("./live-transports/whatsapp/scenario-runtime.js"),
+  "./live-transports/whatsapp/whatsapp-live.scenario-implementations.capabilities.js": () =>
+    import("./live-transports/whatsapp/whatsapp-live.scenario-implementations.capabilities.js"),
+  "./live-transports/whatsapp/whatsapp-live.scenario-implementations.conversation.js": () =>
+    import("./live-transports/whatsapp/whatsapp-live.scenario-implementations.conversation.js"),
+  "./live-transports/whatsapp/whatsapp-live.scenario-implementations.delivery.js": () =>
+    import("./live-transports/whatsapp/whatsapp-live.scenario-implementations.delivery.js"),
+  "./live-transports/whatsapp/whatsapp-live.scenario-implementations.user-path.js": () =>
+    import("./live-transports/whatsapp/whatsapp-live.scenario-implementations.user-path.js"),
   "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
 };
 

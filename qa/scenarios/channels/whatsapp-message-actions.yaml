@@ -14,5 +14,7 @@ scenario:
     suiteIsolation: isolated
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppMessageActionsScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - expr: "(await qaImport('./live-transports/whatsapp/whatsapp-live.scenario-implementations.capabilities.js')).whatsappQaMessageActionsScenario"
