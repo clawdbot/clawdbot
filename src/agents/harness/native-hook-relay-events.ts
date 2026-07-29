@@ -3,7 +3,8 @@ import {
   listAgentToolResultMiddlewares,
 } from "../../plugins/agent-tool-result-middleware.js";
 import { getGlobalHookRunnerRegistry } from "../../plugins/hook-runner-global-state.js";
-import { getGlobalToolHookMatcherScope, hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import { getToolHookMatcherScope } from "../../plugins/hooks.js";
 import {
   buildCodexNativeToolMatcher,
   mergePluginToolMatcherScopes,
@@ -37,6 +38,11 @@ import type {
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
+
+function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_tool_call") {
+  const registry = getGlobalHookRunnerRegistry();
+  return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
+}
 
 function nativePreToolUseMayRunLoopDetection(
   registration: ActiveNativeHookRelayRegistration,

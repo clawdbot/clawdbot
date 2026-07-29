@@ -18,7 +18,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import {
   createComposedHookRegistryFacade,
-  getGlobalHookRunnerRegistry,
   getHookRunnerGlobalState,
 } from "./hook-runner-global-state.js";
 import type {
@@ -27,8 +26,7 @@ import type {
   PluginHookHandlerMap,
   PluginHookName,
 } from "./hook-types.js";
-import { createHookRunner, getToolHookMatcherScope, type HookRunner } from "./hooks.js";
-import type { PluginToolMatcherScope } from "./tool-hook-matcher.js";
+import { createHookRunner, type HookRunner } from "./hooks.js";
 
 const getLog = () => createSubsystemLogger("plugins");
 
@@ -90,13 +88,6 @@ export function hasGlobalHooks<K extends PluginHookName>(
   ctx?: Parameters<PluginHookHandlerMap[K]>[1],
 ): boolean {
   return getHookRunnerGlobalState().hookRunner?.hasHooks(hookName, ctx) ?? false;
-}
-
-export function getGlobalToolHookMatcherScope(
-  hookName: "before_tool_call" | "after_tool_call",
-): PluginToolMatcherScope | undefined {
-  const registry = getGlobalHookRunnerRegistry();
-  return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
 }
 
 export async function runGlobalGatewayStopSafely(params: {
