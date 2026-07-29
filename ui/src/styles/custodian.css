@@ -1,3 +1,10 @@
+openclaw-custodian-page {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .custodian {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -11,6 +18,11 @@
   width: min(100%, var(--chat-thread-max-width, 48rem));
   min-width: 0;
   margin-inline: auto;
+}
+
+.custodian--setup-required .custodian__column {
+  width: 100%;
+  max-width: none;
 }
 
 .custodian-surface {

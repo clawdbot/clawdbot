@@ -73,7 +73,7 @@ suite.define(() => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 820, width: 1180 },
+      viewport: { height: 900, width: 1660 },
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -88,6 +88,9 @@ suite.define(() => {
       await expect.poll(() => page.locator(".custodian__error").count()).toBe(0);
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
+      await expect
+        .poll(async () => (await page.locator(".custodian__header").boundingBox())?.width ?? 0)
+        .toBeGreaterThan(1_000);
       await captureProof(page, "custodian-desktop.png");
 
       await page.setViewportSize({ height: 520, width: 900 });
@@ -102,6 +105,13 @@ suite.define(() => {
         )
         .toBe(true);
       await captureProof(page, "custodian-short-window.png");
+
+      await page.setViewportSize({ height: 900, width: 1660 });
+      await page.getByRole("button", { name: "Connect AI" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
+      await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
+      await captureProof(page, "custodian-model-setup-selected.png");
     } finally {
       await context.close();
     }
