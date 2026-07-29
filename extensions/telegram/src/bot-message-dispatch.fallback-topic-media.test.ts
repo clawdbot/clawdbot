@@ -158,6 +158,34 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("retains the failure fallback when message-tool-only delivery also fails", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({}, { kind: "final", reason: "empty" });
+      await dispatcherOptions.onError?.(new Error("Telegram final delivery failed"), {
+        kind: "final",
+      });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+  });
+
   it("does not emit a silent-reply fallback for no-response group turns", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
