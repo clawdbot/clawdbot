@@ -209,11 +209,18 @@ async function enrichUnixListenerProcessInfo(listeners: PortListener[]): Promise
       if (!listener.pid) {
         return;
       }
-      const [commandLine, user, parentPid] = await Promise.all([
-        resolveUnixCommandLine(listener.pid),
-        resolveUnixUser(listener.pid),
-        resolveUnixParentPid(listener.pid),
-      ]);
+      let commandLine: string | undefined;
+      let user: string | undefined;
+      let parentPid: number | undefined;
+      try {
+        [commandLine, user, parentPid] = await Promise.all([
+          resolveUnixCommandLine(listener.pid),
+          resolveUnixUser(listener.pid),
+          resolveUnixParentPid(listener.pid),
+        ]);
+      } catch {
+        // Skip enrichment for this listener if any resolution fails
+      }
       if (commandLine) {
         listener.commandLine = commandLine;
       }
@@ -533,10 +540,16 @@ async function readWindowsNetstatEntries<T extends PortListener>(
       if (!entry.pid) {
         return;
       }
-      const [imageName, commandLine] = await Promise.all([
-        resolveWindowsImageName(entry.pid),
-        resolveWindowsCommandLine(entry.pid),
-      ]);
+      let imageName: string | undefined;
+      let commandLine: string | undefined;
+      try {
+        [imageName, commandLine] = await Promise.all([
+          resolveWindowsImageName(entry.pid),
+          resolveWindowsCommandLine(entry.pid),
+        ]);
+      } catch {
+        // Skip enrichment for this entry if any resolution fails
+      }
       if (imageName) {
         entry.command = imageName;
       }
