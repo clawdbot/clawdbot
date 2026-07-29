@@ -2330,12 +2330,34 @@ describe("main-session-restart-recovery", () => {
       },
     });
     const firstDispatch = createDeferred();
-    vi.mocked(callGateway).mockImplementationOnce(async () => {
-      firstDispatch.resolve();
-      throw new Error("transient startup failure");
+    const secondDispatch = createDeferred();
+    let firstAgentDispatch = true;
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      if (request.method === "agent") {
+        if (firstAgentDispatch) {
+          firstAgentDispatch = false;
+          firstDispatch.resolve();
+          throw new Error("transient startup failure");
+        }
+        secondDispatch.resolve();
+      }
+      return { runId: "run-resumed" };
     });
 
     vi.useFakeTimers();
+    const retryScheduled = createDeferred();
+    const fakeSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(
+      (...args: Parameters<typeof setTimeout>) => {
+        const timer = fakeSetTimeout(...args);
+        if (args[1] === 5_000) {
+          retryScheduled.resolve();
+        }
+        return timer;
+      },
+    );
+    const countAgentDispatches = () =>
+      vi.mocked(callGateway).mock.calls.filter(([request]) => request.method === "agent").length;
     let recovery: ReturnType<typeof scheduleRestartAbortedMainSessionRecovery> | undefined;
     try {
       recovery = scheduleRestartAbortedMainSessionRecovery({
@@ -2345,17 +2367,18 @@ describe("main-session-restart-recovery", () => {
         stateDir: tmpDir,
       });
       await firstDispatch.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      const initialGatewayCalls = vi.mocked(callGateway).mock.calls.length;
-      expect(initialGatewayCalls).toBeGreaterThan(0);
+      await retryScheduled.promise;
+      expect(countAgentDispatches()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(4_999);
-      expect(callGateway).toHaveBeenCalledTimes(initialGatewayCalls);
+      expect(countAgentDispatches()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(1);
-      expect(vi.mocked(callGateway).mock.calls.length).toBeGreaterThan(initialGatewayCalls);
+      await secondDispatch.promise;
+      expect(countAgentDispatches()).toBe(2);
     } finally {
       await recovery?.stop();
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
   });
