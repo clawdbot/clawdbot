@@ -16,6 +16,12 @@ const MATRIX_MENTION_GATE_PRIMARY_SCENARIOS = [
   "matrix-mention-metadata-spoof-block",
 ] as const;
 
+const MATRIX_ISOLATED_ALLOWBOTS_ADMISSION_SCENARIOS = [
+  "matrix-allowbots-mentions-mentioned-room",
+  "matrix-allowbots-room-override-enables-account-off",
+  "matrix-allowbots-true-unmentioned-open-room",
+] as const;
+
 function readModuleBinding(
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
 ) {
@@ -152,6 +158,19 @@ describe("Matrix QA Lab scenario flows", () => {
       isolationReason:
         "Asserts fresh channel and DM approval fan-out and cannot inherit shared Matrix approval routing state.",
     });
+  });
+
+  it("isolates only model-driven allowBots admission scenarios", () => {
+    const isolatedScenarioIds = MATRIX_MENTION_GATE_PRIMARY_SCENARIOS.filter(
+      (scenarioId) => readQaScenarioById(scenarioId).execution.suiteIsolation === "isolated",
+    );
+
+    expect(isolatedScenarioIds).toEqual(MATRIX_ISOLATED_ALLOWBOTS_ADMISSION_SCENARIOS);
+    for (const scenarioId of MATRIX_ISOLATED_ALLOWBOTS_ADMISSION_SCENARIOS) {
+      expect(readQaScenarioById(scenarioId).execution.isolationReason, scenarioId).toContain(
+        "fresh model-driven configured-bot admission",
+      );
+    }
   });
 
   it("runs the allowlist scenario through its config-file reload owner", () => {

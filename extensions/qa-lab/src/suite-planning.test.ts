@@ -564,6 +564,32 @@ describe("qa suite planning helpers", () => {
     }
   });
 
+  it("isolates only positive model-driven Matrix allowBots admission flows", () => {
+    const isolatedScenarioIds = [
+      "matrix-allowbots-mentions-mentioned-room",
+      "matrix-allowbots-room-override-enables-account-off",
+      "matrix-allowbots-true-unmentioned-open-room",
+    ];
+    const sharedScenarioIds = [
+      "matrix-allowbots-default-block",
+      "matrix-allowbots-self-sender-ignored",
+      "matrix-mention-metadata-spoof-block",
+    ];
+
+    for (const scenarioId of isolatedScenarioIds) {
+      expect(
+        scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById(scenarioId)),
+        scenarioId,
+      ).toBe(true);
+    }
+    for (const scenarioId of sharedScenarioIds) {
+      expect(
+        scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById(scenarioId)),
+        scenarioId,
+      ).toBe(false);
+    }
+  });
+
   it("isolates and collects scenario-declared transport policy", () => {
     const scenario = makeQaSuiteTestScenario("sender-policy", {
       transportPolicy: {
