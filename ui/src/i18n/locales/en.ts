@@ -1420,11 +1420,11 @@ export const en: TranslationMap = {
     open: "Open",
     applying: "Applying…",
     autoSaveSaving: "Saving…",
+    autoSaveSaved: "Saved",
     autoSaveFailed: "Save failed",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
-    applyBannerText: "Saved to openclaw.json — restart the gateway to apply.",
-    applyBannerAction: "Restart & apply",
+    applyChanges: "Apply changes",
     rawDiscard: "Discard",
     rawDraftBlocksApply:
       "Unsaved raw config edits — save or discard them in the Raw editor before restarting.",
