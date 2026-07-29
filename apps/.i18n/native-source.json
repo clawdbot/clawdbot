@@ -41747,7 +41747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 90,
+      "line": 99,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",
@@ -41755,7 +41755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 235,
+      "line": 244,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift",
       "source": "Gateway changed before the thread operation started.",
       "surface": "apple",
@@ -41763,7 +41763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1245,
+      "line": 1225,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "surface": "apple",
