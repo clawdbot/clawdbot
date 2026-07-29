@@ -488,6 +488,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
   "approvals.plugin.targets[].threadId":
     "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
+  "approvals.systemAgent":
+    "Approval policy for persistent operations proposed by delegated agents through Ask OpenClaw. The default prompt mode requires an operator decision for every proposal.",
+  "approvals.systemAgent.mode":
+    'Use "prompt" (default) to require an operator decision, or "always" to automatically approve delegated system-agent persistent operations. "always" is a dangerous opt-in, appears in security audits, and does not unlock exec, plugin, credential, model, or interactive setup approvals.',
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
