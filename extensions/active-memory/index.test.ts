@@ -15,6 +15,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
+import { resolveActiveRecallForRun } from "./recall-state.js";
 import { hasRememberAcrossConversationsAgent } from "./session-policy.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
@@ -866,7 +867,7 @@ describe("active-memory plugin", () => {
   });
 
   it("joins concurrent recall attempts in one run", async () => {
-    let releaseRecall = () => {
+    let releaseRecall: () => void = () => {
       throw new Error("recall gate was not initialized");
     };
     const recallGate = new Promise<void>((resolve) => {
@@ -902,7 +903,7 @@ describe("active-memory plugin", () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 100, logging: true });
-    let releaseCleanup = () => {
+    let releaseCleanup: () => void = () => {
       throw new Error("cleanup gate was not initialized");
     };
     const cleanupGate = new Promise<void>((resolve) => {
@@ -937,6 +938,43 @@ describe("active-memory plugin", () => {
       expect.objectContaining({ prependContext: expect.stringContaining("lemon pepper wings") }),
     );
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts a rejected replacement after timeout cleanup settles", async () => {
+    let releaseCleanup: () => void = () => {
+      throw new Error("cleanup gate was not initialized");
+    };
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const initialResult = { status: "timeout" as const, elapsedMs: 1, summary: null };
+    await expect(
+      resolveActiveRecallForRun("run-rejected-replacement", async (onTimeoutCleanup) => {
+        onTimeoutCleanup(cleanupGate);
+        return initialResult;
+      }),
+    ).resolves.toEqual(initialResult);
+
+    let rejectedReplacementStarts = 0;
+    const rejectedReplacement = resolveActiveRecallForRun("run-rejected-replacement", async () => {
+      rejectedReplacementStarts++;
+      throw new Error("retry deadline expired");
+    });
+    releaseCleanup();
+    await expect(rejectedReplacement).rejects.toThrow("retry deadline expired");
+
+    const freshResult = { status: "failed" as const, elapsedMs: 2, summary: null };
+    let freshStarts = 0;
+    await expect(
+      resolveActiveRecallForRun("run-rejected-replacement", async () => {
+        freshStarts++;
+        return freshResult;
+      }),
+    ).resolves.toEqual(freshResult);
+    expect({ freshStarts, rejectedReplacementStarts }).toEqual({
+      freshStarts: 1,
+      rejectedReplacementStarts: 1,
+    });
   });
 
   it("deduplicates cache-disabled private recall until the run ends", async () => {

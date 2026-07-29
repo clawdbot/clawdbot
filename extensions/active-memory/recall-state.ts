@@ -112,6 +112,13 @@ async function resolveActiveRecallForRun(
     ),
   };
   activeRecallRuns.set(runId, entry);
+  void entry.promise.catch(() => {
+    // Failures before timeout cleanup starts must not poison this run;
+    // timeout-backed entries stay registered until manager cleanup settles.
+    if (!entry.timeoutCleanup && activeRecallRuns.get(runId) === entry) {
+      activeRecallRuns.delete(runId);
+    }
+  });
   return await entry.promise;
 }
 
