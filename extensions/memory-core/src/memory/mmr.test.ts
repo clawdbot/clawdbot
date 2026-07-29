@@ -58,4 +58,72 @@ describe("memory MMR", () => {
     expect(applyMMRToHybridResults(results, { enabled: false })).toEqual(results);
     expect(DEFAULT_MMR_CONFIG).toEqual({ enabled: false, lambda: 0.7 });
   });
+
+  it("preserves the reference MMR ranking while caching running similarities", () => {
+    // Reference implementation: recomputes max-similarity-to-selected from
+    // scratch on every selection round (the pre-optimization behavior). The
+    // production path must produce an identical ranking.
+    type Ref = { id: string; score: number; content: string };
+    const referenceMmrRerank = (items: Ref[], lambda: number): Ref[] => {
+      const tokenCache = new Map(items.map((item) => [item.id, tokenize(item.content)]));
+      const maxScore = Math.max(...items.map((item) => item.score));
+      const minScore = Math.min(...items.map((item) => item.score));
+      const scoreRange = maxScore - minScore;
+      const selected: Ref[] = [];
+      const remaining = new Set(items);
+
+      while (remaining.size > 0) {
+        let bestItem: Ref | null = null;
+        let bestScore = -Infinity;
+        for (const candidate of remaining) {
+          let maxSimilarity = 0;
+          for (const selectedItem of selected) {
+            maxSimilarity = Math.max(
+              maxSimilarity,
+              jaccardSimilarity(tokenCache.get(candidate.id)!, tokenCache.get(selectedItem.id)!),
+            );
+          }
+          const normalizedScore = scoreRange === 0 ? 1 : (candidate.score - minScore) / scoreRange;
+          const score = lambda * normalizedScore - (1 - lambda) * maxSimilarity;
+          if (
+            score > bestScore ||
+            (score === bestScore && candidate.score > (bestItem?.score ?? -Infinity))
+          ) {
+            bestItem = candidate;
+            bestScore = score;
+          }
+        }
+        if (!bestItem) {
+          break;
+        }
+        selected.push(bestItem);
+        remaining.delete(bestItem);
+      }
+      return selected;
+    };
+
+    const results = Array.from({ length: 24 }, (_, index) => ({
+      path: `/doc-${index}.md`,
+      startLine: index,
+      endLine: index,
+      score: 1 - index / 100,
+      snippet: [
+        `shared topic ${index % 5}`,
+        index % 2 === 0 ? "alpha beta gamma" : "delta epsilon zeta",
+        `distinct-${index}`,
+      ].join(" "),
+      source: "memory",
+    }));
+
+    for (const lambda of [0, 0.3, 0.5, 0.7, 0.95]) {
+      const refItems: Ref[] = results.map((r) => ({
+        id: r.path,
+        score: r.score,
+        content: r.snippet,
+      }));
+      const expected = referenceMmrRerank(refItems, lambda).map((item) => item.id);
+      const actual = applyMMRToHybridResults(results, { enabled: true, lambda }).map((r) => r.path);
+      expect(actual, `lambda=${lambda}`).toEqual(expected);
+    }
+  });
 });

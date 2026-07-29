@@ -20,7 +20,14 @@ import {
 } from "./gateway-log-sentinel.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
+import {
+  buildRuntimeParityCacheDiagnostics,
+  type RuntimeParityCacheDiagnostics,
+} from "./runtime-parity-cache-diagnostics.js";
+import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
+
+export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 
 // These are the canonical QA comparison cells, not the extensible product
 // AgentHarness registry. Broader harness coverage needs its own explicit lane.
@@ -37,14 +44,6 @@ export type RuntimeParityToolCall = {
   errorClass?: string;
 };
 
-export type RuntimeParityUsage = {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
-
 export type RuntimeParityUsagePolicy =
   | { expectation: "assistant-message-required" }
   | { expectation: "not-applicable"; reason: string };
@@ -56,6 +55,7 @@ export type RuntimeParityCell = {
   providerPlanToolCalls?: RuntimeParityToolCall[];
   finalText: string;
   usage: RuntimeParityUsage;
+  cacheDiagnostics?: RuntimeParityCacheDiagnostics;
   wallClockMs: number;
   bootstrapWallClockMs?: number;
   transportErrorClass?: string;
@@ -1471,6 +1471,11 @@ export async function captureRuntimeParityCell(
     ...(mockToolCalls ? { providerPlanToolCalls: mockToolCalls } : {}),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
+    cacheDiagnostics: buildRuntimeParityCacheDiagnostics(
+      transcriptRecords
+        .filter((record) => record.role === "assistant")
+        .map((record) => readUsageTotals(record.message.usage ?? null)),
+    ),
     wallClockMs: params.wallClockMs,
     ...(params.bootstrapWallClockMs === undefined
       ? {}
@@ -1486,10 +1491,16 @@ export async function captureRuntimeParityCell(
 export async function runRuntimeParityScenario(params: {
   scenarioId: string;
   runtimeParityUsage?: RuntimeParityUsagePolicy;
+  runtimePair?: readonly [RuntimeId, RuntimeId];
   runCell: (runtime: RuntimeId) => Promise<RuntimeParityScenarioExecution>;
 }): Promise<RuntimeParityResult> {
-  const openclaw = await params.runCell("openclaw");
-  const codex = await params.runCell("codex");
+  const [firstRuntime, secondRuntime] = params.runtimePair ?? CANONICAL_RUNTIME_IDS;
+  if (firstRuntime === secondRuntime) {
+    throw new Error("Runtime parity must compare two different runtimes.");
+  }
+  const first = await params.runCell(firstRuntime);
+  const second = await params.runCell(secondRuntime);
+  const [openclaw, codex] = firstRuntime === "openclaw" ? [first, second] : [second, first];
   const drift = classifyRuntimeParityCells({
     openclaw: openclaw.cell,
     codex: codex.cell,

@@ -7,11 +7,13 @@ import { resolveContextEngineOwnerPluginId } from "../../../context-engine/regis
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import {
+  AgentRunTerminalOutcomeError,
+  buildAgentRunTerminalOutcomeFromAttempt,
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
-import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveAgentDir } from "../../agent-scope.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
@@ -55,6 +57,7 @@ export async function runEmbeddedAttempt(
   const runAbortController = new AbortController();
   const {
     agentCoreThinkingLevel,
+    defaultAgentId,
     effectiveCwd,
     effectiveFsWorkspaceOnly,
     effectiveWorkspace,
@@ -227,11 +230,6 @@ export async function runEmbeddedAttempt(
       sessionAgentId,
       sessionLabel: params.sessionKey ?? params.sessionId,
     });
-    const { defaultAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-      agentId: params.agentId,
-    });
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
@@ -252,6 +250,9 @@ export async function runEmbeddedAttempt(
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
     const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
+    // Catalog preparation registers global run state before tool projection and
+    // diagnostics, so arm cleanup before either can fail and leak the catalog.
+    toolSearchCatalogApplied = toolSearchCatalogRef !== undefined;
     const preparedToolCatalog = prepareEmbeddedAttemptToolCatalog({
       attempt: params,
       preparedToolBase,
@@ -278,9 +279,6 @@ export async function runEmbeddedAttempt(
       toolSearch,
       toolSearchRunPlan,
     } = preparedToolCatalog;
-    // Arms the early-exit catalog clear: the run-scoped catalog is registered in
-    // a process-global map that only clearToolSearchCatalog deletes from, so a
-    // prep-phase abort after registration leaks the entry without this.
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
     const preparedSystemPrompt = await prepareEmbeddedAttemptSystemPrompt({
       activeContextEngine,
@@ -490,6 +488,15 @@ export async function runEmbeddedAttempt(
         }),
       });
     }
+  } catch (error) {
+    const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
+      terminal: executionState.terminal,
+      abortSignal: params.abortSignal,
+    });
+    if (terminalOutcome.status === "timeout") {
+      throw new AgentRunTerminalOutcomeError(error, terminalOutcome);
+    }
+    throw error;
   } finally {
     externalAbortController.dispose();
     clearToolActivityRun(params.runId);

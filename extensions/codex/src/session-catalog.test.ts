@@ -555,11 +555,11 @@ describe("Codex supervision catalog", () => {
     expect(cloneSpy).toHaveBeenCalledTimes(4);
   });
 
-  it("briefly memoizes thread lists and invalidates on TTL or config identity", async () => {
+  it("serves an expired page while one background refresh updates the next poll", async () => {
     let now = 1_000;
     let runtimeConfig = {} as OpenClawConfig;
     commandRpcMocks.codexControlRequest.mockResolvedValue({
-      data: [idleThread({ source: "cli" })],
+      data: [idleThread({ id: "thread-stale", source: "cli" })],
     });
     const control = createCodexSessionCatalogControl({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
@@ -571,13 +571,193 @@ describe("Codex supervision catalog", () => {
     await control.listPage({ limit: 25 });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
 
-    now += 3_001;
+    now += 31_999;
     await control.listPage({ limit: 25 });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+
+    now += 2;
+    let resolveRefresh!: (value: unknown) => void;
+    let refreshSettled = false;
+    const refresh = new Promise<unknown>((resolve) => {
+      resolveRefresh = resolve;
+    }).then((value) => {
+      refreshSettled = true;
+      return value;
+    });
+    commandRpcMocks.codexControlRequest.mockReturnValueOnce(refresh);
+    const firstExpiredPoll = control.listPage({ limit: 25 });
+    const overlappingExpiredPoll = control.listPage({ limit: 25 });
+
+    await expect(Promise.all([firstExpiredPoll, overlappingExpiredPoll])).resolves.toEqual([
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "thread-stale" })],
+      }),
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "thread-stale" })],
+      }),
+    ]);
+    expect(refreshSettled).toBe(false);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+
+    resolveRefresh({ data: [idleThread({ id: "thread-refreshed", source: "cli" })] });
+    await vi.waitFor(async () => {
+      await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
+        sessions: [expect.objectContaining({ threadId: "thread-refreshed" })],
+      });
+    });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
 
     runtimeConfig = { agents: {} } as OpenClawConfig;
     await control.listPage({ limit: 25 });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it("serves the last real page after a refresh failure and retries the next poll", async () => {
+    let now = 1_000;
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ id: "thread-stale", source: "cli" })],
+    });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+      now: () => now,
+    });
+    const first = await control.listPage({ limit: 25 });
+
+    now += 32_001;
+    commandRpcMocks.codexControlRequest.mockRejectedValueOnce(new Error("app-server unavailable"));
+    await expect(control.listPage({ limit: 25 })).resolves.toEqual(first);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ id: "thread-recovered", source: "cli" })],
+    });
+    await expect(control.listPage({ limit: 25 })).resolves.toEqual(first);
+    await vi.waitFor(async () => {
+      await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
+        sessions: [expect.objectContaining({ threadId: "thread-recovered" })],
+      });
+    });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it("evicts a cold failed page so the next caller retries immediately", async () => {
+    commandRpcMocks.codexControlRequest.mockRejectedValueOnce(new Error("cold failure"));
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(control.listPage({ limit: 25 })).rejects.toThrow("cold failure");
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ id: "thread-recovered", source: "cli" })],
+    });
+    await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: "thread-recovered" })],
+    });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates a forced refresh failure while preserving the stale retry state", async () => {
+    let now = 1_000;
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ id: "thread-stale", source: "cli" })],
+    });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+      now: () => now,
+    });
+    await control.listPage({ limit: 25 });
+
+    commandRpcMocks.codexControlRequest.mockRejectedValueOnce(new Error("forced refresh failed"));
+    await expect(control.listPage({ limit: 25, forceRefresh: true })).rejects.toThrow(
+      "forced refresh failed",
+    );
+
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ id: "thread-recovered", source: "cli" })],
+    });
+    now += 1;
+    await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: "thread-stale" })],
+    });
+    await vi.waitFor(async () => {
+      await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
+        sessions: [expect.objectContaining({ threadId: "thread-recovered" })],
+      });
+    });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it("serves stale data to a passive waiter overlapping a failed forced refresh", async () => {
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ id: "thread-stale", source: "cli" })],
+    });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+    });
+    const stale = await control.listPage({ limit: 25 });
+    let rejectRefresh!: (error: Error) => void;
+    commandRpcMocks.codexControlRequest.mockImplementationOnce(
+      async () =>
+        await new Promise((_resolve, reject) => {
+          rejectRefresh = reject;
+        }),
+    );
+
+    const forced = control.listPage({ limit: 25, forceRefresh: true });
+    await vi.waitFor(() => expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2));
+    const passive = control.listPage({ limit: 25 });
+    const forcedResult = expect(forced).rejects.toThrow("forced refresh failed");
+    rejectRefresh(new Error("forced refresh failed"));
+
+    await forcedResult;
+    await expect(passive).resolves.toEqual(stale);
+  });
+
+  it("does not expose a pending cold fill as stale after a forced refresh overtakes it", async () => {
+    let resolveCold!: (value: unknown) => void;
+    let resolveForced!: (value: unknown) => void;
+    commandRpcMocks.codexControlRequest
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveCold = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveForced = resolve;
+        }),
+      );
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+    });
+
+    const cold = control.listPage({ limit: 25 });
+    const forced = control.listPage({ limit: 25, forceRefresh: true });
+    const passive = control.listPage({ limit: 25 });
+    resolveForced({ data: [idleThread({ id: "thread-forced", source: "cli" })] });
+
+    await expect(Promise.all([forced, passive])).resolves.toEqual([
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "thread-forced" })],
+      }),
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "thread-forced" })],
+      }),
+    ]);
+
+    resolveCold({ data: [idleThread({ id: "thread-cold", source: "cli" })] });
+    await expect(cold).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: "thread-cold" })],
+    });
+    await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: "thread-forced" })],
+    });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
   });
 
   it("force-refreshes after a cached specific-thread miss", async () => {

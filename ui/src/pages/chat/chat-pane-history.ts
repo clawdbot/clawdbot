@@ -1,23 +1,27 @@
+import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
+  type CommandPaletteTargetDetail,
+} from "../../components/command-palette-contract.ts";
+import {
   announceCatalogSessionContinued,
+  parseCatalogSessionKey,
+  type CatalogSessionKey,
+} from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
+import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import {
   loadChatHistory,
   loadOlderChatHistoryPage,
-  parseAgentSessionKey,
-  parseCatalogSessionKey,
-  persistChatComposerState,
   resolveChatHistoryPagination,
-  replaceChatAttachmentsFromEditor,
   rewindChatHistory,
-  scheduleChatScroll,
-  scopedAgentParamsForSession,
   switchChatHistoryBranch,
-  visibleSessionMatches,
-  type CatalogSessionKey,
-  type ChatHistoryPagination,
-  type CommandPaletteTargetDetail,
-  type SessionsCatalogContinueResult,
-} from "./chat-pane-deps.ts";
+} from "./chat-history.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
 import {
   CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT,
@@ -26,6 +30,15 @@ import {
   CHAT_HISTORY_TOUCH_INTENT_PX,
   CHAT_HISTORY_UPWARD_KEYS,
 } from "./chat-pane-shared.ts";
+import { persistChatComposerState } from "./composer-persistence.ts";
+import {
+  captureChatSessionScrollPosition,
+  getChatSessionScrollPosition,
+  restoreChatScroll,
+  saveChatSessionScrollPosition,
+  scheduleChatScroll,
+  type ChatSessionScrollPosition,
+} from "./scroll.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneSession {
   private activeCatalogContinuation: symbol | null = null;
@@ -46,7 +59,30 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     return pagination.hasMore && !state.chatLoading;
   }
 
-  protected resetOlderMessagesViewport(): void {
+  protected resetOlderMessagesViewport(nextSessionKey?: string): ChatSessionScrollPosition | null {
+    let restoredPosition: ChatSessionScrollPosition | null = null;
+    const state = this.state;
+    if (nextSessionKey && state) {
+      const root = this.querySelector<HTMLElement>(".chat-thread");
+      const outgoingSessionKey = root ? this.transcript.renderedSessionKey : state.sessionKey;
+      const pendingScrollTop = outgoingSessionKey
+        ? this.transcript.pendingScrollOffsetFor(outgoingSessionKey)
+        : null;
+      const outgoingPosition =
+        pendingScrollTop !== null
+          ? { scrollTop: pendingScrollTop, anchorToEnd: false }
+          : root
+            ? captureChatSessionScrollPosition(root)
+            : this.transcriptScrollTop !== null
+              ? { scrollTop: this.transcriptScrollTop, anchorToEnd: false }
+              : null;
+      if (outgoingSessionKey && outgoingPosition) {
+        saveChatSessionScrollPosition(this.paneId, outgoingSessionKey, outgoingPosition);
+      }
+    }
+    if (nextSessionKey) {
+      restoredPosition = getChatSessionScrollPosition(this.paneId, nextSessionKey) ?? null;
+    }
     this.olderLoadGeneration += 1;
     this.loadingOlder = false;
     this.historyObserverArmed = false;
@@ -58,11 +94,62 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       window.clearTimeout(this.historyIntentTimer);
       this.historyIntentTimer = null;
     }
-    this.transcriptScrollTop = null;
+    this.transcriptScrollTop = restoredPosition?.scrollTop ?? null;
     this.olderCursorsSeen.clear();
     this.olderOffsetsSeen.clear();
     this.nativePaginationSnapshot = null;
     this.clearHistoryObserver();
+    return restoredPosition;
+  }
+
+  protected restoreOlderMessagesViewport(sessionKey: string, scrollTop: number): void {
+    const state = this.state;
+    if (!state || !areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
+      return;
+    }
+    const generation = this.olderLoadGeneration;
+    state.renderLifecycle.afterCommit((complete) => {
+      try {
+        if (
+          this.state !== state ||
+          !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+          this.olderLoadGeneration !== generation
+        ) {
+          return;
+        }
+        const root = this.querySelector<HTMLElement>(".chat-thread");
+        if (root) {
+          restoreChatScroll(state, root, scrollTop);
+          // The outer scroller can still be zero-height on this commit. Let
+          // the virtualizer reconcile the logical target as rows are measured.
+          this.transcript.scrollToOffset(scrollTop, (settledPosition) => {
+            if (
+              this.state !== state ||
+              !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+              this.olderLoadGeneration !== generation
+            ) {
+              return;
+            }
+            const settledRoot = this.querySelector<HTMLElement>(".chat-thread");
+            if (!settledRoot) {
+              return;
+            }
+            this.transcriptScrollTop = restoreChatScroll(
+              state,
+              settledRoot,
+              settledPosition.scrollTop,
+            );
+            saveChatSessionScrollPosition(this.paneId, sessionKey, {
+              ...settledPosition,
+              scrollTop: this.transcriptScrollTop,
+            });
+          });
+          this.transcriptScrollTop = scrollTop;
+        }
+      } finally {
+        complete();
+      }
+    });
   }
 
   protected clearHistoryObserver(): void {
@@ -153,6 +240,19 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     const previousScrollTop = this.transcriptScrollTop;
     if (root) {
       this.transcriptScrollTop = root.scrollTop;
+      const renderedSessionKey = this.transcript.renderedSessionKey;
+      const stateSessionKey = this.state?.sessionKey;
+      if (
+        renderedSessionKey &&
+        stateSessionKey &&
+        areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
+      ) {
+        saveChatSessionScrollPosition(
+          this.paneId,
+          renderedSessionKey,
+          captureChatSessionScrollPosition(root),
+        );
+      }
     }
     const hasUpwardIntent =
       !this.loadingOlder &&

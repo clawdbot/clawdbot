@@ -1248,6 +1248,9 @@
                     "group": "Memory",
                     "pages": [
                       "concepts/memory",
+                      "concepts/memory-architecture",
+                      "concepts/user-model",
+                      "concepts/standing-intents",
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
@@ -1264,6 +1267,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/agent-bindings",
                   "concepts/parallel-specialist-lanes",
                   "concepts/presence",
                   "concepts/delegate-architecture"
@@ -1383,6 +1387,7 @@
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/media-overview",
+                  "tools/mcp",
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
@@ -1514,6 +1519,7 @@
                   "providers/deepseek",
                   "providers/ds4",
                   "providers/elevenlabs",
+                  "providers/fish-audio",
                   "providers/fal",
                   "providers/featherless",
                   "providers/fireworks",
@@ -1763,6 +1769,7 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
+                  "web/notifications",
                   "web/urls",
                   "web/dashboard",
                   "web/dashboards",

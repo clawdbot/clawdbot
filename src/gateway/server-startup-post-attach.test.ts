@@ -220,12 +220,12 @@ vi.mock("../agents/context.js", () => ({
   ensureContextWindowCacheLoaded: hoisted.ensureContextWindowCacheLoaded,
 }));
 
-vi.mock("../agents/model-provider-auth.js", () => ({
-  warmCurrentProviderAuthStateOffMainThread: hoisted.warmCurrentProviderAuthStateOffMainThread,
-}));
-
 vi.mock("./server-startup-handler-prewarm.js", () => ({
   scheduleGatewayHandlerPrewarm: hoisted.scheduleGatewayHandlerPrewarm,
+}));
+
+vi.mock("../agents/model-provider-auth.js", () => ({
+  warmCurrentProviderAuthStateOffMainThread: hoisted.warmCurrentProviderAuthStateOffMainThread,
 }));
 
 vi.mock("../agents/model-provider-auth-state.js", () => ({
@@ -371,6 +371,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.ensureRuntimePluginsLoaded.mockReset();
     hoisted.ensureContextWindowCacheLoaded.mockReset();
     hoisted.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
+    hoisted.scheduleGatewayHandlerPrewarm.mockClear();
     hoisted.clearCurrentProviderAuthState.mockClear();
     hoisted.warmCurrentProviderAuthStateOffMainThread.mockReset();
     hoisted.warmCurrentProviderAuthStateOffMainThread.mockResolvedValue(undefined);
@@ -2510,6 +2511,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     },
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
     activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
+    pluginManifestRecords: [],
     pluginRegistry: {
       plugins: [
         { id: "beta", status: "loaded" },

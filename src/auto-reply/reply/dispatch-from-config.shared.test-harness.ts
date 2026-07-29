@@ -35,8 +35,15 @@ const mocks = vi.hoisted(() => ({
   routeReply: vi.fn(
     async (
       _params: unknown,
-    ): Promise<{ ok: boolean; messageId?: string; suppressed?: boolean; error?: string }> => ({
+    ): Promise<{
+      ok: boolean;
+      delivered: boolean;
+      messageId?: string;
+      suppressed?: boolean;
+      error?: string;
+    }> => ({
       ok: true,
+      delivered: true,
       messageId: "mock",
     }),
   ),

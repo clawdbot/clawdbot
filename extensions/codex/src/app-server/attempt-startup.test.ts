@@ -597,6 +597,7 @@ describe("startCodexAttemptThread", () => {
         'import readline from "node:readline";',
         "const [requestLogPath, pidPath] = process.argv.slice(2);",
         'fs.writeFileSync(pidPath, String(process.pid), "utf8");',
+        'process.stderr.write("Error: failed to initialize sqlite state runtime token=secret-value\\n");',
         "const lines = readline.createInterface({ input: process.stdin });",
         'lines.on("line", (line) => {',
         "  const message = JSON.parse(line);",
@@ -623,7 +624,9 @@ describe("startCodexAttemptThread", () => {
         skipStartSpy: true,
       });
 
-      await expect(run).rejects.toThrow("codex app-server initialize timed out");
+      await expect(run).rejects.toThrow(
+        'codex app-server initialize timed out; stderr="Error: failed to initialize sqlite state runtime token=<redacted>"',
+      );
 
       const requestMethods = (await fs.readFile(requestLogPath, "utf8")).trim().split(/\r?\n/u);
       expect(requestMethods).toEqual(["initialize"]);

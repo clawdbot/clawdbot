@@ -11,6 +11,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
+import { listenBrowserHttpServer } from "./http-listen.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { stopBrowserBridgeRuntime } from "./runtime-lifecycle.js";
 import type { BrowserServerState, ProfileContext } from "./server-context.js";
@@ -154,10 +155,7 @@ export async function startBrowserBridgeServer(params: {
     registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
   }
 
-  const server = await new Promise<Server>((resolve, reject) => {
-    const s = app.listen(port, host, () => resolve(s));
-    s.once("error", reject);
-  });
+  const server = await listenBrowserHttpServer(app, port, host);
 
   const address = server.address() as AddressInfo | null;
   const resolvedPort = address?.port ?? port;

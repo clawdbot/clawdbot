@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Uses the selected locale for Wear OS uppercase labels and compact token-count decimals.
+
 Fixes secondary Gateway sessions disconnecting during temporary discovery gaps and preserves manual TLS when reopening saved Gateways and Control UI pages.
 
 Prevents delayed Wear OS requests from a previous phone from blocking or corrupting the newly selected phone session.

@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"thread-collab-failed"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"collab-failed","type":"collab_tool_call","tool":"send_input","sender_thread_id":"thread-parent","receiver_thread_ids":["missing-thread"],"prompt":"continue","agents_states":{"missing-thread":{"status":"not_found","message":"agent not found"}},"status":"failed"}}
+{"type":"item.completed","item":{"id":"message-collab-failed","type":"agent_message","text":"collab failed"}}
+{"type":"turn.completed","usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2,"reasoning_output_tokens":0}}

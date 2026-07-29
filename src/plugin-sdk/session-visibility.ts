@@ -302,7 +302,12 @@ function selfVisibilityMessage(action: SessionAccessAction): string {
 }
 
 function treeVisibilityMessage(action: SessionAccessAction): string {
-  return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
+  // Reads under tree also cover watched same-agent group sessions (isWatchedRead
+  // below); the deny copy must say so or the model concludes group reads never work.
+  if (action === "send") {
+    return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
+  }
+  return `${actionPrefix(action)} visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).`;
 }
 
 /** Create a direct session-key visibility checker for one requester/action pair. */

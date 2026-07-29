@@ -110,8 +110,11 @@ When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, OpenClaw
 triggers normal local compaction before a run if transcript history reaches
 that size. This is useful for long-running sessions where provider-side context
 management may keep model context healthy while persisted transcript history
-keeps growing. It does not split raw bytes; it asks the normal compaction
-pipeline to create a semantic summary.
+keeps growing. Set a positive byte count or size string such as `"20mb"` to opt
+in; `0` or an unset value disables the guard. It does not split raw bytes; it
+asks the normal compaction pipeline to create a semantic summary. For Codex
+app-server sessions, the same threshold caps native rollout transcripts and
+oversized native threads restart fresh.
 
 <Warning>
 The byte guard applies to the active SQLite transcript history. Legacy JSONL
@@ -120,7 +123,7 @@ checkpoint artifacts are not the active compaction target.
 
 ### Successor transcripts
 
-When `agents.defaults.compaction.truncateAfterCompaction` is enabled, a context engine may return an explicit compacted successor session identity. OpenClaw adopts that successor and records checkpoint metadata against it. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
+A context engine may return an explicit compacted successor session identity. OpenClaw adopts that successor and records checkpoint metadata against it. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
 
 OpenClaw no longer writes separate `.checkpoint.*.jsonl` copies for new
 compactions. Existing legacy checkpoint files can still be used while referenced

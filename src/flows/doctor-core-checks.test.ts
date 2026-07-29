@@ -336,7 +336,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       mode: "doctor",
       runtime,
       cfg: {
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
         tools: { profile: "messaging" },
       },
     });
@@ -362,7 +362,10 @@ describe("CORE_HEALTH_CHECKS", () => {
       check.detect({
         mode: "doctor",
         runtime,
-        cfg: { tools: { profile: "messaging" } },
+        cfg: {
+          skills: { workshop: { autonomous: { mode: "off" } } },
+          tools: { profile: "messaging" },
+        },
       }),
     ).resolves.toEqual([]);
   });

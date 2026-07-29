@@ -5,6 +5,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardSession, type WizardStep } from "../wizard/session.js";
+import type {
+  MemoryImportProviderOutcome,
+  SetupMemoryImportOutcome,
+} from "../wizard/setup.memory-import.js";
 import {
   cleanupSystemAgentSession,
   createSystemAgentSession,
@@ -82,11 +86,37 @@ export type SystemAgentChatEngineOptions = {
     prompter: WizardPrompterLike,
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   ) => Promise<void>;
+  /** Test seam for workspace-skill dependency setup hosted by the chat bridge. */
+  runSkillsSetupWizard?: (
+    prompter: WizardPrompterLike,
+    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  ) => Promise<void>;
+  /** Test seam for web-search provider setup hosted by the chat bridge. */
+  runSearchSetupWizard?: (
+    prompter: WizardPrompterLike,
+    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  ) => Promise<void | HostedWizardCompletion>;
+  /** Test seam for local Gateway configuration hosted by the chat bridge. */
+  runGatewaySetupWizard?: (
+    prompter: WizardPrompterLike,
+    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  ) => Promise<void | HostedWizardCompletion>;
+  /** Test seam for copy-only memory import hosted by the chat bridge. */
+  runMemoryImportWizard?: (
+    prompter: WizardPrompterLike,
+    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+    onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
+  ) => Promise<HostedMemoryImportOutcome>;
   /** Exact route/credential that passed the host's live inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Delegated chats accept approval only from the operator registry. */
   operatorApprovalOnly?: boolean;
 };
+
+type SystemAgentChatTurnOptions = {
+  uiContext?: { page: string };
+};
+
 type SystemAgentChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 
 type SystemAgentChatReply = {
@@ -106,10 +136,24 @@ type SystemAgentChatReply = {
 
 type WizardPrompterLike = import("../wizard/prompts.js").WizardPrompter;
 
+type HostedWizardCompletion = "applied" | "kept-current";
+
+type HostedMemoryImportOutcome =
+  | SetupMemoryImportOutcome
+  | { status: "workspace-missing"; providers: []; workspace: string };
+
+type HostedWizardRunResult = void | HostedWizardCompletion | HostedMemoryImportOutcome;
+
 type ActiveWizardBridge = {
   session: WizardSession;
   step: WizardStep | null;
+  kind: "channel" | "skills" | "search" | "gateway" | "memory-import";
   label: string;
+  completion: {
+    status: HostedWizardCompletion;
+    memoryImport?: HostedMemoryImportOutcome;
+    memoryImportProviders?: MemoryImportProviderOutcome[];
+  };
   /** Channel to auto-answer in the first selection step ("connect telegram"). */
   autoSelectChannel?: string;
 };
@@ -119,6 +163,22 @@ type CaptureRuntime = RuntimeEnv & {
 };
 
 const log = createSubsystemLogger("system-agent/chat-engine");
+
+export const GATEWAY_SETUP_AFTER_WRITE = {
+  mode: "none",
+  reason: "Gateway setup defers runtime apply until explicit restart",
+} as const;
+
+export function assertLocalGatewaySetupMode(
+  config: import("../config/types.openclaw.js").OpenClawConfig,
+): void {
+  if (config.gateway?.mode === "local") {
+    return;
+  }
+  throw new Error(
+    "Hosted Gateway setup manages only a local Gateway. Use `openclaw onboard` for fresh setup or `openclaw configure` for the mode question, then retry after selecting local mode.",
+  );
+}
 
 function createHostedWizardRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return {
@@ -141,58 +201,259 @@ function createCaptureRuntime(): CaptureRuntime {
   };
 }
 
-function defaultChannelSetupWizardRunner(
+async function runHostedConfigWizard(params: {
+  label: string;
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>;
+  afterWrite?: import("../config/runtime-snapshot.js").ConfigWriteAfterWrite;
+  run: (context: {
+    baseConfig: import("../config/types.openclaw.js").OpenClawConfig;
+    runtime: RuntimeEnv;
+  }) => Promise<
+    | {
+        nextConfig: import("../config/types.openclaw.js").OpenClawConfig;
+        afterWrite?: (
+          committedConfig: import("../config/types.openclaw.js").OpenClawConfig,
+        ) => Promise<void>;
+      }
+    | { keptCurrent: true }
+  >;
+}): Promise<HostedWizardCompletion> {
+  const { readSetupConfigFileSnapshot, writeWizardConfigFile } =
+    await import("../wizard/setup.shared.js");
+  const snapshot = await readSetupConfigFileSnapshot();
+  if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+    throw new Error(
+      `${params.label} requires a valid saved config snapshot. Run \`openclaw doctor --fix\`, then retry.`,
+    );
+  }
+  const baseConfig = snapshot.sourceConfig ?? snapshot.config;
+  const { defaultRuntime } = await import("../runtime.js");
+  const runtime = createHostedWizardRuntime(defaultRuntime);
+  const result = await params.run({ baseConfig, runtime });
+  if ("keptCurrent" in result) {
+    return "kept-current";
+  }
+  await params.beforePersistentApply(runtime);
+  const committedConfig = await writeWizardConfigFile(result.nextConfig, {
+    allowConfigSizeDrop: false,
+    baseHash: snapshot.hash,
+    migrationBaseConfig: baseConfig,
+    ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
+  });
+  await result.afterWrite?.(committedConfig);
+  return "applied";
+}
+
+async function defaultChannelSetupWizardRunner(
   channel: string,
+  prompter: WizardPrompterLike,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-): (prompter: WizardPrompterLike) => Promise<void> {
-  return async (prompter) => {
-    const [
-      { readSetupConfigFileSnapshot, writeWizardConfigFile },
-      {
-        createChannelOnboardingPostWriteHookCollector,
-        runCollectedChannelOnboardingPostWriteHooks,
-        setupChannels,
+): Promise<HostedWizardCompletion> {
+  const {
+    createChannelOnboardingPostWriteHookCollector,
+    runCollectedChannelOnboardingPostWriteHooks,
+    setupChannels,
+  } = await import("../commands/onboard-channels.js");
+  const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
+  return await runHostedConfigWizard({
+    label: "Channel setup",
+    beforePersistentApply,
+    run: async ({ baseConfig, runtime }) => ({
+      nextConfig: await setupChannels(baseConfig, runtime, prompter, {
+        initialSelection: [channel],
+        forceAllowFromChannels: [channel],
+        allowIMessageInstall: true,
+        allowSignalInstall: true,
+        deferStatusUntilSelection: true,
+        quickstartDefaults: true,
+        skipDmPolicyPrompt: true,
+        skipConfirm: true,
+        beforePersistentEffect: async () => await beforePersistentApply(runtime),
+        onPostWriteHook: (hook) => postWriteHooks.collect(hook),
+      }),
+      afterWrite: async (committedConfig) => {
+        await runCollectedChannelOnboardingPostWriteHooks({
+          hooks: postWriteHooks.drain(),
+          cfg: committedConfig,
+          runtime,
+          beforePersistentEffect: async () => await beforePersistentApply(runtime),
+        });
       },
-    ] = await Promise.all([
-      import("../wizard/setup.shared.js"),
-      import("../commands/onboard-channels.js"),
-    ]);
-    const snapshot = await readSetupConfigFileSnapshot();
-    if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
-      throw new Error(
-        "Channel setup requires a valid saved config snapshot. Run `openclaw doctor --fix`, then retry.",
-      );
+    }),
+  });
+}
+
+async function defaultSkillsSetupWizardRunner(
+  prompter: WizardPrompterLike,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+): Promise<HostedWizardCompletion> {
+  const [{ setupSkills }, { resolveOnboardingAgentTarget }] = await Promise.all([
+    import("../commands/onboard-skills.js"),
+    import("../commands/onboard-agent-target.js"),
+  ]);
+  return await runHostedConfigWizard({
+    label: "Skills setup",
+    beforePersistentApply,
+    run: async ({ baseConfig, runtime }) => ({
+      nextConfig: await setupSkills(
+        baseConfig,
+        resolveOnboardingAgentTarget(baseConfig).workspaceDir,
+        runtime,
+        prompter,
+        { beforePersistentEffect: async () => await beforePersistentApply(runtime) },
+      ),
+    }),
+  });
+}
+
+async function defaultSearchSetupWizardRunner(
+  prompter: WizardPrompterLike,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+): Promise<HostedWizardCompletion> {
+  const { runSearchSetupFlow } = await import("../flows/search-setup.js");
+  return await runHostedConfigWizard({
+    label: "Web search setup",
+    beforePersistentApply,
+    run: async ({ baseConfig, runtime }) => {
+      const result = await runSearchSetupFlow(baseConfig, runtime, prompter, {
+        preserveDisabledSearchState: false,
+        beforePersistentEffect: async () => await beforePersistentApply(runtime),
+      });
+      if (result.outcome === "install-failed") {
+        const failure = result.reason === "timed-out" ? "timed out" : "failed";
+        throw new Error(`web search provider ${result.providerId} installation ${failure}`);
+      }
+      if (result.outcome === "kept-current") {
+        if (result.reason === "user-skipped" || result.reason === "provider-install-skipped") {
+          return { keptCurrent: true };
+        }
+        const reason =
+          result.reason === "no-providers"
+            ? "no web search providers are available under the current plugin policy"
+            : "the selected web search provider is no longer available";
+        throw new Error(reason);
+      }
+      return { nextConfig: result.config };
+    },
+  });
+}
+
+async function defaultGatewaySetupWizardRunner(
+  prompter: WizardPrompterLike,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+): Promise<HostedWizardCompletion> {
+  const [
+    { resolveGatewayPort },
+    { configureGatewayForSetup },
+    { resolveQuickstartGatewayDefaults },
+  ] = await Promise.all([
+    import("../config/config.js"),
+    import("../wizard/setup.gateway-config.js"),
+    import("../wizard/setup.shared.js"),
+  ]);
+  // A later restart can strand this Gateway-hosted client on a new address or credential.
+  // The host warns before prompting, persists config only, and never restarts itself.
+  return await runHostedConfigWizard({
+    label: "Gateway setup",
+    beforePersistentApply,
+    afterWrite: GATEWAY_SETUP_AFTER_WRITE,
+    run: async ({ baseConfig, runtime }) => {
+      assertLocalGatewaySetupMode(baseConfig);
+      const result = await configureGatewayForSetup({
+        flow: "advanced",
+        baseConfig,
+        nextConfig: baseConfig,
+        localPort: resolveGatewayPort(baseConfig),
+        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
+        prompter,
+        runtime,
+      });
+      return { nextConfig: result.nextConfig };
+    },
+  });
+}
+
+async function defaultMemoryImportWizardRunner(
+  prompter: WizardPrompterLike,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
+): Promise<HostedMemoryImportOutcome> {
+  const [
+    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { defaultRuntime },
+    { readSetupConfigFileSnapshot },
+    { stat },
+  ] = await Promise.all([
+    import("../agents/agent-scope.js"),
+    import("../runtime.js"),
+    import("../wizard/setup.shared.js"),
+    import("node:fs/promises"),
+  ]);
+  const snapshot = await readSetupConfigFileSnapshot();
+  if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+    throw new Error(
+      "Memory import requires a valid saved config. Run `openclaw doctor --fix`, then retry.",
+    );
+  }
+  const baseHash = snapshot.hash;
+  const config = snapshot.config;
+  const agentId = resolveDefaultAgentId(config);
+  const workspace = resolveAgentWorkspaceDir(config, agentId);
+  try {
+    if (!(await stat(workspace)).isDirectory()) {
+      return { status: "workspace-missing", providers: [], workspace };
     }
-    const baseConfig = snapshot.sourceConfig ?? snapshot.config;
-    const baseHash = snapshot.hash;
-    const { defaultRuntime } = await import("../runtime.js");
-    const runtime = createHostedWizardRuntime(defaultRuntime);
-    const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
-    const nextConfig = await setupChannels(baseConfig, runtime, prompter, {
-      initialSelection: [channel],
-      forceAllowFromChannels: [channel],
-      allowIMessageInstall: true,
-      allowSignalInstall: true,
-      deferStatusUntilSelection: true,
-      quickstartDefaults: true,
-      skipDmPolicyPrompt: true,
-      skipConfirm: true,
-      beforePersistentEffect: async () => await beforePersistentApply(runtime),
-      onPostWriteHook: (hook) => postWriteHooks.collect(hook),
-    });
-    await beforePersistentApply(runtime);
-    const committedConfig = await writeWizardConfigFile(nextConfig, {
-      allowConfigSizeDrop: false,
-      baseHash,
-      migrationBaseConfig: baseConfig,
-    });
-    await runCollectedChannelOnboardingPostWriteHooks({
-      hooks: postWriteHooks.drain(),
-      cfg: committedConfig,
-      runtime,
-      beforePersistentEffect: async () => await beforePersistentApply(runtime),
-    });
-  };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return { status: "workspace-missing", providers: [], workspace };
+    }
+    throw error;
+  }
+
+  // Load provider-backed planning only after the default workspace precondition
+  // passes; missing onboarding state must not run provider detection code.
+  const { runSetupMemoryImportStep } = await import("../wizard/setup.memory-import.js");
+  const runtime = createHostedWizardRuntime(defaultRuntime);
+  return await runSetupMemoryImportStep({
+    config,
+    prompter,
+    runtime,
+    // File copies are the persistent effect, so freeze both authority and the
+    // planned target immediately before every provider apply. The whole-config
+    // hash is intentionally strict, matching hosted config-wizard drift rules.
+    beforeApply: async () => {
+      await beforePersistentApply(runtime);
+      const currentSnapshot = await readSetupConfigFileSnapshot();
+      if (!currentSnapshot.exists || !currentSnapshot.valid || currentSnapshot.hash !== baseHash) {
+        throw new Error(
+          "configuration changed during memory import; nothing further was copied — retry to import against the current setup",
+        );
+      }
+    },
+    onProviderOutcome,
+  });
+}
+
+function formatItemCount(count: number): string {
+  return `${count} ${count === 1 ? "item" : "items"}`;
+}
+
+type ConfirmedMemoryImportProviderOutcome = Extract<
+  MemoryImportProviderOutcome,
+  { migrated: number }
+>;
+
+function hasConfirmedMemoryImportCount(
+  provider: MemoryImportProviderOutcome,
+): provider is ConfirmedMemoryImportProviderOutcome {
+  return provider.copiesIndeterminate !== true;
+}
+
+function formatMemoryImportProviders(providers: ConfirmedMemoryImportProviderOutcome[]): string {
+  return providers
+    .map((provider) => `${provider.label} (${formatItemCount(provider.migrated)})`)
+    .join(", ");
 }
 
 function formatWizardOptions(step: WizardStep): string[] {
@@ -467,19 +728,22 @@ export class SystemAgentChatEngine {
     await cleanupSystemAgentSession(this.agentSession);
   }
 
-  async handle(text: string): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(() => this.handleSerialized(text));
+  async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {
+    const turn = this.turnQueue.then(() => this.handleSerialized(text, options));
     // The queue must survive a failed turn or every later message would reject.
     this.turnQueue = turn.catch(() => undefined);
     return await turn;
   }
 
-  private async handleSerialized(text: string): Promise<SystemAgentChatReply> {
+  private async handleSerialized(
+    text: string,
+    options?: SystemAgentChatTurnOptions,
+  ): Promise<SystemAgentChatReply> {
     await this.requireVerifiedInference();
     // Snapshot before resolving: wizard answers to sensitive steps (tokens,
     // passwords) must never enter the AI-visible history.
     const sensitiveTurn = this.wizardBridge?.step?.sensitive === true;
-    const reply = await this.resolveTurn(text);
+    const reply = await this.resolveTurn(text, options);
     this.history.push({
       role: "user",
       text: sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
@@ -498,7 +762,10 @@ export class SystemAgentChatEngine {
     };
   }
 
-  private async resolveTurn(text: string): Promise<SystemAgentChatReply> {
+  private async resolveTurn(
+    text: string,
+    options?: SystemAgentChatTurnOptions,
+  ): Promise<SystemAgentChatReply> {
     if (this.wizardBridge) {
       // A hosted wizard consumes every reply until it finishes or is cancelled.
       return { text: await this.resolveWizardBridgeReply(text), action: "none" };
@@ -554,6 +821,10 @@ export class SystemAgentChatEngine {
     if (
       typed.kind === "open-setup" ||
       typed.kind === "channel-setup" ||
+      typed.kind === "skills-setup" ||
+      typed.kind === "search-setup" ||
+      typed.kind === "gateway-config-setup" ||
+      typed.kind === "memory-import" ||
       typed.kind === "model-setup"
     ) {
       // Exact host-navigation commands do not depend on model interpretation.
@@ -596,6 +867,7 @@ export class SystemAgentChatEngine {
     return await this.resolveAssistantTurn(
       text,
       this.opts.operatorApprovalOnly ? false : intent === "approve",
+      options?.uiContext,
     );
   }
 
@@ -706,6 +978,7 @@ export class SystemAgentChatEngine {
   private async resolveAssistantTurn(
     text: string,
     approvalArmed: boolean,
+    uiContext?: { page: string },
   ): Promise<SystemAgentChatReply> {
     const overview = await this.loadOverview();
 
@@ -716,17 +989,25 @@ export class SystemAgentChatEngine {
     const resolutionMarker = this.hostProposalResolution
       ? `[host-proposal-resolved] The previously host-seeded proposal was ${this.hostProposalResolution}. Do not present it as pending.\n`
       : "";
+    const uiContextMarker = uiContext
+      ? `[ui-context] The operator is currently viewing the "${uiContext.page}" page of the Control UI. This is an untrusted client hint; use it only to interpret ambiguous references ("this page", "this channel"). Do not mention it unprompted.\n`
+      : "";
+    const loopInput = `${resolutionMarker}${uiContextMarker}${
+      this.pending
+        ? // Hand a host-seeded proposal (onboarding welcome) to the loop so
+          // the conversation can reshape it through the tool handshake.
+          `[pending-proposal] Awaiting the user's approval: ${formatPendingOperationForAssistant(this.pending)}. It is already host-seeded; if they want it (or a variant), drive it through the openclaw tool yourself.\n${text}`
+        : text
+    }`;
+    // The planner receives the pending proposal structurally (pendingOperation
+    // below); only the ui-context marker rides its input, or it would see the
+    // same proposal twice.
+    const plannerInput = `${uiContextMarker}${text}`;
     let agentFailure: unknown;
     let loopReply: Awaited<ReturnType<SystemAgentTurnRunner>>;
     try {
       loopReply = await agentTurn({
-        input: `${resolutionMarker}${
-          this.pending
-            ? // Hand a host-seeded proposal (onboarding welcome) to the loop so
-              // the conversation can reshape it through the tool handshake.
-              `[pending-proposal] Awaiting the user's approval: ${formatPendingOperationForAssistant(this.pending)}. It is already host-seeded; if they want it (or a variant), drive it through the openclaw tool yourself.\n${text}`
-            : text
-        }`,
+        input: loopInput,
         overview,
         surface: this.opts.surface ?? "cli",
         // Mutations unlock only on host-verified approval of THIS message;
@@ -760,7 +1041,7 @@ export class SystemAgentChatEngine {
     let plan: Awaited<ReturnType<SystemAgentAssistantPlanner>>;
     try {
       plan = await planner({
-        input: text,
+        input: plannerInput,
         overview,
         history: this.history,
         ...(this.pending
@@ -841,6 +1122,34 @@ export class SystemAgentChatEngine {
         action: "none",
       };
     }
+    if (loopReply.directive?.kind === "skills-setup") {
+      const wizardIntro = await this.startSkillsSetupWizard();
+      return {
+        text: [loopReply.text, wizardIntro].filter(Boolean).join("\n\n"),
+        action: "none",
+      };
+    }
+    if (loopReply.directive?.kind === "search-setup") {
+      const wizardIntro = await this.startSearchSetupWizard();
+      return {
+        text: [loopReply.text, wizardIntro].filter(Boolean).join("\n\n"),
+        action: "none",
+      };
+    }
+    if (loopReply.directive?.kind === "gateway-config-setup") {
+      const wizardIntro = await this.startGatewaySetupWizard();
+      return {
+        text: [loopReply.text, wizardIntro].filter(Boolean).join("\n\n"),
+        action: "none",
+      };
+    }
+    if (loopReply.directive?.kind === "memory-import") {
+      const wizardIntro = await this.startMemoryImportWizard();
+      return {
+        text: [loopReply.text, wizardIntro].filter(Boolean).join("\n\n"),
+        action: "none",
+      };
+    }
     if (loopReply.directive?.kind === "model-setup") {
       const setup = await this.startModelSetup(loopReply.directive.workspace);
       return {
@@ -877,6 +1186,10 @@ export class SystemAgentChatEngine {
     }
     if (
       kind === "channel-setup" ||
+      kind === "skills-setup" ||
+      kind === "search-setup" ||
+      kind === "gateway-config-setup" ||
+      kind === "memory-import" ||
       kind === "model-setup" ||
       kind === "open-setup" ||
       kind === "open-tui"
@@ -913,7 +1226,11 @@ export class SystemAgentChatEngine {
           action: "none",
         };
       }
-      if (operation.target !== "channels") {
+      if (
+        operation.target !== "channels" &&
+        operation.target !== "search" &&
+        operation.target !== "gateway"
+      ) {
         return {
           text: "Setup can replace the inference route powering this session. Exit OpenClaw and run `openclaw onboard`; it saves only a route that passes a live test. Then start OpenClaw again.",
           action: "none",
@@ -934,7 +1251,11 @@ export class SystemAgentChatEngine {
       }
       this.awaitingSetupChannel = false;
       const label =
-        handoff.target === "channels" ? `${handoff.channel ?? "channel"} setup` : "setup";
+        handoff.target === "channels"
+          ? `${handoff.channel ?? "channel"} setup`
+          : handoff.target === "search"
+            ? "web search setup"
+            : "Gateway setup";
       return {
         text: `Opening the ${label} wizard.`,
         action: "open-setup",
@@ -946,6 +1267,18 @@ export class SystemAgentChatEngine {
       // Starting the wizard is not a write; the wizard collects explicit
       // answers and commits only at the end.
       return { text: await this.startChannelSetupWizard(operation.channel), action: "none" };
+    }
+    if (operation.kind === "skills-setup") {
+      return { text: await this.startSkillsSetupWizard(), action: "none" };
+    }
+    if (operation.kind === "search-setup") {
+      return { text: await this.startSearchSetupWizard(), action: "none" };
+    }
+    if (operation.kind === "gateway-config-setup") {
+      return { text: await this.startGatewaySetupWizard(), action: "none" };
+    }
+    if (operation.kind === "memory-import") {
+      return { text: await this.startMemoryImportWizard(), action: "none" };
     }
     if (operation.kind === "model-setup") {
       return await this.startModelSetup(operation.workspace);
@@ -1140,15 +1473,109 @@ export class SystemAgentChatEngine {
     const runWizard =
       this.opts.runChannelSetupWizard ??
       ((ch: string, prompter: WizardPrompterLike, guard: (runtime: RuntimeEnv) => Promise<void>) =>
-        defaultChannelSetupWizardRunner(ch, guard)(prompter));
-    const session = new WizardSession((prompter) =>
-      runWizard(channel, prompter, beforePersistentApply),
-    );
+        defaultChannelSetupWizardRunner(ch, prompter, guard));
+    return await this.startHostedWizard({
+      kind: "channel",
+      label: channel,
+      autoSelectChannel: channel,
+      run: (prompter) => runWizard(channel, prompter, beforePersistentApply),
+    });
+  }
+
+  private async startSkillsSetupWizard(): Promise<string> {
+    this.clearPendingProposals();
+    const beforePersistentApply = async (runtime: RuntimeEnv) => {
+      await this.requirePersistentApplyInference(runtime);
+    };
+    const runWizard = this.opts.runSkillsSetupWizard ?? defaultSkillsSetupWizardRunner;
+    return await this.startHostedWizard({
+      kind: "skills",
+      label: "skills",
+      run: (prompter) => runWizard(prompter, beforePersistentApply),
+    });
+  }
+
+  private async startSearchSetupWizard(): Promise<string> {
+    this.clearPendingProposals();
+    const beforePersistentApply = async (runtime: RuntimeEnv) => {
+      await this.requirePersistentApplyInference(runtime);
+    };
+    const runWizard = this.opts.runSearchSetupWizard ?? defaultSearchSetupWizardRunner;
+    return await this.startHostedWizard({
+      kind: "search",
+      label: "web search",
+      run: (prompter) => runWizard(prompter, beforePersistentApply),
+    });
+  }
+
+  private async startGatewaySetupWizard(): Promise<string> {
+    this.clearPendingProposals();
+    const beforePersistentApply = async (runtime: RuntimeEnv) => {
+      await this.requirePersistentApplyInference(runtime);
+    };
+    const runWizard = this.opts.runGatewaySetupWizard ?? defaultGatewaySetupWizardRunner;
+    const firstStep = await this.startHostedWizard({
+      kind: "gateway",
+      label: "gateway",
+      run: (prompter) => runWizard(prompter, beforePersistentApply),
+    });
+    // Warn only while an interactive wizard is actually pending; a refusal
+    // (remote mode, invalid snapshot) already finished and needs no lockout note.
+    if (this.opts.surface !== "gateway" || this.wizardBridge === null) {
+      return firstStep;
+    }
+    const warning = [
+      "Before we start: changing the Gateway port, bind address, or auth credential requires a Gateway restart to apply.",
+      "That restart may disconnect this chat, and you may need to sign in to the Control UI again with the new address or credential.",
+    ].join(" ");
+    return [warning, firstStep].filter(Boolean).join("\n\n");
+  }
+
+  private async startMemoryImportWizard(): Promise<string> {
+    this.clearPendingProposals();
+    const beforePersistentApply = async (runtime: RuntimeEnv) => {
+      await this.requirePersistentApplyInference(runtime);
+    };
+    const runWizard = this.opts.runMemoryImportWizard ?? defaultMemoryImportWizardRunner;
+    const providerOutcomes: MemoryImportProviderOutcome[] = [];
+    return await this.startHostedWizard({
+      kind: "memory-import",
+      label: "memory import",
+      memoryImportProviders: providerOutcomes,
+      run: (prompter) =>
+        runWizard(prompter, beforePersistentApply, (outcome) => providerOutcomes.push(outcome)),
+    });
+  }
+
+  private async startHostedWizard(params: {
+    kind: ActiveWizardBridge["kind"];
+    label: string;
+    autoSelectChannel?: string;
+    memoryImportProviders?: MemoryImportProviderOutcome[];
+    run: (prompter: WizardPrompterLike) => Promise<HostedWizardRunResult>;
+  }): Promise<string> {
+    this.lastSensitiveChannel = undefined;
+    const completion: ActiveWizardBridge["completion"] = {
+      status: "applied",
+      ...(params.memoryImportProviders
+        ? { memoryImportProviders: params.memoryImportProviders }
+        : {}),
+    };
+    const session = new WizardSession(async (prompter) => {
+      const result = await params.run(prompter);
+      if (typeof result === "string") {
+        completion.status = result;
+      } else if (result) {
+        completion.memoryImport = result;
+      }
+    });
     this.wizardBridge = {
       session,
       step: null,
-      label: channel,
-      autoSelectChannel: channel,
+      kind: params.kind,
+      label: params.label,
+      completion,
+      ...(params.autoSelectChannel ? { autoSelectChannel: params.autoSelectChannel } : {}),
     };
     return await this.pumpWizardBridge();
   }
@@ -1198,32 +1625,74 @@ export class SystemAgentChatEngine {
       this.wizardBridge = null;
       const label = bridge.label;
       if (result.status === "done") {
+        if (bridge.kind === "memory-import") {
+          return await this.finishMemoryImportWizard(bridge.completion.memoryImport);
+        }
+        if (bridge.completion.status === "kept-current") {
+          return `${label[0]?.toUpperCase() ?? "S"}${label.slice(1)} setup kept the current configuration. Nothing was changed.`;
+        }
+        const audit =
+          bridge.kind === "channel"
+            ? {
+                operation: "channels.setup",
+                summary: `Configured channel ${label} via chat setup`,
+                details: { channel: label },
+              }
+            : bridge.kind === "skills"
+              ? {
+                  operation: "skills.setup",
+                  summary: "Completed skills dependency setup via chat",
+                  details: { capability: "skills" },
+                }
+              : bridge.kind === "search"
+                ? {
+                    operation: "search.setup",
+                    summary: "Configured web search via chat setup",
+                    details: { capability: "web-search" },
+                  }
+                : {
+                    operation: "gateway.setup",
+                    summary: "Configured Gateway via chat setup",
+                    details: { capability: "gateway" },
+                  };
         try {
           const appendAuditEntry =
             this.opts.appendAuditEntry ?? (await import("./audit.js")).appendSystemAgentAuditEntry;
-          await appendAuditEntry({
-            operation: "channels.setup",
-            summary: `Configured channel ${label} via chat setup`,
-            details: { channel: label },
-          });
+          await appendAuditEntry(audit);
         } catch (error) {
-          // Channel setup already committed. Audit failure must not turn its
+          // Hosted setup already committed. Audit failure must not turn its
           // truthful success result into a user-facing setup failure.
-          log.warn(`channel setup completed without audit entry: ${formatErrorMessage(error)}`);
+          log.warn(
+            `${bridge.kind} setup completed without audit entry: ${formatErrorMessage(error)}`,
+          );
         }
         const verify = await this.verifyConfigAfterWrite();
-        return [
-          `Done — ${label} is configured.`,
-          "Say `restart gateway` to apply channel changes, or `channels` to review.",
-          verify ?? "",
-        ]
-          .filter(Boolean)
-          .join("\n");
+        const success =
+          bridge.kind === "channel"
+            ? [
+                `Done — ${label} is configured.`,
+                "Say `restart gateway` to apply channel changes, or `channels` to review.",
+              ]
+            : bridge.kind === "skills"
+              ? ["Done — skills dependency setup is complete."]
+              : bridge.kind === "search"
+                ? [
+                    "Done — web search setup is complete.",
+                    "Restart the Gateway if the selected provider or plugin changed.",
+                  ]
+                : [
+                    "Done — gateway settings saved.",
+                    "Restart the Gateway to apply them (`restart gateway`).",
+                  ];
+        return [...success, verify ?? ""].filter(Boolean).join("\n");
+      }
+      if (bridge.kind === "memory-import") {
+        await this.auditMemoryImportProviders(bridge.completion.memoryImportProviders ?? []);
       }
       if (result.status === "cancelled") {
-        return "Channel setup cancelled. Nothing was changed beyond completed steps.";
+        return `${label[0]?.toUpperCase() ?? "S"}${label.slice(1)} setup cancelled. Nothing was changed beyond completed steps.`;
       }
-      return `Channel setup stopped: ${result.error ?? "unknown error"}`;
+      return `${label[0]?.toUpperCase() ?? "S"}${label.slice(1)} setup stopped: ${result.error ?? "unknown error"}`;
     }
     bridge.step = result.step ?? null;
     if (bridge.step) {
@@ -1237,10 +1706,22 @@ export class SystemAgentChatEngine {
       if (this.opts.surface === "cli" && bridge.step.sensitive === true) {
         bridge.session.cancel();
         this.wizardBridge = null;
-        this.lastSensitiveChannel = bridge.label;
+        if (bridge.kind === "channel") {
+          this.lastSensitiveChannel = bridge.label;
+          return [
+            "Sensitive input is not accepted in the OpenClaw chat because terminal input is visible.",
+            `Say \`open channel wizard\` and I'll hand you to the masked terminal wizard for ${bridge.label}, or run \`openclaw channels add --channel ${bridge.label}\` yourself later.`,
+          ].join("\n");
+        }
+        if (bridge.kind === "gateway") {
+          return [
+            "Sensitive input is not accepted in the OpenClaw chat because terminal input is visible.",
+            "Say `open gateway wizard` and I'll hand you to the masked terminal wizard, or run `openclaw configure --section gateway` yourself later.",
+          ].join("\n");
+        }
         return [
           "Sensitive input is not accepted in the OpenClaw chat because terminal input is visible.",
-          `Say \`open channel wizard\` and I'll hand you to the masked terminal wizard for ${bridge.label}, or run \`openclaw channels add --channel ${bridge.label}\` yourself later.`,
+          "Say `open search wizard` and I'll hand you to the masked terminal wizard, or run `openclaw configure --section web` yourself later.",
         ].join("\n");
       }
       if (bridge.step.type === "note" || bridge.step.type === "progress") {
@@ -1258,6 +1739,132 @@ export class SystemAgentChatEngine {
       }
     }
     return bridge.step ? renderWizardStep(bridge.step) : "";
+  }
+
+  private async auditMemoryImportProviders(
+    providers: MemoryImportProviderOutcome[],
+  ): Promise<void> {
+    const confirmedProviders = providers.filter(hasConfirmedMemoryImportCount);
+    const importedProviders = confirmedProviders.filter((provider) => provider.migrated > 0);
+    const indeterminateProviders = providers.filter(
+      (provider) => provider.copiesIndeterminate === true,
+    );
+    const importedItems = importedProviders.reduce(
+      (total, provider) => total + provider.migrated,
+      0,
+    );
+    if (importedItems === 0 && indeterminateProviders.length === 0) {
+      return;
+    }
+    const providerSummary = formatMemoryImportProviders(importedProviders);
+    const indeterminateSummary = indeterminateProviders
+      .map((provider) => `${provider.label} (copy count indeterminate)`)
+      .join(", ");
+    const auditSummary =
+      indeterminateProviders.length > 0
+        ? `Memory import failed partway via chat: ${[
+            providerSummary ? `confirmed ${providerSummary}` : "",
+            indeterminateSummary,
+          ]
+            .filter(Boolean)
+            .join("; ")}`
+        : `Imported memory via chat: ${providerSummary}`;
+    try {
+      const appendAuditEntry =
+        this.opts.appendAuditEntry ?? (await import("./audit.js")).appendSystemAgentAuditEntry;
+      await appendAuditEntry({
+        operation: "memory.import",
+        summary: auditSummary,
+        details: {
+          ...(indeterminateProviders.length > 0
+            ? { confirmedItems: importedItems, copiesIndeterminate: true }
+            : { totalItems: importedItems }),
+          providers: providers.map((provider) =>
+            provider.copiesIndeterminate === true
+              ? { providerId: provider.providerId, copiesIndeterminate: true }
+              : {
+                  providerId: provider.providerId,
+                  items: provider.migrated,
+                  ...(provider.failure ? { partial: true } : {}),
+                },
+          ),
+        },
+      });
+    } catch (error) {
+      // Copies may already have occurred. Audit failure must not replace the
+      // truthful import outcome with a user-facing audit error.
+      log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
+    }
+  }
+
+  private async finishMemoryImportWizard(
+    outcome: HostedMemoryImportOutcome | undefined,
+  ): Promise<string> {
+    if (!outcome) {
+      return "Memory import did not complete. No outcome was reported, and no success was assumed.";
+    }
+    if (outcome.status === "workspace-missing") {
+      return [
+        `Memory import is unavailable because the default agent workspace does not exist at ${outcome.workspace}.`,
+        "Finish onboarding first with `openclaw onboard`, then retry.",
+      ].join("\n");
+    }
+    if (outcome.status === "nothing-to-import") {
+      return "Nothing to import — no new memory files were detected in supported local agent homes.";
+    }
+    if (outcome.status === "skipped") {
+      return "Memory import skipped. Nothing was copied.";
+    }
+
+    const confirmedProviders = outcome.providers.filter(hasConfirmedMemoryImportCount);
+    const importedProviders = confirmedProviders.filter((provider) => provider.migrated > 0);
+    const failedProviders = confirmedProviders.filter((provider) => provider.failure);
+    const indeterminateProviders = outcome.providers.filter(
+      (provider) => provider.copiesIndeterminate === true,
+    );
+    const importedItems = importedProviders.reduce(
+      (total, provider) => total + provider.migrated,
+      0,
+    );
+    const providerSummary = formatMemoryImportProviders(importedProviders);
+    await this.auditMemoryImportProviders(outcome.providers);
+
+    if (importedItems === 0) {
+      if (indeterminateProviders.length > 0) {
+        return [
+          "Memory import failed partway. Some files may have been copied before the failure.",
+          `Copy counts are indeterminate for: ${indeterminateProviders
+            .map((provider) => provider.label)
+            .join(", ")}.`,
+        ].join("\n");
+      }
+      if (failedProviders.length > 0) {
+        return [
+          "Memory import did not complete. No files were copied.",
+          `Failed providers: ${failedProviders.map((provider) => provider.label).join(", ")}.`,
+        ].join("\n");
+      }
+      return "Nothing was imported. No files were copied.";
+    }
+
+    // Memory import copies files and does not change config, so post-write
+    // config verification does not apply.
+    const sourceSummary =
+      importedProviders.length === 1 ? importedProviders[0]!.label : providerSummary;
+    return [
+      `Imported ${formatItemCount(importedItems)} from ${sourceSummary}.`,
+      indeterminateProviders.length > 0
+        ? `Memory import failed partway for ${indeterminateProviders
+            .map((provider) => provider.label)
+            .join(", ")}; some additional files may have been copied before the failure.`
+        : failedProviders.length > 0
+          ? `Some providers did not complete: ${failedProviders
+              .map((provider) => provider.label)
+              .join(", ")}.`
+          : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   private async resolveWizardBridgeReply(text: string): Promise<string> {

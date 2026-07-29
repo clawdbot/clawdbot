@@ -1346,23 +1346,24 @@ export function buildGatewayCronService(params: {
   const automationEpoch = claimSessionAutomationEpoch();
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
-    stopCron();
-    stopExitWatchers();
-    stopHeartbeatReconcileRetry();
-    void stopStreamWatchers().catch((err: unknown) => {
-      cronLogger.warn(
-        { err: formatErrorMessage(err) },
-        "cron-stream: asynchronous teardown failed",
-      );
-    });
-    // Session rows must stop reporting automation from a stopped scheduler,
-    // but a reload's replacement service may already own the registration.
-    unregisterSessionAutomationSource(automationSource);
+    try {
+      stopCron();
+      stopExitWatchers();
+      stopHeartbeatReconcileRetry();
+      void stopStreamWatchers().catch((err: unknown) => {
+        cronLogger.warn(
+          { err: formatErrorMessage(err) },
+          "cron-stream: asynchronous teardown failed",
+        );
+      });
+    } finally {
+      // Session rows must stop reporting automation from a stopped scheduler,
+      // but a reload's replacement service may already own the registration.
+      unregisterSessionAutomationSource(automationSource);
+    }
   };
   cron.stopAndDrain = async () => {
-    stopCron();
-    stopExitWatchers();
-    stopHeartbeatReconcileRetry();
+    cron.stop();
     const streamWatchersStop = stopStreamWatchers().then(
       () => ({ ok: true as const }),
       (error: unknown) => ({ ok: false as const, error }),
@@ -1381,7 +1382,6 @@ export function buildGatewayCronService(params: {
     if (!streamWatchersResult.ok) {
       throw streamWatchersResult.error;
     }
-    unregisterSessionAutomationSource(automationSource);
   };
   // Reconciliations serialize on one tail and only the latest requested epoch
   // executes, so an older reload's convergence can never clobber a newer one.

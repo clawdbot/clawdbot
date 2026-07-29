@@ -505,14 +505,14 @@ describe("normalizeInitialApplicationLocation", () => {
     const gateway = runtime.context.gateway as ApplicationContext<RouteId>["gateway"] & {
       subscribe: (listener: GatewayListener) => () => void;
     };
-    const originalSubscribe = gateway.subscribe.bind(gateway);
     const activeSubscriptions = new Set<GatewayListener>();
     gateway.subscribe = (listener) => {
+      // Keep the released-link resolver genuinely cold. Forwarding to the live
+      // gateway lets a fast connection remove this transient subscription before
+      // stop() can prove its abort cleanup.
       activeSubscriptions.add(listener);
-      const unsubscribe = originalSubscribe(listener);
       return () => {
         activeSubscriptions.delete(listener);
-        unsubscribe();
       };
     };
     const routerStart = vi.spyOn(runtime.router, "start");

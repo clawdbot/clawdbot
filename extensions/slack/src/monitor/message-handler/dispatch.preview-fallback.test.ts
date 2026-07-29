@@ -6,6 +6,7 @@ const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "thread-1";
 const SAME_TEXT = "same reply";
 
+const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(
   async () => undefined as { messageId?: string; channelId?: string } | undefined,
@@ -843,6 +844,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   shouldLogVerbose: () => false,
 }));
 
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return { ...actual, getGlobalHookRunner: getGlobalHookRunnerMock };
+});
+
 vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
@@ -1101,6 +1107,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     reactSlackMessageMock.mockReset();
     removeSlackReactionMock.mockReset();
     logVerboseMock.mockReset();
+    getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
     for (const value of Object.values(statusReactionControllerMock)) {
       value.mockClear();
     }
@@ -1151,6 +1158,69 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.turnAdoptionLifecycle).toBe(turnAdoptionLifecycle);
   });
 
+  it("preserves provider previews for observer-only hooks", async () => {
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "message_sent"),
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
+    { label: "message_sending", hooks: ["message_sending"] },
+    {
+      label: "both modifying hooks",
+      hooks: ["reply_payload_sending", "message_sending"],
+    },
+  ])("suppresses portable provider previews when $label is registered", async ({ hooks }) => {
+    const registered = new Set(hooks);
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => registered.has(hookName)),
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("suppresses native progress cards when a modifying hook is registered", async () => {
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "message_sending"),
+    });
+
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "item", progressText: "private progress" }],
+    });
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("preserves post-hook native answer streaming when a modifying hook is registered", async () => {
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
+    });
+    mockedNativeStreaming = true;
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to normal delivery when preview finalize fails", async () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
@@ -1159,15 +1229,101 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
-  it("uses the relay identity when the agent has no explicit Slack identity", async () => {
-    const relayIdentity = { username: "Nik Team Claw" };
+  it("uses a disposable portable preview before custom-identity final delivery", async () => {
+    const relayIdentity = { username: "Nik Team Claw", iconEmoji: ":robot_face:" };
+    const draftStream = {
+      ...createDraftStreamStub(),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
 
-    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ identity: expect.anything() }),
+    );
     expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
+  });
+
+  it("clears a disposable preview before custom-identity media delivery", async () => {
+    const relayIdentity = {
+      username: "Nik Team Claw",
+      iconUrl: "https://example.com/claw.png",
+    };
+    const draftStream = {
+      ...createDraftStreamStub(),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: { text: "Photo", mediaUrl: "https://example.com/a.png" },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ identity: expect.anything() }),
+    );
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    const params = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(params, { replyThreadTs: THREAD_TS, identity: relayIdentity });
+    expect(params.replies).toEqual([{ text: "Photo", mediaUrl: "https://example.com/a.png" }]);
+  });
+
+  it("restores TTS text before custom-identity supplement delivery", async () => {
+    const relayIdentity = { username: "Nik Team Claw" };
+    const draftStream = {
+      ...createDraftStreamStub(),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    const params = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(params, { replyThreadTs: THREAD_TS, identity: relayIdentity });
+    expect(params.replies).toEqual([
+      {
+        text: "Spoken answer",
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
   });
 
   it("uses supported native Slack streaming authorship when a custom identity is active", async () => {

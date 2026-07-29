@@ -214,7 +214,7 @@ describe("control-ui-i18n process runner", () => {
 
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
-      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`;';
+      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`; const image = html`<img alt="Preview" />`; menu.setAttribute("aria-label", "Selection actions"); reply.setAttribute("aria-label", `Reply to ${name}`); file.setAttribute("title", "Open " + fileName);';
     const sourceFile = ts.createSourceFile(
       "ui/src/pages/example.ts",
       source,
@@ -231,8 +231,12 @@ describe("control-ui-i18n process runner", () => {
       }).map(({ kind, text }) => ({ kind, text })),
     ).toEqual([
       { kind: "html-attribute", text: "Archive" },
+      { kind: "html-attribute", text: "Preview" },
       { kind: "html-attribute", text: "Delete" },
       { kind: "html-text", text: "Delete" },
+      { kind: "html-attribute", text: "Selection actions" },
+      { kind: "html-attribute", text: "Reply to" },
+      { kind: "html-attribute", text: "Open" },
     ]);
   });
 

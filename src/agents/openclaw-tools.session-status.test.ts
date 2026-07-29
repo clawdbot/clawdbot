@@ -2231,7 +2231,7 @@ describe("session_status tool", () => {
         model: "default",
       }),
     ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+      "Session status visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
     );
 
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
@@ -2334,7 +2334,7 @@ describe("session_status tool", () => {
         model: "default",
       }),
     ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+      "Session status visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
     );
 
     expect(updateSessionStoreMock).not.toHaveBeenCalled();

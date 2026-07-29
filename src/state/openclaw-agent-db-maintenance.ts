@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { ensureMemoryRecallMetadataColumns } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
@@ -108,6 +109,9 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
             pathname: options.pathname,
           }),
       });
+      // Runtime startup accepts these feature-owned additive columns as absent;
+      // offline doctor maintenance eagerly asks the memory schema owner to add them.
+      ensureMemoryRecallMetadataColumns(database);
       assertOpenClawAgentDatabaseForMaintenance(database, {
         agentId,
         pathname: options.pathname,

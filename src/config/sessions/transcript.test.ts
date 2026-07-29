@@ -2023,6 +2023,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           agentId: "main",
           sessionId,
           sessionKey,
+          storePath: fixture.storePath(),
         },
       });
     }

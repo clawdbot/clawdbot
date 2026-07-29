@@ -259,6 +259,65 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
   });
 
+  it.each([false, true])(
+    "preserves the admitted current user with persistence suppression set to %s",
+    (suppressNextUserMessagePersistence) => {
+      const currentUser = {
+        role: "user" as const,
+        content: "current prompt",
+        idempotencyKey: "current-run:user",
+        timestamp: 1,
+      };
+      const { activeSession } = createActiveSession([currentUser]);
+      const branch = vi.fn();
+      const resetLeaf = vi.fn();
+      const clearNextUserMessagePersistenceSuppression = vi.fn();
+      const onUserMessagePersistenceInvalidated = vi.fn();
+      const sessionManager = createSessionManager({
+        branch,
+        resetLeaf,
+        clearNextUserMessagePersistenceSuppression,
+        getLeafEntry: () => ({
+          id: "current-user",
+          parentId: "previous-assistant",
+          timestamp: "2026-07-13T00:00:00.000Z",
+          type: "message",
+          message: currentUser,
+        }),
+      });
+      const recorder = {
+        hasPersisted: () => true,
+      } as NonNullable<
+        Parameters<
+          typeof prepareEmbeddedAttemptSessionBoundary
+        >[0]["attempt"]["userTurnTranscriptRecorder"]
+      >;
+
+      const boundary = prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        attempt: {
+          onUserMessagePersistenceInvalidated,
+          prompt: "current prompt",
+          suppressNextUserMessagePersistence,
+          trigger: "user",
+          userTurnTranscriptRecorder: recorder,
+        },
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: currentUser,
+        sessionManager,
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
+
+      expect(boundary.orphanRepair).toBeUndefined();
+      expect(activeSession.agent.state.messages).toEqual([]);
+      expect(branch).not.toHaveBeenCalled();
+      expect(resetLeaf).not.toHaveBeenCalled();
+      expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
+      expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
+    },
+  );
+
   it("repairs an orphaned user leaf before rebuilding active session messages", () => {
     const repairedMessages: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "repaired" }], timestamp: 2 },

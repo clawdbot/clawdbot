@@ -73,8 +73,8 @@ function formatCompactionReason(reason?: string): string | undefined {
       return lower.includes("already under target")
         ? "context is already under the compaction target"
         : "context is below the compaction threshold";
-    case "already_compacted_recently":
-      return "session was already compacted recently";
+    case "already_compacted":
+      return "session is already compacted";
     default:
       return text;
   }

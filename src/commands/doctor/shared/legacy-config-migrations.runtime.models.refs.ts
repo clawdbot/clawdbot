@@ -41,95 +41,49 @@ function shouldUpgradeClaudeProvider(provider: string | undefined): boolean {
   );
 }
 
-function upgradeRetiredGroqModelId(model: string): string | null {
-  const normalized = normalizeString(model);
-  switch (normalized) {
-    case "deepseek-r1-distill-llama-70b":
-      return "llama-3.3-70b-versatile";
-    case "gemma2-9b-it":
-    case "llama3-8b-8192":
-      return "llama-3.1-8b-instant";
-    case "llama3-70b-8192":
-      return "llama-3.3-70b-versatile";
-    case "meta-llama/llama-4-maverick-17b-128e-instruct":
-    case "moonshotai/kimi-k2-instruct":
-    case "moonshotai/kimi-k2-instruct-0905":
-      return "openai/gpt-oss-120b";
-    case "mistral-saba-24b":
-    case "qwen-qwq-32b":
-      return "qwen/qwen3-32b";
-    default:
-      return null;
-  }
+function modelTable(groups: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(groups).flatMap(([target, models]) =>
+      models.split(" ").map((model) => [model, target]),
+    ),
+  );
 }
 
-function upgradeRetiredXaiModelId(model: string): string | null {
-  const normalized = normalizeString(model);
-  switch (normalized) {
-    case "grok-code-fast":
-    case "grok-code-fast-1":
-    case "grok-code-fast-1-0825":
-      return "grok-build-0.1";
-    case "grok-4-fast-reasoning":
-    case "grok-4-1-fast-reasoning":
-    case "grok-4-0709":
-      return "grok-4.3";
-    case "grok-imagine-image-pro":
-      return "grok-imagine-image-quality";
-    default:
-      return null;
-  }
-}
+const RETIRED_GROQ_MODELS = modelTable({
+  "llama-3.3-70b-versatile": "deepseek-r1-distill-llama-70b llama3-70b-8192",
+  "llama-3.1-8b-instant": "gemma2-9b-it llama3-8b-8192",
+  "openai/gpt-oss-120b":
+    "meta-llama/llama-4-maverick-17b-128e-instruct moonshotai/kimi-k2-instruct moonshotai/kimi-k2-instruct-0905",
+  "qwen/qwen3-32b": "mistral-saba-24b qwen-qwq-32b",
+});
+const RETIRED_XAI_MODELS = modelTable({
+  "grok-build-0.1": "grok-code-fast grok-code-fast-1 grok-code-fast-1-0825",
+  "grok-4.3": "grok-4-fast-reasoning grok-4-1-fast-reasoning grok-4-0709",
+  "grok-imagine-image-quality": "grok-imagine-image-pro",
+});
+const RETIRED_OPENAI_MODELS = modelTable({
+  "gpt-5.3-codex": "gpt-5.2-codex gpt-5.1-codex gpt-5-codex",
+  "gpt-5.5-pro": "gpt-5-pro gpt-5.2-pro",
+  "gpt-5.4-nano": "gpt-4.1-nano gpt-5-nano",
+  "gpt-5.4-mini": "gpt-4.1-mini gpt-4o-mini gpt-5.1-codex-mini gpt-5-mini",
+  "gpt-5.5":
+    "gpt-4 gpt-4-turbo gpt-4.1 gpt-4o gpt-4o-2024-05-13 gpt-4o-2024-08-06 gpt-4o-2024-11-20 gpt-5 gpt-5-chat-latest gpt-5.1 gpt-5.1-chat-latest gpt-5.1-codex-max gpt-5.2 gpt-5.2-chat-latest",
+});
+const RETIRED_CODEX_MODEL_OVERRIDES = modelTable({
+  "gpt-5.5": "gpt-5.2 gpt-5.2-codex gpt-5.1-codex gpt-5-codex",
+  "gpt-5.4-mini": "gpt-4.1-nano gpt-5-nano",
+});
 
-function upgradeRetiredOpenAiModelId(model: string, provider?: string): string | null {
+function applyRetiredModelTable(
+  model: string,
+  table: Readonly<Record<string, string>>,
+  overrides?: Readonly<Record<string, string>>,
+): string | null {
   const normalized = normalizeString(model);
-  const codexProvider = provider === "openai-codex";
-  if (codexProvider && normalized === "gpt-5.2") {
-    return "gpt-5.5";
+  if (overrides && Object.hasOwn(overrides, normalized)) {
+    return overrides[normalized] ?? null;
   }
-  if (
-    normalized === "gpt-5.2-codex" ||
-    normalized === "gpt-5.1-codex" ||
-    normalized === "gpt-5-codex"
-  ) {
-    return codexProvider ? "gpt-5.5" : "gpt-5.3-codex";
-  }
-  if (normalized === "gpt-5-pro" || normalized === "gpt-5.2-pro") {
-    return "gpt-5.5-pro";
-  }
-  if (normalized === "gpt-4.1-nano" || normalized === "gpt-5-nano") {
-    if (codexProvider) {
-      return "gpt-5.4-mini";
-    }
-    return "gpt-5.4-nano";
-  }
-  if (
-    normalized === "gpt-4.1-mini" ||
-    normalized === "gpt-4o-mini" ||
-    normalized === "gpt-5.1-codex-mini" ||
-    normalized === "gpt-5-mini"
-  ) {
-    return "gpt-5.4-mini";
-  }
-  if (
-    normalized === "gpt-4" ||
-    normalized === "gpt-4-turbo" ||
-    normalized === "gpt-4.1" ||
-    normalized === "gpt-4o" ||
-    normalized === "gpt-4o-2024-05-13" ||
-    normalized === "gpt-4o-2024-08-06" ||
-    normalized === "gpt-4o-2024-11-20" ||
-    normalized === "gpt-5" ||
-    normalized === "gpt-5-chat-latest" ||
-    normalized === "gpt-5.1" ||
-    normalized === "gpt-5.1-chat-latest" ||
-    normalized === "gpt-5.1-codex-max" ||
-    normalized === "gpt-5.2" ||
-    normalized === "gpt-5.2-chat-latest"
-  ) {
-    return "gpt-5.5";
-  }
-  return null;
+  return Object.hasOwn(table, normalized) ? (table[normalized] ?? null) : null;
 }
 
 function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
@@ -146,6 +100,13 @@ function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
 function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
 }
+
+const RETIRED_OPUS_ALIASES = new Set("opus-4.5 opus-4.1 opus-4 opus-3".split(" "));
+const RETIRED_SONNET_ALIASES = new Set(
+  "sonnet-4.5 sonnet-4.1 sonnet-4.0 sonnet-4 sonnet-3.7 sonnet-3.5 sonnet-3 haiku-3.5 haiku-3".split(
+    " ",
+  ),
+);
 
 function upgradeOldClaudeToken(
   token: string,
@@ -233,25 +194,10 @@ function upgradeOldClaudeToken(
     }
     return `anthropic.${claudeTargetModelId("sonnet", "-", provider)}`;
   }
-  if (
-    normalized === "opus-4.5" ||
-    normalized === "opus-4.1" ||
-    normalized === "opus-4" ||
-    normalized === "opus-3"
-  ) {
+  if (RETIRED_OPUS_ALIASES.has(normalized)) {
     return opusTarget;
   }
-  if (
-    normalized === "sonnet-4.5" ||
-    normalized === "sonnet-4.1" ||
-    normalized === "sonnet-4.0" ||
-    normalized === "sonnet-4" ||
-    normalized === "sonnet-3.7" ||
-    normalized === "sonnet-3.5" ||
-    normalized === "sonnet-3" ||
-    normalized === "haiku-3.5" ||
-    normalized === "haiku-3"
-  ) {
+  if (RETIRED_SONNET_ALIASES.has(normalized)) {
     return sonnetTarget;
   }
   return null;
@@ -284,13 +230,17 @@ function upgradeRetiredModelRef(value: string): string | null {
   const normalizedModel = normalizeString(model);
   const retiredOwnerModel =
     normalizedProvider === "groq"
-      ? upgradeRetiredGroqModelId(model)
+      ? applyRetiredModelTable(model, RETIRED_GROQ_MODELS)
       : normalizedProvider === "xai"
-        ? upgradeRetiredXaiModelId(model)
+        ? applyRetiredModelTable(model, RETIRED_XAI_MODELS)
         : normalizedProvider === "openai" ||
             normalizedProvider === "openai-codex" ||
             normalizedProvider === "github-copilot"
-          ? upgradeRetiredOpenAiModelId(model, normalizedProvider)
+          ? applyRetiredModelTable(
+              model,
+              RETIRED_OPENAI_MODELS,
+              normalizedProvider === "openai-codex" ? RETIRED_CODEX_MODEL_OVERRIDES : undefined,
+            )
           : undefined;
   if (retiredOwnerModel) {
     return `${provider}/${retiredOwnerModel}${split.profile ? `@${split.profile}` : ""}`;

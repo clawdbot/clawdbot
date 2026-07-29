@@ -234,6 +234,13 @@ export type ModelCatalogModel = {
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
   compat?: ModelCatalogCompatConfig;
+  /**
+   * Provider/model ref of the same upstream model in another bundled catalog,
+   * for vendors reachable through several provider ids under different model
+   * ids. Authoring metadata only: normalization drops it, and the shared-model
+   * contract test uses it to keep `compat` capability tiers from drifting apart.
+   */
+  upstreamModel?: string;
   mediaInput?: ModelCatalogMediaInputConfig;
   status?: ModelCatalogStatus;
   statusReason?: string;

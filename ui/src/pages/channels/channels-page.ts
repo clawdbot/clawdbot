@@ -28,9 +28,6 @@ type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | nu
 
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
 
-const NOSTR_PROFILE_TIMEOUT_ERROR =
-  "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.";
-
 type NostrOperation = {
   generation: number;
   gateway: ApplicationContext["gateway"];
@@ -43,8 +40,8 @@ type NostrOperation = {
 
 function formatNostrProfileOperationError(error: unknown, prefix: string): string {
   return error instanceof DOMException && error.name === "TimeoutError"
-    ? NOSTR_PROFILE_TIMEOUT_ERROR
-    : `${prefix}: ${String(error)}`;
+    ? t("channels.nostr.notices.timeout")
+    : t("channels.nostr.notices.operationFailed", { prefix, error: String(error) });
 }
 
 class ChannelsPage extends OpenClawLightDomElement {
@@ -437,7 +434,11 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error: data?.error ?? `Profile update failed (${response.status})`,
+          error:
+            data?.error ??
+            t("channels.nostr.notices.updateFailedStatus", {
+              status: String(response.status),
+            }),
           success: null,
           fieldErrors: parseValidationErrors(data?.details),
         };
@@ -448,7 +449,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error: "Profile publish failed on all relays.",
+          error: t("channels.nostr.notices.publishFailed"),
           success: null,
         };
         return;
@@ -458,7 +459,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         ...currentForm,
         saving: false,
         error: null,
-        success: "Profile published to relays.",
+        success: t("channels.nostr.notices.published"),
         fieldErrors: {},
         original: { ...form.values },
       };
@@ -471,7 +472,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrProfileFormState = {
         ...currentForm,
         saving: false,
-        error: formatNostrProfileOperationError(err, "Profile update failed"),
+        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.updateFailed")),
         success: null,
       };
     }
@@ -506,7 +507,11 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           importing: false,
-          error: data?.error ?? `Profile import failed (${response.status})`,
+          error:
+            data?.error ??
+            t("channels.nostr.notices.importFailedStatus", {
+              status: String(response.status),
+            }),
           success: null,
         };
         return;
@@ -520,8 +525,8 @@ class ChannelsPage extends OpenClawLightDomElement {
         values,
         error: null,
         success: data.saved
-          ? "Profile imported from relays. Review and publish."
-          : "Profile imported. Review and publish.",
+          ? t("channels.nostr.notices.importedFromRelays")
+          : t("channels.nostr.notices.imported"),
         showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
       };
 
@@ -536,7 +541,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrProfileFormState = {
         ...currentForm,
         importing: false,
-        error: formatNostrProfileOperationError(err, "Profile import failed"),
+        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.importFailed")),
         success: null,
       };
     }

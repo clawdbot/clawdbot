@@ -20,7 +20,9 @@
   --chrome: rgba(14, 16, 21, 0.96);
   --chrome-strong: rgba(14, 16, 21, 0.98);
 
-  /* Text - Clean contrast */
+  /* Text - Clean contrast
+   * Keep --muted AA on dark surfaces; do not dim muted body text with opacity. */
+
   --text: #d4d4d8;
   --text-strong: #f4f4f5;
   --chat-text: #d4d4d8;

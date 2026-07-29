@@ -42,7 +42,10 @@ describe("createPluginRuntimeMock", () => {
     const debouncer = runtime.channel.debounce.createInboundDebouncer({
       debounceMs: 0,
       buildKey: () => "key",
-      onFlush: vi.fn(),
+      onFlush: vi.fn(() => {
+        const completion = Promise.resolve();
+        return { admission: completion, completion };
+      }),
     });
 
     expect(debouncer.cancelKey("key")).toBe(false);

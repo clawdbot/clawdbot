@@ -9,6 +9,17 @@ import "./tooltip.ts";
 
 let container: HTMLDivElement;
 
+const saveIndicator = () => ({
+  status: "idle" as const,
+  lastError: null,
+  needsApply: false,
+  applying: false,
+  applyDisabled: false,
+  onRetry: vi.fn(),
+  onReload: vi.fn(),
+  onApply: vi.fn(),
+});
+
 beforeEach(async () => {
   await i18n.setLocale("en");
   container = document.createElement("div");
@@ -22,6 +33,36 @@ afterEach(async () => {
 });
 
 describe("settings sidebar search", () => {
+  it("keeps Models selected while its setup flow is open", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "model-setup",
+        offline: false,
+        lastError: null,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const active = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__item[href="/settings/model-providers"]',
+    );
+    expect(active?.classList.contains("settings-sidebar__item--active")).toBe(true);
+    expect(active?.getAttribute("aria-current")).toBe("page");
+    expect(active?.textContent?.trim()).toBe("Models");
+  });
+
   it("links Ask OpenClaw to the shared custodian route", () => {
     const onNavigate = vi.fn();
     render(
@@ -40,6 +81,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -66,9 +108,9 @@ describe("settings sidebar search", () => {
         searchQuery: "cp",
         searchBlockMatches: [
           {
-            routeId: "config",
+            routeId: "connection",
             label: "Gateway Host",
-            hash: "#settings-general-system",
+            hash: "#settings-connection-host",
           },
         ],
         onExit: vi.fn(),
@@ -76,6 +118,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -85,7 +128,7 @@ describe("settings sidebar search", () => {
         ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
       ),
     ].map((item) => item.textContent?.trim());
-    expect(resultLabels).toEqual(["General", "Gateway Host"]);
+    expect(resultLabels).toEqual(["Gateway", "Gateway Host"]);
   });
 
   it("ranks matching pages before matching blocks and navigates to the block", () => {
@@ -119,6 +162,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -166,6 +210,7 @@ describe("settings sidebar search", () => {
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -185,6 +230,51 @@ describe("settings sidebar search", () => {
     expect(onNavigate).toHaveBeenCalledWith("infrastructure", {
       search: "?section=browser",
       hash: "#config-section-browser",
+    });
+  });
+
+  it("keeps Memory search results on the canonical Settings tab path", () => {
+    const onNavigate = vi.fn();
+    render(
+      renderSettingsSidebar({
+        basePath: "/ui",
+        activeRouteId: "memory",
+        activePathname: "/ui/settings/memory/settings",
+        activeHash: "#memory-backend",
+        offline: false,
+        lastError: null,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "backend",
+        searchBlockMatches: [
+          {
+            routeId: "memory",
+            label: "Memory",
+            pathname: "/ui/settings/memory/settings",
+            hash: "#memory-backend",
+          },
+        ],
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const link = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__subitem[href="/ui/settings/memory/settings#memory-backend"]',
+    );
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("aria-current")).toBe("location");
+    link?.click();
+    expect(onNavigate).toHaveBeenCalledWith("memory", {
+      pathname: "/ui/settings/memory/settings",
+      hash: "#memory-backend",
     });
   });
 
@@ -211,6 +301,7 @@ describe("settings sidebar search", () => {
             rerender();
           },
           preloadTimers: new Map(),
+          saveIndicator: saveIndicator(),
         }),
         container,
       );
@@ -243,7 +334,7 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Connection", "Channels", "Communications", "Devices"]);
+    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Talk", "Devices"]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
@@ -288,6 +379,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -322,6 +414,7 @@ describe("settings sidebar search", () => {
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
       }),
       container,
     );
@@ -355,14 +448,17 @@ describe("settings sidebar search", () => {
           onNavigate: vi.fn(),
           onSearchQueryChange: vi.fn(),
           preloadTimers: new Map(),
+          saveIndicator: { ...saveIndicator(), status: "saving" },
         }),
         container,
       );
 
     renderSidebar(false, null, 3);
     expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
 
     renderSidebar(true, "connection refused?token=settings-secret", 3);
+    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.hasAttribute("title")).toBe(false);
     expect(

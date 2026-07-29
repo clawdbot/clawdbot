@@ -78,6 +78,7 @@ vi.mock("./runtime-plugins.js", () => ({
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
   loadBundledProviderStaticCatalogContextModels: (...args: Parameters<LoadStaticCatalog>) =>
     mocks.loadStaticCatalog(...args),
+  resolveBundledStaticCatalogModel: () => undefined,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({

@@ -1,12 +1,12 @@
 // Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
@@ -37,8 +37,68 @@ export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string
   return url.toString();
 }
 
+type ControlUiRouteTarget = {
+  hash?: string;
+  pathname?: string;
+  pathnamePrefix?: string;
+  routeId: string;
+  search?: string;
+};
+
+/**
+ * Wait for the browser router to commit a route, not merely update the URL.
+ * Browser-local polling keeps readiness independent of host-side CDP scheduling.
+ */
+export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTarget) {
+  const handle = await page.waitForFunction(
+    (expected) => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime?: {
+          router: {
+            getState: () => {
+              status: string;
+              resolvedLocation: { pathname: string } | null;
+              matches: { routeId: string }[];
+              pendingMatches: unknown[];
+            };
+          };
+        };
+      };
+      const state = app.runtime?.router.getState();
+      const pathname = window.location.pathname;
+      return (
+        state?.status === "success" &&
+        state.matches[0]?.routeId === expected.routeId &&
+        state.resolvedLocation?.pathname === pathname &&
+        state.pendingMatches.length === 0 &&
+        (expected.pathname === undefined || pathname === expected.pathname) &&
+        (expected.pathnamePrefix === undefined || pathname.startsWith(expected.pathnamePrefix)) &&
+        (expected.search === undefined || window.location.search === expected.search) &&
+        (expected.hash === undefined || window.location.hash === expected.hash)
+      );
+    },
+    target,
+    { timeout: 30_000 },
+  );
+  await handle.dispose();
+}
+
+export async function waitForControlUiSettingsTakeover(
+  page: Page,
+  pathname = "/settings/general",
+): Promise<{ search: Locator; sidebar: Locator }> {
+  await waitForControlUiRoute(page, { pathname, routeId: "config" });
+  const appSidebar = page.locator("openclaw-app-sidebar");
+  const sidebar = page.locator(".settings-sidebar");
+  const search = sidebar.getByRole("searchbox", { name: "Search settings" });
+  await appSidebar.waitFor({ state: "detached" });
+  await search.waitFor({ state: "visible" });
+  return { search, sidebar };
+}
+
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js"), "utf8");
 const commonJsOptimizeDeps = [
   "highlight.js/lib/core",
   "highlight.js/lib/languages/bash",
@@ -64,6 +124,7 @@ export type MockGatewayRequest = {
 };
 
 export type ControlUiMockGatewayScenario = {
+  agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
   basePath?: string;
@@ -121,6 +182,8 @@ export type ControlUiMockGatewayScenario = {
     provider: string;
     available?: boolean;
   }>;
+  /** Operator scopes returned by the mocked connect handshake. */
+  operatorScopes?: string[];
   sessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
@@ -197,6 +260,16 @@ export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolea
     return false;
   }
   return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
+}
+
+// Pause an installed virtual clock slightly ahead of its current time so
+// elapsed time advances only through clock.runFor/fastForward. Without this,
+// page.clock.install() keeps ticking at real-time rate, and slow runners break
+// assertions that a virtual deadline has or has not elapsed yet (#115187). The
+// headroom keeps the pauseAt target ahead of the still-ticking clock between
+// the Date.now() read and the pause; jumping to it fires nothing relevant.
+export async function pauseVirtualClock(page: Page): Promise<void> {
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 5_000);
 }
 
 export async function startControlUiE2eServer(
@@ -300,6 +373,8 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    agentModel:
+      scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
@@ -324,6 +399,13 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    operatorScopes: scenario.operatorScopes ?? [
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+    ],
     repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
@@ -358,13 +440,16 @@ export function createControlUiMockGatewayInitScript(
     protocolVersion: PROTOCOL_VERSION,
     scenario: normalizeScenario(scenario),
   };
-  return `(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}); })();`;
+  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse); })();`;
 }
 
-function installControlUiMockGateway(input: {
-  protocolVersion: number;
-  scenario: NormalizedControlUiMockGatewayScenario;
-}) {
+function installControlUiMockGateway(
+  input: {
+    protocolVersion: number;
+    scenario: NormalizedControlUiMockGatewayScenario;
+  },
+  parseJson5: (raw: string) => unknown,
+) {
   type BrowserRequest = { id: string; method: string; params?: unknown };
   type BrowserFrame = {
     id?: unknown;
@@ -658,6 +743,35 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  function applyScenarioAgentModel(method: string, value: unknown): unknown {
+    if (!scenario.agentModel || !isRecord(value)) {
+      return value;
+    }
+    const applyAgentsList = (agentsList: unknown): unknown => {
+      if (!isRecord(agentsList) || !Array.isArray(agentsList.agents)) {
+        return agentsList;
+      }
+      return {
+        ...agentsList,
+        agents: agentsList.agents.map((agent) =>
+          isRecord(agent) && !hasOwn(agent, "model")
+            ? { ...agent, model: { primary: scenario.agentModel } }
+            : agent,
+        ),
+      };
+    };
+    if (method === "agents.list") {
+      return applyAgentsList(value);
+    }
+    if (method === "chat.startup" && hasOwn(value, "agentsList")) {
+      return {
+        ...value,
+        agentsList: applyAgentsList(value.agentsList),
+      };
+    }
+    return value;
+  }
+
   /** Transcript fields a scenario configured on chat.history, replayed onto the
    * chat.startup payload so both bootstrap paths serve the same conversation. */
   function configuredHistoryTranscript(): Record<string, unknown> {
@@ -926,9 +1040,9 @@ function installControlUiMockGateway(input: {
         }
         let parsedConfig: unknown = configuredConfig.config;
         try {
-          parsedConfig = JSON.parse(configState.raw) as unknown;
+          parsedConfig = parseJson5(configState.raw);
         } catch {
-          // JSON5-only raw keeps the last parseable config object.
+          // Invalid raw keeps the last valid fixture object for generic mock scenarios.
         }
         return {
           ...configuredConfig,
@@ -966,18 +1080,33 @@ function installControlUiMockGateway(input: {
           };
           persistConfigState();
         }
-        // Like the real gateway, ack with the persisted snapshot hash.
-        return { ok: true, hash: mockConfigHash() };
+        let parsedConfig: unknown = baseConfigResponse.config;
+        try {
+          parsedConfig = parseJson5(configState.raw);
+        } catch {
+          // Invalid raw keeps the last valid fixture object for generic mock scenarios.
+        }
+        const configured = configuredResponse(method, params);
+        const configuredAck = isRecord(configured.value) ? configured.value : {};
+        // Like the real gateway, return the persisted config and its new hash.
+        return {
+          ...configuredAck,
+          ok: true,
+          path: baseConfigResponse.path,
+          hash: mockConfigHash(),
+          config: parsedConfig,
+        };
       }
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
+      const configuredValue = applyScenarioAgentModel(method, configured.value);
       if (method === "sessions.create" || method === "sessions.catalog.continue") {
-        recordMaterializedSession(params, configured.value);
+        recordMaterializedSession(params, configuredValue);
       }
       return method === "sessions.list"
-        ? applySessionPatches(configured.value, params)
-        : configured.value;
+        ? applySessionPatches(configuredValue, params)
+        : configuredValue;
     }
     switch (method) {
       case "connect":
@@ -985,13 +1114,7 @@ function installControlUiMockGateway(input: {
           auth: {
             ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
             role: "operator",
-            scopes: [
-              "operator.admin",
-              "operator.read",
-              "operator.write",
-              "operator.approvals",
-              "operator.pairing",
-            ],
+            scopes: scenario.operatorScopes,
           },
           features: {
             capabilities: scenario.featureCapabilities,
@@ -1036,6 +1159,7 @@ function installControlUiMockGateway(input: {
             {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
+              ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
               name: scenario.assistantName,
               ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
               workspaceGit: scenario.workspaceGit,
@@ -1088,6 +1212,7 @@ function installControlUiMockGateway(input: {
               {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
+                ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
                 name: scenario.assistantName,
                 ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
                 workspaceGit: scenario.workspaceGit,
@@ -1406,7 +1531,10 @@ function installControlUiMockGateway(input: {
       if (!response) {
         throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
       }
-      const resolvedPayload = payload ?? buildResponse(response.method, response.params);
+      const resolvedPayload = applyScenarioAgentModel(
+        response.method,
+        payload ?? buildResponse(response.method, response.params),
+      );
       if (
         response.method === "sessions.create" ||
         response.method === "sessions.catalog.continue"

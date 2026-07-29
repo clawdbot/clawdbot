@@ -2,12 +2,14 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { getFeishuRuntime } from "./runtime.js";
@@ -67,20 +69,10 @@ type FeishuLifecycleSource = {
   replayClaim?: ChannelReplayClaimHandle;
 };
 
-export class FeishuIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "authentication-failed" | "invalid-event",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "FeishuIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export const FeishuIngressPermanentError = createChannelIngressError<
+  "authentication-failed" | "invalid-event"
+>("FeishuIngressPermanentError", { withReason: true });
+export type FeishuIngressPermanentError = InstanceType<typeof FeishuIngressPermanentError>;
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -354,7 +346,6 @@ export function buildFeishuFlushIngressLifecycle(
 export function createFeishuDurableIngress(options: FeishuIngressOptions): FeishuDurableIngress {
   let socketTerminator: (() => void) | undefined;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
-  const deferredClaims = new Map<string, Promise<void>>();
 
   const monitor = createChannelIngressMonitor<
     string,
@@ -393,40 +384,15 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
         ),
     },
     deliver: async (rawEnvelope, lifecycle, claim) => {
-      let resolveDeferred!: () => void;
-      const deferred = new Promise<void>((resolve) => {
-        resolveDeferred = resolve;
-      });
-      let deferredSettled = false;
-      const settleDeferred = () => {
-        if (deferredSettled) {
-          return;
-        }
-        deferredSettled = true;
-        if (deferredClaims.get(claim.id) === deferred) {
-          deferredClaims.delete(claim.id);
-        }
-        resolveDeferred();
-      };
       const abandonHandlers = new Set<() => void | Promise<void>>();
       // Feishu handlers can defer transport settlement across broadcast lanes.
       // Keep their lifecycle registry local while the monitor owns the durable claim.
       const wrappedLifecycle: FeishuIngressLifecycle = {
         ...lifecycle,
-        onAdopted: async () => {
-          try {
-            await lifecycle.onAdopted();
-          } finally {
-            settleDeferred();
-          }
-        },
+        onAdopted: lifecycle.onAdopted,
         onAbandoned: async () => {
-          try {
-            await Promise.allSettled([...abandonHandlers].map(async (handler) => await handler()));
-            await lifecycle.onAbandoned();
-          } finally {
-            settleDeferred();
-          }
+          await Promise.allSettled([...abandonHandlers].map(async (handler) => await handler()));
+          await lifecycle.onAbandoned();
         },
         registerAbandonHandler: (handler) => {
           abandonHandlers.add(handler);
@@ -442,9 +408,6 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
           return undefined;
         }
         if (result.kind === "deferred") {
-          if (!deferredSettled) {
-            deferredClaims.set(claim.id, deferred);
-          }
           return { kind: "deferred" };
         }
         if (result.kind === "completed") {
@@ -463,6 +426,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
         }
       }
     },
+    deferredClaims: "wait-on-stop",
     pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
     retention: {
       pruneIntervalMs: FEISHU_INGRESS_PRUNE_INTERVAL_MS,
@@ -527,7 +491,6 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
     start: monitor.start,
     stop: async () => {
       await monitor.stop();
-      await Promise.allSettled(deferredClaims.values());
       activeLifecycles.clear();
       socketTerminator = undefined;
     },

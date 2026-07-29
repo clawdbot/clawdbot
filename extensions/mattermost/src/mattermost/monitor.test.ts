@@ -60,13 +60,13 @@ beforeEach(() => {
 });
 
 describe("buildMattermostInboundMediaPayload", () => {
-  it("keeps a failed attachment kind aligned with a successful path", () => {
-    expect(
+  it("keeps a failed attachment kind aligned with a successful path", async () => {
+    await expect(
       buildMattermostInboundMediaPayload([
         { path: "/tmp/image.png", contentType: "image/png", kind: "image" },
         { kind: "audio" },
       ]),
-    ).toEqual({
+    ).resolves.toEqual({
       MediaPath: "/tmp/image.png",
       MediaUrl: "/tmp/image.png",
       MediaType: "image/png",
@@ -74,16 +74,34 @@ describe("buildMattermostInboundMediaPayload", () => {
       MediaUrls: ["/tmp/image.png", ""],
       MediaTypes: ["image/png", "audio"],
       MediaTranscribedIndexes: undefined,
+      media: [
+        {
+          path: "/tmp/image.png",
+          url: undefined,
+          contentType: "image/png",
+          kind: "image",
+          transcribed: false,
+          messageId: undefined,
+        },
+        {
+          path: undefined,
+          url: undefined,
+          contentType: undefined,
+          kind: "audio",
+          transcribed: false,
+          messageId: undefined,
+        },
+      ],
     });
   });
 
-  it("keeps total failures as type-only media facts", () => {
-    expect(
+  it("keeps total failures as type-only media facts", async () => {
+    await expect(
       buildMattermostInboundMediaPayload([
         { kind: "video" },
         { contentType: "application/pdf", kind: "document" },
       ]),
-    ).toEqual({
+    ).resolves.toEqual({
       MediaPath: undefined,
       MediaUrl: undefined,
       MediaType: "video",
@@ -91,6 +109,24 @@ describe("buildMattermostInboundMediaPayload", () => {
       MediaUrls: undefined,
       MediaTypes: ["video", "application/pdf"],
       MediaTranscribedIndexes: undefined,
+      media: [
+        {
+          path: undefined,
+          url: undefined,
+          contentType: undefined,
+          kind: "video",
+          transcribed: false,
+          messageId: undefined,
+        },
+        {
+          path: undefined,
+          url: undefined,
+          contentType: "application/pdf",
+          kind: "document",
+          transcribed: false,
+          messageId: undefined,
+        },
+      ],
     });
   });
 });
@@ -346,6 +382,40 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
     expect(deliverFinal).not.toHaveBeenCalled();
     expect(recordThreadParticipation).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a finalized preview when a later tool warning is delivered", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+    const previewState = { finalizedViaPreviewPost: false };
+    const params = {
+      kind: "direct" as const,
+      client: createMattermostClientMock(),
+      draftStream,
+      resolvePreviewFinalText: (text?: string) => text?.trim(),
+      previewState,
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    };
+
+    await deliverMattermostReplyWithDraftPreview({
+      ...params,
+      payload: { text: "Successful assistant final" } as never,
+      info: { kind: "final" },
+    });
+    await deliverMattermostReplyWithDraftPreview({
+      ...params,
+      payload: { text: "Tool error warning", isError: true } as never,
+      info: { kind: "final" },
+    });
+
+    expect(previewState.finalizedViaPreviewPost).toBe(true);
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
+      text: "Tool error warning",
+      isError: true,
+    });
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
   it("deletes the preview after a successful normal final send", async () => {

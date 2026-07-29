@@ -2518,38 +2518,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("accepts a legacy Codex auth-provider alias for app-server login", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
-    try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "token",
-          provider: "codex-cli",
-          token: "legacy-access-token",
-          email: "legacy-codex@example.test",
-        },
-      });
-
-      await applyCodexAppServerAuthProfile({
-        client: { request } as never,
-        agentDir,
-        authProfileId: "openai:work",
-      });
-
-      expect(request).toHaveBeenCalledWith("account/login/start", {
-        type: "chatgptAuthTokens",
-        accessToken: "legacy-access-token",
-        chatgptAccountId: "legacy-codex@example.test",
-        chatgptPlanType: null,
-      });
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  });
-
   it("answers app-server ChatGPT token refresh requests from the bound profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
@@ -2766,45 +2734,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
       expect(childProfile?.refresh).toBe("child-stale-refresh-token");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts a refreshed Codex OAuth credential when the stored provider is a legacy alias", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
-      access: "refreshed-alias-access-token",
-      refresh: "refreshed-alias-refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "account-alias",
-    });
-    try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "codex-cli",
-          access: "stale-alias-access-token",
-          refresh: "alias-refresh-token",
-          expires: Date.now() + 60_000,
-          accountId: "account-legacy",
-          email: "legacy-codex@example.test",
-        },
-      });
-
-      await expect(
-        refreshCodexAppServerAuthTokens({
-          agentDir,
-          authProfileId: "openai:work",
-        }),
-      ).resolves.toEqual({
-        accessToken: "refreshed-alias-access-token",
-        chatgptAccountId: "account-alias",
-        chatgptPlanType: null,
-      });
-      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("alias-refresh-token");
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
 

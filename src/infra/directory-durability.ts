@@ -1,16 +1,32 @@
-import { syncDirectory, type DirectorySyncOutcome } from "@openclaw/fs-safe/durability";
+import { constants, copyFileSync, linkSync } from "node:fs";
+import fs from "node:fs/promises";
+import {
+  publishFileExclusive,
+  syncDirectory,
+  type DirectorySyncOutcome,
+  type PublishFileExclusiveFailureDetails,
+  type PublishFileExclusiveFailurePhase,
+  type PublishFileExclusiveResult,
+} from "@openclaw/fs-safe/durability";
+import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { FsSafeError } from "./fs-safe.js";
 
 export {
   ensureDurableDirectory,
+  isHardlinkFallbackError,
   pinDirectory,
+  publishFileExclusive,
+  sha256File,
   syncDirectory,
   syncDirectoryBestEffortSync,
   type DirectorySyncOutcome,
+  type DirectoryReceipt,
   type DurableDirectoryReceipt,
   type PinnedDirectory,
 } from "@openclaw/fs-safe/durability";
 
 type DirectoryDurabilityOutcome = DirectorySyncOutcome | { status: "not-needed" };
+const HARD_LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
 
 function isUnsupportedDirectorySyncError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
@@ -29,6 +45,112 @@ export function requireDirectorySync(outcome: DirectoryDurabilityOutcome, label:
   }
   const code = outcome.code ? ` (${outcome.code})` : "";
   throw new Error(`${label} does not support crash-durable directory synchronization${code}.`);
+}
+
+export function getPublishFileExclusiveFailureDetails(
+  error: unknown,
+): PublishFileExclusiveFailureDetails | undefined {
+  if (!(error instanceof FsSafeError)) {
+    return undefined;
+  }
+  const details = error.details;
+  if (
+    !details ||
+    typeof details.targetCreated !== "boolean" ||
+    (details.cleanup !== "removed" &&
+      details.cleanup !== "preserved" &&
+      details.cleanup !== "unknown")
+  ) {
+    return undefined;
+  }
+  return details as PublishFileExclusiveFailureDetails;
+}
+
+function postPublicationFailure(params: {
+  error: unknown;
+  phase: PublishFileExclusiveFailurePhase;
+  published: PublishFileExclusiveResult;
+}): FsSafeError {
+  const cause = params.error instanceof Error ? params.error : new Error(String(params.error));
+  return new FsSafeError(
+    params.error instanceof FsSafeError ? params.error.code : "helper-failed",
+    `File publication failed after target creation: ${cause.message}`,
+    {
+      cause,
+      details: {
+        phase: params.phase,
+        targetCreated: true,
+        targetIdentity: {
+          dev: params.published.identity.dev,
+          ino: params.published.identity.ino,
+        },
+        // After publication succeeds, pathname cleanup cannot atomically prove
+        // it still owns the target. Callers use this receipt with their pinned guards.
+        cleanup: "preserved",
+      } satisfies PublishFileExclusiveFailureDetails,
+    },
+  );
+}
+
+/** Publish one file without replacement under OpenClaw's durability policy. */
+export async function publishFileNoClobber(
+  sourcePath: string,
+  targetPath: string,
+  options: {
+    strategy: "link-required" | "link-or-copy";
+    moveSource?: boolean;
+    durability: "fail-closed" | "degrade";
+  },
+) {
+  const sourceIdentity = await fs.lstat(sourcePath);
+  const published = await publishFileExclusive({
+    sourcePath,
+    targetPath,
+    expectedSourceIdentity: sourceIdentity,
+    strategy: options.strategy,
+  });
+  const degraded = published.directorySync.status === "unsupported";
+  if (options.durability === "fail-closed") {
+    try {
+      requireDirectorySync(published.directorySync, "File publication directory");
+    } catch (error) {
+      throw postPublicationFailure({
+        error,
+        phase: "directory-sync",
+        published,
+      });
+    }
+  }
+
+  if (options.moveSource) {
+    try {
+      const currentSource = await fs.lstat(sourcePath);
+      if (!currentSource.isFile() || !sameFileIdentity(currentSource, sourceIdentity)) {
+        throw new Error(`File publication source changed before removal: ${sourcePath}`);
+      }
+      await fs.unlink(sourcePath);
+    } catch (error) {
+      throw postPublicationFailure({
+        error,
+        phase: published.method === "hardlink" ? "hardlink-verify" : "copy-verify",
+        published,
+      });
+    }
+  }
+
+  return { ...published, durability: degraded ? "degraded" : "durable" };
+}
+
+/** Synchronous no-clobber publication for critical sections that cannot yield. */
+export function publishFileNoClobberSync(sourcePath: string, targetPath: string): void {
+  try {
+    linkSync(sourcePath, targetPath);
+  } catch (error) {
+    if (!HARD_LINK_UNSUPPORTED_CODES.has((error as NodeJS.ErrnoException).code ?? "")) {
+      throw error;
+    }
+    copyFileSync(sourcePath, targetPath, constants.COPYFILE_EXCL);
+  }
 }
 
 /** Compatibility adapter for former best-effort call sites. */
