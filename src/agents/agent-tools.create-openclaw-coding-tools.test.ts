@@ -19,6 +19,11 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+  type MemoryFlushPlan,
+} from "../plugins/memory-state.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -197,6 +202,7 @@ describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
   afterEach(() => {
+    clearMemoryPluginState();
     resetGlobalHookRunner();
   });
 
@@ -2004,6 +2010,114 @@ describe("createOpenClawCodingTools", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(taskCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records ordinary write, edit, and apply_patch memory provenance from turn taint", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-taint-"));
+    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
+      async () => {},
+    );
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/2026-07-29.md",
+        recordWriteProvenance,
+      }),
+    });
+    let tainted = false;
+    try {
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        senderIsOwner: true,
+        isTurnTainted: () => tainted,
+      });
+      const write = requireToolExecute(requireTool(tools, "write"));
+      const edit = requireToolExecute(requireTool(tools, "edit"));
+      const applyPatch = requireToolExecute(requireTool(tools, "apply_patch"));
+
+      await write("write-memory", {
+        path: "memory/2026-07-29.md",
+        content: "owner-requested note\n",
+      });
+      tainted = true;
+      await edit("edit-memory", {
+        path: "memory/2026-07-29.md",
+        edits: [{ oldText: "note", newText: "network-derived note" }],
+      });
+      await applyPatch("patch-memory", {
+        input: [
+          "*** Begin Patch",
+          "*** Add File: memory/project.md",
+          "+network project note",
+          "*** End Patch",
+        ].join("\n"),
+      });
+
+      expect(recordWriteProvenance.mock.calls.map(([entry]) => entry.originClass)).toEqual([
+        "agent",
+        "untrusted",
+        "untrusted",
+      ]);
+      expect(recordWriteProvenance).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          relativePath: "memory/project.md",
+          contentBefore: "",
+          contentAfter: "network project note\n",
+        }),
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records sandbox-backed memory writes before mutation", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sandbox-taint-"));
+    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
+      async () => {},
+    );
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/2026-07-29.md",
+        recordWriteProvenance,
+      }),
+    });
+    try {
+      const sandbox = createAgentToolsSandboxContext({
+        workspaceDir,
+        fsBridge: createHostSandboxFsBridge(workspaceDir),
+        workspaceAccess: "rw",
+      });
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        sandbox,
+        senderIsOwner: true,
+        isTurnTainted: () => true,
+      });
+      await requireToolExecute(requireTool(tools, "write"))("sandbox-memory", {
+        path: "memory/2026-07-29.md",
+        content: "sandbox network note\n",
+      });
+
+      expect(recordWriteProvenance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          relativePath: "memory/2026-07-29.md",
+          originClass: "untrusted",
+          contentBefore: "",
+          contentAfter: "sandbox network note\n",
+        }),
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 

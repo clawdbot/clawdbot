@@ -301,6 +301,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           authProfileStore: attempt.authProfileStore,
           recordToolPrepStage: params.markCoreToolStage,
           onToolOutcome: attempt.onToolOutcome,
+          isTurnTainted: attempt.isTurnTainted,
           allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
           skillsSnapshot: params.skillsSnapshot,
           skillUsagePaths: params.skillUsagePaths,
