@@ -380,6 +380,7 @@ describe("chat page split layout host", () => {
   });
 
   it("replaces a cold literal main route after canonical defaults resolve", async () => {
+    window.history.replaceState({}, "", "/chat/research/workspace?draft=ship");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     const canonicalLocation = deferred<RouteLocation | null>();
@@ -388,6 +389,11 @@ describe("chat page split layout host", () => {
       face: "chat",
       draft: "ship",
       canonicalLocationReady: canonicalLocation.promise,
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "?draft=ship",
+        hash: "",
+      },
     };
     document.body.append(page);
     await page.updateComplete;
@@ -408,7 +414,63 @@ describe("chat page split layout host", () => {
     );
   });
 
+  it("does not let a cold chat canonicalization replace a newer route", async () => {
+    window.history.replaceState({}, "", "/chat/research/workspace");
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const canonicalLocation = deferred<RouteLocation | null>();
+    page.data = {
+      sessionKey: "agent:research:workspace",
+      face: "chat",
+      canonicalLocationReady: canonicalLocation.promise,
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "",
+        hash: "",
+      },
+    };
+    document.body.append(page);
+    await page.updateComplete;
+
+    window.history.replaceState({}, "", "/settings/appearance");
+    canonicalLocation.resolve({ pathname: "/chat/research", search: "", hash: "" });
+    await canonicalLocation.promise;
+    await Promise.resolve();
+
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it("does not let a cold chat canonicalization replace a newer draft", async () => {
+    window.history.replaceState({}, "", "/chat/research/workspace?draft=old");
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const canonicalLocation = deferred<RouteLocation | null>();
+    page.data = {
+      sessionKey: "agent:research:workspace",
+      face: "chat",
+      draft: "old",
+      canonicalLocationReady: canonicalLocation.promise,
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "?draft=old",
+        hash: "",
+      },
+    };
+    document.body.append(page);
+    await page.updateComplete;
+    await Promise.resolve();
+    navigation.replace.mockClear();
+
+    window.history.replaceState({}, "", "/chat/research/workspace?draft=new");
+    canonicalLocation.resolve({ pathname: "/chat/research", search: "?draft=old", hash: "" });
+    await canonicalLocation.promise;
+    await Promise.resolve();
+
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
   it("replaces into the canonical face namespace without adding history", async () => {
+    window.history.replaceState({}, "", "/chat");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     // The loader resolved this session to its stored dashboard face while the route was
@@ -418,6 +480,11 @@ describe("chat page split layout host", () => {
       face: "dashboard",
       canonicalLocation: {
         pathname: "/dashboard/main/deploy-monitor-12345678",
+        search: "",
+        hash: "",
+      },
+      canonicalLocationSource: {
+        pathname: "/chat",
         search: "",
         hash: "",
       },

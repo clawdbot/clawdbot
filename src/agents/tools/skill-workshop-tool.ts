@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   applySkillProposal,
+  evaluateSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -15,6 +16,7 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
+import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
@@ -54,6 +56,7 @@ const SKILL_WORKSHOP_ACTIONS = [
   "revise",
   "list",
   "inspect",
+  "evaluate",
   "apply",
   "reject",
   "quarantine",
@@ -72,6 +75,20 @@ const SKILL_PROPOSAL_STATUSES = [
   "stale",
 ] as const satisfies readonly SkillProposalStatus[];
 
+function skillWorkshopAgentEventActor(agentId?: string) {
+  return {
+    type: "agent" as const,
+    ...(agentId ? { id: agentId } : {}),
+  };
+}
+
+function requireProposalContent(content: string | undefined): string {
+  if (content === undefined) {
+    throw new ToolInputError("proposal_content required");
+  }
+  return content;
+}
+
 function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion: boolean) {
   const proposalActions = supportsCompletion
     ? SKILL_WORKSHOP_PROPOSAL_COMPLETION_ACTIONS
@@ -81,12 +98,12 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       action: stringEnum(proposalOnly ? proposalActions : SKILL_WORKSHOP_ACTIONS, {
         description: proposalOnly
           ? `create = new skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Live-skill updates and lifecycle actions are unavailable.`
-          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); apply/reject/quarantine are explicit lifecycle actions.",
+          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
       }),
       proposal_id: Type.Optional(
         Type.String({
           description:
-            "Existing proposal id for action=inspect, action=revise, action=apply, action=reject, or action=quarantine.",
+            "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, or action=quarantine.",
         }),
       ),
       name: Type.Optional(
@@ -122,8 +139,8 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       proposal_content: Type.Optional(
         Type.String({
           description: proposalOnly
-            ? "Complete final skill body for action=create or action=revise. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes."
-            : "Complete final skill body for action=create, action=update, or action=revise. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
+            ? "Complete final skill body for action=create, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body, or preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes."
+            : "Complete final skill body for action=create or action=update, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
         }),
       ),
       support_files: Type.Optional(
@@ -148,6 +165,19 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
           description: "Optional reason for action=apply, action=reject, or action=quarantine.",
         }),
       ),
+      expected_revision_hash: Type.Optional(
+        Type.String({
+          description:
+            "Optional exact proposal revision hash for evaluate/apply/reject/quarantine. The action fails if content or support files changed.",
+        }),
+      ),
+      correlation_id: Type.Optional(
+        Type.String({
+          maxLength: 256,
+          description:
+            "Optional orchestration or experiment correlation id carried into lifecycle events.",
+        }),
+      ),
     },
     { additionalProperties: false },
   );
@@ -160,6 +190,8 @@ type SkillWorkshopToolOptions = {
   origin?: SkillProposalOrigin;
   /** Internal reviewers may inspect and draft bounded pending proposals, never change lifecycle state. */
   proposalOnly?: boolean;
+  /** Marks proposals created by an autonomous capture pipeline. */
+  autonomousCapture?: boolean;
   /** Run-scoped budget shared by every tool instance created across retries. */
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   /** Optional durable completion latch shared across runner retries. */
@@ -171,10 +203,10 @@ function buildSkillWorkshopToolDescription(
   supportsCompletion: boolean,
 ): string {
   if (!proposalOnly) {
-    return "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure skill proposals.";
+    return `Create/update/revise/list/inspect/evaluate/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const completion = supportsCompletion ? " complete = durably finish this review." : "";
-  return `Inspect reusable-procedure skill proposals and create or revise pending proposals.${completion} Live-skill updates and lifecycle actions are unavailable.`;
+  return `Inspect reusable-procedure skill proposals and create or revise pending proposals.${completion} Live-skill updates and lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
@@ -224,7 +256,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const limit = readListLimitParam(params);
         const proposals = listProposalEntries({
           proposals: (
-            await listSkillProposals({ workspaceDir: options.workspaceDir, env: options.env })
+            await listSkillProposals({
+              agentId: options.agentId,
+              workspaceDir: options.workspaceDir,
+              env: options.env,
+            })
           ).proposals,
           status,
           query,
@@ -239,19 +275,54 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "inspect") {
-        const proposal = await readProposalForInspect(params, options.workspaceDir, options.env);
+        const proposal = await readProposalForInspect(
+          params,
+          options.workspaceDir,
+          options.env,
+          options.agentId,
+        );
         return proposalResult(proposal, {
           contentText: formatProposalInspect(proposal),
           includeContent: true,
         });
       }
 
+      if (action === "evaluate") {
+        const evaluated = await evaluateSkillProposal({
+          workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
+          eventActor: skillWorkshopAgentEventActor(options.agentId),
+          env: options.env,
+          proposalId: readLifecycleProposalIdParam(params),
+          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
+          correlationId: readStringParam(params, "correlation_id"),
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Evaluated skill proposal ${evaluated.record.id} with ${evaluated.evaluation.outcomes.length} evaluator result(s).`,
+            },
+          ],
+          details: {
+            id: evaluated.record.id,
+            proposedVersion: evaluated.evaluation.proposedVersion,
+            revisionHash: evaluated.evaluation.revisionHash,
+            evaluation: evaluated.evaluation,
+          },
+        };
+      }
+
       if (action === "apply") {
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
+          eventActor: skillWorkshopAgentEventActor(options.agentId),
           config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
+          correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(applied.record, {
@@ -263,8 +334,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "reject") {
         const rejected = await rejectSkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
+          eventActor: skillWorkshopAgentEventActor(options.agentId),
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
+          correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(rejected, {
@@ -275,8 +350,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "quarantine") {
         const quarantined = await quarantineSkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
+          eventActor: skillWorkshopAgentEventActor(options.agentId),
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
+          correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(quarantined, {
@@ -285,11 +364,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       const proposalContent = readStringParam(params, "proposal_content", {
-        required: true,
+        required: action !== "revise",
         label: "proposal_content",
         trim: false,
       });
-      if (proposalContent.trim().length === 0) {
+      if (proposalContent !== undefined && proposalContent.trim().length === 0) {
         throw new ToolInputError("proposal_content required");
       }
       const supportFiles = readSupportFilesParam(params);
@@ -319,13 +398,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         if (action === "create") {
           proposal = await proposeCreateSkill({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
+            eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
             name: readStringParam(params, "name", { required: true }),
             description: readStringParam(params, "description", { required: true }),
-            content: proposalContent,
+            content: requireProposalContent(proposalContent),
             supportFiles,
             createdBy: "skill-workshop",
+            ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,
@@ -334,17 +416,19 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         } else if (action === "update") {
           proposal = await proposeUpdateSkill({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
+            eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
-            agentId: options.agentId,
             skillName: readStringParam(params, "skill_name", {
               required: true,
               label: "skill_name",
             }),
             description: readStringParam(params, "description"),
-            content: proposalContent,
+            content: requireProposalContent(proposalContent),
             supportFiles,
             createdBy: "skill-workshop",
+            ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,
@@ -357,13 +441,19 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             }),
             name: readStringParam(params, "name"),
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             env: options.env,
           });
           proposal = await reviseSkillProposal({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
+            eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
             proposalId: pendingProposal.record.id,
+            expectedRevisionHash:
+              readStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash,
+            correlationId: readStringParam(params, "correlation_id"),
             content: proposalContent,
             supportFiles,
             description: readStringParam(params, "description"),

@@ -112,6 +112,8 @@ vi.mock("./prepared-model-runtime.js", () => ({
       agentDir: params.agentDir,
       config: params.config,
       workspaceDir: params.workspaceDir,
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
       createStores: () => ({ authStorage, modelRegistry }),
     };
   },
@@ -435,6 +437,7 @@ function createTranscriptEntry(params: { id: string; parentId?: string | null; m
 
 function mockTranscriptEntries(entries: unknown[]) {
   parseSessionEntriesMock.mockReturnValue(entries);
+  loadTranscriptEventsMock.mockResolvedValue(entries);
 }
 
 function mockActiveTranscript(messages: unknown[]) {
@@ -609,7 +612,7 @@ describe("runBtwSideQuestion", () => {
 
     readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
-    parseSessionEntriesMock.mockReturnValue([
+    mockTranscriptEntries([
       createTranscriptEntry({
         id: "user-1",
         message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
@@ -836,7 +839,13 @@ describe("runBtwSideQuestion", () => {
       "gpt-5.5",
       DEFAULT_AGENT_DIR,
       expect.any(Object),
-      expect.objectContaining({ authProfileMode: "token" }),
+      expect.objectContaining({
+        authProfileMode: "token",
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: [],
+          inlineProviderModels: [],
+        }),
+      }),
     );
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
@@ -1761,6 +1770,10 @@ describe("runBtwSideQuestion", () => {
         modelRegistry,
         authProfileId: "anthropic:backup",
         authProfileMode: "api_key",
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: [],
+          inlineProviderModels: [],
+        }),
         skipAgentDiscovery: true,
       }),
     );
@@ -2372,6 +2385,13 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("reads SQLite marker transcripts through the accessor when no active snapshot exists", async () => {
+    const header = {
+      type: "session",
+      version: 3,
+      id: "session-1",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      cwd: "/tmp",
+    };
     const userEntry = createTranscriptEntry({
       id: "user-seed",
       message: createUserTranscriptMessage(),
@@ -2381,15 +2401,14 @@ describe("runBtwSideQuestion", () => {
       parentId: "user-seed",
       message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
     });
-    loadTranscriptEventsMock.mockResolvedValue([userEntry, assistantEntry]);
+    loadTranscriptEventsMock.mockResolvedValue([header, userEntry, assistantEntry]);
     readFileMock.mockRejectedValue(new Error("sqlite marker must not be read as a file"));
     mockDoneAnswer(MATH_ANSWER);
 
     const result = await runMathSideQuestion({
       sessionKey: DEFAULT_SESSION_KEY,
-      sessionEntry: createSessionEntry({
-        sessionFile: `sqlite:main:session-1:${DEFAULT_STORE_PATH}`,
-      }),
+      sessionEntry: createSessionEntry(),
+      storePath: DEFAULT_STORE_PATH,
     });
 
     expect(result).toEqual({ text: MATH_ANSWER });

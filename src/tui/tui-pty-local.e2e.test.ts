@@ -165,7 +165,7 @@ type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
 async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
   await waitFor({
     timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-    read: () => (run.output().slice(offset).includes(needle) ? true : null),
+    read: () => (run.visibleOutput().slice(offset).includes(needle) ? true : null),
     onTimeout: () =>
       new Error(
         `timed out waiting for ${JSON.stringify(needle)} after offset ${offset}\n${run.output()}`,
@@ -174,15 +174,15 @@ async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
 }
 
 async function createFreshSession(run: PtyRun, newSessionPrefix: string) {
-  const outputOffset = run.output().length;
+  const outputOffset = run.visibleOutput().length;
   await run.write("/new\r", { delay: false });
   await waitFor({
     timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
-    read: () => (run.output().includes(newSessionPrefix, outputOffset) ? true : null),
+    read: () => (run.visibleOutput().includes(newSessionPrefix, outputOffset) ? true : null),
     onTimeout: () =>
       new Error(`timed out creating a fresh session after one submission\n${run.output()}`),
   });
-  const newSessionOffset = run.output().lastIndexOf(newSessionPrefix);
+  const newSessionOffset = run.visibleOutput().lastIndexOf(newSessionPrefix);
   // Wait for the accepted session's own idle redraw; older PTY frames can
   // replay busy messages and must never cause a second session creation.
   await waitForOutputAfter(run, "| idle", newSessionOffset);
@@ -857,6 +857,7 @@ describe("TUI PTY real backends", () => {
     let acceptanceTimer: ReturnType<typeof setTimeout> | undefined;
     const run = {
       output: () => output,
+      visibleOutput: () => output.replace(/\s+/gu, " "),
       write: async (data: string) => {
         writes.push(data);
         if (writes.length === 1) {
@@ -919,7 +920,7 @@ describe("TUI PTY real backends", () => {
         expect(request?.body.model).toBe("gpt-5.5");
         await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
 
-        const responseOffset = fixture.run.output().lastIndexOf("LOCAL_PTY_RESPONSE");
+        const responseOffset = fixture.run.visibleOutput().lastIndexOf("LOCAL_PTY_RESPONSE");
         await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         await createFreshSession(fixture.run, "new session: agent:main:tui-");
         await fixture.run.write("send after local new\r");
@@ -960,7 +961,7 @@ describe("TUI PTY real backends", () => {
             new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
         });
 
-        const steerOffset = fixture.run.output().length;
+        const steerOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("steer the active local turn\r");
         await waitForOutputAfter(fixture.run, "steer the active local turn", steerOffset);
         await sleep(SUBMISSION_SETTLE_MS);
@@ -990,7 +991,7 @@ describe("TUI PTY real backends", () => {
               secondRequestHasDynamicPrompt: (
                 JSON.stringify(fixture.mockModel.requests()[1]?.body) ?? ""
               ).includes("steer the active local turn"),
-              renderedCompletion: fixture.run.output().includes("LOCAL_STEER_COMPLETE"),
+              renderedCompletion: fixture.run.visibleOutput().includes("LOCAL_STEER_COMPLETE"),
               secondPromptEchoedBeforeRelease: true,
             }),
           );
@@ -1084,7 +1085,7 @@ describe("TUI PTY real backends", () => {
           );
 
           expect(fixture.mockModel.requests().length).toBeGreaterThanOrEqual(2);
-          expect(fixture.run.output()).not.toContain("Received arguments");
+          expect(fixture.run.visibleOutput()).not.toContain("Received arguments");
 
           await fixture.run.write("/exit\r", { delay: false });
           expect((await fixture.run.waitForExit()).exitCode).toBe(0);
@@ -1163,7 +1164,7 @@ describe("TUI PTY real backends", () => {
       let gatewayStopped = false;
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
-        const disconnectOffset = fixture.run.output().length;
+        const disconnectOffset = fixture.run.visibleOutput().length;
         await fixture.gateway.stopGateway();
         gatewayStopped = true;
         await waitForOutputAfter(fixture.run, "gateway disconnected", disconnectOffset);
@@ -1172,7 +1173,7 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("not connected to gateway — message not sent");
         expect(fixture.mockModel.requests()).toHaveLength(0);
 
-        const reconnectOffset = fixture.run.output().length;
+        const reconnectOffset = fixture.run.visibleOutput().length;
         await fixture.gateway.startGateway();
         gatewayStopped = false;
         await waitForOutputAfter(fixture.run, "gateway reconnected", reconnectOffset);
@@ -1211,7 +1212,7 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("seed cross-client session\r");
         await fixture.run.waitForOutput("FIRST_RUN_ACTIVE", LOCAL_OUTPUT_TIMEOUT_MS);
-        const firstReplyOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
+        const firstReplyOffset = fixture.run.visibleOutput().lastIndexOf("FIRST_RUN_ACTIVE");
         await waitForOutputAfter(fixture.run, "| idle", firstReplyOffset);
         const connectedExternalClient = await connectGatewayClient({
           url: fixture.gateway.url,
@@ -1234,8 +1235,19 @@ describe("TUI PTY real backends", () => {
 
         await fixture.run.waitForOutput(marker, LOCAL_OUTPUT_TIMEOUT_MS);
         await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE", LOCAL_OUTPUT_TIMEOUT_MS);
-        const followupOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        const followupOffset = fixture.run.visibleOutput().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
         await waitForOutputAfter(fixture.run, "| idle", followupOffset);
+        console.info(
+          "[behavior-evidence] tui-real-gateway-cross-client",
+          JSON.stringify({
+            transport: "real Gateway WebSocket",
+            terminal: "real PTY",
+            externalMessage: marker,
+            externalMessageRendered: fixture.run.visibleOutput().includes(marker),
+            followupRendered: fixture.run.visibleOutput().includes("FOLLOWUP_RUN_COMPLETE"),
+            returnedToIdle: fixture.run.visibleOutput().slice(followupOffset).includes("| idle"),
+          }),
+        );
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
@@ -1258,12 +1270,12 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("seed gateway session\r");
         await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
 
-        const responseOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
+        const responseOffset = fixture.run.visibleOutput().lastIndexOf("FIRST_RUN_ACTIVE");
         await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         const newSessionPrefix = `new session: agent:${fixture.agentId}:tui-`;
         await createFreshSession(fixture.run, newSessionPrefix);
         const newSessionKey = fixture.run
-          .output()
+          .visibleOutput()
           .match(new RegExp(`new session: (agent:${fixture.agentId}:tui-[a-z0-9-]+)`))?.[1];
         expect(newSessionKey).toBeDefined();
         if (newSessionKey) {
@@ -1349,7 +1361,7 @@ describe("TUI PTY real backends", () => {
             new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
         });
 
-        const followupOffset = fixture.run.output().length;
+        const followupOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("queued followup turn\r");
         await waitForOutputAfter(fixture.run, "queued followup turn", followupOffset);
         // Keep the provider held while the echoed input crosses TUI submission.
@@ -1368,7 +1380,7 @@ describe("TUI PTY real backends", () => {
             ),
         });
         await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
-        const completedOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        const completedOffset = fixture.run.visibleOutput().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
 
         await fixture.run.write("turn after queued followup\r");
         await waitFor({
@@ -1387,7 +1399,9 @@ describe("TUI PTY real backends", () => {
           "turn after queued followup",
         );
         await waitForOutputAfter(fixture.run, "FOLLOWUP_RUN_COMPLETE", completedOffset);
-        const finalResponseOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        const finalResponseOffset = fixture.run
+          .visibleOutput()
+          .lastIndexOf("FOLLOWUP_RUN_COMPLETE");
         await waitForOutputAfter(fixture.run, "| idle", finalResponseOffset);
 
         await fixture.run.write("/exit\r", { delay: false });
@@ -1416,7 +1430,7 @@ describe("TUI PTY real backends", () => {
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
           read: () =>
-            fixture.run.output().includes("did not produce a visible reply") ? true : null,
+            fixture.run.visibleOutput().includes("did not produce a visible reply") ? true : null,
           onTimeout: () =>
             new Error(
               `empty-reply fallback was not rendered\nrequests=${JSON.stringify(
@@ -1427,7 +1441,7 @@ describe("TUI PTY real backends", () => {
             ),
         });
         expect(fixture.mockModel.requests()).toHaveLength(1);
-        expect(fixture.run.output()).not.toContain("[[reply_to_current]]");
+        expect(fixture.run.visibleOutput()).not.toContain("[[reply_to_current]]");
 
         await fixture.run.write("turn after empty reply\r");
         await waitFor({
@@ -1462,7 +1476,7 @@ describe("TUI PTY real backends", () => {
           onTimeout: () =>
             new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
         });
-        const followupOffset = fixture.run.output().length;
+        const followupOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("must never reach model\r");
         await waitForOutputAfter(fixture.run, "must never reach model", followupOffset);
         await sleep(SUBMISSION_SETTLE_MS);
@@ -1473,7 +1487,7 @@ describe("TUI PTY real backends", () => {
         await sleep(250);
 
         expect(fixture.mockModel.requests()).toHaveLength(1);
-        expect(fixture.run.output()).not.toContain("FOLLOWUP_RUN_COMPLETE");
+        expect(fixture.run.visibleOutput()).not.toContain("FOLLOWUP_RUN_COMPLETE");
 
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
@@ -1525,6 +1539,9 @@ describe("TUI PTY real backends", () => {
         });
         const sendResults = await Promise.all([alphaSend, betaSend]);
         expect(sendResults.map((result) => result.status)).toEqual(["started", "started"]);
+        // Let both Gateway submissions reach the active-turn queue before the
+        // parent response opens the collect debounce window.
+        await sleep(1_000);
         fixture.mockModel.releaseFirstResponse();
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1535,7 +1552,7 @@ describe("TUI PTY real backends", () => {
             ),
         });
         await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
-        const completedOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        const completedOffset = fixture.run.visibleOutput().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
         await waitForOutputAfter(fixture.run, "| idle", completedOffset);
 
         const requests = fixture.mockModel.requests();

@@ -134,6 +134,39 @@ describe("remote sandbox fs bridge", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "forwards and enforces bounded pinned file reads",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bounded-read-", async (stateDir) => {
+        const workspacePath = path.join(stateDir, "workspace");
+        await fs.mkdir(workspacePath, { recursive: true });
+        const workspaceDir = await fs.realpath(workspacePath);
+        await fs.writeFile(path.join(workspaceDir, "note.txt"), "hello", "utf8");
+
+        const { calls, runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+
+        await expect(bridge.readFile({ filePath: "note.txt", maxBytes: 5 })).resolves.toEqual(
+          Buffer.from("hello"),
+        );
+        expect(calls[0]?.args).toEqual(["read", workspaceDir, "", "note.txt", "5"]);
+        await expect(bridge.readFile({ filePath: "note.txt", maxBytes: 4 })).rejects.toThrow(
+          /bounded read limit/i,
+        );
+        await expect(bridge.readFile({ filePath: "note.txt", maxBytes: -1 })).rejects.toThrow(
+          /non-negative safe integer/i,
+        );
+        expect(calls).toHaveLength(2);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "streams file copies with the pinned mutation helper",
     async () => {
       await withTempDir("openclaw-remote-fs-copy-", async (stateDir) => {

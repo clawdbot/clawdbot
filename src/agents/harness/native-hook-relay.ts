@@ -5,10 +5,6 @@ import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import type {
-  BeforeToolCallFailureDisposition,
-  requestDeferredPluginToolApproval,
-} from "../agent-tools.before-tool-call.js";
 import {
   clearNativeHookRelayBridgesForTests,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
@@ -26,7 +22,6 @@ import {
   readNativeHookRelayApprovalMode,
 } from "./native-hook-relay-codec.js";
 import {
-  buildNativeHookRelayCommand as buildNativeHookRelayCommandImpl,
   buildNativeHookRelayCommandWithStateDatabase,
   resolveNativeHookRelayCommandTimeoutMs,
 } from "./native-hook-relay-command.js";
@@ -42,23 +37,24 @@ import {
   pruneNativeHookRelayPermissionAllowAlways,
   removeNativeHookRelayPermissionState,
   removeNativeHookRelayPreToolUseApprovals,
-  resolveNativeHookRelayDeferredToolApproval as resolveNativeHookRelayDeferredToolApprovalImpl,
   setNativeHookRelayDeferredToolApprovalRequesterForTests as setNativeHookRelayDeferredToolApprovalRequesterForTestsImpl,
   setNativeHookRelayPermissionApprovalRequesterForTests as setNativeHookRelayPermissionApprovalRequesterForTestsImpl,
 } from "./native-hook-relay-permissions.js";
+import type { NativeHookRelayDeferredToolApprovalRequester } from "./native-hook-relay-permissions.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import type {
   ActiveNativeHookRelayRegistration,
   ActiveNativeHookRelayRegistrationHandle,
   InvokeNativeHookRelayParams,
-  NativeHookRelayCommandForEventOptions,
-  NativeHookRelayDeferredApprovalOutcome,
+  NativeHookRelayEvent,
   NativeHookRelayInvocation,
   NativeHookRelayPermissionApprovalRequest,
   NativeHookRelayPermissionApprovalRequester,
+  NativeHookRelayProcessResponse,
   NativeHookRelayRegistration,
   RegisterNativeHookRelayParams,
 } from "./native-hook-relay-types.js";
+import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-types.js";
 import {
   isJsonValue,
   normalizePositiveInteger,
@@ -68,62 +64,14 @@ import {
   snapshotNativeHookRelayPayload,
 } from "./native-hook-relay-utils.js";
 
-export { invokeNativeHookRelayBridge } from "./native-hook-relay-bridge.js";
-export { isNativeHookRelayBridgeStaleRegistrationError } from "./native-hook-relay-bridge.js";
-
-const NATIVE_HOOK_RELAY_EVENTS = [
-  "pre_tool_use",
-  "post_tool_use",
-  "permission_request",
-  "before_agent_finalize",
-] as const;
-
-const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
-
-export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
-export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
-
-export type NativeHookRelayProcessResponse = {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
-};
-
-export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
-  generation?: string;
-  shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
-  commandForEvent: (
-    event: NativeHookRelayEvent,
-    options?: NativeHookRelayCommandForEventOptions,
-  ) => string;
-  renew: (ttlMs?: number) => void;
-  unregister: () => void;
-};
-
-type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
-
-export function buildNativeHookRelayCommand(params: {
-  provider: NativeHookRelayProvider;
-  relayId: string;
-  generation?: string;
-  event: NativeHookRelayEvent;
-  preToolUseUnavailable?: "noop";
-  timeoutMs?: number;
-  executable?: string;
-  nice?: number | false;
-  nodeExecutable?: string;
-}): string {
-  return buildNativeHookRelayCommandImpl(params);
-}
-
-export function resolveNativeHookRelayDeferredToolApproval(params: {
-  relayId: string;
-  toolUseId?: string;
-  signal?: AbortSignal;
-}): Promise<NativeHookRelayDeferredApprovalOutcome | undefined> {
-  return resolveNativeHookRelayDeferredToolApprovalImpl(params);
-}
+export { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
+export { resolveNativeHookRelayDeferredToolApproval } from "./native-hook-relay-permissions.js";
+export type {
+  NativeHookRelayEvent,
+  NativeHookRelayProcessResponse,
+  NativeHookRelayProvider,
+  NativeHookRelayRegistrationHandle,
+} from "./native-hook-relay-types.js";
 
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
@@ -393,31 +341,6 @@ export function hasNativeHookRelayInvocation(params: {
       invocation.event === params.event &&
       invocation.toolUseId === toolUseId,
   );
-}
-
-export function renderNativeHookRelayUnavailableResponse(params: {
-  provider: unknown;
-  event: unknown;
-  preToolUseUnavailable?: unknown;
-  message?: string;
-}): NativeHookRelayProcessResponse {
-  const provider = readNativeHookRelayProvider(params.provider);
-  const event = readNativeHookRelayEvent(params.event);
-  const adapter = getNativeHookRelayProviderAdapter(provider);
-  const message = params.message?.trim() || "Native hook relay unavailable";
-  if (event === "pre_tool_use") {
-    // The standalone CLI cannot reconstruct the originating registration after
-    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
-    // generated command explicitly recorded that no before-tool policy existed.
-    if (params.preToolUseUnavailable === "noop") {
-      return adapter.renderNoopResponse(event);
-    }
-    return adapter.renderPreToolUseBlockResponse(message);
-  }
-  if (event === "permission_request") {
-    return adapter.renderPermissionDecisionResponse("deny", message);
-  }
-  return adapter.renderNoopResponse(event);
 }
 
 function recordNativeHookRelayInvocation(invocation: NativeHookRelayInvocation): void {

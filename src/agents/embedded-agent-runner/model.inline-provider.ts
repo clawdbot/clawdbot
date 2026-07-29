@@ -16,7 +16,7 @@ import {
 /**
  * Normalizes inline `models.providers` config into runtime model entries.
  */
-type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+export type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
   api?: Api;
   provider: string;
   baseUrl?: string;

@@ -310,6 +310,16 @@ describe("plugin session extension SessionEntry projection", () => {
           description: "bad run error slot",
           sessionEntrySlotKey: "lastRunError",
         });
+        api.registerSessionExtension({
+          namespace: "transcript-path",
+          description: "retired transcript locator",
+          sessionEntrySlotKey: "transcriptPath",
+        });
+        api.registerSessionExtension({
+          namespace: "pending-final-text",
+          description: "retired pending-final field",
+          sessionEntrySlotKey: "pendingFinalDeliveryText",
+        });
       },
     });
 
@@ -332,6 +342,14 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: lastRunError",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: transcriptPath",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: pendingFinalDeliveryText",
       },
     ]);
   });

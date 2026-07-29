@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { mobileNavLayoutMediaQuery, shouldMergeChatChrome } from "../../app/mobile-nav-layout.ts";
+import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import "../../components/resizable-divider.ts";
@@ -19,6 +19,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
+import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
 import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
@@ -39,13 +40,12 @@ import {
   resizePanes,
   setActivePane,
   setPaneSession,
+  singlePaneLayout,
   splitRatio,
   splitWeight,
   type ChatSplitLayout,
   type ChatSplitPane,
 } from "./split-layout.ts";
-
-const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 type ChatPaneElement = HTMLElement & { paneId?: string; sessionKey?: string };
@@ -54,6 +54,7 @@ export class ChatPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @property({ attribute: false }) data!: SessionChatRouteData;
+  @property({ attribute: false }) navDrawerOpen = false;
   @state() private layout: ChatSplitLayout | undefined;
   @state() private narrow = false;
   @state() private mergedChrome = false;
@@ -82,7 +83,7 @@ export class ChatPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.layout = loadSettings().chatSplitLayout;
-    this.mediaQuery = window.matchMedia(NARROW_SPLIT_QUERY);
+    this.mediaQuery = window.matchMedia("(max-width: 1099px)");
     this.narrow = this.mediaQuery.matches;
     this.mediaQuery.addEventListener("change", this.handleViewportChange);
     this.mobileNavMediaQuery = window.matchMedia(mobileNavLayoutMediaQuery());
@@ -122,14 +123,24 @@ export class ChatPage extends OpenClawLightDomElement {
       this.consumedDraftData !== data &&
       (!this.layout || activePane?.sessionKey === data.sessionKey);
     if (changedProperties.has("data")) {
-      if (data?.canonicalLocation) {
+      if (
+        data?.canonicalLocation &&
+        stillOwnsCanonicalLocation(data.canonicalLocationSource, this.consumedDraftData === data)
+      ) {
         // data.face is the loader's resolved face, which may differ from the namespace
         // this route was matched under; replacing under it moves the URL to that board.
         this.context.replace(data.face ?? "chat", data.canonicalLocation);
         return;
       }
       void data?.canonicalLocationReady?.then((location) => {
-        if (location && this.isConnected && this.data === data) {
+        if (
+          location &&
+          this.isConnected &&
+          this.data === data &&
+          stillOwnsCanonicalLocation(data.canonicalLocationSource, this.consumedDraftData === data)
+        ) {
+          // A lazy chat canonicalization can resolve while the old page remains
+          // mounted under a cold navigation. Never replace that newer route.
           this.context.replace(
             data.face ?? "chat",
             this.consumedDraftData === data ? locationWithoutDraft(location) : location,
@@ -160,11 +171,7 @@ export class ChatPage extends OpenClawLightDomElement {
   };
 
   private resolveMergedChrome(mobileNavLayout: boolean): boolean {
-    return shouldMergeChatChrome({
-      mobileNavLayout,
-      routeId: "chat",
-      onboarding: this.closest(".shell--onboarding") !== null,
-    });
+    return mergeChatPageChrome(mobileNavLayout, this.closest(".shell--onboarding") !== null);
   }
 
   private readonly handleMobileNavViewportChange = (event: MediaQueryListEvent) => {
@@ -484,23 +491,17 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   };
 
-  private readonly handleSplitRight = (paneId: string) => {
+  private handleSplit(paneId: string, direction: "right" | "down") {
     const layout = this.layout;
     const pane = layout ? findPane(layout, paneId)?.pane : null;
     if (!layout || !pane) {
       return;
     }
-    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, "right"));
-  };
+    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, direction));
+  }
 
-  private readonly handleSplitDown = (paneId: string) => {
-    const layout = this.layout;
-    const pane = layout ? findPane(layout, paneId)?.pane : null;
-    if (!layout || !pane) {
-      return;
-    }
-    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, "down"));
-  };
+  private readonly handleSplitRight = (paneId: string) => this.handleSplit(paneId, "right");
+  private readonly handleSplitDown = (paneId: string) => this.handleSplit(paneId, "down");
 
   private readonly handleClosePane = (paneId: string) => {
     const layout = this.layout;
@@ -574,6 +575,7 @@ export class ChatPage extends OpenClawLightDomElement {
           .paneTitle=${title}
           .narrow=${this.narrow}
           .mergedChrome=${this.mergedChrome && active}
+          .navDrawerOpen=${this.navDrawerOpen && active}
           .nativeGateways=${showGatewayPicker ? nativeGateways : null}
           .gatewaysSnapshot=${showGatewayPicker ? (nativeGateways?.snapshot ?? null) : null}
           .onboarding=${this.closest(".shell--onboarding") !== null}
@@ -591,17 +593,7 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   private classicLayout(sessionKey = this.data?.sessionKey?.trim() ?? ""): ChatSplitLayout {
-    return {
-      columns: [
-        {
-          id: this.classicColumnId,
-          panes: [{ id: this.classicPaneId, sessionKey }],
-          paneWeights: [1],
-        },
-      ],
-      columnWeights: [1],
-      activePaneId: this.classicPaneId,
-    };
+    return singlePaneLayout(this.classicColumnId, this.classicPaneId, sessionKey);
   }
 
   private renderSplitLayout(layout: ChatSplitLayout, splitMode: boolean) {

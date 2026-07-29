@@ -153,11 +153,27 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onIdentityAvatarSelect: () => undefined,
     onIdentitySave: () => undefined,
     onTogglePinnedAgent: () => undefined,
+    onOpenAgentDefaults: () => undefined,
     ...overrides,
   };
 }
 
 describe("renderAgents", () => {
+  it("opens global Agent defaults before the per-agent tabs", () => {
+    const container = document.createElement("div");
+    const onOpenAgentDefaults = vi.fn();
+    render(renderAgents(createProps({ onOpenAgentDefaults })), container);
+
+    const defaultsRow = container.querySelector<HTMLButtonElement>(".settings-row--nav");
+    const tabs = container.querySelector(".agent-tabs");
+    expect(defaultsRow?.textContent).toContain("Agent defaults");
+    expect(defaultsRow?.textContent).toContain("Defaults every agent inherits unless overridden.");
+    expect(defaultsRow?.compareDocumentPosition(tabs!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    defaultsRow?.click();
+    expect(onOpenAgentDefaults).toHaveBeenCalledOnce();
+  });
+
   it("prefills the identity editor from the fetched agent identity", () => {
     const container = document.createElement("div");
     render(
@@ -270,6 +286,73 @@ describe("renderAgents", () => {
     expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
       "Inherit default (openai/gpt-5.4)",
     );
+  });
+
+  it("shows canonical model names alongside configured aliases in agent options", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: {
+            "anthropic/claude-opus-4-8": { alias: "opus" },
+            "anthropic/claude-sonnet-5": { alias: "sonnet" },
+            "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+            "local/unlisted-model": { alias: "My local model" },
+          },
+        },
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+          modelCatalog: [
+            {
+              id: "claude-opus-4-8",
+              alias: "opus",
+              name: "Opus 4.8",
+              provider: "anthropic",
+            },
+            {
+              id: "claude-sonnet-5",
+              alias: "sonnet",
+              name: "Sonnet 5",
+              provider: "anthropic",
+            },
+            {
+              id: "moonshotai/kimi-k2.5",
+              alias: "Kimi K2.5 (NVIDIA)",
+              name: "Kimi K2.5",
+              provider: "nvidia",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const candidate = container.querySelector<HTMLSelectElement>("select.settings-select");
+      expect(candidate?.value).toBe("anthropic/claude-opus-4-8");
+      return candidate;
+    });
+    const options = new Map(
+      Array.from(select?.options ?? []).map((option) => [option.value, option.textContent?.trim()]),
+    );
+
+    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
+    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
+    expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
+    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
   });
 
   it.each([
@@ -542,6 +625,119 @@ describe("renderAgentFiles", () => {
     expect(soulTab.disabled).toBe(true);
     soulTab.click();
     expect(onSelectFile).not.toHaveBeenCalled();
+  });
+
+  // A missing SOUL.md is a normal workspace state, so it belongs in the add picker
+  // instead of a permanently-badged MISSING tab; a missing AGENTS.md is a real fault.
+  it("offers normally-absent files in the add picker and badges only real faults", () => {
+    const container = document.createElement("div");
+    const onSelectFile = vi.fn();
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            { name: "AGENTS.md", path: "/tmp/workspace/AGENTS.md", missing: true },
+            {
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
+              missing: true,
+              expectedAbsent: true,
+            },
+            {
+              name: "MEMORY.md",
+              path: "/tmp/workspace/MEMORY.md",
+              missing: true,
+              expectedAbsent: true,
+            },
+          ],
+        },
+        agentFilesLoading: false,
+        agentFilesError: null,
+        agentFileActive: "AGENTS.md",
+        agentFileContents: { "AGENTS.md": "" },
+        agentFileDrafts: { "AGENTS.md": "" },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
+      (tab) => directText(tab),
+    );
+    expect(tabLabels).toStrictEqual(["AGENTS"]);
+    expect(container.querySelectorAll(".agent-tab--missing")).toHaveLength(1);
+
+    const picker = container.querySelector<HTMLSelectElement>(".agent-tab-add");
+    expect(picker).not.toBeNull();
+    expect(Array.from(picker?.options ?? []).map((option) => option.value)).toStrictEqual([
+      "",
+      "SOUL.md",
+      "MEMORY.md",
+    ]);
+
+    if (!picker) {
+      throw new Error("expected add picker");
+    }
+    picker.value = "SOUL.md";
+    picker.dispatchEvent(new Event("change"));
+    expect(onSelectFile).toHaveBeenCalledWith("SOUL.md");
+    // The picker is an action, not a selection: it resets so the same file can be
+    // re-picked after the operator switches tabs.
+    expect(picker.value).toBe("");
+  });
+
+  it("shows the picked file as a tab with a create hint", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            { name: "AGENTS.md", path: "/tmp/workspace/AGENTS.md", missing: false },
+            {
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
+              missing: true,
+              expectedAbsent: true,
+            },
+          ],
+        },
+        agentFilesLoading: false,
+        agentFilesError: null,
+        agentFileActive: "SOUL.md",
+        agentFileContents: { "SOUL.md": "" },
+        agentFileDrafts: { "SOUL.md": "" },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile: () => undefined,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
+      (tab) => directText(tab),
+    );
+    expect(tabLabels).toStrictEqual(["AGENTS", "SOUL"]);
+    expect(container.querySelector(".agent-tab-add")).toBeNull();
+    expect(container.querySelectorAll(".agent-tab--missing")).toHaveLength(0);
+    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
+      "This file does not exist yet. Saving will create it in the agent workspace.",
+    );
   });
 
   it("renders the upgraded markdown preview structure with file metadata", () => {

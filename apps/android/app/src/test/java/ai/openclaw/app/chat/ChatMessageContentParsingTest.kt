@@ -276,14 +276,14 @@ class ChatMessageContentParsingTest {
     }
 
   @Test
-  fun parsesImageBlocksOnlyWhenInlineContentExists() {
+  fun parsesInlineAndManagedImageBlocks() {
     val image =
       Json.parseToJsonElement(
         """{"type":"image","mimeType":"image/png","fileName":"chart.png","content":"abc123"}""",
       )
     val managedImage =
       Json.parseToJsonElement(
-        """{"type":"image","mimeType":"image/png","fileName":"chart.png","url":"/api/chat/media/outgoing/main/id"}""",
+        """{"type":"image","artifactId":"artifact_managed_image_11111111-1111-4111-8111-111111111111","mimeType":"image/png","fileName":"chart.png","url":"/api/chat/media/outgoing/main/id","openUrl":"/api/chat/media/outgoing/main/id","alt":"Chart","width":1200,"height":800,"sizeBytes":2048}""",
       )
 
     assertEquals(
@@ -291,8 +291,32 @@ class ChatMessageContentParsingTest {
       parseChatMessageContent(image),
     )
     assertEquals(
-      ChatMessageContent(type = "image", mimeType = "image/png", fileName = "chart.png", base64 = null),
+      ChatMessageContent(
+        type = "image",
+        mimeType = "image/png",
+        fileName = "chart.png",
+        artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111",
+        url = "/api/chat/media/outgoing/main/id",
+        openUrl = "/api/chat/media/outgoing/main/id",
+        alt = "Chart",
+        width = 1200,
+        height = 800,
+        sizeBytes = 2048,
+      ),
       parseChatMessageContent(managedImage),
+    )
+  }
+
+  @Test
+  fun derivesArtifactIdentityForShippedManagedImageBlocks() {
+    val image =
+      Json.parseToJsonElement(
+        """{"type":"image","mimeType":"image/png","url":"/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full"}""",
+      )
+
+    assertEquals(
+      "artifact_managed_image_11111111-1111-4111-8111-111111111111",
+      parseChatMessageContent(image)?.artifactId,
     )
   }
 

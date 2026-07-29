@@ -22,7 +22,6 @@ import {
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -148,9 +147,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     const entry = created.payload?.entry;
     expect(entry?.incognito).toBe(true);
     expect(entry?.parentSessionKey).toBeUndefined();
-    expect(parseSqliteSessionFileMarker(entry?.sessionFile)?.storePath).toBe(
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    );
+    expect(entry).not.toHaveProperty("sessionFile");
     const openedIncognitoDatabase = openOpenClawAgentDatabase({
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
@@ -217,9 +214,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     const childKey = requireNonEmptyString(child.payload?.key, "incognito child key");
     expect(child.payload?.entry.incognito).toBe(true);
     expect(child.payload?.entry.parentSessionKey).toBe(key);
-    expect(parseSqliteSessionFileMarker(child.payload?.entry.sessionFile)?.storePath).toBe(
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    );
+    expect(child.payload?.entry).not.toHaveProperty("sessionFile");
 
     const rejectedInheritedChannel = await directSessionReq("sessions.create", {
       agentId: "main",
@@ -496,6 +491,30 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
   }
 });
 
+test("createGatewaySession persists a generated title only for a new session", async () => {
+  await createSessionStoreDir();
+  const { createGatewaySession } = await import("./session-create-service.js");
+  const key = "agent:main:dashboard:generated-worktree-title";
+  const base = {
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+    key,
+    commandSource: "test",
+  };
+
+  const created = await createGatewaySession({
+    ...base,
+    generatedDisplayName: "Readable Worktree Names",
+  });
+  expect(created).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
+
+  const reused = await createGatewaySession({
+    ...base,
+    generatedDisplayName: "Replacement Title",
+  });
+  expect(reused).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
+});
+
 test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
@@ -744,14 +763,14 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { agentId: "main", worktree: true },
+      { agentId: "main", label: "Release planning", worktree: true },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
 
     expect(created.ok).toBe(true);
     const key = requireNonEmptyString(created.payload?.key, "created session key");
     const worktree = created.payload?.worktree;
-    expect(worktree?.branch).toMatch(/^openclaw\/wt-[a-f0-9]{8}$/);
+    expect(worktree?.branch).toBe("openclaw/release-planning");
     expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
     worktreeId = worktree?.id;
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
@@ -1205,7 +1224,7 @@ test("sessions.create preserves a linked-worktree subdirectory", async () => {
     worktreeId = worktree?.id;
     // The managed worktree anchors at the repo root even when the workspace is nested;
     // the session cwd points at the equivalent subdirectory inside the worktree.
-    expect(worktree?.branch).toMatch(/^openclaw\/wt-[a-f0-9]{8}$/);
+    expect(worktree?.branch).toMatch(/^openclaw\/[a-z0-9]+(?:-[a-z0-9]+)+$/);
     expect(created.payload?.entry.spawnedCwd).toBe(
       path.join(requireNonEmptyString(worktree?.path, "worktree path"), "packages", "app"),
     );
@@ -1364,10 +1383,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.thinkingLevel).toBe("high");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  const sessionFile = requireNonEmptyString(
-    created.payload?.entry?.sessionFile,
-    "created session file",
-  );
+  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
@@ -1380,7 +1396,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   expect(storedEntry?.modelOverride).toBe("gpt-test-a");
   expect(storedEntry?.thinkingLevel).toBe("high");
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
-  expect(sessionFile).toBe(storedEntry?.sessionFile);
+  expect(storedEntry).not.toHaveProperty("sessionFile");
 
   await expect(
     loadTranscriptEvents({
@@ -2287,7 +2303,7 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
 
   expect(created.ok).toBe(true);
   expect(created.payload?.key).toBe("agent:longmemeval:main");
-  requireNonEmptyString(created.payload?.entry?.sessionFile, "longmemeval session file");
+  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
 
   expect(
     loadSessionEntry({
@@ -2364,7 +2380,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(globalCreated.ok).toBe(true);
   expect(globalCreated.payload?.key).toBe("global");
-  requireNonEmptyString(globalCreated.payload?.entry?.sessionFile, "global session file");
+  expect(globalCreated.payload?.entry).not.toHaveProperty("sessionFile");
 
   const unknownCreated = await directSessionReq<{
     key?: string;
@@ -2379,7 +2395,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(unknownCreated.ok).toBe(true);
   expect(unknownCreated.payload?.key).toBe("unknown");
-  requireNonEmptyString(unknownCreated.payload?.entry?.sessionFile, "unknown session file");
+  expect(unknownCreated.payload?.entry).not.toHaveProperty("sessionFile");
 
   expect(
     loadSessionEntry({ agentId: "longmemeval", sessionKey: "global", storePath })?.sessionId,
@@ -2427,7 +2443,7 @@ test("sessions.create stores selected global sessions in the requested agent sto
 
   expect(created.ok).toBe(true);
   expect(created.payload?.key).toBe("global");
-  requireNonEmptyString(created.payload?.entry?.sessionFile, "work global session file");
+  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: "global", storePath: mainStorePath }),
   ).toBeUndefined();
@@ -2798,10 +2814,7 @@ test("sessions.create forks the parent transcript into the new session", async (
   expect(created.payload?.entry?.totalTokens).toBeUndefined();
   expect(created.payload?.entry?.totalTokensFresh).toBe(false);
   expect(created.payload?.sessionId).not.toBe(parent.sessionId);
-  const forkedSessionFile = requireNonEmptyString(
-    created.payload?.entry?.sessionFile,
-    "forked session file",
-  );
+  expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   const readMessages = async (scope: {
     sessionFile?: string;
     sessionId: string;
@@ -2822,7 +2835,6 @@ test("sessions.create forks the parent transcript into the new session", async (
   const forkedSessionId = requireNonEmptyString(created.payload?.sessionId, "forked session id");
   expect(
     await readMessages({
-      sessionFile: forkedSessionFile,
       sessionId: forkedSessionId,
       sessionKey: created.payload?.key ?? "",
       storePath,
@@ -2838,7 +2850,6 @@ test("sessions.create forks the parent transcript into the new session", async (
   const key = requireNonEmptyString(created.payload?.key, "forked session key");
   expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
     sessionId: created.payload?.sessionId,
-    sessionFile: forkedSessionFile,
     forkSource: {
       sessionKey: "agent:main:main",
       sessionId: parent.sessionId,
@@ -3090,13 +3101,9 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
       sessionId: parent.sessionId,
     });
     expect(created.payload?.entry?.forkedFromParent).toBe(true);
-    const forkedSessionFile = requireNonEmptyString(
-      created.payload?.entry?.sessionFile,
-      "agent-qualified forked session file",
-    );
+    expect(created.payload?.entry).not.toHaveProperty("sessionFile");
     await expect(
       loadTranscriptEvents({
-        sessionFile: forkedSessionFile,
         sessionId: requireNonEmptyString(
           created.payload?.sessionId,
           "agent-qualified forked session id",

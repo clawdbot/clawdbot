@@ -86,6 +86,7 @@ openclaw tui --local
 ## Keyboard shortcuts
 
 - Enter: send message
+- Shift+Enter or Ctrl+J: insert a newline without sending
 - Esc: abort active run
 - Ctrl+C: clear input (press twice to exit)
 - Ctrl+D: exit

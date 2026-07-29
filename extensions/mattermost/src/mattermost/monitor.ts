@@ -249,39 +249,44 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       const text = normalizeOptionalString(entry.post.message) ?? "";
       return Boolean(text) && !core.channel.commands.isControlCommandMessage(text, cfg);
     },
-    onFlush: async (entries) => {
+    onFlush: (entries, createFlush) => {
       const last = entries.at(-1);
-      if (!last) {
-        return;
-      }
       const { lifecycle, settle } = fanInChannelIngressLifecycles(
         entries.map((entry) => entry.turnAdoptionLifecycle),
       );
-      try {
-        if (entries.length === 1) {
-          await handlePost(last.post, last.payload, lifecycle);
-          await settle();
-          return;
-        }
-        const mergedPost: MattermostPost = {
-          ...last.post,
-          message: entries
-            .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
-            .filter(Boolean)
-            .join("\n"),
-          file_ids: [],
-        };
-        await handlePost(
-          mergedPost,
-          last.payload,
-          lifecycle,
-          entries.map((entry) => entry.post.id),
-        );
-        await settle();
-      } catch (error) {
-        await lifecycle?.onAbandoned();
-        throw error;
-      }
+      return createFlush({
+        lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          if (!last) {
+            return;
+          }
+          try {
+            if (entries.length === 1) {
+              await handlePost(last.post, last.payload, admissionLifecycle);
+              await settle();
+              return;
+            }
+            const mergedPost: MattermostPost = {
+              ...last.post,
+              message: entries
+                .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
+                .filter(Boolean)
+                .join("\n"),
+              file_ids: [],
+            };
+            await handlePost(
+              mergedPost,
+              last.payload,
+              admissionLifecycle,
+              entries.map((entry) => entry.post.id),
+            );
+            await settle();
+          } catch (error) {
+            await admissionLifecycle.onAbandoned();
+            throw error;
+          }
+        },
+      });
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);

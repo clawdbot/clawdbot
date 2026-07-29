@@ -20,7 +20,6 @@ import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
 import {
   completePanelRefresh,
-  createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
 } from "./panel-refresh-status.ts";
@@ -46,49 +45,25 @@ export interface SessionCatalogDataOwner {
   loadingMoreSessionCatalogIds: ReadonlySet<string>;
   readonly sessionCatalogLive: SessionCatalogLiveState;
   sessionCatalogAgentId: string | null;
-  sessionCatalogGeneration: number;
+  readonly sessionScopeGeneration: number;
   sessionCatalogRevision: number;
   readonly sessionCatalogPageDepths: Map<string, number>;
   readonly sessionCatalogRevisions: Map<string, number>;
   expandedAgentId(): string;
   sessionCatalogGatewayClient(): GatewayBrowserClient | null;
+  synchronizeSessionScope(): void;
   requestSessionDataUpdate(): void;
   refreshSessionCatalogs(): Promise<void>;
 }
 
-export function visibleSessionCatalogClient(
-  owner: SessionCatalogDataOwner,
-): GatewayBrowserClient | null {
+function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBrowserClient | null {
   if (document.visibilityState === "hidden") {
     return null;
   }
   return sessionCatalogListClient(owner.context?.gateway.snapshot, owner.sessionDataHostConnected);
 }
 
-export function synchronizeSessionCatalogAgent(
-  owner: SessionCatalogDataOwner,
-  agentId: string | null,
-): void {
-  const nextAgentId = resolveSessionCatalogAgentId(owner, agentId);
-  if (nextAgentId === owner.sessionCatalogAgentId) {
-    return;
-  }
-  owner.sessionCatalogAgentId = nextAgentId;
-  owner.sessionCatalogGeneration += 1;
-  owner.sessionCatalogRevision += 1;
-  owner.sessionCatalogLive.clear();
-  owner.sessionCatalogRefreshStatus = createPanelRefreshStatus();
-  owner.loadingMoreSessionCatalogIds = new Set();
-  if (owner.sessionCatalogs.some((catalog) => catalog.capabilities.createSession)) {
-    owner.sessionCatalogs = owner.sessionCatalogs.map((catalog) => {
-      const { createSession: _createSession, ...capabilities } = catalog.capabilities;
-      return { ...catalog, capabilities };
-    });
-  }
-  owner.requestSessionDataUpdate();
-}
-
-function resolveSessionCatalogAgentId(
+export function resolveSessionCatalogAgentId(
   owner: SessionCatalogDataOwner,
   candidateAgentId: string | null | undefined = owner.expandedAgentId(),
 ): string | null {
@@ -127,7 +102,7 @@ function resolveSessionCatalogAgentId(
   return selected && selected !== helloDefault ? null : helloDefault;
 }
 
-export function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
   const snapshot = owner.context?.gateway.snapshot;
   owner.sessionCatalogLive.requestRefresh({
     visible: document.visibilityState !== "hidden",
@@ -135,9 +110,44 @@ export function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): vo
       owner.isSessionDataHostConnected &&
       owner.sessionCatalogAgentId !== null &&
       Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
-    generation: owner.sessionCatalogGeneration,
+    generation: owner.sessionScopeGeneration,
     refresh: () => void owner.refreshSessionCatalogs(),
   });
+}
+
+export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+  if (document.visibilityState === "hidden") {
+    owner.sessionCatalogLive.cancelScheduledRefreshes();
+    return;
+  }
+  owner.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogRefresh(owner));
+}
+
+export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer = false): void {
+  if (owner.context) {
+    owner.synchronizeSessionScope();
+  }
+  if (
+    !visibleSessionCatalogClient(owner) ||
+    owner.sessionCatalogLive.timer ||
+    owner.sessionCatalogLive.requestGeneration === owner.sessionScopeGeneration
+  ) {
+    return;
+  }
+  if (defer && owner.sessionCatalogLive.hasRequested) {
+    scheduleSessionCatalogRefresh(owner);
+    return;
+  }
+  void owner.refreshSessionCatalogs();
+}
+
+export function applySessionCatalogPresence(
+  owner: SessionCatalogDataOwner,
+  payload: unknown,
+): void {
+  if (owner.sessionCatalogLive.observePresence(payload)) {
+    scheduleSessionCatalogRefresh(owner);
+  }
 }
 
 export function applySessionCatalogHostEvent(
@@ -158,7 +168,10 @@ export function applySessionCatalogHostEvent(
   owner.sessionCatalogRevision += owner.sessionCatalogLive.refetching ? 1 : 0;
   const catalogRevision = owner.sessionCatalogRevisions.get(update.catalogId) ?? 0;
   owner.sessionCatalogRevisions.set(update.catalogId, catalogRevision + 1);
-  if (owner.sessionCatalogLive.requestGeneration !== owner.sessionCatalogGeneration) {
+  if (
+    update.materialChange &&
+    owner.sessionCatalogLive.requestGeneration !== owner.sessionScopeGeneration
+  ) {
     owner.sessionCatalogLive.schedule(
       SESSION_CATALOG_CHANGED_REFRESH_MS,
       owner.isSessionDataHostConnected,
@@ -170,13 +183,13 @@ export function applySessionCatalogHostEvent(
 export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Promise<void> {
   // Hidden pages resume through the coalesced activation handler. Starting
   // here without a timer makes catalog state updates poll at request latency.
-  const agentId = resolveSessionCatalogAgentId(owner);
-  synchronizeSessionCatalogAgent(owner, agentId);
+  owner.synchronizeSessionScope();
+  const agentId = owner.sessionCatalogAgentId;
   const client = visibleSessionCatalogClient(owner);
   if (!client || !agentId) {
     return;
   }
-  const generation = owner.sessionCatalogGeneration;
+  const generation = owner.sessionScopeGeneration;
   const revision = owner.sessionCatalogRevision;
   await refreshSessionCatalogsLive({
     live: owner.sessionCatalogLive,
@@ -184,7 +197,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     agentId,
     generation,
     revision,
-    currentGeneration: () => owner.sessionCatalogGeneration,
+    currentGeneration: () => owner.sessionScopeGeneration,
     currentRevision: () => owner.sessionCatalogRevision,
     currentClient: () => owner.sessionCatalogGatewayClient(),
     catalogs: () => owner.sessionCatalogs,
@@ -239,7 +252,7 @@ export async function loadMoreSessionCatalog(
   ) {
     return;
   }
-  const generation = owner.sessionCatalogGeneration;
+  const generation = owner.sessionScopeGeneration;
   const revision = owner.sessionCatalogRevisions.get(catalogId) ?? 0;
   owner.loadingMoreSessionCatalogIds = new Set([...owner.loadingMoreSessionCatalogIds, catalogId]);
   owner.requestSessionDataUpdate();
@@ -282,7 +295,7 @@ export async function loadMoreSessionCatalog(
     owner.sessionCatalogRevisions.set(catalogId, revision + 1);
     owner.sessionCatalogRevision += 1;
   } finally {
-    if (generation === owner.sessionCatalogGeneration) {
+    if (generation === owner.sessionScopeGeneration) {
       const loading = new Set(owner.loadingMoreSessionCatalogIds);
       loading.delete(catalogId);
       owner.loadingMoreSessionCatalogIds = loading;
@@ -299,7 +312,7 @@ function isCurrentSessionCatalogRequest(
   revision: number,
 ): boolean {
   return (
-    generation === owner.sessionCatalogGeneration &&
+    generation === owner.sessionScopeGeneration &&
     revision === (owner.sessionCatalogRevisions.get(catalogId) ?? 0) &&
     client === owner.sessionCatalogGatewayClient()
   );

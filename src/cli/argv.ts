@@ -30,7 +30,7 @@ const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
 );
 
 export function isHelpOrVersionInvocation(argv: string[]): boolean {
-  if (hasRootVersionAlias(argv)) {
+  if (isRootVersionInvocation(argv)) {
     return true;
   }
 
@@ -47,7 +47,7 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
       i += rootConsumed - 1;
       continue;
     }
-    if (HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) {
+    if (HELP_FLAGS.has(arg)) {
       return true;
     }
     if (arg.startsWith("-")) {
@@ -580,6 +580,10 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   }
   const [primary, secondary] = path;
   if (primary === "health" || primary === "sessions") {
+    return false;
+  }
+  // Remote RPC clients must not migrate state owned by the running gateway.
+  if (primary === "gateway" && secondary === "call") {
     return false;
   }
   if (primary === "update" && secondary === "status") {

@@ -113,18 +113,37 @@ export function buildQaGatewayConfig(params: {
       .map((pluginId) => pluginId.trim())
       .filter((pluginId) => pluginId.length > 0),
   );
-  const selectedPluginIds = usesCodexMockAppServer
+  const providerSelectedPluginIds = usesCodexMockAppServer
     ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
     : provider.usesModelProviderPlugins
       ? uniqueStrings(
           (params.enabledPluginIds?.length ?? 0) > 0 ? configuredPluginIds : selectedProviderIds,
         )
       : configuredPluginIds;
+  // A forced Codex cell must stage its harness even when the provider owner is
+  // selected independently; otherwise its QA-only sandbox never takes effect.
+  const selectedPluginIds =
+    params.forcedRuntime === "codex"
+      ? uniqueStrings([...providerSelectedPluginIds, "codex"])
+      : providerSelectedPluginIds;
   const transportPluginIds = uniqueStrings(params.transportPluginIds ?? [])
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId.length > 0);
   const pluginEntries = Object.fromEntries(
-    selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+    selectedPluginIds.map((pluginId) => [
+      pluginId,
+      params.forcedRuntime === "codex" && pluginId === "codex"
+        ? {
+            enabled: true,
+            config: {
+              appServer: {
+                sandbox: "workspace-write",
+                ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+              },
+            },
+          }
+        : { enabled: true },
+    ]),
   );
   const transportPluginEntries = Object.fromEntries(
     transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),

@@ -22,7 +22,6 @@ import {
   reserveDeliveryQueueEntryAttempt,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
-  type DeliveryQueueRowMetadata,
   type DeliveryQueueCompletionRetention,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
@@ -120,16 +119,6 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
 }
 
-function queuedDeliveryMetadata(entry: QueuedDelivery): DeliveryQueueRowMetadata {
-  return {
-    entryKind: "outbound",
-    sessionKey: entry.session?.key,
-    channel: entry.channel,
-    target: entry.to,
-    accountId: entry.accountId,
-  };
-}
-
 function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): QueuedDelivery {
   return {
     id,
@@ -172,12 +161,10 @@ export async function enqueueDelivery(
 ): Promise<string> {
   const id = generateSecureUuid();
   const entry = createQueuedDelivery(params, id);
-  const metadata = queuedDeliveryMetadata(entry);
   if (mediaStageId) {
     const committed = commitStagedDeliveryQueueEntry({
       queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
       entry,
-      metadata,
       stagingId: mediaStageId,
       stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
       stateDir,
@@ -189,7 +176,6 @@ export async function enqueueDelivery(
     upsertDeliveryQueueEntry({
       queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
       entry,
-      metadata,
       stateDir,
     });
   }
@@ -208,13 +194,11 @@ export async function enqueueDeliveryOnce(
     throw new Error("Stable delivery queue id is required");
   }
   const entry = createQueuedDelivery(params, normalizedId);
-  const metadata = queuedDeliveryMetadata(entry);
   const created = mediaStageId
     ? (() => {
         const result = commitStagedDeliveryQueueEntryOnce({
           queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
           entry,
-          metadata,
           stagingId: mediaStageId,
           stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
           stateDir,
@@ -227,7 +211,6 @@ export async function enqueueDeliveryOnce(
     : upsertDeliveryQueueEntry({
         queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
         entry,
-        metadata,
         stateDir,
         insertOnly: true,
       });

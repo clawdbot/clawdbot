@@ -29,6 +29,7 @@ const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
 const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
+const VALID_PLUGIN_KINDS: ReadonlySet<string> = new Set<PluginKind>(["memory", "context-engine"]);
 
 export function isCoreReservedPluginId(id: string): boolean {
   return CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id));
@@ -109,13 +110,18 @@ function setCachedPluginManifestLoadResult(
 }
 
 function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
-  if (typeof raw === "string") {
-    return raw as PluginKind;
+  const values = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+  const kinds: PluginKind[] = [];
+  for (const value of values) {
+    if (typeof value !== "string" || !VALID_PLUGIN_KINDS.has(value)) {
+      continue;
+    }
+    const kind = value as PluginKind;
+    if (!kinds.includes(kind)) {
+      kinds.push(kind);
+    }
   }
-  if (Array.isArray(raw) && raw.length > 0 && raw.every((k) => typeof k === "string")) {
-    return raw.length === 1 ? (raw[0] as PluginKind) : (raw as PluginKind[]);
-  }
-  return undefined;
+  return kinds.length === 0 ? undefined : kinds.length === 1 ? kinds[0] : kinds;
 }
 
 export function loadPluginManifest(

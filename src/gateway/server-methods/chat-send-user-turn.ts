@@ -84,6 +84,9 @@ function buildChatSendUserTurnMedia(
           }
         : {}),
       contentType: entry.contentType,
+      ...(offloadedRef?.durationMs ? { durationMs: offloadedRef.durationMs } : {}),
+      ...(offloadedRef?.width ? { width: offloadedRef.width } : {}),
+      ...(offloadedRef?.height ? { height: offloadedRef.height } : {}),
     };
   });
 }

@@ -92,9 +92,7 @@ suite("Codex native session catalog", () => {
     });
 
     await page.goto(`${server.baseUrl}chat`);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-      .toBeGreaterThan(0);
+    await gateway.waitForRequest("sessions.catalog.list");
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
     await page.close();
@@ -177,9 +175,10 @@ suite("Codex native session catalog", () => {
       await page.goto(`${server.baseUrl}chat`);
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       await expandCodingSection(page);
-      const workSection = page.locator('[data-session-section="work"]');
+      const sessionGroups = page.locator(".sidebar-recent-sessions");
+      const workSection = sessionGroups.locator(':scope > [data-session-section="work"]');
       const liveRows = workSection.locator(":scope > .sidebar-recent-sessions__list");
-      const catalog = workSection.locator(':scope > [data-session-section="catalog:codex"]');
+      const catalog = sessionGroups.locator(':scope > [data-session-section="catalog:codex"]');
       await catalog.waitFor({ state: "visible" });
       const [liveRowsBox, catalogBox] = await Promise.all([
         liveRows.boundingBox(),
@@ -190,7 +189,7 @@ suite("Codex native session catalog", () => {
       expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(10);
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });
-        await workSection.screenshot({
+        await sessionGroups.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
         });
@@ -263,7 +262,10 @@ suite("Codex native session catalog", () => {
   });
 
   it("groups sessions by host and hides empty offline nodes", async () => {
-    const page = await browser.newPage({ viewport: { height: 1100, width: 1440 } });
+    const page = await browser.newPage({
+      deviceScaleFactor: 2,
+      viewport: { height: 1100, width: 1440 },
+    });
     await page.addInitScript((key) => localStorage.removeItem(key), catalogGroupingStorageKey);
     await page.addInitScript(
       (key) => localStorage.removeItem(key),
@@ -272,6 +274,31 @@ suite("Codex native session catalog", () => {
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: {
+            contextTokens: null,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+          },
+          path: "",
+          sessions: [
+            {
+              contextTokens: null,
+              displayName: "Research thread",
+              hasActiveRun: false,
+              key: "agent:main:research",
+              kind: "direct",
+              label: "Research thread",
+              model: "gpt-5.5",
+              modelProvider: "openai",
+              status: "done",
+              totalTokens: 0,
+              updatedAt: Date.parse("2026-07-29T06:00:00.000Z"),
+            },
+          ],
+          ts: Date.parse("2026-07-29T06:00:00.000Z"),
+        },
         "sessions.catalog.list": {
           catalogs: [
             {
@@ -357,6 +384,10 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await page.evaluate(() => {
+        document.documentElement.setAttribute("data-theme", "openknot");
+        document.documentElement.setAttribute("data-theme-mode", "dark");
+      });
       await expandCodingSection(page);
       const section = page.locator('[data-session-section="catalog:codex"]');
       await section.waitFor({ state: "visible" });
@@ -376,6 +407,87 @@ suite("Codex native session catalog", () => {
       expect(
         await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
       ).toBe("2");
+      const projectRows = section.locator(".sidebar-recent-session--catalog-project-child");
+      await expect.poll(() => projectRows.count()).toBe(3);
+      const threadRows = page.locator(
+        '[data-session-section="ungrouped"] .sidebar-recent-session, [data-session-section="catalog:codex"] .sidebar-recent-session--catalog-project-child',
+      );
+      await expect.poll(() => threadRows.count()).toBe(4);
+      const threadRowMetrics = await threadRows.evaluateAll((rows) =>
+        rows.map((row) => {
+          const link = row.querySelector(".sidebar-recent-session__link");
+          const name = row.querySelector(".sidebar-recent-session__name");
+          const rowStyle = getComputedStyle(row);
+          const linkStyle = link ? getComputedStyle(link) : null;
+          const nameStyle = name ? getComputedStyle(name) : null;
+          return {
+            height: row.getBoundingClientRect().height,
+            minHeight: rowStyle.minHeight,
+            nameFontSize: nameStyle?.fontSize ?? "",
+            paddingBottom: linkStyle?.paddingBottom ?? "",
+            paddingTop: linkStyle?.paddingTop ?? "",
+          };
+        }),
+      );
+      expect(threadRowMetrics).toEqual([
+        {
+          height: 30,
+          minHeight: "30px",
+          nameFontSize: "13px",
+          paddingBottom: "3px",
+          paddingTop: "3px",
+        },
+        {
+          height: 30,
+          minHeight: "30px",
+          nameFontSize: "13px",
+          paddingBottom: "3px",
+          paddingTop: "3px",
+        },
+        {
+          height: 30,
+          minHeight: "30px",
+          nameFontSize: "13px",
+          paddingBottom: "3px",
+          paddingTop: "3px",
+        },
+        {
+          height: 30,
+          minHeight: "30px",
+          nameFontSize: "13px",
+          paddingBottom: "3px",
+          paddingTop: "3px",
+        },
+      ]);
+      const projectLabelTone = await openclawProject
+        .locator(".sidebar-session-catalog-project__label")
+        .evaluate((label) => {
+          const probe = document.createElement("span");
+          document.body.append(probe);
+          const resolveColor = (value: string) => {
+            probe.style.color = value;
+            return getComputedStyle(probe).color;
+          };
+          const channels = (value: string) => {
+            const values =
+              value
+                .match(/[\d.]+/g)
+                ?.slice(0, 3)
+                .map(Number) ?? [];
+            return value.startsWith("color(srgb") ? values.map((channel) => channel * 255) : values;
+          };
+          const distance = (left: number[], right: number[]) =>
+            Math.hypot(...left.map((channel, index) => channel - (right[index] ?? 0)));
+          const labelColor = channels(getComputedStyle(label).color);
+          const textColor = channels(resolveColor("var(--text)"));
+          const mutedColor = channels(resolveColor("var(--muted)"));
+          probe.remove();
+          return {
+            distanceToMuted: distance(labelColor, mutedColor),
+            distanceToText: distance(labelColor, textColor),
+          };
+        });
+      expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
       expect(
         await section
           .locator('[data-session-catalog-project="/Users/dev/other"]')
@@ -612,7 +724,7 @@ suite("Codex native session catalog", () => {
         });
       }
 
-      await page.goto(`${server.baseUrl}settings/automation?section=plugins`);
+      await page.goto(`${server.baseUrl}settings/automation?section=plugins&advanced=1`);
       const expandPluginSetting = async (pluginLabel: string) => {
         const pluginGroup = page
           .getByText(pluginLabel, { exact: true })
@@ -782,6 +894,28 @@ suite("Codex native session catalog", () => {
     await expect.poll(() => page.getByText("prepare release", { exact: true }).count()).toBe(1);
     const composer = page.locator(".agent-chat__composer-combobox > textarea");
     await composer.fill("continue with the final checks");
+    await gateway.setMethodResponse("sessions.list", {
+      count: 1,
+      defaults: {
+        contextTokens: null,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+      },
+      path: "",
+      sessions: [
+        {
+          contextTokens: null,
+          displayName: "Adopted Codex session",
+          key: "agent:main:adopted-codex",
+          kind: "direct",
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          totalTokens: 0,
+          updatedAt: Date.now(),
+        },
+      ],
+      ts: Date.now(),
+    });
     await composer.press("Enter");
     const continued = await gateway.waitForRequest("sessions.catalog.continue");
     expect(continued.params).toEqual({

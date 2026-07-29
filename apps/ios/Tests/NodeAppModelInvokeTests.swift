@@ -2880,6 +2880,44 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(talkMode.cancelPushToTalk(captureId: second.captureId).status == "cancelled")
     }
 
+    @Test @MainActor func `transcribed PTT releases audio once before replacement capture`() async throws {
+        var ownershipEvents: [String] = []
+        let talkMode = TalkModeManager(
+            allowSimulatorCapture: true,
+            audioSessionDeactivationAction: { ownershipEvents.append("deactivate") })
+        talkMode.setPushToTalkAudioOwnershipEndHandler {
+            ownershipEvents.append("release:\($0)")
+        }
+        defer {
+            talkMode.setPushToTalkAudioOwnershipEndHandler(nil)
+            talkMode.stop()
+        }
+
+        let first = try await talkMode.beginPushToTalk(transcriptionOnly: true)
+        await talkMode._test_handlePushToTalkTranscript(
+            "transcription survives release",
+            isFinal: false,
+            captureId: first.captureId)
+
+        let finished = talkMode.endPushToTalk(captureId: first.captureId)
+
+        #expect(finished.status == "transcribed")
+        #expect(finished.transcript == "transcription survives release")
+        #expect(ownershipEvents == ["deactivate", "release:\(first.captureId)"])
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(talkMode._test_pushToTalkCaptureIsIdle())
+
+        let replacement = try await talkMode.beginPushToTalk(transcriptionOnly: true)
+        #expect(replacement.captureId != first.captureId)
+        #expect(talkMode.cancelPushToTalk(captureId: replacement.captureId).status == "cancelled")
+        #expect(ownershipEvents == [
+            "deactivate",
+            "release:\(first.captureId)",
+            "deactivate",
+            "release:\(replacement.captureId)",
+        ])
+    }
+
     @Test @MainActor func `standalone PTT deactivates audio before releasing ownership`() async throws {
         var events: [String] = []
         let talkMode = TalkModeManager(
@@ -3718,6 +3756,23 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(!response.ok)
         #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `cancelled background timer cannot suppress a replacement background lease`() async {
+        let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+        defer { appModel.setScenePhase(.active) }
+
+        appModel.setScenePhase(.background)
+        appModel.setScenePhase(.active)
+        appModel.setScenePhase(.background)
+
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+
+        #expect(appModel.isBackgrounded)
+        #expect(!appModel._test_backgroundReconnectIsSuppressed())
+        #expect(appModel.gatewayStatusText != "Background idle")
     }
 
     @Test @MainActor func `stale foreground resume cannot reopen Talk after rebackgrounding`() async {
@@ -6110,6 +6165,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(outbox.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a") == reply)
     }
 
+    @Test func `watch messages only override thinking for quick replies`() {
+        #expect(NodeAppModel.watchThinkingOverride(for: .chat) == nil)
+        #expect(NodeAppModel.watchThinkingOverride(for: .quickReply) == "low")
+    }
+
     @Test func `watch message outbox discards permanent gateway failures`() {
         #expect(NodeAppModel._test_shouldDiscardFailedWatchMessage(code: "INVALID_REQUEST"))
         #expect(!NodeAppModel._test_shouldDiscardFailedWatchMessage(
@@ -7842,6 +7902,41 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         {
         } else {
             Issue.record("expected delivered reply to remain deduped after restart")
+        }
+    }
+
+    @Test @MainActor func `watch message outbox tombstone rejects stale persisted queue`() throws {
+        let suiteName = "watch-message-stale-queue-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let event = WatchAppCommandEvent(
+            commandId: "delivered-before-crash",
+            command: .sendChat,
+            sessionKey: "main",
+            gatewayStableID: "gateway-a",
+            text: "Delivered reply",
+            sentAtMs: 1,
+            transport: "sendMessage",
+            messageKind: .quickReply)
+        let firstOutbox = WatchMessageOutbox(defaults: defaults)
+        _ = firstOutbox.ingest(event, isAvailable: true, gatewayStableID: "gateway-a")
+        let staleQueue = try #require(defaults.data(forKey: "watch.chat.command.queue.v1"))
+        firstOutbox.removeQueuedMessage(messageID: event.commandId, gatewayStableID: "gateway-a")
+
+        // Simulate termination after the delivery tombstone persisted but before
+        // the older queue snapshot was removed.
+        defaults.set(staleQueue, forKey: "watch.chat.command.queue.v1")
+        let restoredOutbox = WatchMessageOutbox(defaults: defaults)
+
+        #expect(restoredOutbox.queuedCount() == 0)
+        if case .deduped = restoredOutbox.ingest(
+            event,
+            isAvailable: true,
+            gatewayStableID: "gateway-a")
+        {
+        } else {
+            Issue.record("expected the delivery tombstone to reject the stale queue row")
         }
     }
 

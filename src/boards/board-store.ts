@@ -25,6 +25,7 @@ export type BoardWidgetHtmlDocument = {
   grantState: "none" | "pending" | "granted" | "rejected";
   declared?: BoardWidgetDeclared;
 };
+export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
   revision: number;
@@ -34,14 +35,14 @@ export type BoardWidgetMcpAppDocument = {
   interactive: boolean;
 };
 export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
-export type BoardSnapshotWithHtmlDocuments = {
+export type BoardSnapshotWithHtmlViewMetadata = {
   snapshot: BoardSnapshot;
-  htmlDocuments: ReadonlyMap<string, BoardWidgetHtmlDocument>;
+  htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
 };
 
 export interface BoardStore {
   getSnapshot(sessionKey: string): BoardSnapshot;
-  getSnapshotWithHtmlDocuments(sessionKey: string): BoardSnapshotWithHtmlDocuments;
+  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata;
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot;
   putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot;
   grant(
@@ -108,6 +109,13 @@ function cloneBoardWidgetHtmlDocument(document: BoardWidgetHtmlDocument): BoardW
         }
       : {}),
   };
+}
+
+function cloneBoardWidgetHtmlViewMetadata(
+  document: BoardWidgetHtmlDocument,
+): BoardWidgetHtmlViewMetadata {
+  const { html: _html, ...metadata } = cloneBoardWidgetHtmlDocument(document);
+  return metadata;
 }
 
 function createBoardWidgetDocument(
@@ -354,17 +362,17 @@ export class InMemoryBoardStore implements BoardStore {
     );
   }
 
-  getSnapshotWithHtmlDocuments(sessionKey: string): BoardSnapshotWithHtmlDocuments {
+  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata {
     const stored = this.boards.get(sessionKey);
-    const htmlDocuments = new Map<string, BoardWidgetHtmlDocument>();
+    const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
     for (const [name, document] of stored?.documents ?? []) {
       if ("html" in document) {
-        htmlDocuments.set(name, cloneBoardWidgetHtmlDocument(document));
+        htmlViewMetadata.set(name, cloneBoardWidgetHtmlViewMetadata(document));
       }
     }
     return {
       snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(sessionKey)),
-      htmlDocuments,
+      htmlViewMetadata,
     };
   }
 

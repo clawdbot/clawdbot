@@ -1,5 +1,6 @@
 // Control UI tests cover markdown behavior.
 import { describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
@@ -354,7 +355,7 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
-    it("escapes details/summary injection in task items", () => {
+    it("keeps details escaped when they are inline inside a task item", () => {
       const html = toSanitizedMarkdownHtml("- [ ] <details><summary>x</summary>y</details>");
       expect(html).toBe(
         '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> &lt;details&gt;&lt;summary&gt;x&lt;/summary&gt;y&lt;/details&gt;</li>\n</ul>\n',
@@ -576,6 +577,23 @@ PY
       expect(details?.querySelector("summary")?.textContent).toBe("JSON · 2 lines");
       expect(code?.textContent).toBe('{"ok": true}\n');
       expect(code?.innerHTML).toContain("hljs-");
+    });
+
+    it("localizes collapsed JSON line counts", async () => {
+      i18n.registerTranslation("pt-BR", {
+        chat: {
+          codeBlock: {
+            jsonLines: "JSON · {count} linhas",
+          },
+        },
+      });
+      await i18n.setLocale("pt-BR");
+      try {
+        const fragment = htmlFragment(toSanitizedMarkdownHtml('```json\n{"ok": true}\n```'));
+        expect(fragment.querySelector("summary")?.textContent).toBe("JSON · 2 linhas");
+      } finally {
+        await i18n.setLocale("en");
+      }
     });
 
     it("auto-highlights unlabeled code blocks only when detection is confident", () => {
@@ -1032,6 +1050,25 @@ describe("toStreamingMarkdownHtml", () => {
     expect(code?.textContent).toContain("… truncated");
     expect(code?.textContent).toContain(`showing first 140000`);
     expect(code?.textContent?.length).toBeLessThan(blockArt.length);
+  });
+
+  it("localizes the oversized markdown truncation notice", async () => {
+    i18n.registerTranslation("pt-BR", {
+      chat: {
+        markdown: {
+          truncated: "… truncado ({total} caracteres, exibindo os primeiros {shown}).",
+        },
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      const blockArt = Array.from({ length: 20_000 }, () => "  ▀▀▀▀  ").join("\n");
+      const fragment = htmlFragment(toStreamingMarkdownHtml(blockArt));
+      expect(fragment.textContent).toContain("… truncado");
+      expect(fragment.textContent).toContain("exibindo os primeiros 140000");
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 
   it("renders completed block prefixes as markdown and closes the streaming tail", () => {

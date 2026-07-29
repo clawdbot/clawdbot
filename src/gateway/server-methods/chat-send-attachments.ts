@@ -190,7 +190,13 @@ export async function prepareChatSendAttachments(params: {
   const { request, session, admission, respond, context } = params;
   const { inboundMessage, normalizedAttachments, explicitOrigin } = request;
   const { cfg, sessionKey, agentId, resolvedSessionModel, clientRunId } = session;
-  const { chatSendTraceAttributes, cleanupAdmittedRun, lifecycleGeneration } = admission;
+  const {
+    activeRunAbort,
+    chatSendTraceAttributes,
+    cleanupAdmittedRun,
+    finishAbortedChatSend,
+    lifecycleGeneration,
+  } = admission;
   let parsedMessage = inboundMessage;
   let parsedImages: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
@@ -253,6 +259,13 @@ export async function prepareChatSendAttachments(params: {
         performance.now() - prepareAttachmentsStartedAtMs,
       );
     } catch (err) {
+      if (
+        activeRunAbort.controller.signal.aborted &&
+        context.chatRunState.hasAbortMarker(clientRunId)
+      ) {
+        finishAbortedChatSend();
+        return { ok: false as const };
+      }
       cleanupAdmittedRun({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);

@@ -1,7 +1,6 @@
 /**
  * Provider-entry configuration and stored-profile binding for model auth.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -32,7 +31,14 @@ import {
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "./model-auth-markers.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import { isLocalProviderBaseUrl } from "./model-provider-local.js";
 import { normalizeProviderId } from "./model-selection.js";
+
+const MODEL_AUTH_LOCAL_HOST_ALIASES = new Set([
+  "docker.orb.internal",
+  "host.docker.internal",
+  "host.orb.internal",
+]);
 
 export function sentinelizeSecretRefProfileApiKey(params: {
   apiKey: string;
@@ -185,7 +191,7 @@ export function resolveUsableCustomProviderApiKey(params: {
     isCustomLocalProviderConfig(customProviderConfig) &&
     (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
     customProviderConfig.baseUrl &&
-    isLocalBaseUrl(customProviderConfig.baseUrl)
+    isLocalAuthProviderBaseUrl(customProviderConfig.baseUrl)
   ) {
     return {
       apiKey: customProviderConfig.api === "ollama" ? customKey : CUSTOM_LOCAL_AUTH_MARKER,
@@ -477,42 +483,8 @@ export function resolveConfiguredAwsSdkProfileAuth(params: {
   };
 }
 
-export function isLocalBaseUrl(baseUrl: string): boolean {
-  try {
-    let host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    if (host.startsWith("[") && host.endsWith("]")) {
-      host = host.slice(1, -1);
-    }
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host === "::ffff:7f00:1" ||
-      host === "::ffff:127.0.0.1" ||
-      host === "docker.orb.internal" ||
-      host === "host.docker.internal" ||
-      host === "host.orb.internal" ||
-      host.endsWith(".local") ||
-      isPrivateIpv4Host(host)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isPrivateIpv4Host(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = octets;
-  return (
-    a === 10 || (a === 172 && b !== undefined && b >= 16 && b <= 31) || (a === 192 && b === 168)
-  );
+export function isLocalAuthProviderBaseUrl(baseUrl: string): boolean {
+  return isLocalProviderBaseUrl(baseUrl, MODEL_AUTH_LOCAL_HOST_ALIASES);
 }
 
 export function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {

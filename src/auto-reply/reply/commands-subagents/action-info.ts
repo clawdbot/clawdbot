@@ -104,7 +104,6 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
-    `Transcript: ${sessionEntry?.sessionFile ?? "n/a"}`,
     `Runtime: ${runtime}`,
     `Created: ${formatTimestampWithAge(run.createdAt)}`,
     `Started: ${formatTimestampWithAge(run.startedAt)}`,

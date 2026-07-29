@@ -29,6 +29,21 @@ type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
   cleanupAfterGatewayStop?: () => Promise<void>;
 };
+
+function renderTelegramQaInboundText(
+  input: { text: string; nativeCommand?: { name: string } },
+  botUsername: string,
+) {
+  const commandName = input.nativeCommand?.name.trim().toLowerCase();
+  const renderedText = input.text.replaceAll("@openclaw", `@${botUsername}`);
+  const commandToken = renderedText.match(/^\S+/u)?.[0];
+  // Scenarios declare command semantics once; the live adapter owns Telegram's
+  // bot-username targeting while local drivers may encode the same metadata differently.
+  return commandName && commandToken?.toLowerCase() === `/${commandName}`
+    ? `/${commandName}@${botUsername}${renderedText.slice(commandToken.length)}`
+    : renderedText;
+}
+
 export async function createTelegramQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
@@ -58,6 +73,7 @@ export async function createTelegramQaTransportAdapter(
   const runtimeEnv = credentialLease.payload;
   let driverIdentity: TelegramBotIdentity;
   let sutIdentity: TelegramBotIdentity;
+  let sutUsername: string;
   let offset: number;
   try {
     [driverIdentity, sutIdentity] = await Promise.all([
@@ -73,6 +89,7 @@ export async function createTelegramQaTransportAdapter(
     if (!sutIdentity.username?.trim()) {
       throw new Error("Telegram QA requires the SUT bot to have a Telegram username.");
     }
+    sutUsername = sutIdentity.username.trim();
     [offset] = await Promise.all([
       flushTelegramUpdates(runtimeEnv.driverToken),
       flushTelegramUpdates(runtimeEnv.sutToken),
@@ -167,9 +184,7 @@ export async function createTelegramQaTransportAdapter(
       heartbeat.throwIfFailed();
       logicalConversationId = input.conversation.id;
       logicalConversationKind = input.conversation.kind;
-      const text = sutIdentity.username
-        ? input.text.replaceAll("@openclaw", `@${sutIdentity.username}`)
-        : input.text;
+      const text = renderTelegramQaInboundText(input, sutUsername);
       const nativeReplyToId = input.replyToId ? nativeMessageIds.get(input.replyToId) : undefined;
       const sent = await callTelegramApi<{ message_id: number }>(
         runtimeEnv.driverToken,

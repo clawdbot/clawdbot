@@ -619,11 +619,20 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
+        let imageArtifactLoader = IOSImageArtifactLoader { [weak self] in
+            guard let config = self?.activeGatewayConnectConfig else { return nil }
+            return IOSImageArtifactLoader.Connection(
+                config: config,
+                gatewayID: config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID,
+                customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
+                    gatewayStableID: config.effectiveStableID))
+        }
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
-            outboxGatewayID: outboxGatewayID)
+            outboxGatewayID: outboxGatewayID,
+            imageArtifactLoader: imageArtifactLoader)
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
@@ -1272,8 +1281,13 @@ final class NodeAppModel {
         self.pushWakeLogger.info("Background grace started seconds=\(seconds, privacy: .public)")
         self.backgroundGraceTaskTimer = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(max(1, seconds) * 1_000_000_000))
+            do {
+                try await Task.sleep(nanoseconds: UInt64(max(1, seconds) * 1_000_000_000))
+            } catch {
+                return
+            }
             await MainActor.run {
+                guard !Task.isCancelled, self.backgroundGraceTaskID == taskID else { return }
                 self.suppressBackgroundReconnect(reason: "background_grace_timer", disconnectIfNeeded: true)
                 self.endBackgroundConnectionGracePeriod(reason: "timer")
             }
@@ -2296,6 +2310,23 @@ final class NodeAppModel {
         }
     }
 
+    private static func successfulInvokeResponse(
+        _ request: BridgeInvokeRequest,
+        payload: some Encodable) throws -> BridgeInvokeResponse
+    {
+        try BridgeInvokeResponse(
+            id: request.id,
+            ok: true,
+            payloadJSON: self.encodePayload(payload))
+    }
+
+    private static func unknownInvokeResponse(_ request: BridgeInvokeRequest) -> BridgeInvokeResponse {
+        BridgeInvokeResponse(
+            id: request.id,
+            ok: false,
+            error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+    }
+
     private static func scopedWatchNotificationRequest(
         _ req: BridgeInvokeRequest,
         gatewayStableID: String?) -> BridgeInvokeRequest
@@ -2374,8 +2405,7 @@ final class NodeAppModel {
             timestamp: ISO8601DateFormatter().string(from: location.timestamp),
             isPrecise: isPrecise,
             source: nil)
-        let json = try Self.encodePayload(payload)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        return try Self.successfulInvokeResponse(req, payload: payload)
     }
 
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -2426,10 +2456,7 @@ final class NodeAppModel {
             ])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2502,10 +2529,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: resultJSON)
 
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2576,10 +2600,7 @@ final class NodeAppModel {
             updateCameraHUD(ownerID: req.id, text: "Clip captured", kind: .success, autoHideSeconds: 1.8)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2734,8 +2755,7 @@ final class NodeAppModel {
         }
 
         let payload = OpenClawChatPushPayload(messageId: messageId)
-        let json = try Self.encodePayload(payload)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        return try Self.successfulInvokeResponse(req, payload: payload)
     }
 
     private func notificationAuthorizationStatus() async -> NotificationAuthorizationStatus {
@@ -2797,17 +2817,12 @@ final class NodeAppModel {
         switch req.command {
         case OpenClawDeviceCommand.status.rawValue:
             let payload = try await deviceStatusService.status()
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawDeviceCommand.info.rawValue:
             let payload = self.deviceStatusService.info()
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2815,8 +2830,7 @@ final class NodeAppModel {
         let params = (try? Self.decodeParams(OpenClawPhotosLatestParams.self, from: req.paramsJSON)) ??
             OpenClawPhotosLatestParams()
         let payload = try await photosService.latest(params: params)
-        let json = try Self.encodePayload(payload)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        return try Self.successfulInvokeResponse(req, payload: payload)
     }
 
     private func handleContactsInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -2825,18 +2839,13 @@ final class NodeAppModel {
             let params = (try? Self.decodeParams(OpenClawContactsSearchParams.self, from: req.paramsJSON)) ??
                 OpenClawContactsSearchParams()
             let payload = try await contactsService.search(params: params)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawContactsCommand.add.rawValue:
             let params = try Self.decodeParams(OpenClawContactsAddParams.self, from: req.paramsJSON)
             let payload = try await contactsService.add(params: params)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2846,18 +2855,13 @@ final class NodeAppModel {
             let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
                 OpenClawCalendarEventsParams()
             let payload = try await calendarService.events(params: params)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawCalendarCommand.add.rawValue:
             let params = try Self.decodeParams(OpenClawCalendarAddParams.self, from: req.paramsJSON)
             let payload = try await calendarService.add(params: params)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2867,18 +2871,13 @@ final class NodeAppModel {
             let params = (try? Self.decodeParams(OpenClawRemindersListParams.self, from: req.paramsJSON)) ??
                 OpenClawRemindersListParams()
             let payload = try await remindersService.list(params: params)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawRemindersCommand.add.rawValue:
             let params = try Self.decodeParams(OpenClawRemindersAddParams.self, from: req.paramsJSON)
             let payload = try await remindersService.add(params: params)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2888,19 +2887,14 @@ final class NodeAppModel {
             let params = (try? Self.decodeParams(OpenClawMotionActivityParams.self, from: req.paramsJSON)) ??
                 OpenClawMotionActivityParams()
             let payload = try await motionService.activities(params: params)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawMotionCommand.pedometer.rawValue:
             let params = (try? Self.decodeParams(OpenClawPedometerParams.self, from: req.paramsJSON)) ??
                 OpenClawPedometerParams()
             let payload = try await motionService.pedometer(params: params)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2914,8 +2908,7 @@ final class NodeAppModel {
                     message: "INVALID_REQUEST: period must be today"))
         }
         let payload = try await self.healthSummaryService.summary(params: params)
-        let json = try Self.encodePayload(payload)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        return try Self.successfulInvokeResponse(req, payload: payload)
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -2983,25 +2976,19 @@ final class NodeAppModel {
             case .started:
                 await self.talkMode.awaitPushToTalkOnce(start)
             }
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawTalkCommand.pttStop.rawValue:
             // Interrupt commands invalidate suspended preparation before touching
             // capture state, then bypass the preparation queue entirely.
             self.talkPttCommandEpoch &+= 1
             let payload = self.talkMode.endPushToTalk(expectedTranscriptionOnly: false)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawTalkCommand.pttCancel.rawValue:
             self.talkPttCommandEpoch &+= 1
             let payload = self.talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -3278,16 +3265,20 @@ extension NodeAppModel {
     private func buildCapabilityRouter() -> NodeCapabilityRouter {
         var handlers: [String: NodeCapabilityRouter.Handler] = [:]
 
-        func register(_ commands: [String], handler: @escaping NodeCapabilityRouter.Handler) {
+        func register(
+            _ commands: [String],
+            handler: @escaping (NodeAppModel, BridgeInvokeRequest) async throws -> BridgeInvokeResponse)
+        {
+            let invoke: NodeCapabilityRouter.Handler = { [weak self] request in
+                guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+                return try await handler(self, request)
+            }
             for command in commands {
-                handlers[command] = handler
+                handlers[command] = invoke
             }
         }
 
-        register([OpenClawLocationCommand.get.rawValue]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleLocationInvoke(req)
-        }
+        register([OpenClawLocationCommand.get.rawValue]) { try await $0.handleLocationInvoke($1) }
 
         register([
             OpenClawCanvasCommand.present.rawValue,
@@ -3295,111 +3286,66 @@ extension NodeAppModel {
             OpenClawCanvasCommand.navigate.rawValue,
             OpenClawCanvasCommand.evalJS.rawValue,
             OpenClawCanvasCommand.snapshot.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleCanvasInvoke(req)
-        }
+        ]) { try await $0.handleCanvasInvoke($1) }
 
         register([
             OpenClawCanvasA2UICommand.reset.rawValue,
             OpenClawCanvasA2UICommand.push.rawValue,
             OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleCanvasA2UIInvoke(req)
-        }
+        ]) { try await $0.handleCanvasA2UIInvoke($1) }
 
         register([
             OpenClawCameraCommand.list.rawValue,
             OpenClawCameraCommand.snap.rawValue,
             OpenClawCameraCommand.clip.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleCameraInvoke(req)
-        }
+        ]) { try await $0.handleCameraInvoke($1) }
 
-        register([OpenClawScreenCommand.record.rawValue]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleScreenRecordInvoke(req)
-        }
+        register([OpenClawScreenCommand.record.rawValue]) { try await $0.handleScreenRecordInvoke($1) }
 
-        register([OpenClawSystemCommand.notify.rawValue]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleSystemNotify(req)
-        }
+        register([OpenClawSystemCommand.notify.rawValue]) { try await $0.handleSystemNotify($1) }
 
-        register([OpenClawChatCommand.push.rawValue]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleChatPushInvoke(req)
-        }
+        register([OpenClawChatCommand.push.rawValue]) { try await $0.handleChatPushInvoke($1) }
 
         register([
             OpenClawDeviceCommand.status.rawValue,
             OpenClawDeviceCommand.info.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleDeviceInvoke(req)
-        }
+        ]) { try await $0.handleDeviceInvoke($1) }
 
         register([
             OpenClawWatchCommand.status.rawValue,
             OpenClawWatchCommand.notify.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleWatchInvoke(req)
-        }
+        ]) { try await $0.handleWatchInvoke($1) }
 
-        register([OpenClawPhotosCommand.latest.rawValue]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handlePhotosInvoke(req)
-        }
+        register([OpenClawPhotosCommand.latest.rawValue]) { try await $0.handlePhotosInvoke($1) }
 
         register([
             OpenClawContactsCommand.search.rawValue,
             OpenClawContactsCommand.add.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleContactsInvoke(req)
-        }
+        ]) { try await $0.handleContactsInvoke($1) }
 
         register([
             OpenClawCalendarCommand.events.rawValue,
             OpenClawCalendarCommand.add.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleCalendarInvoke(req)
-        }
+        ]) { try await $0.handleCalendarInvoke($1) }
 
         register([
             OpenClawRemindersCommand.list.rawValue,
             OpenClawRemindersCommand.add.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleRemindersInvoke(req)
-        }
+        ]) { try await $0.handleRemindersInvoke($1) }
 
         register([
             OpenClawMotionCommand.activity.rawValue,
             OpenClawMotionCommand.pedometer.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleMotionInvoke(req)
-        }
+        ]) { try await $0.handleMotionInvoke($1) }
 
-        register([OpenClawHealthCommand.summary.rawValue]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleHealthInvoke(req)
-        }
+        register([OpenClawHealthCommand.summary.rawValue]) { try await $0.handleHealthInvoke($1) }
 
         register([
             OpenClawTalkCommand.pttStart.rawValue,
             OpenClawTalkCommand.pttStop.rawValue,
             OpenClawTalkCommand.pttCancel.rawValue,
             OpenClawTalkCommand.pttOnce.rawValue,
-        ]) { [weak self] req in
-            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
-            return try await self.handleTalkInvoke(req)
-        }
+        ]) { try await $0.handleTalkInvoke($1) }
 
         return NodeCapabilityRouter(handlers: handlers)
     }
@@ -3414,8 +3360,7 @@ extension NodeAppModel {
                 appInstalled: status.appInstalled,
                 reachable: status.reachable,
                 activationState: status.activationState)
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawWatchCommand.notify.rawValue:
             let params = try Self.decodeParams(OpenClawWatchNotifyParams.self, from: req.paramsJSON)
             let normalizedParams = Self.normalizeWatchNotifyParams(params)
@@ -3452,8 +3397,7 @@ extension NodeAppModel {
                     deliveredImmediately: result.deliveredImmediately,
                     queuedForDelivery: result.queuedForDelivery,
                     transport: result.transport)
-                let json = try Self.encodePayload(payload)
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+                return try Self.successfulInvokeResponse(req, payload: payload)
             } catch {
                 return BridgeInvokeResponse(
                     id: req.id,
@@ -3463,10 +3407,7 @@ extension NodeAppModel {
                         message: error.localizedDescription))
             }
         default:
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -5796,12 +5737,15 @@ extension NodeAppModel {
             transport: event.transport,
             messageKind: .quickReply)
         let needsReconnect = !self.isWatchMessageSendAvailable()
+        let routeGeneration = self.gatewayRouteGeneration
         await self.handleWatchMessage(message)
         guard needsReconnect else { return }
 
         let connected = await ensureOperatorApprovalConnectionForWatchReview(
             timeoutMs: 12000,
-            reason: "watch_reply")
+            reason: "watch_reply",
+            routeGeneration: routeGeneration,
+            gatewayStableID: gatewayStableID)
         guard connected,
               GatewayStableIdentifier.matches(
                   self.currentWatchChatGatewayStableID(),
@@ -6042,14 +5986,38 @@ extension NodeAppModel {
         await self.syncWatchExecApprovalSnapshot(reason: reason)
     }
 
+    private static func appendPendingApproval<Item>(
+        _ item: Item,
+        to items: inout [Item],
+        maximumCount: Int? = nil,
+        key: (Item) -> (some Equatable)?,
+        sortedBy sortsBefore: (Item, Item) -> Bool) -> Bool
+    {
+        guard let itemKey = key(item), !items.contains(where: { key($0) == itemKey }) else { return false }
+        items.append(item)
+        if let maximumCount, items.count > maximumCount { items.removeFirst() }
+        items.sort(by: sortsBefore)
+        return true
+    }
+
+    private static func removePendingApproval<Item>(
+        _ item: Item,
+        from items: inout [Item],
+        key: (Item) -> (some Equatable)?) -> Bool
+    {
+        guard let itemKey = key(item) else { return false }
+        let originalCount = items.count
+        items.removeAll { key($0) == itemKey }
+        return items.count != originalCount
+    }
+
     private func appendPendingWatchExecApprovalRecoveryPush(_ push: ExecApprovalNotificationPrompt) {
-        guard let pushKey = Self.execApprovalPushKey(push),
-              !self.pendingWatchExecApprovalRecoveryPushes.contains(where: {
-                  Self.execApprovalPushKey($0) == pushKey
-              })
+        guard Self.appendPendingApproval(
+            push,
+            to: &self.pendingWatchExecApprovalRecoveryPushes,
+            key: Self.execApprovalPushKey,
+            sortedBy: Self.execApprovalPushSortsBefore)
         else { return }
-        self.pendingWatchExecApprovalRecoveryPushes.append(push)
-        self.pendingWatchExecApprovalRecoveryPushes.sort(by: Self.execApprovalPushSortsBefore)
         GatewayDiagnostics.log(
             "watch exec approval: queued recovery "
                 + "id=\(push.approvalId) pendingCount=\(self.pendingWatchExecApprovalRecoveryPushes.count)")
@@ -6057,12 +6025,11 @@ extension NodeAppModel {
     }
 
     private func removePendingWatchExecApprovalRecoveryPush(_ push: ExecApprovalNotificationPrompt) {
-        guard let pushKey = Self.execApprovalPushKey(push) else { return }
-        let originalCount = self.pendingWatchExecApprovalRecoveryPushes.count
-        self.pendingWatchExecApprovalRecoveryPushes.removeAll {
-            Self.execApprovalPushKey($0) == pushKey
-        }
-        guard self.pendingWatchExecApprovalRecoveryPushes.count != originalCount else { return }
+        guard Self.removePendingApproval(
+            push,
+            from: &self.pendingWatchExecApprovalRecoveryPushes,
+            key: Self.execApprovalPushKey)
+        else { return }
         GatewayDiagnostics.log(
             "watch exec approval: cleared recovery "
                 + "id=\(push.approvalId) pendingCount=\(self.pendingWatchExecApprovalRecoveryPushes.count)")
@@ -6070,40 +6037,35 @@ extension NodeAppModel {
     }
 
     private func appendPendingExecApprovalResolvedPush(_ push: ExecApprovalNotificationPrompt) {
-        guard let pushKey = Self.execApprovalPushKey(push),
-              !self.pendingExecApprovalResolvedPushes.contains(where: {
-                  Self.execApprovalPushKey($0) == pushKey
-              })
-        else { return }
         // A silent resolution push is not replayed by the gateway. Keep it until the
         // authenticated owner route returns so its matching notification cannot linger.
-        self.pendingExecApprovalResolvedPushes.append(push)
-        if self.pendingExecApprovalResolvedPushes.count > 32 {
-            self.pendingExecApprovalResolvedPushes.removeFirst()
-        }
-        self.pendingExecApprovalResolvedPushes.sort(by: Self.execApprovalPushSortsBefore)
+        guard Self.appendPendingApproval(
+            push,
+            to: &self.pendingExecApprovalResolvedPushes,
+            maximumCount: 32,
+            key: Self.execApprovalPushKey,
+            sortedBy: Self.execApprovalPushSortsBefore)
+        else { return }
         self.persistWatchExecApprovalBridgeState()
     }
 
     private func removePendingExecApprovalResolvedPush(_ push: ExecApprovalNotificationPrompt) {
-        guard let pushKey = Self.execApprovalPushKey(push) else { return }
-        let originalCount = self.pendingExecApprovalResolvedPushes.count
-        self.pendingExecApprovalResolvedPushes.removeAll {
-            Self.execApprovalPushKey($0) == pushKey
-        }
-        guard self.pendingExecApprovalResolvedPushes.count != originalCount else { return }
+        guard Self.removePendingApproval(
+            push,
+            from: &self.pendingExecApprovalResolvedPushes,
+            key: Self.execApprovalPushKey)
+        else { return }
         self.persistWatchExecApprovalBridgeState()
     }
 
     private func removePendingPersistedExecApprovalReadback(
         _ readback: PersistedExecApprovalReadback)
     {
-        guard let readbackKey = Self.persistedExecApprovalReadbackKey(readback) else { return }
-        let originalCount = self.pendingPersistedExecApprovalReadbacks.count
-        self.pendingPersistedExecApprovalReadbacks.removeAll {
-            Self.persistedExecApprovalReadbackKey($0) == readbackKey
-        }
-        guard self.pendingPersistedExecApprovalReadbacks.count != originalCount else { return }
+        guard Self.removePendingApproval(
+            readback,
+            from: &self.pendingPersistedExecApprovalReadbacks,
+            key: Self.persistedExecApprovalReadbackKey)
+        else { return }
         self.persistWatchExecApprovalBridgeState()
     }
 
@@ -6114,19 +6076,15 @@ extension NodeAppModel {
         let readback = PersistedExecApprovalReadback(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID)
-        guard let readbackKey = Self.persistedExecApprovalReadbackKey(readback),
-              !self.pendingPersistedExecApprovalReadbacks.contains(where: {
-                  Self.persistedExecApprovalReadbackKey($0) == readbackKey
-              })
-        else { return }
         // A requested event is an edge trigger, not replayed state. Retain its exact owner
         // until approval.get classifies it so a reconnect cannot lose a parked approval.
-        self.pendingPersistedExecApprovalReadbacks.append(readback)
-        if self.pendingPersistedExecApprovalReadbacks.count > 64 {
-            self.pendingPersistedExecApprovalReadbacks.removeFirst()
-        }
-        self.pendingPersistedExecApprovalReadbacks.sort(
-            by: Self.persistedExecApprovalReadbackSortsBefore)
+        guard Self.appendPendingApproval(
+            readback,
+            to: &self.pendingPersistedExecApprovalReadbacks,
+            maximumCount: 64,
+            key: Self.persistedExecApprovalReadbackKey,
+            sortedBy: Self.persistedExecApprovalReadbackSortsBefore)
+        else { return }
         self.persistWatchExecApprovalBridgeState()
     }
 
@@ -6778,6 +6736,17 @@ extension NodeAppModel {
         event.messageKind ?? .chat
     }
 
+    nonisolated static func watchThinkingOverride(for messageKind: WatchMessageKind) -> String? {
+        // Free-form Watch chat has no one-turn thinking control, so it must not
+        // invent an override. Quick replies intentionally use a cheap level.
+        switch messageKind {
+        case .chat:
+            nil
+        case .quickReply:
+            "low"
+        }
+    }
+
     private func forwardWatchMessage(
         _ event: WatchAppCommandEvent,
         requeueOnFailure: Bool) async -> WatchMessageSendOutcome
@@ -6800,7 +6769,7 @@ extension NodeAppModel {
         if messageKind == .chat {
             self.focusChatSession(sessionKey)
         }
-        let thinking = messageKind == .quickReply ? "low" : "auto"
+        let thinkingOverride = Self.watchThinkingOverride(for: messageKind)
 
         do {
             let submittedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -6808,7 +6777,8 @@ extension NodeAppModel {
                 let response = try await appleReviewDemoChatTransport.sendMessage(
                     sessionKey: sessionKey,
                     message: text,
-                    thinking: thinking,
+                    // Demo mode has no Gateway session from which to resolve an omitted level.
+                    thinking: thinkingOverride ?? "auto",
                     idempotencyKey: event.commandId,
                     attachments: [])
                 if messageKind == .quickReply {
@@ -6852,7 +6822,7 @@ extension NodeAppModel {
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
                 message: text,
-                thinking: thinking,
+                thinking: thinkingOverride,
                 idempotencyKey: event.commandId,
                 attachments: [],
                 ifCurrentRoute: operatorRoute)
@@ -8913,7 +8883,9 @@ extension NodeAppModel {
         {
             await self.ensureOperatorApprovalConnectionForWatchReview(
                 timeoutMs: 12000,
-                reason: sourceReason)
+                reason: sourceReason,
+                routeGeneration: routeGeneration,
+                gatewayStableID: gatewayStableID)
         } else {
             await self.ensureOperatorApprovalConnection(timeoutMs: 12000)
         }
@@ -9849,10 +9821,23 @@ extension NodeAppModel {
             sessionBox: sessionBox)
     }
 
-    private func ensureOperatorApprovalConnectionForWatchReview(timeoutMs: Int, reason: String) async -> Bool {
+    private func ensureOperatorApprovalConnectionForWatchReview(
+        timeoutMs: Int,
+        reason: String,
+        routeGeneration: UInt64,
+        gatewayStableID: String) async -> Bool
+    {
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         let normalizedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         let reconnectReason = normalizedReason.isEmpty ? "watch_request" : normalizedReason
         if await self.isOperatorConnected() {
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_connected "
                     + "reason=\(reconnectReason) phase=already_connected")
@@ -9864,6 +9849,10 @@ extension NodeAppModel {
                 "watch exec approval: watch_request_reconnect_begin "
                     + "reason=\(reconnectReason) backgrounded=false strategy=default")
             let connected = await ensureOperatorApprovalConnection(timeoutMs: timeoutMs)
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
                     + "reason=\(reconnectReason) phase=foreground_delegate")
@@ -9920,17 +9909,29 @@ extension NodeAppModel {
             pollMs: 200,
             owner: .operator)
         {
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_connected "
                     + "reason=\(reconnectReason) phase=initial")
             return true
         }
 
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_restart reason=\(reconnectReason)")
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
         await self.operatorGateway.disconnect()
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.stopGatewayHealthMonitor()
@@ -9953,6 +9954,10 @@ extension NodeAppModel {
             timeoutMs: remainingWaitMs,
             pollMs: 200,
             owner: .operator)
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
                 + "reason=\(reconnectReason) phase=restart")
@@ -10421,6 +10426,10 @@ extension NodeAppModel {
 
 #if DEBUG
 extension NodeAppModel {
+    func _test_backgroundReconnectIsSuppressed() -> Bool {
+        self.backgroundReconnectSuppressed
+    }
+
     func _test_setActiveGatewayConnectConfig(_ config: GatewayConnectConfig?) {
         self.activeGatewayConnectConfig = config
     }

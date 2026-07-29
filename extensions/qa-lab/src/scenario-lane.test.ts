@@ -1,8 +1,10 @@
 // Qa Lab tests cover canonical scenario lane matching behavior.
 import { describe, expect, it } from "vitest";
+import type { QaProviderMode } from "./model-selection.js";
 import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
+  resolveQaScenarioLaneChannels,
   scenarioMatchesQaProviderLane,
 } from "./scenario-lane.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -32,12 +34,62 @@ describe("QA scenario lane matching", () => {
     ).toBe(false);
   });
 
+  it.each([
+    {
+      id: "cron-empty-response-after-write-recovery",
+      allowedProviderMode: "mock-openai" as const,
+      rejectedProviderMode: "live-frontier" as const,
+    },
+    {
+      id: "cron-explicit-authority-execution",
+      allowedProviderMode: "live-frontier" as const,
+      rejectedProviderMode: "mock-openai" as const,
+    },
+  ])(
+    "keeps $id on its required $allowedProviderMode provider lane",
+    ({ id, allowedProviderMode, rejectedProviderMode }) => {
+      const scenario = readQaScenarioById(id);
+      const modelForMode = (mode: QaProviderMode) =>
+        mode === "mock-openai" ? "mock-openai/gpt-5.6-luna" : "openai/gpt-5.6-luna";
+
+      expect(
+        scenarioMatchesQaProviderLane({
+          scenario,
+          providerMode: allowedProviderMode,
+          primaryModel: modelForMode(allowedProviderMode),
+        }),
+      ).toBe(true);
+      const rejected = {
+        scenario,
+        providerMode: rejectedProviderMode,
+        primaryModel: modelForMode(rejectedProviderMode),
+      };
+      expect(scenarioMatchesQaProviderLane(rejected)).toBe(false);
+      expect(describeQaProviderLaneMismatches(rejected)).toContain(
+        `providerMode=${allowedProviderMode}`,
+      );
+    },
+  );
+
+  it("keeps multi-channel metadata as OR eligibility while exposing every supported lane", () => {
+    const scenario = readQaScenarioById("thread-isolation");
+
+    expect(
+      resolveQaScenarioLaneChannels({
+        scenario,
+        channelDriver: "live",
+        supportsChannel: (channel) => channel === "slack" || channel === "matrix",
+      }),
+    ).toEqual(["slack", "matrix"]);
+  });
+
   it("reports every declared mismatch in one decision", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {
       channel: "matrix",
       runtimePairLane: "core",
       config: {
         requiredProviderMode: "live-frontier",
+        requiredChannelDriver: "live",
         requiredProvider: "claude-cli",
         requiredModel: "claude-sonnet-4-6",
         authMode: "subscription",
@@ -55,6 +107,7 @@ describe("QA scenario lane matching", () => {
       }),
     ).toEqual([
       "providerMode=live-frontier",
+      "channelDriver=live",
       "channel=matrix",
       "provider=claude-cli",
       "model=claude-sonnet-4-6",
@@ -87,6 +140,32 @@ describe("QA scenario lane matching", () => {
         primaryModel: "openai/gpt-5.6-luna",
         channelDriver: "live",
         channel: "telegram",
+      }),
+    ).toBe(true);
+  });
+
+  it("enforces an explicit channel driver contract", () => {
+    const scenario = makeQaSuiteTestScenario("live-only", {
+      channel: "matrix",
+      config: { requiredChannelDriver: "live" },
+    });
+
+    expect(
+      describeQaProviderLaneMismatches({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "crabline",
+        channel: "matrix",
+      }),
+    ).toEqual(["channelDriver=live"]);
+    expect(
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
       }),
     ).toBe(true);
   });

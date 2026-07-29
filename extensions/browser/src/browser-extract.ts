@@ -10,6 +10,7 @@ import {
   readStringValue,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
+import type { BrowserProxyRequest } from "./browser-tool.snapshot.js";
 import {
   BROWSER_EXTRACT_MAX_CHARS,
   BROWSER_EXTRACT_TRUNCATION_MARKER,
@@ -48,15 +49,6 @@ type BrowserExtractCompletionDeps = {
 type BrowserExtractDeps = BrowserExtractCompletionDeps & {
   browserPageContent: typeof browserPageContent;
 };
-
-type BrowserProxyRequest = (opts: {
-  method: string;
-  path: string;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-  signal?: AbortSignal;
-}) => Promise<unknown>;
 
 export function resolveBrowserExtractTimeoutMs(input: Record<string, unknown>): number {
   const requested = readPositiveIntegerParam(input, "timeoutMs", {

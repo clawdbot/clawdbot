@@ -1,4 +1,11 @@
 // Mattermost plugin module implements channel behavior.
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringParam,
+  withNormalizedTimestamp,
+} from "openclaw/plugin-sdk/channel-actions";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -54,6 +61,7 @@ import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
+  inspectMattermostAccount,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -153,9 +161,9 @@ function describeMattermostMessageTool({
 >[0]): ChannelMessageToolDiscovery {
   const enabledAccounts = (
     accountId
-      ? [resolveMattermostAccount({ cfg, accountId })]
+      ? [inspectMattermostAccount({ cfg, accountId })]
       : listMattermostAccountIds(cfg).map((listedAccountId) =>
-          resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+          inspectMattermostAccount({ cfg, accountId: listedAccountId }),
         )
   )
     .filter((account) => account.enabled)
@@ -167,7 +175,10 @@ function describeMattermostMessageTool({
     actions.push("send");
   }
 
-  const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+  const actionsConfig = cfg.channels?.mattermost?.actions as
+    | { messages?: boolean; reactions?: boolean }
+    | undefined;
+  const baseMessages = actionsConfig?.messages;
   const baseReactions = actionsConfig?.reactions;
   const hasReactionCapableAccount = enabledAccounts.some((account) => {
     const accountActions = account.config.actions as { reactions?: boolean } | undefined;
@@ -175,6 +186,12 @@ function describeMattermostMessageTool({
   });
   if (hasReactionCapableAccount) {
     actions.push("react");
+  }
+  const hasMessageCapableAccount = enabledAccounts.some(
+    (account) => account.config.actions?.messages ?? baseMessages ?? false,
+  );
+  if (hasMessageCapableAccount) {
+    actions.push("read");
   }
 
   return {
@@ -188,9 +205,9 @@ function hasConfiguredMattermostDirectoryAccount({
   accountId,
 }: Pick<MattermostDirectoryListParams, "cfg" | "accountId">): boolean {
   const accounts = accountId
-    ? [resolveMattermostAccount({ cfg, accountId })]
+    ? [inspectMattermostAccount({ cfg, accountId })]
     : listMattermostAccountIds(cfg).map((listedAccountId) =>
-        resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+        inspectMattermostAccount({ cfg, accountId: listedAccountId }),
       );
   return accounts.some((account) =>
     Boolean(account.enabled && account.botToken?.trim() && account.baseUrl?.trim()),
@@ -365,7 +382,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => extractMattermostToolSend(args),
   extractToolSendResult: ({ result, send }) => extractMattermostToolSendResult(result, send),
   supportsAction: ({ action }) => {
-    return action === "send" || action === "react";
+    return action === "send" || action === "react" || action === "read";
   },
   handleAction: async ({
     action,
@@ -376,7 +393,71 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     mediaLocalRoots,
     mediaReadFile,
     conversationReadOrigin,
+    requesterAccountId,
+    toolContext,
   }) => {
+    if (action === "read") {
+      const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+      const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
+      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      if (!account.enabled) {
+        throw new Error(`Mattermost account "${resolvedAccountId}" is disabled`);
+      }
+      const messagesEnabled =
+        account.config.actions?.messages ?? mattermostConfig?.actions?.messages ?? false;
+      if (!messagesEnabled) {
+        throw new Error("Mattermost message reads are disabled in config");
+      }
+
+      const rawTarget =
+        readStringParam(params, "to") ??
+        readStringParam(params, "channelId") ??
+        readStringParam(params, "target");
+      if (!rawTarget) {
+        throw new Error("Mattermost read requires target, to, or channelId.");
+      }
+      const normalizedTarget = normalizeMattermostMessagingTarget(rawTarget);
+      const channelId = normalizedTarget?.startsWith("channel:")
+        ? normalizedTarget.slice("channel:".length).trim()
+        : !rawTarget.includes(":")
+          ? rawTarget
+          : "";
+      if (!channelId) {
+        throw new Error("Mattermost read requires a channel target.");
+      }
+
+      const before = readStringParam(params, "before");
+      const after = readStringParam(params, "after");
+      if (before && after) {
+        throw new Error("Mattermost read accepts either before or after, not both.");
+      }
+      const result = await (
+        await loadMattermostChannelRuntime()
+      ).readMattermostMessages({
+        cfg,
+        channelId,
+        limit: readPositiveIntegerParam(params, "limit", {
+          message: "limit must be a positive integer.",
+        }),
+        before,
+        after,
+        accountId: resolvedAccountId,
+        context: {
+          conversationReadOrigin,
+          requesterAccountId,
+          toolContext,
+        },
+      });
+      return jsonResult({
+        ok: true,
+        channelId,
+        messages: result.messages.map((message) =>
+          withNormalizedTimestamp(message as Record<string, unknown>, message.create_at),
+        ),
+        hasMore: result.hasMore,
+      });
+    }
+
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
@@ -810,6 +891,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
+      inspectAccount: adaptScopedAccountAccessor(inspectMattermostAccount),
       isConfigured: isMattermostConfigured,
       describeAccount: describeMattermostAccount,
     },
@@ -895,6 +977,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         configured: Boolean(account.botToken && account.baseUrl),
         extra: {
           botTokenSource: account.botTokenSource,
+          botTokenStatus: account.botTokenStatus,
           baseUrl: account.baseUrl,
           dmPolicy: account.config.dmPolicy ?? "pairing",
           connected: runtime?.connected ?? false,

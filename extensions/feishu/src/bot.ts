@@ -4,7 +4,7 @@ import {
   formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
   resolveEnvelopeFormatOptions,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
@@ -1051,7 +1051,7 @@ export async function handleFeishuMessage(params: {
         : mediaList.findIndex(
             (media) => media.kind === "audio" || media.contentType?.startsWith("audio/"),
           );
-    const inboundMedia = toInboundMediaFacts(mediaList, {
+    const inboundMedia = await toInboundMediaFactsWithMetadata(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     });
     const requiredMentionTargets =

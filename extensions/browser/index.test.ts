@@ -214,6 +214,7 @@ describe("browser plugin", () => {
     }
 
     expect(tool.name).toBe("browser");
+    expect(tool.resultContentSource).toBe("network");
     expect(tool.description).toContain("action=profiles");
     expect(tool.description).not.toContain('profile="user"');
     expect(tool.outputSchema).toBe(BrowserToolOutputSchema);
@@ -344,6 +345,7 @@ describe("browser plugin", () => {
           name: "browser",
           description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
           hasSubcommands: true,
+          machineOutput: expect.any(Function),
         },
       ],
     });

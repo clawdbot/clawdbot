@@ -2,6 +2,7 @@
 import type { Agent } from "node:https";
 import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
@@ -84,10 +85,6 @@ type FeishuHttpInstanceLike = Pick<
   typeof feishuClientSdk.defaultHttpInstance,
   "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
 >;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function readHeader(headers: unknown, name: string): string | undefined {
   if (!isRecord(headers)) {

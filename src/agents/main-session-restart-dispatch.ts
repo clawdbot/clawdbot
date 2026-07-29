@@ -114,7 +114,7 @@ export function resolveRestartRecoveryResumeBlockReason(params: {
   // A stored hook result proves that invocation completed, but not that the
   // same plugin code and config are still loaded after restart. Fail closed
   // until hook activation owns a stable cross-process implementation digest.
-  const unsafeHook = findRestartRecoveryUnsafeReplyHook();
+  const unsafeHook = findRestartRecoveryUnsafeReplyHook({ trigger: "user" });
   return unsafeHook ? `pre-hook recovery cannot bypass the active ${unsafeHook} hook` : undefined;
 }
 
@@ -143,7 +143,7 @@ export function resolveRestartRecoveryDeliveryContext(params: {
   const hasActiveRunDeliveryClaim =
     normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
   const deliveryContext =
-    normalizeDeliveryContext(params.entry.pendingFinalDeliveryContext) ??
+    normalizeDeliveryContext(params.entry.pendingFinalDelivery?.context) ??
     activeRunDeliveryContext ??
     (params.includeSessionDeliveryFallback && !hasActiveRunDeliveryClaim
       ? deliveryContextFromSession(params.entry)

@@ -4,6 +4,7 @@
 // tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
@@ -58,6 +59,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ attribute: false }) agentId: string | null = null;
   /** Whether the connected gateway advertises the terminal surface. */
   @property({ type: Boolean }) available = false;
+  /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
+  @property({ type: Boolean }) suppressed = false;
   /** Active Control UI color mode, mirrored into the terminal theme. */
   @property({ attribute: false }) themeMode: "dark" | "light" = "dark";
   /**
@@ -68,10 +71,19 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   @state() terminalPanelErrorText: string | null = null;
   @state() private sessionPickerOpen = false;
-  @state() private sessionPickerLoading = false;
   @state() private pickerSessions: TerminalSessionInfo[] = [];
 
-  private sessionPickerRefreshGeneration = 0;
+  private readonly sessionPickerTask = new Task(this, {
+    autoRun: false,
+    // The controller reads the host client; carrying its identity retires stale picker loads.
+    args: () => [this.available ? this.client : null] as const,
+    task: ([client]) => (client ? this.terminalSessions.listSessions() : initialState),
+    onComplete: (sessions) => {
+      if (sessions !== null) {
+        this.pickerSessions = sessions;
+      }
+    },
+  });
   readonly terminalPanelUploadController = new TerminalPanelUploadController({
     activeTab: () =>
       this.terminalSessions.tabs.find(
@@ -104,6 +116,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.terminalSessions.connectHost();
+    // A settings takeover can already own the viewport when the panel mounts.
+    // Suppress before the restored open state boots a session nobody can see.
+    this.dockLayout.setSuppressed(this.suppressed);
     if (!this.fullscreen) {
       window.addEventListener("keydown", this.onGlobalKeyDown);
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
@@ -121,6 +136,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
+      // Restoring after a takeover: a reconnect during settings disposed the tabs
+      // without restoring them, so re-run the normal open path.
+      void this.terminalSessions.restoreSessions();
+    }
     if (changed.has("client") || changed.has("available")) {
       this.terminalSessions.scheduleLifecycleSync();
     }
@@ -217,15 +237,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  private async refreshSessionPicker(): Promise<void> {
-    const refreshGeneration = ++this.sessionPickerRefreshGeneration;
-    this.sessionPickerLoading = true;
-    const sessions = await this.terminalSessions.listSessions();
-    if (refreshGeneration !== this.sessionPickerRefreshGeneration || sessions === null) {
-      return;
-    }
-    this.pickerSessions = sessions;
-    this.sessionPickerLoading = false;
+  private refreshSessionPicker(): Promise<void> {
+    return this.sessionPickerTask.run();
   }
 
   private async attachPickedSession(
@@ -243,8 +256,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   resetTerminalSessionPicker(): void {
     this.sessionPickerOpen = false;
-    this.sessionPickerLoading = false;
-    this.sessionPickerRefreshGeneration += 1;
+    void this.sessionPickerTask.run([null]);
     this.pickerSessions = [];
   }
 
@@ -270,7 +282,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       activeTab?.status === "connecting";
     const sessionPicker = renderTerminalSessionPicker({
       open: this.sessionPickerOpen,
-      loading: this.sessionPickerLoading,
+      loading: this.sessionPickerTask.status === TaskStatus.PENDING,
       sessions: this.pickerSessions,
       currentSessionIds: new Set(
         this.terminalSessions.tabs

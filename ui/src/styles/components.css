@@ -45,6 +45,13 @@ openclaw-session-owner-chip {
   font-size: 10px;
 }
 
+.session-owner-chip .viewer-avatar {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  font-size: inherit;
+}
+
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
    ring and corner badge, so run state always reads at the row's left edge. */
 .session-glyph {
@@ -644,6 +651,9 @@ openclaw-session-owner-chip {
   font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.01em;
+  /* Labels never break mid-text; tight clusters wrap whole buttons instead
+     (see .settings-row--actions). */
+  white-space: nowrap;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),
@@ -1121,7 +1131,7 @@ openclaw-session-owner-chip {
 .field select {
   appearance: none;
   padding-right: 36px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-image: var(--select-chevron);
   background-repeat: no-repeat;
   background-position: right 10px center;
 }
@@ -1273,10 +1283,6 @@ openclaw-session-owner-chip {
 :root[data-theme-mode="light"] .field select {
   background-color: var(--card);
   border-color: var(--input);
-}
-
-:root[data-theme-mode="light"] .field select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 }
 
 :root[data-theme-mode="light"] .btn {
@@ -3723,6 +3729,21 @@ td.data-table-key-col {
   opacity: 0.5;
 }
 
+.agent-tab-add {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+}
+
+.agent-tab-add:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .agent-tab-badge {
   margin-left: 4px;
   font-size: 12px; /* was 9px */
@@ -5776,4 +5797,63 @@ td.data-table-key-col {
 .provider-brand-icon[data-provider-icon="opencode"],
 .provider-brand-icon[data-provider-icon="opencodego"] {
   color: var(--text-strong);
+}
+/* Shared working-claw motion: chat and settings use the same body flex and
+   jaw snip timing so the brand activity signal stays consistent. */
+@keyframes chatWorkingClawFlex {
+  0%,
+  6% {
+    transform: rotate(0deg);
+  }
+
+  10% {
+    transform: rotate(-4deg);
+  }
+
+  16% {
+    transform: rotate(3deg);
+  }
+
+  22%,
+  26% {
+    transform: rotate(-4deg);
+  }
+
+  32% {
+    transform: rotate(3deg);
+  }
+
+  42%,
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes chatWorkingClawSnip {
+  0%,
+  6% {
+    transform: rotate(-10deg);
+  }
+
+  10% {
+    transform: rotate(-26deg);
+  }
+
+  16% {
+    transform: rotate(4deg);
+  }
+
+  22%,
+  26% {
+    transform: rotate(-24deg);
+  }
+
+  32% {
+    transform: rotate(4deg);
+  }
+
+  42%,
+  100% {
+    transform: rotate(-10deg);
+  }
 }

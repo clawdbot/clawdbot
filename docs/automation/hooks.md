@@ -27,6 +27,8 @@ OpenClaw has several extension surfaces that look similar but solve different pr
 
 Use internal hooks when you want automation that behaves like a small installed integration. Use typed plugin hooks when you need runtime lifecycle control.
 
+Internal hook handlers are request/event handlers. They must not own long-lived timers, watchers, sockets, or clients; plugins should register a service or use the typed `gateway_start` / `gateway_stop` lifecycle instead.
+
 ## Quick start
 
 ```bash

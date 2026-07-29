@@ -41,6 +41,18 @@ openclaw agent exec "Implement the change" \
 
 For this command only, explicit `--fallback` values remain active with explicit `--model`. Other agent entry points keep their existing rule that a user-selected model disables configured fallbacks.
 
+Select the one-shot tool surface explicitly when comparing local or smaller models:
+
+```bash
+openclaw agent exec "Inspect this repository" \
+  --model ollama/qwen3.5:9b \
+  --code-mode code \
+  --local-model-lean \
+  --json
+```
+
+`--code-mode direct` disables Code Mode, `auto` uses model capability metadata, and `code` forces the generic Code Mode surface for tool-capable runs. `--local-model-lean` removes high-latency and channel-dependent tools and enables the bounded Tool Search defaults for the isolated run.
+
 The timeout defaults to 600 seconds for `agent exec`; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
 
 Plain output writes only the final assistant text to stdout. Diagnostics use stderr. `--json` reserves stdout for this stable envelope:
@@ -52,6 +64,11 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
   "final": "The focused tests pass.",
   "payloads": [{ "text": "The focused tests pass." }],
   "usage": { "input": 120, "output": 8, "total": 128 },
+  "costUsd": 0.0021,
+  "codeModeEngaged": false,
+  "assistantTurns": 2,
+  "bridgeCalls": { "search": 1, "describe": 0, "call": 3 },
+  "toolSummary": { "calls": 2, "tools": ["read", "write"], "totalToolTimeMs": 48 },
   "model": "gpt-5.6-sol",
   "provider": "openai",
   "sessionId": "019..."
@@ -60,6 +77,30 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
 
 `status` is `ok`, `error`, or `timeout`. `usage` is omitted when unavailable. Failed envelopes add `error: { message, kind }`; `model` and `provider` are `null` when failure happens before model selection.
 
+Run-stat fields are additive and may be absent:
+
+- `costUsd`: estimated USD cost of the run's accumulated usage, including cache read/write pricing; omitted when the model has no cost data.
+- `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement; models routed through a native harness surface can leave it `false`.
+- `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
+- `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
+- `toolSummary`: outer model-visible tool-call count, tool names, failures, and total tool time from the embedded run.
+
+The agent run-stat fields appear on `meta.agentMeta` in the `openclaw agent --json` response; the outer tool summary remains at `meta.toolSummary`.
+
+### Code Mode model matrix
+
+From a source checkout, run the bounded evaluation matrix against any explicit model reference:
+
+```bash
+pnpm qa:code-mode-models -- --model ollama/qwen3.5:9b
+```
+
+Repeat `--model` to compare models, or use `--mode`, `--task`, and `--repetitions` to narrow the default direct/automatic/forced Code Mode matrix. Each cell runs an isolated `agent exec` task and records model/provider identity, timing, result status, failure class, outer tool calls, Code Mode bridge calls, and verified output/effects.
+
+The output directory contains canonical QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity.
+
+This is evaluation-only evidence, not a CI or release gate. Results do not change model capabilities, runtime routing, fallback, or repair policy.
+
 ### `agent exec` options
 
 - `[message]`: positional prompt text
@@ -67,6 +108,8 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
 - `--cwd <dir>`: set both the agent workspace and tool working directory
 - `--state-dir <dir>`: use an existing state directory without deleting it
 - `--model <provider/model>`: explicit primary model
+- `--code-mode <mode>`: select `direct`, `auto`, or forced `code` tool mode
+- `--local-model-lean`: use the reduced local-model tool surface
 - `--thinking <level>`: one-run thinking level
 - `--fallback <provider/model>`: ordered fallback model; repeatable and requires `--model`
 - `--auth-env-only`: ignore stored and external CLI credentials (default)

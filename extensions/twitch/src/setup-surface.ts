@@ -144,43 +144,51 @@ export async function promptToken(
   ).trim();
 }
 
+async function promptRequiredTwitchAccountValue(
+  prompter: WizardPrompter,
+  message: string,
+  initialValue: string | undefined,
+): Promise<string> {
+  return (
+    await prompter.text({
+      message,
+      initialValue: initialValue ?? "",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    })
+  ).trim();
+}
+
 export async function promptUsername(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
-  return (
-    await prompter.text({
-      message: t("wizard.twitch.botUsernamePrompt"),
-      initialValue: account?.username ?? "",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    })
-  ).trim();
+  return await promptRequiredTwitchAccountValue(
+    prompter,
+    t("wizard.twitch.botUsernamePrompt"),
+    account?.username,
+  );
 }
 
 export async function promptClientId(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
-  return (
-    await prompter.text({
-      message: t("wizard.twitch.clientIdPrompt"),
-      initialValue: account?.clientId ?? "",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    })
-  ).trim();
+  return await promptRequiredTwitchAccountValue(
+    prompter,
+    t("wizard.twitch.clientIdPrompt"),
+    account?.clientId,
+  );
 }
 
 export async function promptChannelName(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
-  return (
-    await prompter.text({
-      message: t("wizard.twitch.channelJoinPrompt"),
-      initialValue: account?.channel ?? "",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    })
-  ).trim();
+  return await promptRequiredTwitchAccountValue(
+    prompter,
+    t("wizard.twitch.channelJoinPrompt"),
+    account?.channel,
+  );
 }
 
 export async function promptRefreshTokenSetup(
@@ -197,22 +205,17 @@ export async function promptRefreshTokenSetup(
   }
 
   const clientSecret =
-    (
-      await prompter.text({
-        message: t("wizard.twitch.clientSecretPrompt"),
-        initialValue: account?.clientSecret ?? "",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
-    ).trim() || undefined;
-
+    (await promptRequiredTwitchAccountValue(
+      prompter,
+      t("wizard.twitch.clientSecretPrompt"),
+      account?.clientSecret,
+    )) || undefined;
   const refreshToken =
-    (
-      await prompter.text({
-        message: t("wizard.twitch.refreshTokenInputPrompt"),
-        initialValue: account?.refreshToken ?? "",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
-    ).trim() || undefined;
+    (await promptRequiredTwitchAccountValue(
+      prompter,
+      t("wizard.twitch.refreshTokenInputPrompt"),
+      account?.refreshToken,
+    )) || undefined;
 
   return { clientSecret, refreshToken };
 }

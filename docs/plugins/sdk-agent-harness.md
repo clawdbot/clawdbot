@@ -294,6 +294,11 @@ runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
 
+Harnesses that forward embedded attempt params should pass
+`skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are
+deliberately narrow single-tool runs, and the runtime keeps them on the raw
+tool surface instead of engaging code mode or a tool-search catalog.
+
 ### Native Codex harness mode
 
 The bundled `codex` harness is the native Codex mode for embedded OpenClaw

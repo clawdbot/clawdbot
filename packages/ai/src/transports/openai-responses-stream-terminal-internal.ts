@@ -185,7 +185,9 @@ export function createResponsesTerminalController(params: {
     stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output as never });
   };
   const recoverTerminalOutput = (items: ResponseOutputItem[], includeToolCalls: boolean) => {
-    if (blocks.length > 0) {
+    // Reasoning can stream before the final message appears only in the terminal snapshot.
+    // Recover that visible answer without replaying already-streamed text or tool calls.
+    if (blocks.some((block) => block.type !== "thinking")) {
       return;
     }
     for (const item of items) {
@@ -204,6 +206,7 @@ export function createResponsesTerminalController(params: {
       ResponseStreamEvent,
       { type: "response.completed" | "response.incomplete" }
     >["response"],
+    terminalEventType: "response.completed" | "response.incomplete",
   ) => {
     params.markFinalized();
     backfillReasoning(response.output ?? []);
@@ -226,6 +229,7 @@ export function createResponsesTerminalController(params: {
     }
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
+      terminalEventType,
       incompleteReason: response.incomplete_details?.reason,
       hasToolCall: blocks.some((block) => block.type === "toolCall"),
     });

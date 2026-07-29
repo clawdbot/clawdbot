@@ -7,13 +7,16 @@ import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
+import { SessionToolOverridesSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
 export {
   SessionCreatedActorSchema,
   SessionRowSchema,
+  SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionRow,
+  type SessionToolOverrides,
 } from "./sessions-row.js";
 
 export const SESSION_OBSERVER_HEALTH_VALUES = [
@@ -470,6 +473,9 @@ export const SessionsAbortParamsSchema = closedObject({
 export const SessionsPatchParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  /** Reject the mutation if the session was reset or replaced before it commits. */
+  expectedSessionId: Type.Optional(NonEmptyString),
+  expectedLifecycleRevision: Type.Optional(NonEmptyString),
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
@@ -495,6 +501,7 @@ export const SessionsPatchParamsSchema = closedObject({
   ),
   thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
+  toolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
   verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

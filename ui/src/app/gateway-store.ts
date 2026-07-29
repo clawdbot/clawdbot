@@ -85,20 +85,6 @@ export function createApplicationGateway(
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
   let eventLog: EventLogEntry[] = [];
-  let stopClientEvents: (() => void) | undefined;
-  const syncClientEvents = (nextClient: GatewayBrowserClient | null) => {
-    stopClientEvents?.();
-    stopClientEvents = undefined;
-    if (!nextClient || eventListeners.size === 0) {
-      return;
-    }
-    const removers = [...eventListeners].map((listener) => nextClient.addEventListener(listener));
-    stopClientEvents = () => {
-      for (const remove of removers) {
-        remove();
-      }
-    };
-  };
   const notify = () => {
     for (const listener of listeners) {
       listener(snapshot);
@@ -295,8 +281,6 @@ export function createApplicationGateway(
     );
     stopCanvasSurfaceLease();
     client?.stop();
-    stopClientEvents?.();
-    stopClientEvents = undefined;
 
     const nextClient = createClient({
       url: nextConnection.gatewayUrl,
@@ -403,10 +387,34 @@ export function createApplicationGateway(
         });
         connect();
       },
-      onEvent: recordGatewayEvent,
+      onEvent: (event) => {
+        // A replaced socket can still deliver queued events; never let it
+        // project presence or history into the current gateway connection.
+        if (client !== nextClient) {
+          return;
+        }
+        try {
+          recordGatewayEvent(event);
+        } catch (error) {
+          // Preserve protocol-client isolation: a broken log subscriber must
+          // not prevent chat, approvals, or the remaining app from updating.
+          console.error("[gateway] event handler error:", error);
+        }
+        // Snapshot listeners so subscriptions changed during delivery affect
+        // only the next frame, not sibling consumers of the current frame.
+        for (const listener of Array.from(eventListeners)) {
+          if (client !== nextClient) {
+            return;
+          }
+          try {
+            listener(event);
+          } catch (error) {
+            console.error("[gateway] event listener handler error:", error);
+          }
+        }
+      },
     });
     client = nextClient;
-    syncClientEvents(nextClient);
     setSnapshot({
       ...snapshot,
       client: nextClient,
@@ -451,8 +459,6 @@ export function createApplicationGateway(
       stopped = true;
       clearOfflineIndicatorTimer();
       stopCanvasSurfaceLease();
-      stopClientEvents?.();
-      stopClientEvents = undefined;
       client?.stop();
       client = null;
       everConnected = false;
@@ -479,12 +485,7 @@ export function createApplicationGateway(
     },
     subscribeEvents: (listener) => {
       eventListeners.add(listener);
-      syncClientEvents(client);
-      return () => {
-        if (eventListeners.delete(listener)) {
-          syncClientEvents(client);
-        }
-      };
+      return () => eventListeners.delete(listener);
     },
     updateSelfUser: (patch) => {
       if (!snapshot.selfUser) {

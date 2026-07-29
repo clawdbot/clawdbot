@@ -22,6 +22,7 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -256,6 +257,11 @@ export type PluginAgentToolResultMiddlewareRegistration = {
   source: string;
   rootDir?: string;
 };
+export type PluginAgentToolResultMiddlewareOwner = {
+  pluginId: string;
+  runtimes: AgentToolResultMiddlewareRuntime[];
+  manifest: PluginManifestRecord;
+};
 type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -415,6 +421,7 @@ type PluginConversationBindingResolvedHandlerRegistration = {
 export type PluginRecord = {
   id: string;
   name: string;
+  packageVersion?: string;
   version?: string;
   builtWithOpenClawVersion?: string;
   packageName?: string;
@@ -502,6 +509,7 @@ export type PluginRegistry = {
   workerProviders: Map<string, PluginWorkerProviderRegistration>;
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
+  agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];

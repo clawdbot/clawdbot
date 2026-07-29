@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { applySelectedSessionProjection, SessionParticipationTracker } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  resolveChatArtifactDownload,
+  SessionParticipationTracker,
+} from "./chat-pane-state.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
   return {
@@ -77,6 +81,44 @@ describe("applySelectedSessionProjection", () => {
       archivedFilter: "active",
     });
     expect(afterNavigation?.sessions.map((row) => row.key)).toEqual(["agent:main:main"]);
+  });
+});
+
+describe("resolveChatArtifactDownload", () => {
+  it("returns a trimmed ticket without exposing a gateway bearer credential", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const result = await resolveChatArtifactDownload(
+      {
+        connected: true,
+        client: {
+          request: async (method: string, params: unknown) => {
+            requests.push({ method, params });
+            return {
+              artifact: {
+                id: "artifact-1",
+                type: "image",
+                title: "image",
+                download: { mode: "url" },
+              },
+              url: " /api/chat/media/outgoing/main/image/full?mediaTicket=ticket ",
+              expiresAt: " 2026-07-28T00:00:00.000Z ",
+            };
+          },
+        } as never,
+      },
+      { sessionKey: "agent:main:main", artifactId: "artifact-1" },
+    );
+
+    expect(requests).toEqual([
+      {
+        method: "artifacts.download",
+        params: { sessionKey: "agent:main:main", artifactId: "artifact-1" },
+      },
+    ]);
+    expect(result).toEqual({
+      url: "/api/chat/media/outgoing/main/image/full?mediaTicket=ticket",
+      expiresAt: "2026-07-28T00:00:00.000Z",
+    });
   });
 });
 

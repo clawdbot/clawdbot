@@ -83,10 +83,6 @@ const SYNCED_PREFS = {
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
     local: (settings) => settings.sidebarEntries,
   }),
-  showAdvancedSettings: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.showAdvancedSettings === true,
-  }),
 } as const;
 type SyncedPrefKey = keyof typeof SYNCED_PREFS;
 type SyncedPrefValue<K extends SyncedPrefKey> =

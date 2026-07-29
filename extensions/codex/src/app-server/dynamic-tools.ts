@@ -66,6 +66,10 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+import {
+  prepareCodexRemoteWorkspaceMessageMedia,
+  type CodexRemoteWorkspaceFileReader,
+} from "./remote-workspace-media.js";
 import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -73,6 +77,8 @@ type CodexDynamicToolHookContext = {
   agentId?: string;
   config?: EmbeddedRunAttemptParams["config"];
   workspaceDir?: string;
+  remoteWorkspaceRoot?: string;
+  remoteWorkspaceRequestTimeoutMs?: number;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -356,6 +362,8 @@ export type CodexDynamicToolBridge = {
   consumeToolExecutionSnapshot?: (
     toolCallId: string,
   ) => { executedArguments: Record<string, unknown>; executionStarted: boolean } | undefined;
+  /** Bind the authenticated app-server client once remote thread startup completes. */
+  setRemoteWorkspaceFileReader?: (reader: CodexRemoteWorkspaceFileReader) => void;
   telemetry: {
     didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
@@ -377,6 +385,9 @@ const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
 // is unavailable or resolves a connector-only universe. Developer instructions
 // still steer normal Codex subagents to native spawn_agent.
+// sessions_yield is normally routed by its catalogMode "direct-only" before
+// this set is consulted; the name entry stays as the metadata-independent
+// contract that control-path tools remain directly callable.
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   "agents_list",
   "sessions_spawn",
@@ -521,6 +532,7 @@ export function createCodexDynamicToolBridge(params: {
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
   ]);
+  let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableSpecs: createCodexDynamicToolSpecs({
       entries: availableTools,
@@ -533,6 +545,9 @@ export function createCodexDynamicToolBridge(params: {
       directToolNames,
     }),
     telemetry,
+    setRemoteWorkspaceFileReader: (reader) => {
+      readRemoteWorkspaceFile = reader;
+    },
     consumeToolExecutionSnapshot: (toolCallId) => {
       const state = executionSnapshotStates.get(toolCallId);
       executionSnapshotStates.delete(toolCallId);
@@ -603,7 +618,18 @@ export function createCodexDynamicToolBridge(params: {
         }
       };
       try {
-        const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const toolArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const preparedArgs =
+          toolName === "message" && isRecord(toolArgs)
+            ? await prepareCodexRemoteWorkspaceMessageMedia({
+                args: toolArgs,
+                localWorkspaceRoot: params.hookContext?.workspaceDir,
+                remoteWorkspaceRoot: params.hookContext?.remoteWorkspaceRoot,
+                readRemoteFile: readRemoteWorkspaceFile,
+                timeoutMs: params.hookContext?.remoteWorkspaceRequestTimeoutMs,
+                signal,
+              })
+            : toolArgs;
         const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
         executedArgs = structuredClone(telemetryArgs);
         const messagingContext = {
@@ -960,7 +986,13 @@ function createCodexDynamicToolSpecs(params: {
   const specs: CodexDynamicToolSpec[] = [];
   const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
   const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
-  for (const entry of params.entries) {
+  // Codex reuses its incremental websocket request only when the complete
+  // searchable surface is unchanged. Direct mode retains its compatibility order.
+  const entries =
+    params.loading === "direct"
+      ? params.entries
+      : params.entries.toSorted((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
     const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
     if (entry.name === "openclaw" && params.directToolNames.has(entry.name)) {
       // OpenClaw is ring-zero and its whole turn surface. Keep its canonical

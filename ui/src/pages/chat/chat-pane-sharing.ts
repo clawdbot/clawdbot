@@ -1,30 +1,34 @@
-import { ChatPaneBase } from "./chat-pane-base.ts";
+import type {
+  SessionSuggestion,
+  SessionSuggestionEvent,
+  SessionSuggestionResolution,
+  SessionSuggestionsListResult,
+  SessionTypingEvent,
+  TaskSuggestion,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
+import type {
+  GatewaySessionRow,
+  SessionMembersListResult,
+  SessionVisibility,
+} from "../../api/types.ts";
+import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
+import { t } from "../../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
-  GatewayRequestError,
   areUiSessionKeysEquivalent,
-  hasMultiplePresenceIdentities,
-  isGatewayMethodAdvertised,
   parseAgentSessionKey,
-  resolveChatAgentId,
-  scopedAgentParamsForSession,
-  t,
   uiSessionEventMatches,
-  type ChatPageHost,
-  type ChatSessionSharingState,
-  type GatewaySessionRow,
-  type SessionMembersListResult,
-  type SessionSuggestion,
-  type SessionSuggestionEvent,
-  type SessionSuggestionResolution,
-  type SessionSuggestionsListResult,
-  type SessionTypingEvent,
-  type SessionVisibility,
-  type TaskSuggestion,
-} from "./chat-pane-deps.ts";
+} from "../../lib/sessions/session-key.ts";
+import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   type ChatPaneConnectionScope,
 } from "./chat-pane-shared.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 
 export abstract class ChatPaneSharing extends ChatPaneBase {
   protected setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
@@ -172,7 +176,9 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     );
   }
 
-  protected taskSuggestionMatchesCurrentSession(suggestion: TaskSuggestion): boolean {
+  protected suggestionMatchesCurrentSession(
+    suggestion: Pick<TaskSuggestion | SessionSuggestion, "agentId" | "sessionKey">,
+  ): boolean {
     const state = this.state;
     return Boolean(
       state?.connected &&
@@ -190,22 +196,6 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
 
   protected hasMultipleIdentities(): boolean {
     return hasMultiplePresenceIdentities(this.presencePayload);
-  }
-
-  protected sessionSuggestionMatchesCurrentSession(suggestion: SessionSuggestion): boolean {
-    const state = this.state;
-    return Boolean(
-      state?.connected &&
-      uiSessionEventMatches(
-        {
-          agentsList: this.context.agents.state.agentsList,
-          hello: this.context.gateway.snapshot.hello,
-          sessionKey: state.sessionKey,
-        },
-        suggestion.sessionKey,
-        suggestion.agentId,
-      ),
-    );
   }
 
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
@@ -321,10 +311,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   }
 
   protected handleSessionSuggestionEvent(event: SessionSuggestionEvent): void {
-    if (
-      !this.hasMultipleIdentities() ||
-      !this.sessionSuggestionMatchesCurrentSession(event.suggestion)
-    ) {
+    if (!this.hasMultipleIdentities() || !this.suggestionMatchesCurrentSession(event.suggestion)) {
       return;
     }
     const shouldRefresh =
@@ -427,7 +414,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       !scope ||
       this.sessionSuggestionBusyIds.has(suggestion.id) ||
       (resolution === "edit" && this.sessionSuggestionEditOperation !== undefined) ||
-      !this.sessionSuggestionMatchesCurrentSession(suggestion)
+      !this.suggestionMatchesCurrentSession(suggestion)
     ) {
       return;
     }

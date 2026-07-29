@@ -44,7 +44,11 @@ import {
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
@@ -80,6 +84,20 @@ function diagnosticSummaries(diagnostics: readonly unknown[]) {
   return diagnostics.map((entry) => {
     const diagnostic = entry as { pluginId?: string; message?: string };
     return { pluginId: diagnostic.pluginId, message: diagnostic.message };
+  });
+}
+
+function createHostHookFixtureRegistry() {
+  return createPluginRegistryFixture({
+    plugins: {
+      entries: {
+        "host-hook-fixture": {
+          hooks: {
+            allowConversationAccess: true,
+          },
+        },
+      },
+    },
   });
 }
 
@@ -148,13 +166,14 @@ async function withHostHookState(
 
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
+    releasePinnedPluginSessionExtensionRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginHostRuntimeState();
     resetAgentEventsForTest();
   });
 
   it("registers generic SDK seams without Plan Mode business logic", () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const { config, registry } = createHostHookFixtureRegistry();
     registerTestPlugin({
       registry,
       config,
@@ -1145,7 +1164,7 @@ describe("host-hook fixture plugin contract", () => {
   });
 
   it("projects registered session extensions into gateway session rows", () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const { config, registry } = createHostHookFixtureRegistry();
     registerTestPlugin({
       registry,
       config,
@@ -1581,7 +1600,7 @@ describe("host-hook fixture plugin contract", () => {
   });
 
   it("models queued next-turn injections and agent_turn_prepare as one prompt context", async () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const { config, registry } = createHostHookFixtureRegistry();
     registerTestPlugin({
       registry,
       config,
@@ -1997,6 +2016,58 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
+  it("keeps gateway UI descriptors pinned across agent registry replacement", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "pinned-ui-fixture",
+        name: "Pinned UI Fixture",
+      }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          id: "gateway-panel",
+          surface: "session",
+          label: "Gateway panel",
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    pinActivePluginSessionExtensionRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const calls: Array<[boolean, unknown, unknown]> = [];
+    void expectDefined(
+      pluginHostHookHandlers["plugins.uiDescriptors"],
+      'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
+    )({
+      params: {},
+      respond: (ok: boolean, payload: unknown, error: unknown) => {
+        calls.push([ok, payload, error]);
+      },
+    } as never);
+
+    expect(calls).toEqual([
+      [
+        true,
+        {
+          ok: true,
+          descriptors: [
+            {
+              id: "gateway-panel",
+              pluginId: "pinned-ui-fixture",
+              pluginName: "Pinned UI Fixture",
+              surface: "session",
+              label: "Gateway panel",
+            },
+          ],
+        },
+        undefined,
+      ],
+    ]);
+  });
+
   it("enforces command requiredScopes for gateway clients and command owners", async () => {
     const handlerCalls: string[] = [];
     const { config, registry } = createPluginRegistryFixture();
@@ -2101,7 +2172,7 @@ describe("host-hook fixture plugin contract", () => {
   });
 
   it("dispatches sanitized agent events and clears plugin run context on run end", async () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const { config, registry } = createHostHookFixtureRegistry();
     registerTestPlugin({
       registry,
       config,

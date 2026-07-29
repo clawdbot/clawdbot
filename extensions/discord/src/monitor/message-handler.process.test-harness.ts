@@ -7,6 +7,18 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
+const getGlobalHookRunner = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner,
+  };
+});
+
+export const getGlobalHookRunnerForTest = getGlobalHookRunner;
+
 export const logVerboseForTest = logVerbose;
 export const sleepWithAbortForTest = sleepWithAbort;
 
@@ -50,7 +62,7 @@ const deliveryMocks = vi.hoisted(() => ({
       opts?: unknown,
     ) => Promise<import("discord-api-types/v10").APIMessage>
   >(async () => ({ id: "m1" }) as import("discord-api-types/v10").APIMessage),
-  deliverDiscordReply: vi.fn<(params: unknown) => Promise<{ visibleReplySent: true }>>(
+  deliverDiscordReply: vi.fn<(params: unknown) => Promise<{ visibleReplySent: boolean }>>(
     async () => ({
       visibleReplySent: true,
     }),
@@ -567,12 +579,14 @@ export function registerDiscordProcessTestLifecycle() {
     readLatestAssistantTextByIdentity.mockClear();
     resolveStorePath.mockClear();
     createDiscordRestClientSpy.mockClear();
+    getGlobalHookRunner.mockReset();
     dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
     recordInboundSession.mockResolvedValue(undefined);
     readSessionUpdatedAt.mockReturnValue(undefined);
     getSessionEntry.mockReturnValue(undefined);
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
+    getGlobalHookRunner.mockReturnValue(null);
     threadBindingTesting.resetThreadBindingsForTests();
   });
 
