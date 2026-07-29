@@ -32,6 +32,21 @@ export type ZaloEventMessage = {
   ts: string | number;
 };
 
+/**
+ * Surface a single inbound attachment from a Zalo message. Currently we only
+ * extract photos because that is the most common attachment type Vietnamese
+ * customer-support bots receive (users sending a photo of a device serial
+ * number, ID card, error screen, etc.). Other attachment kinds (audio, file,
+ * video) can be added later without breaking the existing tuple shape.
+ */
+export type ZaloInboundMedia = {
+  kind: "image";
+  /** Public Zalo CDN URL the media can be downloaded from. No auth required. */
+  url: string;
+  /** Optional thumbnail URL (smaller version of the same image). */
+  thumbUrl?: string;
+};
+
 export type ZaloInboundMessage = {
   threadId: string;
   isGroup: boolean;
@@ -51,6 +66,14 @@ export type ZaloInboundMessage = {
   quotedOwnerId?: string;
   quotedBody?: string;
   eventMessage?: ZaloEventMessage;
+  /**
+   * Set when the inbound message carries an attachment (photo today). The
+   * channel runtime downloads the bytes via `core.channel.media.saveRemoteMedia`
+   * before passing the message to the agent, so the agent receives the photo
+   * as a native vision content block - no separate tool call required.
+   * Undefined for plain text messages.
+   */
+  media?: ZaloInboundMedia;
   raw: unknown;
 };
 
