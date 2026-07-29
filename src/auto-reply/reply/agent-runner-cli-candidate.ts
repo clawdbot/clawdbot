@@ -1,7 +1,10 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
+import {
+  getCliSessionBinding,
+  shouldClearFailedCliSessionBinding,
+} from "../../agents/cli-session.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import {
@@ -10,6 +13,10 @@ import {
 } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../tasks/task-status-access.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -18,7 +25,7 @@ import {
 } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
-  clearDroppedCliSessionBinding,
+  clearCliSessionBindingForRun,
   createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
@@ -80,6 +87,7 @@ export async function runCliFallbackCandidate(params: {
     turn.getActiveSessionEntry(),
     params.cliExecutionProvider,
   );
+  const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
   const cliLifecycleStartedAt = Date.now();
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
@@ -144,6 +152,31 @@ export async function runCliFallbackCandidate(params: {
           onAgentRunStart: params.notifyAgentRunStart,
           suppressAssistantBridge: turn.followupRun.run.silentExpected,
           onActivity: () => turn.replyOperation?.recordActivity(),
+          onErrorBeforeLifecycle:
+            params.cliExecutionProvider === "claude-cli" && cliSessionBinding?.sessionId
+              ? async (error) => {
+                  if (
+                    !shouldClearFailedCliSessionBinding({
+                      error,
+                      binding: cliSessionBinding,
+                      hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+                        turn.sessionKey,
+                        mediaTaskIdsBefore,
+                      ),
+                    })
+                  ) {
+                    return;
+                  }
+                  await clearCliSessionBindingForRun({
+                    provider: params.cliExecutionProvider,
+                    expectedSessionId: cliSessionBinding.sessionId,
+                    sessionKey: turn.sessionKey,
+                    sessionStore: turn.activeSessionStore,
+                    storePath: turn.storePath,
+                    activeSessionEntry: turn.getActiveSessionEntry(),
+                  });
+                }
+              : undefined,
           preserveProgressCallbackStartOrder: params.preserveProgressCallbackStartOrder,
           onAssistantText: async (text) => {
             if (!params.preserveProgressCallbackStartOrder) {
@@ -343,8 +376,9 @@ export async function runCliFallbackCandidate(params: {
     ),
   );
   if (droppedCliSessionReplacement) {
-    await clearDroppedCliSessionBinding({
+    await clearCliSessionBindingForRun({
       provider: params.cliExecutionProvider,
+      expectedSessionId: cliSessionBinding?.sessionId,
       sessionKey: turn.sessionKey,
       sessionStore: turn.activeSessionStore,
       storePath: turn.storePath,
