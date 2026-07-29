@@ -178,13 +178,36 @@ export class TerminalSessionManager {
       return { ok: false, code: "closed", message: pending.abortMessage };
     }
     if (evictionCandidate) {
-      // The replacement backend exists; retire the claimed victim now, still
-      // inside the synchronous window, so registration stays within the cap.
-      log.info(
-        `evicted idle agent terminal session under pool pressure: id=${evictionCandidate.id} agent=${evictionCandidate.agentId} idleMs=${Date.now() - evictionCandidate.lastActivityAtMs}`,
-      );
-      this.finalize(evictionCandidate, "closed", {});
+      // The replacement backend exists; retire a victim now, still inside the
+      // synchronous window, so registration stays within the cap. Revalidate
+      // first: the claimed candidate may have gained a viewer or exited during
+      // the spawn await, and viewer-attached sessions are never evicted.
+      const claimed = evictionCandidate;
       evictionCandidate = undefined;
+      claimed.evictionClaimed = false;
+      if (this.sessions.size >= this.maxSessions) {
+        const victim =
+          !claimed.closed && claimed.viewers.size === 0
+            ? claimed
+            : this.claimLongestIdleAgentSession();
+        if (!victim) {
+          try {
+            backend.kill();
+          } catch {
+            // Best-effort; the process may already be gone.
+          }
+          return {
+            ok: false,
+            code: "limit",
+            message: `terminal session limit reached (${this.maxSessions})`,
+          };
+        }
+        victim.evictionClaimed = false;
+        log.info(
+          `evicted idle agent terminal session under pool pressure: id=${victim.id} agent=${victim.agentId} idleMs=${Date.now() - victim.lastActivityAtMs}`,
+        );
+        this.finalize(victim, "closed", {});
+      }
     }
 
     const sessionId = randomUUID();

@@ -2,7 +2,7 @@
 import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import type { TerminalSessionManager } from "./session-manager.js";
 
-export type TerminalOpenRequestInput = Parameters<TerminalSessionManager["open"]>[0];
+type TerminalOpenRequestInput = Parameters<TerminalSessionManager["open"]>[0];
 type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
 
 export type FakeTerminalPty = TerminalPtyHandle & {

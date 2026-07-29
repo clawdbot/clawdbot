@@ -69,6 +69,48 @@ describe("TerminalSessionManager idle eviction", () => {
     expect(ptys.some((pty) => pty.killed)).toBe(false);
   });
 
+  it("spares a victim that gains a viewer during the replacement spawn", async () => {
+    const victimPty = makeFakePty();
+    const replacementPty = makeFakePty();
+    let releaseSpawn: (() => void) | undefined;
+    let spawnCount = 0;
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => {
+        spawnCount += 1;
+        if (spawnCount === 1) {
+          return victimPty;
+        }
+        await new Promise<void>((resolve) => {
+          releaseSpawn = resolve;
+        });
+        return replacementPty;
+      },
+      maxSessions: 1,
+    });
+    const victim = await manager.open(baseOpenRequest({ owner: agentOwner }));
+    if (!victim.ok) {
+      throw new Error("expected open");
+    }
+
+    const opening = manager.open(baseOpenRequest({ owner: agentOwner }));
+    await vi.waitFor(() => expect(releaseSpawn).toBeDefined());
+    // The claimed victim becomes viewer-attached while the replacement spawns.
+    expect(manager.attach("viewer-1", victim.sessionId)?.sessionId).toBe(victim.sessionId);
+    releaseSpawn?.();
+
+    const outcome = await opening;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe("limit");
+    }
+    // The now-viewered session survives; the orphaned replacement is killed.
+    expect(victimPty.killed).toBe(false);
+    expect(replacementPty.killed).toBe(true);
+    expect(manager.size).toBe(1);
+    expect(manager.writeAgent("agent:main:main", victim.sessionId, "still-alive\r")).toBe(true);
+  });
+
   it("keeps the claimed victim alive when the replacement spawn fails", async () => {
     const pty = makeFakePty();
     let failNextSpawn = false;
