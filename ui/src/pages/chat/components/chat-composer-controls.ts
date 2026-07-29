@@ -30,6 +30,7 @@ export type ChatRunControlsProps = {
   voiceVideoPending?: boolean;
   dictation?: ComposerDictationController;
   onDictationPointerDown?: (event: PointerEvent) => void;
+  onPrimaryActionPointerDown?: (event: PointerEvent) => void;
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
@@ -200,6 +201,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         <openclaw-tooltip .content=${t("chat.runControls.stop")}>
           <button
             class="chat-send-btn chat-send-btn--stop"
+            @pointerdown=${props.onPrimaryActionPointerDown}
             @click=${props.onAbort}
             aria-label=${t("chat.runControls.stopGenerating")}
           >
@@ -226,6 +228,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     >
       <button
         class="chat-send-btn"
+        @pointerdown=${props.onPrimaryActionPointerDown}
         @click=${storeDraftAndSend}
         ?disabled=${!props.canSend || props.sending}
         aria-label=${props.suggestionComposer
@@ -319,6 +322,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
                   <openclaw-tooltip .content=${activeRunActionLabel}>
                     <button
                       class="chat-send-btn"
+                      @pointerdown=${props.onPrimaryActionPointerDown}
                       @click=${storeDraftAndSend}
                       ?disabled=${!props.canSend || props.sending}
                       aria-label=${activeRunActionDescription}
@@ -332,6 +336,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             <openclaw-tooltip .content=${t("chat.runControls.stop")}>
               <button
                 class="chat-send-btn chat-send-btn--stop"
+                @pointerdown=${props.onPrimaryActionPointerDown}
                 @click=${props.onAbort}
                 aria-label=${t("chat.runControls.stopGenerating")}
               >

@@ -149,6 +149,16 @@ function dictationPointerDown(pointerId: number): PointerEvent {
   return event as PointerEvent;
 }
 
+function primaryPointerDown(): MouseEvent {
+  return new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+}
+
+function markComposerAtFocusInset(container: HTMLElement): void {
+  const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
+  expect(shell).not.toBeNull();
+  shell?.style.setProperty("margin-bottom", "0px");
+}
+
 beforeEach(() => {
   // ESM imports remain live when the composer was cached by another test file.
   // Patch the shared dependencies instead of clearing isolate:false's registry.
@@ -282,6 +292,177 @@ describe("renderChatComposer controls", () => {
       onAbort,
     });
     expect(button(view.container, t("chat.runControls.sendMessage")).disabled).toBe(false);
+  });
+
+  it("preserves only its own textarea focus during primary pointer actions", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChatComposer(
+        props({
+          canAbort: true,
+          draft: "Follow up",
+          onAbort: vi.fn(),
+          onSend: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) {
+      return;
+    }
+    const send = button(container, t("chat.runControls.sendMessage"));
+    const stop = button(container, t("chat.runControls.stopGenerating"));
+    markComposerAtFocusInset(container);
+
+    textarea.focus();
+    const sendPointerDown = primaryPointerDown();
+    send.dispatchEvent(sendPointerDown);
+    expect(sendPointerDown.defaultPrevented).toBe(true);
+
+    textarea.focus();
+    const stopPointerDown = primaryPointerDown();
+    stop.dispatchEvent(stopPointerDown);
+    expect(stopPointerDown.defaultPrevented).toBe(true);
+
+    const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+    shell.style.marginBottom = "14px";
+    textarea.focus();
+    const stableLayoutPointerDown = primaryPointerDown();
+    send.dispatchEvent(stableLayoutPointerDown);
+    expect(stableLayoutPointerDown.defaultPrevented).toBe(false);
+
+    const unrelatedInput = document.createElement("input");
+    document.body.append(unrelatedInput);
+    unrelatedInput.focus();
+    const unrelatedPointerDown = primaryPointerDown();
+    send.dispatchEvent(unrelatedPointerDown);
+    expect(unrelatedPointerDown.defaultPrevented).toBe(false);
+  });
+
+  it("retains focus while Send clears the draft and Stop preserves it", () => {
+    let sendDraft = "Send this";
+    const onSend = vi.fn(() => {
+      sendDraft = "";
+    });
+    const onSendTypingChange = vi.fn();
+    const sendContainer = document.createElement("div");
+    document.body.append(sendContainer);
+    render(
+      renderChatComposer(
+        props({
+          draft: sendDraft,
+          getDraft: () => sendDraft,
+          onDraftChange: (value) => {
+            sendDraft = value;
+          },
+          onSend,
+          onTypingChange: onSendTypingChange,
+        }),
+      ),
+      sendContainer,
+    );
+    const sendTextarea = sendContainer.querySelector<HTMLTextAreaElement>("textarea")!;
+    const send = button(sendContainer, t("chat.runControls.sendMessage"));
+    markComposerAtFocusInset(sendContainer);
+    sendTextarea.focus();
+    send.dispatchEvent(primaryPointerDown());
+    send.click();
+
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSendTypingChange).toHaveBeenLastCalledWith(false);
+    expect(sendTextarea.value).toBe("");
+    expect(document.activeElement).toBe(sendTextarea);
+
+    const onAbort = vi.fn();
+    const onStopTypingChange = vi.fn();
+    const stopContainer = document.createElement("div");
+    document.body.append(stopContainer);
+    const stopProps = props({
+      canAbort: true,
+      draft: "Keep this follow-up",
+      onAbort,
+      onTypingChange: onStopTypingChange,
+    });
+    render(renderChatComposer(stopProps), stopContainer);
+    const stopTextarea = stopContainer.querySelector<HTMLTextAreaElement>("textarea")!;
+    const stop = button(stopContainer, t("chat.runControls.stopGenerating"));
+    markComposerAtFocusInset(stopContainer);
+    stopTextarea.focus();
+    stopTextarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    stop.dispatchEvent(primaryPointerDown());
+    stop.click();
+
+    expect(onAbort).toHaveBeenCalledOnce();
+    expect(stopTextarea.value).toBe("Keep this follow-up");
+    expect(document.activeElement).toBe(stopTextarea);
+    expect(onStopTypingChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it.each([
+    ["queue", t("chat.runControls.queueMessage")],
+    ["steer", t("chat.followUpModeSteer")],
+    ["interrupt", t("chat.runControls.sendMessage")],
+  ] as const)("preserves focus for the %s active-run action", (followUpMode, label) => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChatComposer(
+        props({
+          canAbort: true,
+          draft: "Follow up",
+          followUpMode,
+          onAbort: vi.fn(),
+          onSend: vi.fn(),
+        }),
+      ),
+      container,
+    );
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    markComposerAtFocusInset(container);
+    textarea.focus();
+    const event = primaryPointerDown();
+    button(container, label).dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not leave composition state stuck after pointer Send", () => {
+    let draft = "構成中";
+    const onSend = vi.fn(() => {
+      draft = "";
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChatComposer(
+        props({
+          draft,
+          getDraft: () => draft,
+          onDraftChange: (value) => {
+            draft = value;
+          },
+          onSend,
+        }),
+      ),
+      container,
+    );
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.focus();
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const send = button(container, t("chat.runControls.sendMessage"));
+    send.dispatchEvent(primaryPointerDown());
+    send.click();
+    expect(onSend).toHaveBeenCalledOnce();
+
+    textarea.value = "next";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+    );
+    expect(onSend).toHaveBeenCalledTimes(2);
   });
 
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
