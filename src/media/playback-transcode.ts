@@ -19,11 +19,10 @@ type PlaybackPolicyEntry = {
   nativeMimeTypes: readonly string[];
   codecProbeInputFormats: Readonly<Record<string, string>>;
   transcodeInputFormats: Readonly<Record<string, string>>;
-  target: {
-    contentType: string;
-    extension: `.${string}`;
-  };
+  target: { contentType: string; extension: `.${string}` };
 };
+
+const WAV_MIME_TYPES = new Set(["audio/wav", "audio/wave", "audio/x-wav"]);
 
 /**
  * Native means safe across the supported browser, AVPlayer, and ExoPlayer clients.
@@ -32,7 +31,6 @@ type PlaybackPolicyEntry = {
 export const PLAYBACK_TRANSCODE_POLICY = {
   audio: {
     nativeMimeTypes: [
-      "audio/aac",
       "audio/m4a",
       "audio/mp3",
       "audio/mp4",
@@ -45,9 +43,13 @@ export const PLAYBACK_TRANSCODE_POLICY = {
     codecProbeInputFormats: {
       "audio/m4a": "mov",
       "audio/mp4": "mov",
+      "audio/wav": "wav",
+      "audio/wave": "wav",
       "audio/x-m4a": "mov",
+      "audio/x-wav": "wav",
     },
     transcodeInputFormats: {
+      "audio/aac": "aac",
       "audio/aiff": "aiff",
       "audio/amr": "amr",
       "audio/amr-wb": "amr",
@@ -131,9 +133,7 @@ const PLAYBACK_TRANSCODE_MAX_DURATION_SECS = 20 * 60;
 const PLAYBACK_TRANSCODE_MAX_INPUT_PIXELS = 4096 * 4096;
 const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
-const MAX_PLAYBACK_TRANSCODE_FAILURES = 32;
-const MAX_PLAYBACK_INSPECTIONS = 32;
-const MAX_PLAYBACK_INSPECTION_JOBS = 2;
+const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32, inspectionJobs: 2 } as const;
 const playbackJobs = new Map<string, true>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
@@ -236,9 +236,13 @@ function setBoundedMapEntry<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: 
 function readPlaybackInspection(cacheKey: string): PlaybackInspection | undefined {
   const inspection = playbackInspections.get(cacheKey);
   if (inspection) {
-    setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_INSPECTIONS);
+    cachePlaybackInspection(cacheKey, inspection);
   }
   return inspection;
+}
+
+function cachePlaybackInspection(cacheKey: string, inspection: PlaybackInspection): void {
+  setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_ENTRIES.inspections);
 }
 
 function playbackInspectionCacheKey(params: {
@@ -269,14 +273,18 @@ async function probePlaybackSource(
 
 function hasNativePlaybackCodecs(
   kind: PlaybackMediaKind,
+  mimeType: string,
   probe: PlaybackMediaProbeResult,
 ): boolean | undefined {
   if (kind === "audio") {
-    if (probe.audioStreamIndex === undefined) {
+    const codec = probe.audioCodec;
+    if (probe.audioStreamIndex === undefined || !codec) {
       return undefined;
     }
-    const codec = probe.audioCodec;
-    return codec ? codec === "aac" || codec === "mp3" || codec === "pcm_s16le" : undefined;
+    if (WAV_MIME_TYPES.has(normalizeMimeType(mimeType) ?? "")) {
+      return codec === "pcm_s16le" || codec === "pcm_u8";
+    }
+    return codec === "aac" || codec === "mp3" || codec === "pcm_s16le";
   }
   if (!probe.videoCodec || probe.videoStreamIndex === undefined) {
     return undefined;
@@ -325,17 +333,19 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
     const needsCodecProbe = Boolean(mimeType && policy.codecProbeInputFormats[mimeType]);
     if (containerMode === "native" && !needsCodecProbe) {
       const inspection = { mode: "native" } as const;
-      setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_INSPECTIONS);
+      cachePlaybackInspection(cacheKey, inspection);
       return inspection;
     }
 
     const probe =
       params.probe !== undefined ? params.probe : await probePlaybackSource(source, params.kind);
     if (containerMode === "native") {
-      const nativeCodecs = probe ? hasNativePlaybackCodecs(params.kind, probe) : undefined;
+      const nativeCodecs = probe
+        ? hasNativePlaybackCodecs(params.kind, params.mimeType, probe)
+        : undefined;
       if (nativeCodecs === true) {
         const inspection = { mode: "native" } as const;
-        setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_INSPECTIONS);
+        cachePlaybackInspection(cacheKey, inspection);
         return inspection;
       }
       if (nativeCodecs === undefined) {
@@ -366,7 +376,7 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
               : {}),
           }
         : { mode: "fallback" };
-    setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_INSPECTIONS);
+    cachePlaybackInspection(cacheKey, inspection);
     return inspection;
   };
   if (params.probe !== undefined) {
@@ -376,7 +386,7 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
   if (existingJob) {
     return await existingJob;
   }
-  if (playbackInspectionJobs.size >= MAX_PLAYBACK_INSPECTION_JOBS) {
+  if (playbackInspectionJobs.size >= MAX_PLAYBACK_ENTRIES.inspectionJobs) {
     return { mode: "fallback" };
   }
 
@@ -664,10 +674,6 @@ async function transcodePlaybackSource(params: {
   }
 }
 
-function makePlaybackJobRoom(): boolean {
-  return playbackJobs.size < MAX_PLAYBACK_TRANSCODE_JOBS;
-}
-
 /** Resolves a native, pending, cached, or failed playback rendition without blocking on ffmpeg. */
 export async function resolvePlaybackTranscode(
   params: PlaybackSourceParams,
@@ -713,7 +719,7 @@ export async function resolvePlaybackTranscode(
     }
     playbackFailures.delete(operationKey);
   }
-  if (!makePlaybackJobRoom()) {
+  if (playbackJobs.size >= MAX_PLAYBACK_TRANSCODE_JOBS) {
     return { kind: "preparing" };
   }
 
@@ -738,12 +744,7 @@ export async function resolvePlaybackTranscode(
     },
     () => {
       playbackJobs.delete(operationKey);
-      setBoundedMapEntry(
-        playbackFailures,
-        operationKey,
-        Date.now(),
-        MAX_PLAYBACK_TRANSCODE_FAILURES,
-      );
+      setBoundedMapEntry(playbackFailures, operationKey, Date.now(), MAX_PLAYBACK_ENTRIES.failures);
     },
   );
   return { kind: "preparing" };

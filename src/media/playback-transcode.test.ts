@@ -102,7 +102,6 @@ describe("playback transcode policy", () => {
     expect(playback.PLAYBACK_TRANSCODE_POLICY).toEqual({
       audio: {
         nativeMimeTypes: [
-          "audio/aac",
           "audio/m4a",
           "audio/mp3",
           "audio/mp4",
@@ -115,9 +114,13 @@ describe("playback transcode policy", () => {
         codecProbeInputFormats: {
           "audio/m4a": "mov",
           "audio/mp4": "mov",
+          "audio/wav": "wav",
+          "audio/wave": "wav",
           "audio/x-m4a": "mov",
+          "audio/x-wav": "wav",
         },
         transcodeInputFormats: {
+          "audio/aac": "aac",
           "audio/aiff": "aiff",
           "audio/amr": "amr",
           "audio/amr-wb": "amr",
@@ -155,6 +158,7 @@ describe("playback transcode policy", () => {
 
     const audioPolicy = playback.PLAYBACK_TRANSCODE_POLICY.audio;
     const videoPolicy = playback.PLAYBACK_TRANSCODE_POLICY.video;
+    expect(playback.resolvePlaybackMode("audio/aac", audioPolicy)).toBe("transcode");
     expect(playback.resolvePlaybackMode("audio/mpeg", audioPolicy)).toBe("native");
     expect(playback.resolvePlaybackMode("audio/x-caf", audioPolicy)).toBe("transcode");
     expect(playback.resolvePlaybackMode("audio/amr", audioPolicy)).toBe("transcode");
@@ -164,6 +168,44 @@ describe("playback transcode policy", () => {
     expect(playback.resolvePlaybackMode("video/webm", videoPolicy)).toBe("transcode");
     expect(playback.resolvePlaybackMode("video/x-playlist", videoPolicy)).toBeUndefined();
   });
+
+  it.each([
+    {
+      name: "ADTS AAC",
+      fileName: "raw.aac",
+      mimeType: "audio/aac",
+      audioCodec: "aac",
+      expected: "transcode",
+    },
+    {
+      name: "signed 16-bit PCM WAV",
+      fileName: "pcm16.wav",
+      mimeType: "audio/wav",
+      audioCodec: "pcm_s16le",
+      expected: "native",
+    },
+    {
+      name: "float PCM WAV",
+      fileName: "float.wav",
+      mimeType: "audio/x-wav",
+      audioCodec: "pcm_f32le",
+      expected: "transcode",
+    },
+  ] as const)(
+    "classifies $name as $expected",
+    async ({ fileName, mimeType, audioCodec, expected }) => {
+      const source = await createSource(fileName);
+
+      await expect(
+        playback.resolvePlaybackModeForSource({
+          ...source,
+          mimeType,
+          kind: "audio",
+          probe: { durationMs: 1000, audioCodec, audioStreamIndex: 0 },
+        }),
+      ).resolves.toBe(expected);
+    },
+  );
 
   it("derives a stable cache key from path, size, and modification time", () => {
     const source = {
