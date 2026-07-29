@@ -83,6 +83,23 @@ class ChatMarkdownTest {
   }
 
   @Test
+  fun emptyDetailsSummaryAfterProseUsesLocalizedDefault() {
+    val blocks =
+      parseChatMarkdownBlocks(
+        "Intro\n\n<details>\n<summary></summary>\n\nBody\n\n</details>",
+      )
+    val intro = (blocks[0] as ChatMarkdownRenderBlock.CommonMark).node as Paragraph
+    val disclosure = blocks[1] as ChatMarkdownRenderBlock.Disclosure
+
+    assertEquals("Intro", (intro.firstChild as org.commonmark.node.Text).literal)
+    assertNull(disclosure.summary)
+    assertEquals(
+      "Localized details",
+      chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" },
+    )
+  }
+
+  @Test
   fun detailsBodyKeepsNativeListAndFenceBlocks() {
     val disclosure =
       parseChatMarkdownBlocks(
@@ -170,21 +187,17 @@ class ChatMarkdownTest {
   }
 
   @Test
-  fun detailsSummaryResolvesDocumentScopedReferenceLink() {
-    val source =
-      "<details>\n<summary>[Docs][id]</summary>\n\nBody\n\n</details>\n\n[id]: https://example.com"
-    val disclosure = parseChatMarkdownBlocks(source).first() as ChatMarkdownRenderBlock.Disclosure
-    val rendered =
-      buildChatInlineMarkdown(
-        checkNotNull(disclosure.summary),
-        referenceDocument = disclosure.referenceDocument,
-      )
+  fun rawHtmlCloseMarkersInsideDetailsStayLiteral() {
+    listOf(
+      "<details>\n<summary>X</summary>\n<pre>\n</details>\n</pre>\n</details>" to "</details>",
+      "<details>\n<summary>X</summary>\n<!--\n</details>\n-->\n</details>" to "</details>",
+    ).forEach { (source, literalClose) ->
+      val blocks = parseChatMarkdownBlocks(source)
+      val disclosure = blocks.single() as ChatMarkdownRenderBlock.Disclosure
+      val rawBlock = (disclosure.blocks.single() as ChatMarkdownRenderBlock.CommonMark).node as HtmlBlock
 
-    assertEquals("Docs", rendered.text)
-    assertEquals(
-      "https://example.com",
-      (rendered.getLinkAnnotations(0, rendered.length).single().item as LinkAnnotation.Url).url,
-    )
+      assertTrue(rawBlock.literal.contains(literalClose))
+    }
   }
 
   @Test

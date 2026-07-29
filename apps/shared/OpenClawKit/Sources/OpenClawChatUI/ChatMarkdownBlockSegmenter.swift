@@ -99,6 +99,34 @@ enum ChatMarkdownBlockSyntax {
     }
 }
 
+private enum ChatMarkdownRawHTMLContext {
+    case comment
+    case element(String)
+
+    static func opening(in line: String) -> ChatMarkdownRawHTMLContext? {
+        let trimmed = line.drop(while: \.isWhitespace).lowercased()
+        if trimmed.hasPrefix("<!--") { return .comment }
+        for tag in ["pre", "script", "style", "textarea"] {
+            let prefix = "<\(tag)"
+            guard trimmed.hasPrefix(prefix) else { continue }
+            let boundary = trimmed.index(trimmed.startIndex, offsetBy: prefix.count)
+            if boundary == trimmed.endIndex || trimmed[boundary].isWhitespace || trimmed[boundary] == ">" {
+                return .element(tag)
+            }
+        }
+        return nil
+    }
+
+    func closes(in line: String) -> Bool {
+        switch self {
+        case .comment:
+            line.contains("-->")
+        case let .element(tag):
+            line.lowercased().contains("</\(tag)>")
+        }
+    }
+}
+
 enum ChatMarkdownBlockSegmenter {
     static let maxMathBytes = 5000
     static let maxTableBytes = 20000
@@ -230,9 +258,6 @@ enum ChatMarkdownBlockSegmenter {
                     html,
                     parseMarkdown: { markdown in
                         self.segments(markdown: markdown, isComplete: isComplete).map(UnfoldedBlock.block)
-                    },
-                    resolveSummary: { summary in
-                        self.resolvingSummaryReferences(summary, documentMarkdown: source.markdown)
                     }))
             }
             proseStart = extraction.lineRange.upperBound
@@ -399,19 +424,6 @@ enum ChatMarkdownBlockSegmenter {
         return source.replacing(replacements)
     }
 
-    private static func resolvingSummaryReferences(
-        _ summary: String,
-        documentMarkdown: String) -> String
-    {
-        let separator = "\n\n"
-        let combinedSource = SourceBuffer(summary + separator + documentMarkdown)
-        let combinedDocument = Document(parsing: combinedSource.markdown)
-        guard let resolved = self.resolvingReferenceLinks(in: combinedDocument, source: combinedSource),
-              let separatorRange = resolved.range(of: separator)
-        else { return summary }
-        return String(resolved[..<separatorRange.lowerBound])
-    }
-
     private static func isReferenceLink(_ markup: any Markup, source: SourceBuffer) -> Bool {
         guard markup is Markdown.Link || markup is Markdown.Image,
               let range = markup.range,
@@ -543,12 +555,12 @@ enum ChatMarkdownBlockSegmenter {
 
         mutating func tokenize(
             _ source: String,
-            parseMarkdown: (String) -> [UnfoldedBlock],
-            resolveSummary: (String) -> String) -> [UnfoldedBlock]
+            parseMarkdown: (String) -> [UnfoldedBlock]) -> [UnfoldedBlock]
         {
             let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             var tokens: [UnfoldedBlock] = []
             var pendingSource = ""
+            var rawHTMLContext: ChatMarkdownRawHTMLContext?
 
             func flushSource() {
                 let trimmed = pendingSource.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -565,10 +577,24 @@ enum ChatMarkdownBlockSegmenter {
                 tokens.append(.block(.prose(raw)))
             }
 
+            func appendSourceLine(_ line: String, at index: Int) {
+                pendingSource += line
+                if index < lines.count - 1 { pendingSource += "\n" }
+            }
+
             for (lineIndex, line) in lines.enumerated() {
+                if let context = rawHTMLContext {
+                    appendSourceLine(line, at: lineIndex)
+                    if context.closes(in: line) { rawHTMLContext = nil }
+                    continue
+                }
+                if let context = ChatMarkdownRawHTMLContext.opening(in: line) {
+                    appendSourceLine(line, at: lineIndex)
+                    if !context.closes(in: line) { rawHTMLContext = context }
+                    continue
+                }
                 guard let tags = Self.tags(in: line) else {
-                    pendingSource += line
-                    if lineIndex < lines.count - 1 { pendingSource += "\n" }
+                    appendSourceLine(line, at: lineIndex)
                     continue
                 }
 
@@ -611,6 +637,8 @@ enum ChatMarkdownBlockSegmenter {
                     case .summaryOpen:
                         // The web block rule also pairs summary tags within one line;
                         // multiline summaries deliberately remain literal on every surface.
+                        // Reference definitions resolve in bodies, not standalone summaries;
+                        // keeping fragments isolated avoids cross-document splicing.
                         let closeIndex = tags[(index + 1)...].firstIndex { candidate in
                             if case .summaryClose = candidate.kind { return true }
                             return false
@@ -623,7 +651,9 @@ enum ChatMarkdownBlockSegmenter {
                             flushSource()
                             let close = tags[closeIndex]
                             let summary = String(line[tag.range.upperBound..<close.range.lowerBound])
-                            tokens.append(.disclosureSummary(resolveSummary(summary)))
+                            if !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                tokens.append(.disclosureSummary(summary))
+                            }
                             self.balanceStack[self.balanceStack.count - 1].hasSummary = true
                             cursor = close.range.upperBound
                             index = closeIndex + 1

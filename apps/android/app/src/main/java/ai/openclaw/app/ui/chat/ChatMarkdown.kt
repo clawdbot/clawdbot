@@ -307,12 +307,8 @@ private fun RenderMarkdownDisclosure(
   var isExpanded by rememberSaveable { mutableStateOf(disclosure.isExpanded) }
   val summarySource = chatMarkdownDisclosureSummarySource(disclosure.summary) { nativeString("Details") }
   val summary =
-    remember(summarySource, disclosure.referenceDocument, inlineStyles.linkColor) {
-      buildChatInlineMarkdown(
-        summarySource,
-        linkColor = inlineStyles.linkColor,
-        referenceDocument = disclosure.referenceDocument,
-      )
+    remember(summarySource, inlineStyles.linkColor) {
+      buildChatInlineMarkdown(summarySource, linkColor = inlineStyles.linkColor)
     }
 
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -723,10 +719,8 @@ internal fun isSafeMarkdownLinkDestination(destination: String): Boolean {
 internal fun buildChatInlineMarkdown(
   text: String,
   linkColor: Color = Color.Blue,
-  referenceDocument: String? = null,
 ): AnnotatedString {
-  val markdown = referenceDocument?.let { "$text\n\n$it" } ?: text
-  val document = parseChatMarkdown(markdown)
+  val document = parseChatMarkdown(text)
   val paragraph = document.firstChild as? Paragraph ?: return AnnotatedString("")
   return buildInlineMarkdown(
     paragraph.firstChild,
@@ -754,7 +748,6 @@ internal sealed interface ChatMarkdownRenderBlock {
     val summary: String?,
     val isExpanded: Boolean,
     val blocks: List<ChatMarkdownRenderBlock>,
-    val referenceDocument: String,
   ) : ChatMarkdownRenderBlock
 }
 
@@ -777,7 +770,7 @@ internal fun parseChatMarkdownBlocks(text: String): List<ChatMarkdownRenderBlock
     }
     node = current.next
   }
-  return foldDisclosureTokens(tokens, referenceDocument = text)
+  return foldDisclosureTokens(tokens)
 }
 
 private fun commonMarkBlocks(start: Node?): List<ChatMarkdownRenderBlock> {
@@ -829,12 +822,41 @@ private class DisclosureTokenizer {
     val kind: TagKind,
   )
 
+  private sealed interface RawHtmlContext {
+    fun closes(line: String): Boolean
+
+    data object Comment : RawHtmlContext {
+      override fun closes(line: String): Boolean = line.contains("-->")
+    }
+
+    data class Element(
+      val tag: String,
+    ) : RawHtmlContext {
+      override fun closes(line: String): Boolean = line.lowercase(Locale.US).contains("</$tag>")
+    }
+
+    companion object {
+      fun opening(line: String): RawHtmlContext? {
+        val trimmed = line.trimStart().lowercase(Locale.US)
+        if (trimmed.startsWith("<!--")) return Comment
+        for (tag in listOf("pre", "script", "style", "textarea")) {
+          val prefix = "<$tag"
+          if (!trimmed.startsWith(prefix)) continue
+          val boundary = trimmed.getOrNull(prefix.length)
+          if (boundary == null || boundary.isWhitespace() || boundary == '>') return Element(tag)
+        }
+        return null
+      }
+    }
+  }
+
   private val balanceStack = mutableListOf<BalanceFrame>()
 
   fun tokenize(source: String): List<DisclosureToken> {
     val lines = source.split('\n')
     val tokens = mutableListOf<DisclosureToken>()
     val pendingSource = StringBuilder()
+    var rawHtmlContext: RawHtmlContext? = null
 
     fun flushSource() {
       val markdown = pendingSource.toString()
@@ -853,11 +875,28 @@ private class DisclosureTokenizer {
       tokens += DisclosureToken.Block(ChatMarkdownRenderBlock.LiteralHtml(raw))
     }
 
+    fun appendSourceLine(
+      line: String,
+      index: Int,
+    ) {
+      pendingSource.append(line)
+      if (index < lines.lastIndex) pendingSource.append('\n')
+    }
+
     lines.forEachIndexed { lineIndex, line ->
+      rawHtmlContext?.let { context ->
+        appendSourceLine(line, lineIndex)
+        if (context.closes(line)) rawHtmlContext = null
+        return@forEachIndexed
+      }
+      RawHtmlContext.opening(line)?.let { context ->
+        appendSourceLine(line, lineIndex)
+        if (!context.closes(line)) rawHtmlContext = context
+        return@forEachIndexed
+      }
       val tags = tags(line)
       if (tags == null) {
-        pendingSource.append(line)
-        if (lineIndex < lines.lastIndex) pendingSource.append('\n')
+        appendSourceLine(line, lineIndex)
         return@forEachIndexed
       }
 
@@ -901,12 +940,15 @@ private class DisclosureTokenizer {
           TagKind.SUMMARY_OPEN -> {
             // The web block rule also pairs summary tags within one line;
             // multiline summaries deliberately remain literal on every surface.
+            // Reference definitions resolve in bodies, not standalone summaries;
+            // keeping fragments isolated avoids cross-document splicing.
             val closeIndex = ((index + 1) until tags.size).firstOrNull { tags[it].kind == TagKind.SUMMARY_CLOSE }
             val frame = balanceStack.lastOrNull()
             if (closeIndex != null && frame?.isStructural == true && !frame.hasSummary) {
               flushSource()
               val close = tags[closeIndex]
-              tokens += DisclosureToken.Summary(line.substring(tag.range.last + 1, close.range.first))
+              val summary = line.substring(tag.range.last + 1, close.range.first)
+              if (summary.isNotBlank()) tokens += DisclosureToken.Summary(summary)
               frame.hasSummary = true
               cursor = close.range.last + 1
               index = closeIndex + 1
@@ -1016,10 +1058,7 @@ private class DisclosureTokenizer {
   }
 }
 
-private fun foldDisclosureTokens(
-  tokens: List<DisclosureToken>,
-  referenceDocument: String,
-): List<ChatMarkdownRenderBlock> {
+private fun foldDisclosureTokens(tokens: List<DisclosureToken>): List<ChatMarkdownRenderBlock> {
   data class Frame(
     var summary: String? = null,
     val isExpanded: Boolean,
@@ -1040,7 +1079,6 @@ private fun foldDisclosureTokens(
         summary = frame.summary,
         isExpanded = frame.isExpanded,
         blocks = frame.blocks,
-        referenceDocument = referenceDocument,
       ),
     )
   }

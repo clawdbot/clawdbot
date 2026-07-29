@@ -110,6 +110,30 @@ struct ChatMarkdownBlockSegmenterTests {
             == "Localized details")
     }
 
+    @Test @MainActor func `empty details summary after prose uses localized default`() throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: """
+            Intro
+
+            <details>
+            <summary></summary>
+
+            Body
+
+            </details>
+            """,
+            isComplete: true)
+        guard case let .prose(intro) = try #require(snapshot.blocks.first),
+              case let .disclosure(disclosure) = try #require(snapshot.blocks.dropFirst().first)
+        else {
+            Issue.record("expected intro followed by disclosure")
+            return
+        }
+
+        #expect(String(intro.attributed.characters) == "Intro")
+        #expect(String(disclosure.summary.attributed.characters) == String(localized: "Details"))
+    }
+
     @Test func `details body keeps native list and fence blocks`() throws {
         let blocks = self.segments("""
         <details open>
@@ -267,27 +291,24 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
-    @Test @MainActor func `details summary resolves document scoped reference link`() throws {
-        let destination = try #require(URL(string: "https://example.com"))
-        let snapshot = ChatMarkdownRenderSnapshot(
-            text: """
-            <details>
-            <summary>[Docs][id]</summary>
-
-            Body
-
-            </details>
-
-            [id]: https://example.com
-            """,
-            isComplete: true)
-        guard case let .disclosure(disclosure) = try #require(snapshot.blocks.first) else {
-            Issue.record("expected disclosure")
-            return
+    @Test func `raw HTML close markers inside details stay literal`() throws {
+        for (markdown, literal) in [
+            (
+                "<details>\n<summary>X</summary>\n<pre>\n</details>\n</pre>\n</details>",
+                "<pre>\n</details>\n</pre>"),
+            (
+                "<details>\n<summary>X</summary>\n<!--\n</details>\n-->\n</details>",
+                "<!--\n</details>\n-->"),
+        ] {
+            let blocks = self.segments(markdown)
+            guard blocks.count == 1,
+                  case let .disclosure(disclosure) = try #require(blocks.first)
+            else {
+                Issue.record("expected one outer disclosure")
+                continue
+            }
+            #expect(disclosure.blocks == [.prose(literal)])
         }
-
-        #expect(String(disclosure.summary.attributed.characters) == "Docs")
-        #expect(disclosure.summary.attributed.runs.contains { $0.link == destination })
     }
 
     @Test func `mid line and over indented details stay literal`() {
