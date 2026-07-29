@@ -660,6 +660,8 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
 
 - `slack-canary`
 - `slack-mention-gating`
+- `slack-mpim-app-mention-dedupe` - opens a real C-prefixed group DM, sends one
+  mention, verifies exactly one SUT reply in that MPIM, then closes it.
 - `slack-allowlist-block`
 - `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
   configured disabled channel emits a structured warning without replying.
