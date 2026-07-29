@@ -137,57 +137,65 @@ export async function createBuzzQaRelayDriver(params: {
   const observerReadyTimeout = setTimeout(() => {
     rejectObserverReady?.(new Error("Timed out waiting for the Buzz QA message observer."));
   }, OBSERVER_READY_TIMEOUT_MS);
-  const subscription = relay.subscribe(
-    [
+  let subscription: ReturnType<Relay["subscribe"]>;
+  try {
+    subscription = relay.subscribe(
+      [
+        {
+          kinds: [BUZZ_MESSAGE_KIND],
+          authors: [credentials.sutPublicKey],
+          "#h": [credentials.roomId],
+          since: Math.floor(Date.now() / 1_000) - 5,
+        },
+      ],
       {
-        kinds: [BUZZ_MESSAGE_KIND],
-        authors: [credentials.sutPublicKey],
-        "#h": [credentials.roomId],
-        since: Math.floor(Date.now() / 1_000) - 5,
-      },
-    ],
-    {
-      onevent: (event: Event) => {
-        if (!observerReady) {
-          return;
-        }
-        if (observedEventIds.has(event.id)) {
-          return;
-        }
-        observedEventIds.add(event.id);
-        const message = parseBuzzMessageEvent(event);
-        if (
-          !message ||
-          message.channelId !== credentials.roomId ||
-          message.senderPubkey !== credentials.sutPublicKey
-        ) {
-          return;
-        }
-        messageQueue = messageQueue
-          .then(async () => await params.onMessage(message))
-          .catch((error: unknown) => {
-            transportError = error instanceof Error ? error : new Error(String(error));
-          });
-      },
-      oneose: () => {
-        observerReady = true;
-        clearTimeout(observerReadyTimeout);
-        resolveObserverReady?.();
-      },
-      onclose: (reason) => {
-        if (!observerReady) {
+        onevent: (event: Event) => {
+          if (!observerReady) {
+            return;
+          }
+          if (observedEventIds.has(event.id)) {
+            return;
+          }
+          observedEventIds.add(event.id);
+          const message = parseBuzzMessageEvent(event);
+          if (
+            !message ||
+            message.channelId !== credentials.roomId ||
+            message.senderPubkey !== credentials.sutPublicKey
+          ) {
+            return;
+          }
+          messageQueue = messageQueue
+            .then(async () => await params.onMessage(message))
+            .catch((error: unknown) => {
+              transportError = error instanceof Error ? error : new Error(String(error));
+            });
+        },
+        oneose: () => {
+          observerReady = true;
           clearTimeout(observerReadyTimeout);
-          rejectObserverReady?.(
-            new Error(`Buzz QA message observer closed before it was ready: ${reason}`),
-          );
-          return;
-        }
-        if (reason !== "shutdown" && reason !== "relay connection closed by us") {
-          transportError = new Error(`Buzz QA message subscription closed: ${reason}`);
-        }
+          resolveObserverReady?.();
+        },
+        onclose: (reason) => {
+          if (!observerReady) {
+            clearTimeout(observerReadyTimeout);
+            rejectObserverReady?.(
+              new Error(`Buzz QA message observer closed before it was ready: ${reason}`),
+            );
+            return;
+          }
+          if (reason !== "shutdown" && reason !== "relay connection closed by us") {
+            transportError = new Error(`Buzz QA message subscription closed: ${reason}`);
+          }
+        },
       },
-    },
-  );
+    );
+  } catch (error) {
+    clearTimeout(observerReadyTimeout);
+    lifecycleAbort.abort(error);
+    relay.close();
+    throw error;
+  }
   try {
     await observerReadyPromise;
   } catch (error) {
