@@ -25,7 +25,7 @@ export function resolvePairedAccessScopes(
   return normalizeSortedUniqueTrimmedStringList(scopes);
 }
 
-export function isSetupCodeMobileBootstrapClient(client: {
+function isSetupCodeMobileBootstrapClient(client: {
   id?: string;
   platform?: string;
   deviceFamily?: string;
@@ -42,7 +42,7 @@ export function isSetupCodeMobileBootstrapClient(client: {
 }
 
 /** Embedded voice nodes must prove the canonical node-host and ESP32 metadata tuple. */
-export function isSetupCodeVoiceNodeBootstrapClient(client: {
+function isSetupCodeVoiceNodeBootstrapClient(client: {
   id?: string;
   platform?: string;
   deviceFamily?: string;
