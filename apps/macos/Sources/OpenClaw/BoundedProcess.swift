@@ -41,6 +41,12 @@ enum BoundedProcess {
                 self?.finish()
             }
             source.resume()
+            // The child can exit between the initial waitid probe and kqueue
+            // registration. Recheck after resume so that race cannot consume
+            // the full timeout when no NOTE_EXIT event is delivered.
+            if Self.hasExited(processIdentifier) {
+                self.finish()
+            }
         }
 
         func wait() async {

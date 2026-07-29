@@ -37,6 +37,31 @@ struct BoundedProcessTests {
         #expect(results.allSatisfy { $0 == 0 })
     }
 
+    @Test func `captures parallel script exits during monitor registration`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-bounded-process-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("instant-exit")
+        try "#!/bin/sh\nexit 0\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        let results = try await withThrowingTaskGroup(of: Int32.self) { group in
+            for _ in 0..<64 {
+                group.addTask {
+                    try await BoundedProcess.run(
+                        path: script.path,
+                        arguments: [],
+                        timeout: 1).terminationStatus
+                }
+            }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+
+        #expect(results.count == 64)
+        #expect(results.allSatisfy { $0 == 0 })
+    }
+
     @Test func `times out and reaps a TERM-resistant process group`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-bounded-process-\(UUID().uuidString)", isDirectory: true)
