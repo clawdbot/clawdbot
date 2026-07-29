@@ -35,7 +35,10 @@ import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 
 type CliPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
-  "handlePartialForTyping" | "preparePartialForTyping" | "startPresentationWhileTyping"
+  | "blockReplyHandler"
+  | "handlePartialForTyping"
+  | "preparePartialForTyping"
+  | "startPresentationWhileTyping"
 >;
 
 export async function runCliFallbackCandidate(params: {
@@ -118,6 +121,11 @@ export async function runCliFallbackCandidate(params: {
       await turn.opts?.onToolResult?.(payload);
     },
   });
+  const bridgeCliPreambleProgress =
+    Boolean(turn.opts?.onItemEvent) && shouldBridgeCliPreambleEvents(turn.opts);
+  const bridgeCliDurableCommentary =
+    Boolean(params.presentation.blockReplyHandler) &&
+    (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnAdmission(
       {
@@ -205,13 +213,29 @@ export async function runCliFallbackCandidate(params: {
             ]);
           },
           onCommentaryText:
-            turn.opts?.onItemEvent && shouldBridgeCliPreambleEvents(turn.opts)
+            bridgeCliPreambleProgress || bridgeCliDurableCommentary
               ? async (payload) => {
-                  await turn.opts?.onItemEvent?.({
-                    itemId: payload.itemId,
-                    kind: "preamble",
-                    progressText: payload.text,
-                  });
+                  const deliveries: unknown[] = [];
+                  if (bridgeCliPreambleProgress) {
+                    deliveries.push(
+                      turn.opts?.onItemEvent?.({
+                        itemId: payload.itemId,
+                        kind: "preamble",
+                        progressText: payload.text,
+                      }),
+                    );
+                  }
+                  if (bridgeCliDurableCommentary) {
+                    // Block mode treats completed CLI text as an ordinary answer block so
+                    // the existing pipeline owns coalescing and final-payload dedupe.
+                    deliveries.push(
+                      params.presentation.blockReplyHandler?.({
+                        text: payload.text,
+                        ...(turn.blockStreamingEnabled ? {} : { isCommentary: true }),
+                      }),
+                    );
+                  }
+                  await Promise.all(deliveries);
                 }
               : undefined,
           onFastModeAutoProgress: async (payload) => {
