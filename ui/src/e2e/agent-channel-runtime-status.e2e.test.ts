@@ -97,7 +97,7 @@ describeControlUiE2e("Control UI Agents channel status", () => {
     try {
       const response = await page.goto(`${server.baseUrl}agents`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("button", { name: /^Channels/ }).click();
+      await page.getByRole("tab", { name: /^Channels/ }).click();
 
       const discordRow = page.locator(".settings-row").filter({ hasText: "Discord" });
       await expect.poll(() => discordRow.count()).toBe(1);
