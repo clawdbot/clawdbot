@@ -71,6 +71,22 @@ export type OperatorRequestHeaderResolution = {
   suspicious: string[];
 };
 
+function trimHttpWhitespace(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && isHttpWhitespaceCode(value.charCodeAt(start))) {
+    start += 1;
+  }
+  while (end > start && isHttpWhitespaceCode(value.charCodeAt(end - 1))) {
+    end -= 1;
+  }
+  return start === 0 && end === value.length ? value : value.slice(start, end);
+}
+
+function isHttpWhitespaceCode(code: number): boolean {
+  return code === 0x09 || code === 0x0a || code === 0x0d || code === 0x20;
+}
+
 export function resolveOperatorRequestHeaders(params: {
   configured: unknown;
   /** Names the calling tool owns; an operator entry must never override these. */
@@ -89,9 +105,9 @@ export function resolveOperatorRequestHeaders(params: {
   const usable = new Map<string, { name: string; value: string }>();
   for (const [rawName, rawValue] of Object.entries(params.configured)) {
     const name = rawName.trim();
-    // undici trims field values, so trimming here keeps any caller-side cache
-    // fingerprint keyed on the bytes the request actually sends.
-    const value = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+    // Match Fetch's header-value normalization so caller-side cache fingerprints
+    // use the bytes sent without stripping valid obs-text such as U+00A0.
+    const value = typeof rawValue === "string" ? trimHttpWhitespace(rawValue) : rawValue;
     if (!HTTP_HEADER_NAME_PATTERN.test(name) || !isSendableHeaderValue(value) || value === "") {
       ignored.push(rawName);
       continue;

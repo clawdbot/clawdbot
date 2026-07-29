@@ -126,6 +126,8 @@ describe("web_fetch configured request headers", () => {
       "Proxy-Authorization": "Basic abc",
       "X-Api-Key": "live-key",
       apikey: "live-key",
+      "x-goog-api-key": "google-live-key",
+      "Ocp-Apim-Subscription-Key": "azure-live-key",
       "X-Routing-Target": "staging",
     });
 
@@ -139,6 +141,8 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("Proxy-Authorization");
     expect(names).not.toContain("X-Api-Key");
     expect(names).not.toContain("apikey");
+    expect(names).not.toContain("x-goog-api-key");
+    expect(names).not.toContain("Ocp-Apim-Subscription-Key");
   });
 
   it("refuses framing headers that undici rejects or ignores", async () => {
@@ -182,6 +186,17 @@ describe("web_fetch configured request headers", () => {
     const headers = getRequestHeaders(fetchSpy);
     expect(headers["X-Padded"]).toBe("staging");
     expect(Object.keys(headers)).not.toContain("X-Blank");
+  });
+
+  it("preserves valid obs-text at header boundaries", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Obs Text"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createToolWithHeaders({ "X-Routing-Target": "\u00a0staging\u00a0" });
+
+    await tool?.execute?.("call", { url: "https://example.com/obs-text" });
+
+    expect(getRequestHeaders(fetchSpy)["X-Routing-Target"]).toBe("\u00a0staging\u00a0");
   });
 
   it("keeps one entry when configured names differ only in case", async () => {

@@ -64,6 +64,8 @@ describe("resolveOperatorRequestHeaders", () => {
       TE: "trailers",
       Authorization: "Bearer x",
       "X-Api-Key": "live",
+      "x-goog-api-key": "google-live",
+      "Ocp-Apim-Subscription-Key": "azure-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -76,8 +78,19 @@ describe("resolveOperatorRequestHeaders", () => {
         "TE",
         "Authorization",
         "X-Api-Key",
+        "x-goog-api-key",
+        "Ocp-Apim-Subscription-Key",
       ]),
     );
+  });
+
+  it("trims only HTTP whitespace and preserves valid obs-text bytes", () => {
+    const { headers } = resolve({
+      "X-Http-Padded": " \tvalue\t ",
+      "X-Obs-Text-Padded": "\u00a0route\u00a0",
+    });
+    expect(headers?.["X-Http-Padded"]).toBe("value");
+    expect(headers?.["X-Obs-Text-Padded"]).toBe("\u00a0route\u00a0");
   });
 
   it("reports unsendable entries as ignored without dropping the rest", () => {
