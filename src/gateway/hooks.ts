@@ -273,11 +273,7 @@ export function resolveHookDeliver(raw: unknown): boolean {
 }
 
 /** Normalize webhook delivery intent before any isolated cron work is scheduled. */
-function normalizeHookAgentDelivery(params: {
-  deliver: unknown;
-  channel: unknown;
-  to: unknown;
-}):
+function normalizeHookAgentDelivery(params: { deliver: unknown; channel: unknown; to: unknown }):
   | {
       ok: true;
       value: Pick<HookAgentPayload, "deliver" | "channel" | "to" | "delivery">;
