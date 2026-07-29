@@ -2033,6 +2033,7 @@ describe("createOpenClawCodingTools", () => {
     try {
       const tools = createOpenClawCodingTools({
         workspaceDir,
+        config: { tools: { fs: { workspaceOnly: true } } },
         senderIsOwner: true,
         isTurnTainted: () => tainted,
       });
@@ -2071,6 +2072,125 @@ describe("createOpenClawCodingTools", () => {
         }),
       );
     } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records agent provenance after an untainted same-turn delete and recreate", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-recreate-"));
+    let recordedOrigin: "agent" | "untrusted" | undefined;
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/recreated.md",
+        recordWriteProvenance: async (entry) => {
+          const previous = recordedOrigin;
+          recordedOrigin = entry.originClass;
+          return async () => {
+            recordedOrigin = previous;
+          };
+        },
+        clearWriteProvenance: async () => {
+          recordedOrigin = undefined;
+        },
+      }),
+    });
+    try {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "memory/recreated.md"), "old\n", "utf8");
+      const applyPatch = requireToolExecute(
+        requireTool(
+          createOpenClawCodingTools({
+            workspaceDir,
+            senderIsOwner: true,
+            isTurnTainted: () => false,
+          }),
+          "apply_patch",
+        ),
+      );
+
+      await applyPatch("delete-memory", {
+        input: "*** Begin Patch\n*** Delete File: memory/recreated.md\n*** End Patch",
+      });
+      await applyPatch("recreate-memory", {
+        input: "*** Begin Patch\n*** Add File: memory/recreated.md\n+recreated\n*** End Patch",
+      });
+
+      expect(recordedOrigin).toBe("agent");
+      await expect(
+        fs.readFile(path.join(workspaceDir, "memory/recreated.md"), "utf8"),
+      ).resolves.toBe("recreated\n");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("orders parallel apply_patch delete cleanup before a tainted recreate", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-race-"));
+    let recordedOrigin: "agent" | "untrusted" | undefined;
+    let releaseCleanup!: () => void;
+    let signalCleanupStarted!: () => void;
+    const cleanupRelease = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupStarted = new Promise<void>((resolve) => {
+      signalCleanupStarted = resolve;
+    });
+    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
+      async (entry) => {
+        recordedOrigin = entry.originClass;
+      },
+    );
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/raced.md",
+        recordWriteProvenance,
+        clearWriteProvenance: async () => {
+          signalCleanupStarted();
+          await cleanupRelease;
+          recordedOrigin = undefined;
+        },
+      }),
+    });
+    try {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "memory/raced.md"), "old\n", "utf8");
+      const applyPatch = requireToolExecute(
+        requireTool(
+          createOpenClawCodingTools({
+            workspaceDir,
+            senderIsOwner: true,
+            isTurnTainted: () => true,
+          }),
+          "apply_patch",
+        ),
+      );
+
+      const deleting = applyPatch("delete-raced-memory", {
+        input: "*** Begin Patch\n*** Delete File: memory/raced.md\n*** End Patch",
+      });
+      await cleanupStarted;
+      const recreating = applyPatch("recreate-raced-memory", {
+        input: "*** Begin Patch\n*** Add File: memory/raced.md\n+network note\n*** End Patch",
+      });
+      await Promise.resolve();
+      expect(recordWriteProvenance).not.toHaveBeenCalled();
+      releaseCleanup();
+      await Promise.all([deleting, recreating]);
+
+      expect(recordedOrigin).toBe("untrusted");
+      expect(recordWriteProvenance).toHaveBeenCalledOnce();
+    } finally {
+      releaseCleanup();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });

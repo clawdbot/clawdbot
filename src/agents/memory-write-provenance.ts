@@ -3,6 +3,7 @@ import { logWarn } from "../logger.js";
 import type { MemoryFlushPlan } from "../plugins/memory-state.js";
 
 export type MemoryWriteProvenanceObserver = {
+  classifies: (absolutePath: string) => boolean;
   write: (params: {
     absolutePath: string;
     contentBefore: string;
@@ -41,6 +42,8 @@ export function createMemoryWriteProvenanceObserver(params: {
   }
   const now = params.now ?? Date.now;
   return {
+    classifies: (absolutePath) =>
+      resolveMemoryRelativePath(params.mutationRoot, absolutePath) !== undefined,
     write: async ({ absolutePath, contentBefore, contentAfter, commit }) => {
       const relativePath = resolveMemoryRelativePath(params.mutationRoot, absolutePath);
       if (!relativePath) {

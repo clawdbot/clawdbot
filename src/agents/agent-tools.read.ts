@@ -1081,7 +1081,10 @@ function createSandboxEditOperations(params: SandboxToolParams) {
 }
 
 function isMissingFileError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+  return (
+    (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ||
+    (error instanceof FsSafeError && error.code === "not-found")
+  );
 }
 
 function withMemoryWriteProvenance<
@@ -1096,6 +1099,10 @@ function withMemoryWriteProvenance<
   return {
     ...operations,
     writeFile: async (absolutePath: string, content: string) => {
+      if (!observer.classifies(absolutePath)) {
+        await operations.writeFile(absolutePath, content);
+        return;
+      }
       const contentBefore = await operations
         .readFile(absolutePath)
         .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
