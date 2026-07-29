@@ -280,7 +280,7 @@
 .claws-plan {
   padding: 18px 20px;
   border-block: 1px solid var(--border);
-  background: var(--bg-subtle);
+  background: var(--bg-muted);
 }
 
 .claws-stages {

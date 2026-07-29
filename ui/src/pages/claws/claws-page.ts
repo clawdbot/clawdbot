@@ -80,7 +80,6 @@ class ClawsPage extends OpenClawLightDomElement {
   @state() private outcome: ClawLifecycleApplyResult | null = null;
   @state() private pendingOperation: PendingClawOperation | null = null;
   @state() private answers: ClawSetupAnswers = {};
-  @state() private baselineAnswers: ClawSetupAnswers = {};
   @state() private submittedAnswers: ClawSetupAnswers = {};
   @state() private clearedAnswers: string[] = [];
   @state() private regenerateSeeds: string[] = [];
@@ -273,7 +272,6 @@ class ClawsPage extends OpenClawLightDomElement {
 
   private async previewAdd(detail: ClawCatalogDetail) {
     this.answers = {};
-    this.baselineAnswers = {};
     this.submittedAnswers = {};
     this.clearedAnswers = [];
     this.regenerateSeeds = [];
@@ -285,10 +283,7 @@ class ClawsPage extends OpenClawLightDomElement {
   }
 
   private async previewUpdate(record: ClawStatusEntry, detail?: ClawCatalogDetail) {
-    this.answers = Object.fromEntries(
-      record.personalization?.answers.map((answer) => [answer.id, answer.value]) ?? [],
-    );
-    this.baselineAnswers = { ...this.answers };
+    this.answers = {};
     this.submittedAnswers = {};
     this.clearedAnswers = [];
     this.regenerateSeeds = [];
@@ -304,10 +299,7 @@ class ClawsPage extends OpenClawLightDomElement {
     if (!this.configureAvailable) {
       return;
     }
-    this.answers = Object.fromEntries(
-      record.personalization?.answers.map((answer) => [answer.id, answer.value]) ?? [],
-    );
-    this.baselineAnswers = { ...this.answers };
+    this.answers = {};
     this.submittedAnswers = {};
     this.clearedAnswers = [];
     this.regenerateSeeds = [];
@@ -393,7 +385,6 @@ class ClawsPage extends OpenClawLightDomElement {
     this.removeUnused = false;
     this.riskAcknowledged = false;
     this.answers = {};
-    this.baselineAnswers = {};
     this.submittedAnswers = {};
     this.clearedAnswers = [];
     this.regenerateSeeds = [];
@@ -405,18 +396,12 @@ class ClawsPage extends OpenClawLightDomElement {
       return;
     }
     if (value === undefined) {
-      if (
-        Object.hasOwn(this.baselineAnswers, id) &&
-        this.pendingOperation?.operation === "configure"
-      ) {
-        const { [id]: _removed, ...remaining } = this.answers;
-        this.answers = remaining;
+      const { [id]: _removed, ...remaining } = this.answers;
+      this.answers = remaining;
+      if (this.pendingOperation?.operation === "configure") {
         this.clearedAnswers = [...new Set([...this.clearedAnswers, id])];
-      } else if (Object.hasOwn(this.baselineAnswers, id)) {
-        this.answers = { ...this.answers, [id]: this.baselineAnswers[id]! };
       } else {
-        const { [id]: _removed, ...remaining } = this.answers;
-        this.answers = remaining;
+        this.clearedAnswers = this.clearedAnswers.filter((entry) => entry !== id);
       }
       const { [id]: _submitted, ...remainingSubmitted } = this.submittedAnswers;
       this.submittedAnswers = remainingSubmitted;

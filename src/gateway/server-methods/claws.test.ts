@@ -164,7 +164,6 @@ describe("Claw gateway projections", () => {
     );
     expect(result.records[0]?.personalization).toEqual({
       status: "complete",
-      answers: [{ id: "timezone", value: "America/Los_Angeles", source: "explicit" }],
       seeds: [{ destination: "PREFERENCES.md", status: "complete" }],
       updatePending: false,
     });
@@ -183,6 +182,7 @@ describe("Claw gateway projections", () => {
     expect(serialized).not.toContain("/secret/");
     expect(serialized).not.toContain("sha256:");
     expect(serialized).not.toContain("private cron prompt");
+    expect(serialized).not.toContain("America/Los_Angeles");
   });
 
   it("omits diagnostic targets and source metadata", () => {

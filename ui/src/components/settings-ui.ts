@@ -217,7 +217,13 @@ export function renderSettingsToggleRow(props: {
 
 export function renderSettingsSegmented<T extends string>(props: {
   value: T;
-  options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
+  options: ReadonlyArray<{
+    value: T;
+    label: unknown;
+    title?: string;
+    testId?: string;
+    disabled?: boolean;
+  }>;
   /** The selected radio is passed so callers can anchor visual transitions. */
   onChange: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
@@ -254,6 +260,7 @@ export function renderSettingsSegmented<T extends string>(props: {
             appearance="button"
             value=${option.value}
             .checked=${option.value === props.value}
+            ?disabled=${option.disabled ?? false}
             title=${option.title ?? nothing}
             data-test-id=${option.testId ?? nothing}
           >

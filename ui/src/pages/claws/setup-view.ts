@@ -33,7 +33,7 @@ function renderSetupInput(input: ClawSetupInput, props: ClawSetupViewProps) {
     : nothing;
   const wrap = (control: unknown) => html`<div class="claws-setup__answer">
     ${control}
-    ${props.allowAnswerClearing && !input.required && Object.hasOwn(props.answers, input.id)
+    ${props.allowAnswerClearing && !input.required
       ? html`<button
           class="btn btn--icon claws-setup__clear"
           type="button"
@@ -127,10 +127,7 @@ function renderSetupInput(input: ClawSetupInput, props: ClawSetupViewProps) {
       ?disabled=${disabled}
       @input=${(event: Event) => {
         const raw = (event.currentTarget as HTMLInputElement).value;
-        props.onAnswerChange(
-          input.id,
-          setupAnswerFromText(raw, input.type),
-        );
+        props.onAnswerChange(input.id, setupAnswerFromText(raw, input.type));
       }}
     />
   </label>`);

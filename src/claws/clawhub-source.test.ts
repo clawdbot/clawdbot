@@ -36,7 +36,6 @@ vi.mock("./reader.js", () => ({
 }));
 
 import {
-  ClawHubSourceError,
   readClawHubClawDetail,
   searchClawHubClaws,
   withResolvedClawHubSource,
@@ -158,6 +157,86 @@ describe("ClawHub Claw source resolution", () => {
     );
   });
 
+  it("surfaces risky catalog content during preview without treating preview as apply consent", async () => {
+    mocks.artifact.mockResolvedValue({
+      package: { name: "financial-analyst", family: "claw" },
+      version: "1.2.0",
+      artifact: { artifactKind: "npm-pack", artifactSha256: digest },
+    });
+    mocks.trust.mockImplementation(async (params) => {
+      expect(params.acknowledgeClawHubRisk).toBeUndefined();
+      expect(params.onClawHubRisk).toEqual(expect.any(Function));
+      params.onClawHubRisk({ warning: "Unverified publisher." });
+      return { ok: true, warning: "Unverified publisher." };
+    });
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName: "financial-analyst", version: "1.2.0" },
+        mode: "preview",
+        run: async () => undefined,
+      }),
+    ).resolves.toMatchObject({
+      trustWarning: "Unverified publisher.",
+      riskAcknowledgementRequired: true,
+    });
+  });
+
+  it("requires fresh explicit risk acknowledgement when applying catalog content", async () => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), "clawhub-risk-test-"));
+    const extractedRoot = path.join(temp, "extracted");
+    const stateDir = path.join(temp, "state");
+    await fs.mkdir(extractedRoot);
+    await fs.writeFile(path.join(extractedRoot, "package.json"), "{}\n");
+    mocks.artifact.mockResolvedValue({
+      package: { name: "financial-analyst", family: "claw" },
+      version: "1.2.0",
+      artifact: { artifactKind: "npm-pack", artifactSha256: digest },
+    });
+    mocks.trust.mockImplementation(async (params) =>
+      params.acknowledgeClawHubRisk === true
+        ? { ok: true, warning: "Unverified publisher." }
+        : {
+            ok: false,
+            code: "clawhub_risk_ack_required",
+            error: "Explicit acknowledgement is required.",
+          },
+    );
+    mocks.extract.mockImplementation(async ({ onExtracted }) => await onExtracted(extractedRoot));
+
+    try {
+      await expect(
+        withResolvedClawHubSource({
+          coordinate: { packageName: "financial-analyst", version: "1.2.0" },
+          mode: "apply",
+          stateDir,
+          run: async () => undefined,
+        }),
+      ).rejects.toMatchObject({
+        code: "clawhub_risk_ack_required",
+      });
+      expect(mocks.download).not.toHaveBeenCalled();
+
+      await expect(
+        withResolvedClawHubSource({
+          coordinate: { packageName: "financial-analyst", version: "1.2.0" },
+          mode: "apply",
+          acknowledgeClawHubRisk: true,
+          stateDir,
+          run: async () => undefined,
+        }),
+      ).resolves.toMatchObject({ trustWarning: "Unverified publisher." });
+      expect(mocks.trust).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          acknowledgeClawHubRisk: true,
+          onClawHubRisk: undefined,
+        }),
+      );
+    } finally {
+      await fs.rm(temp, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a downloaded artifact whose digest differs from the selected release", async () => {
     mocks.artifact.mockResolvedValue({
       package: { name: "financial-analyst", family: "claw" },
@@ -176,7 +255,7 @@ describe("ClawHub Claw source resolution", () => {
         mode: "preview",
         run: async () => undefined,
       }),
-    ).rejects.toMatchObject<Partial<ClawHubSourceError>>({
+    ).rejects.toMatchObject({
       code: "clawhub_artifact_integrity_mismatch",
     });
     expect(mocks.extract).not.toHaveBeenCalled();

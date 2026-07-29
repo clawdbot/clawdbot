@@ -10,6 +10,7 @@ import type {
   ClawsDoctorResult,
   ClawsStatusResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { setupAnswerEditable, type ClawSetupAnswers } from "./lifecycle-request.ts";
@@ -304,30 +305,17 @@ function renderDetail(record: ClawStatusEntry, props: ClawsProps) {
 }
 
 function renderModeControl(props: ClawsProps) {
-  return html`
-    <div
-      class="settings-segmented claws-mode"
-      role="tablist"
-      aria-label=${t("clawsPage.modeLabel")}
-    >
-      ${(["installed", "discover"] as const).map(
-        (mode) => html`
-          <button
-            class="settings-segmented__btn ${props.mode === mode
-              ? "settings-segmented__btn--active"
-              : ""}"
-            type="button"
-            role="tab"
-            aria-selected=${props.mode === mode}
-            ?disabled=${mode === "discover" && !props.catalogAvailable}
-            @click=${() => props.onModeChange(mode)}
-          >
-            ${t(`clawsPage.modes.${mode}`)}
-          </button>
-        `,
-      )}
-    </div>
-  `;
+  return renderSettingsSegmented({
+    value: props.mode,
+    options: (["installed", "discover"] as const).map((mode) => ({
+      value: mode,
+      label: t(`clawsPage.modes.${mode}`),
+      disabled: mode === "discover" && !props.catalogAvailable,
+    })),
+    ariaLabel: t("clawsPage.modeLabel"),
+    className: "claws-mode",
+    onChange: (mode) => props.onModeChange(mode),
+  });
 }
 
 function renderCatalogDetail(detail: ClawCatalogDetail, props: ClawsProps) {
@@ -372,24 +360,24 @@ function renderCatalogDetail(detail: ClawCatalogDetail, props: ClawsProps) {
       ${props.installedCatalogAgents.length > 1
         ? html`<div class="callout warn">${t("clawsPage.multipleInstalled")}</div>`
         : html`<div class="claws-detail__actions">
-        ${props.installedCatalogAgents.length === 1
-          ? html`<button
-              class="btn primary"
-              type="button"
-              ?disabled=${!props.lifecycleAvailable || props.operationBusy}
-              @click=${() => props.onPreviewUpdate(props.installedCatalogAgents[0]!, detail)}
-            >
-              ${t("clawsPage.actions.previewUpdate")}
-            </button>`
-          : html`<button
-              class="btn primary"
-              type="button"
-              ?disabled=${!props.lifecycleAvailable || props.operationBusy}
-              @click=${() => props.onPreviewAdd(detail)}
-            >
-              ${t("clawsPage.actions.previewAdd")}
-            </button>`}
-      </div>`}
+            ${props.installedCatalogAgents.length === 1
+              ? html`<button
+                  class="btn primary"
+                  type="button"
+                  ?disabled=${!props.lifecycleAvailable || props.operationBusy}
+                  @click=${() => props.onPreviewUpdate(props.installedCatalogAgents[0]!, detail)}
+                >
+                  ${t("clawsPage.actions.previewUpdate")}
+                </button>`
+              : html`<button
+                  class="btn primary"
+                  type="button"
+                  ?disabled=${!props.lifecycleAvailable || props.operationBusy}
+                  @click=${() => props.onPreviewAdd(detail)}
+                >
+                  ${t("clawsPage.actions.previewAdd")}
+                </button>`}
+          </div>`}
       ${renderClawStages("overview")}
     </section>
   `;
@@ -635,13 +623,11 @@ function renderPlan(plan: ClawLifecyclePlanResult, props: ClawsProps) {
         ><button
           class="btn primary"
           type="button"
-          ?disabled=${
-            !mutationAvailable ||
-            props.operationBusy ||
-            blocked ||
-            consentMissing ||
-            setupNeedsReview
-          }
+          ?disabled=${!mutationAvailable ||
+          props.operationBusy ||
+          blocked ||
+          consentMissing ||
+          setupNeedsReview}
           @click=${props.onApplyPlan}
         >
           ${props.operationBusy

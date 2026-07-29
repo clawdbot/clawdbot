@@ -175,13 +175,6 @@ export const ClawStatusEntrySchema = closedObject({
         Type.Literal("complete"),
         Type.Literal("partial"),
       ]),
-      answers: Type.Array(
-        closedObject({
-          id: NonEmptyString,
-          value: ClawSetupAnswerValueSchema,
-          source: Type.Union([Type.Literal("explicit"), Type.Literal("default")]),
-        }),
-      ),
       seeds: Type.Array(
         closedObject({
           destination: NonEmptyString,

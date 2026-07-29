@@ -165,7 +165,6 @@ function projectStatusRecord(record: ClawStatusRecord): ClawStatusEntry {
       ? {
           personalization: {
             status: setup.status,
-            answers: setup.answers,
             seeds: setup.seeds.map((seed) => ({
               destination: seed.destination,
               status: seed.status,

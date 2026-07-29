@@ -122,15 +122,27 @@ function props(overrides: Partial<Parameters<typeof renderClaws>[0]> = {}) {
 }
 
 describe("renderClaws", () => {
+  it("uses the shared segmented control and disables unavailable discovery", () => {
+    const container = document.createElement("div");
+    render(renderClaws(props({ catalogAvailable: false })), container);
+
+    expect(container.querySelector("[role='tablist']")).toBeNull();
+    const options = [
+      ...container.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-radio"),
+    ];
+    expect(options.map((option) => option.textContent?.trim())).toEqual(["Installed", "Discover"]);
+    expect(options[0]?.disabled).toBe(false);
+    expect(options[1]?.disabled).toBe(true);
+  });
+
   it("keeps existing lifecycle actions available when configure is unavailable", () => {
     const personalizedStatus: ClawsStatusResult = {
       ...status,
       records: [
         {
-          ...status.records[0],
+          ...status.records[0]!,
           personalization: {
             status: "complete",
-            answers: [],
             seeds: [],
             updatePending: false,
           },
@@ -218,7 +230,7 @@ describe("renderClaws", () => {
         props({
           mode: "discover",
           catalogDetail,
-          installedCatalogAgents: [status.records[0]],
+          installedCatalogAgents: [status.records[0]!],
           onPreviewUpdate,
         }),
       ),
@@ -239,8 +251,8 @@ describe("renderClaws", () => {
           mode: "discover",
           catalogDetail,
           installedCatalogAgents: [
-            status.records[0],
-            { ...status.records[0], agentId: "analyst-two" },
+            status.records[0]!,
+            { ...status.records[0]!, agentId: "analyst-two" },
           ],
         }),
       ),
@@ -376,7 +388,7 @@ describe("renderClaws", () => {
               diagnostics: [],
             },
           },
-          answers: { enabled: false },
+          answers: {},
           onAnswerChange,
         }),
       ),
