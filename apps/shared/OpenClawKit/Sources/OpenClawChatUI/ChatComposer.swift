@@ -938,6 +938,40 @@ struct OpenClawChatComposer: View {
                 .onChange(of: self.viewModel.input) { _, _ in
                     self.updateSlashPopoverPresentation()
                 }
+            #elseif os(iOS)
+            ChatComposerTextViewIOS(
+                text: self.$viewModel.input,
+                shouldFocus: self.isFocused,
+                isEnabled: self.isComposerEnabled,
+                minHeight: self.textMinHeight,
+                maxHeight: self.textMaxHeight,
+                onFocusChange: { focused in
+                    self.isFocused = focused
+                })
+                .padding(.horizontal, self.cleanFieldTextInset)
+                .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
+                .onChange(of: self.isFocused) { _, focused in
+                    if focused {
+                        self.updateSlashPopoverPresentation()
+                    } else {
+                        self.setSlashPanelPresented(false)
+                    }
+                }
+                // Keep history recall on physical arrow keys while native
+                // UITextView owns Return, selection, and marked-text input.
+                .onKeyPress(.upArrow) {
+                    guard !self.isSlashPopoverPresented else { return .ignored }
+                    return self.viewModel.recallPreviousInput(caretOnFirstLine: false)
+                        ? .handled
+                        : .ignored
+                }
+                .onKeyPress(.downArrow) {
+                    guard !self.isSlashPopoverPresented else { return .ignored }
+                    return self.viewModel.recallNextInput() ? .handled : .ignored
+                }
             #else
             TextField(
                 "",
