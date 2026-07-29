@@ -33,8 +33,12 @@ actor RemoteTunnelManager {
         else {
             self.createInFlight?.task.cancel()
             self.createInFlight = nil
-            await self.controlTunnel?.tunnel.terminate()
+            let tunnel = self.controlTunnel?.tunnel
             self.controlTunnel = nil
+            if tunnel != nil {
+                self.tunnelGeneration &+= 1
+            }
+            await tunnel?.terminate()
             return nil
         }
         return await self.controlTunnelRouteIfRunning(configuration: configuration)
@@ -54,9 +58,9 @@ actor RemoteTunnelManager {
         if let active = controlTunnel {
             guard Self.canReuse(active.configuration, for: configuration) else {
                 self.logger.info("configured SSH route changed; replacing control tunnel")
-                await active.tunnel.terminate()
                 self.controlTunnel = nil
                 self.tunnelGeneration &+= 1
+                await active.tunnel.terminate()
                 return nil
             }
             guard active.tunnel.isRunning,
@@ -81,10 +85,10 @@ actor RemoteTunnelManager {
             }
             self.logger.error(
                 "active SSH tunnel on port \(local, privacy: .public) is not listening; restarting")
-            await self.beginRestart()
-            await active.tunnel.terminate()
             self.controlTunnel = nil
             self.tunnelGeneration &+= 1
+            self.beginRestart()
+            await active.tunnel.terminate()
         }
         return nil
     }
@@ -211,8 +215,9 @@ actor RemoteTunnelManager {
         self.tunnelGeneration &+= 1
         self.createInFlight?.task.cancel()
         self.createInFlight = nil
-        await self.controlTunnel?.tunnel.terminate()
+        let tunnel = self.controlTunnel?.tunnel
         self.controlTunnel = nil
+        await tunnel?.terminate()
     }
 
     #if DEBUG
@@ -224,7 +229,7 @@ actor RemoteTunnelManager {
     }
     #endif
 
-    private func beginRestart() async {
+    private func beginRestart() {
         guard !self.restartInFlight else { return }
         self.restartInFlight = true
         self.lastRestartAt = Date()
