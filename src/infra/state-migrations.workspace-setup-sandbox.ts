@@ -1,6 +1,6 @@
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { readRegisteredSandboxScopeKeys } from "../agents/sandbox/registry.js";
+import { readRegisteredSandboxSessionKeys } from "../agents/sandbox/registry-session-keys.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,7 +12,7 @@ export function listSandboxWorkspaceDirs(params: {
   homedir: () => string;
 }): string[] {
   const dirs = new Set<string>();
-  let registeredScopeKeys: string[] | undefined;
+  let registeredSessionKeys: string[] | undefined;
 
   for (const agentId of listAgentIds(params.cfg)) {
     const sandbox = resolveSandboxConfigForAgent(params.cfg, agentId);
@@ -36,8 +36,8 @@ export function listSandboxWorkspaceDirs(params: {
 
     // Directory slugs erase agent/session boundaries; only the SQLite runtime
     // registry can prove that a session copy belongs to an active sandbox.
-    registeredScopeKeys ??= readRegisteredSandboxScopeKeys(params.env);
-    for (const sessionKey of registeredScopeKeys) {
+    registeredSessionKeys ??= readRegisteredSandboxSessionKeys(params.env);
+    for (const sessionKey of registeredSessionKeys) {
       const runtime = resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey });
       if (!runtime.sandboxed || runtime.agentId !== agentId) {
         continue;
