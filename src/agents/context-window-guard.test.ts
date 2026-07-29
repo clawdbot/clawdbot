@@ -117,6 +117,104 @@ describe("context-window-guard", () => {
     expect(info.tokens).toBe(64_000);
   });
 
+  it("uses agents.defaults.models[].contextTokens when present", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "kilocode/anthropic/claude-sonnet-5": { contextTokens: 900_000 },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "kilocode",
+      modelId: "anthropic/claude-sonnet-5",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("agentModelContextTokens");
+    expect(info.tokens).toBe(900_000);
+  });
+
+  it("only applies the per-model override to the matching model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "kilocode/anthropic/claude-sonnet-5": { contextTokens: 900_000 },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "kilocode",
+      modelId: "kilo-auto/balanced",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("model");
+    expect(info.tokens).toBe(128_000);
+  });
+
+  it("prefers the per-model override over models.providers and the global cap", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          contextTokens: 50_000,
+          models: { "openrouter/tiny": { contextTokens: 300_000 } },
+        },
+      },
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "tiny",
+                name: "tiny",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 12_000,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "tiny",
+      modelContextWindow: 64_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("agentModelContextTokens");
+    expect(info.tokens).toBe(300_000);
+  });
+
+  it("ignores a non-positive per-model override", () => {
+    const cfg = {
+      agents: {
+        defaults: { models: { "anthropic/whatever": { contextTokens: 0 } } },
+      },
+    } as unknown as OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 64_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("model");
+    expect(info.tokens).toBe(64_000);
+  });
+
   it("uses default when nothing else is available", () => {
     const info = resolveContextWindowInfo({
       cfg: undefined,

@@ -31,6 +31,8 @@ export const AgentDefaultsSchema = z
             params: z.record(z.string(), z.unknown()).optional(),
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
+            /** Context window override for this model, in tokens. */
+            contextTokens: z.number().int().positive().optional(),
           })
           .strict(),
       )

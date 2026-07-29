@@ -43,11 +43,31 @@ Session pruning trims **old tool results** from the in-memory context right befo
 
 Pruning uses an estimated context window (chars ≈ tokens × 4). The base window is resolved in this order:
 
-1. `models.providers.*.models[].contextWindow` override.
-2. Model definition `contextWindow` (from the model registry).
-3. Default `200000` tokens.
+1. `agents.defaults.models["<provider>/<model>"].contextTokens` override.
+2. `models.providers.*.models[].contextWindow` override.
+3. Model definition `contextWindow` (from the model registry).
+4. Default `200000` tokens.
 
 If `agents.defaults.contextTokens` is set, it is treated as a cap (min) on the resolved window.
+
+The per-model `contextTokens` override wins outright, including over that cap, and can raise
+the window above what the model registry reports. Use it when a gateway under-reports the
+window of the model it actually routes to:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "kilocode/anthropic/claude-sonnet-5": { contextTokens: 900000 },
+      },
+    },
+  },
+}
+```
+
+Note the key is the full `<provider>/<model>` string, and `models` is an object keyed by that
+string — not an array.
 
 ## Mode
 

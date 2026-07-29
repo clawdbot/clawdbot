@@ -3,7 +3,12 @@ import type { OpenClawConfig } from "../config/config.js";
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 32_000;
 
-export type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
+export type ContextWindowSource =
+  | "model"
+  | "modelsConfig"
+  | "agentModelContextTokens"
+  | "agentContextTokens"
+  | "default";
 
 export type ContextWindowInfo = {
   tokens: number;
@@ -25,6 +30,18 @@ export function resolveContextWindowInfo(params: {
   modelContextWindow?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
+  // `agents.defaults.models` is keyed by `<provider>/<modelId>` (see modelKey()
+  // in model-selection.ts). Built inline so this module stays dependency-free.
+  // An explicit per-model override is the most specific signal available, so it
+  // wins outright — including over the global `agents.defaults.contextTokens`
+  // cap, which exists to trim windows the user did not set deliberately.
+  const fromAgentModel = normalizePositiveInt(
+    params.cfg?.agents?.defaults?.models?.[`${params.provider}/${params.modelId}`]?.contextTokens,
+  );
+  if (fromAgentModel) {
+    return { tokens: fromAgentModel, source: "agentModelContextTokens" };
+  }
+
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
       | Record<string, { models?: Array<{ id?: string; contextWindow?: number }> }>
