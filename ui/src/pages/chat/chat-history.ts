@@ -1,9 +1,5 @@
 // Control UI page module owns Chat transcript loading and selected-session message subscription.
-import {
-  readSessionMessageSequence,
-  reduceSessionProjection,
-  type SessionProjectionScope,
-} from "@openclaw/gateway-client/browser";
+import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -55,7 +51,7 @@ import {
 } from "./chat-history-retry.ts";
 import type { ChatRunStartupPhase, ChatRunStartupState } from "./chat-run-startup.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
@@ -152,21 +148,10 @@ function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
   chatHistoryRequestVersions.set(owner, (chatHistoryRequestVersions.get(owner) ?? 0) + 1);
   inFlightChatHistoryRequests.delete(state);
   state.chatLoading = false;
-  const scope: SessionProjectionScope = {
-    sessionKey: state.sessionKey,
-    ...(agentId ? { agentId } : {}),
-    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
-    ...(Object.hasOwn(state, "chatDisplayedLeafEntryId")
-      ? { activeLeafEntryId: state.chatDisplayedLeafEntryId ?? null }
-      : {}),
-  };
-  const projection = getChatSessionProjection(state, state.chatMessages, scope);
+  const scope = readChatSessionProjectionScope(state, { agentId });
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
-  setChatSessionProjection(
-    state,
-    reduceSessionProjection(projection, { type: "sessionReset", scope }),
-  );
+  reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
 }
 
 export function isSilentReplyStream(text: string): boolean {
@@ -1000,7 +985,6 @@ export async function clearChatHistory(
         // ambiguous reset may already have destroyed. Clearing first also
         // prevents history loading from preserving a pre-reset optimistic tail.
         resetChatHistoryProjection(state, agentParams.agentId);
-        state.chatMessages = [];
         historyRefreshed = Boolean(await loadChatHistory(state));
       }
       setChatError(
@@ -1023,7 +1007,6 @@ export async function clearChatHistory(
     return "completed";
   }
   resetChatHistoryProjection(state, agentParams.agentId);
-  state.chatMessages = [];
   state.chatRunError = null;
   state.chatReplyTarget = null;
   reconcileChatRunLifecycle(state, {
@@ -1067,7 +1050,6 @@ export async function rewindChatHistory(
       return null;
     }
     resetChatHistoryProjection(state, agentParams.agentId);
-    state.chatMessages = [];
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
     if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
       return null;
@@ -1108,7 +1090,6 @@ export async function switchChatHistoryBranch(
       return false;
     }
     resetChatHistoryProjection(state, agentParams.agentId);
-    state.chatMessages = [];
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
     return visibleSessionMatches(state, sessionKey, agentParams.agentId);
   } catch (error) {
@@ -1340,8 +1321,7 @@ async function loadChatHistoryUncached(
     const nextSessionId = resolveChatHistorySessionId(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
-    const reconciledTerminal = reconcileAuthoritativeTerminalHistory({
-      currentMessages: state.chatMessages,
+    const previousTerminalMessages = reconcileAuthoritativeTerminalHistory({
       host: state,
       previousMessages,
       sessionKey,
@@ -1358,36 +1338,31 @@ async function loadChatHistoryUncached(
       nextMessages: visibleMessages,
       nextPagination,
       nextSessionId,
-      previousMessages: retainsTranscriptIdentity ? reconciledTerminal.previousMessages : [],
+      previousMessages: retainsTranscriptIdentity ? previousTerminalMessages : [],
       previousPagination,
       previousSessionId,
     });
     const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
-    const scope: SessionProjectionScope = {
+    const scope = readChatSessionProjectionScope(state, {
       sessionKey,
-      ...(requestAgentId ? { agentId: requestAgentId } : {}),
-      ...(nextSessionId ? { sessionId: nextSessionId } : {}),
-      ...(Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId") ||
-      Object.hasOwn(state, "chatDisplayedLeafEntryId")
+      agentId: requestAgentId,
+      sessionId: nextSessionId,
+      ...(Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
         ? { activeLeafEntryId: nextDisplayedLeafEntryId }
         : {}),
-    };
+    });
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new
     // session or leaf starts empty.
-    const currentProjection = getChatSessionProjection(
+    reduceChatSessionProjection(
       state,
-      retainsTranscriptIdentity ? state.chatMessages : [],
-      scope,
+      {
+        type: "snapshotLoaded",
+        messages: authoritativeMessages,
+        options: { shouldIncludeMessage: (message) => !shouldHideHistoryMessage(message) },
+      },
+      { scope, messages: retainsTranscriptIdentity ? state.chatMessages : [] },
     );
-    const projection = reduceSessionProjection(currentProjection, {
-      type: "snapshotLoaded",
-      messages: authoritativeMessages,
-      scope,
-      options: { shouldIncludeMessage: (message) => !shouldHideHistoryMessage(message) },
-    });
-    setChatSessionProjection(state, projection);
-    state.chatMessages = [...projection.messages];
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
     }
@@ -1524,7 +1499,6 @@ async function loadChatHistoryUncached(
     });
     if (isMissingOperatorReadScopeError(err)) {
       resetChatHistoryProjection(state, requestAgentId);
-      state.chatMessages = [];
       state.chatThinkingLevel = null;
       state.chatVerboseLevel = null;
       setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
