@@ -324,8 +324,11 @@ const MCP_DISCOVERY_NOTICE_IDS = new Set([
   "mcp-stale-catalog",
 ]);
 
-function mcpDiscoveryNotice(result: ToolsEffectiveResult | null) {
-  return result?.notices?.find((notice) => MCP_DISCOVERY_NOTICE_IDS.has(notice.id));
+function mcpDiscoveryNotice(result: ToolsEffectiveResult | null, serverName: string) {
+  return result?.notices?.find(
+    (notice) =>
+      MCP_DISCOVERY_NOTICE_IDS.has(notice.id) && notice.servers?.includes(serverName) === true,
+  );
 }
 
 function isToolDenied(props: ChatComposerPlusMenuProps, tool: ToolsEffectiveEntry): boolean {
@@ -345,7 +348,7 @@ function isToolDenied(props: ChatComposerPlusMenuProps, tool: ToolsEffectiveEntr
 function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: string) {
   const tools = toolsForServer(props.toolsEffectiveResult, serverName);
   const discoveryNotice =
-    tools.length === 0 ? mcpDiscoveryNotice(props.toolsEffectiveResult) : null;
+    tools.length === 0 ? mcpDiscoveryNotice(props.toolsEffectiveResult, serverName) : null;
   const enabledCount = tools.filter((tool) => !isToolDenied(props, tool)).length;
   const summary = t(
     tools.length === 1
