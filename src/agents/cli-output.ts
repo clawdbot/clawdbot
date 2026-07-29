@@ -1196,7 +1196,7 @@ function readCodexToolEvent(item: Record<string, unknown>): CodexToolEvent | nul
       kind: "tool_use",
       args: typeof item.command === "string" ? { command: item.command } : {},
       result: item.aggregated_output,
-      isError: item.status === "failed",
+      isError: item.status === "failed" || item.status === "declined",
     };
   }
   if (type === "file_change") {
@@ -1220,7 +1220,29 @@ function readCodexToolEvent(item: Record<string, unknown>): CodexToolEvent | nul
     };
   }
   if (type !== "mcp_tool_call") {
-    return null;
+    if (type !== "collab_tool_call") {
+      return null;
+    }
+    const tool = typeof item.tool === "string" ? item.tool.trim() : "";
+    if (!tool) {
+      return null;
+    }
+    return {
+      toolCallId,
+      name: `collab.${tool}`,
+      kind: "server_tool_use",
+      args: {
+        ...(typeof item.sender_thread_id === "string"
+          ? { sender_thread_id: item.sender_thread_id }
+          : {}),
+        ...(Array.isArray(item.receiver_thread_ids)
+          ? { receiver_thread_ids: item.receiver_thread_ids }
+          : {}),
+        ...(typeof item.prompt === "string" ? { prompt: item.prompt } : {}),
+      },
+      result: item.agents_states,
+      isError: item.status === "failed",
+    };
   }
   const server = typeof item.server === "string" ? item.server.trim() : "";
   const tool = typeof item.tool === "string" ? item.tool.trim() : "";

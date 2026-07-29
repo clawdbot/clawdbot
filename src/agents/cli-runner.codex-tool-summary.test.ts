@@ -72,4 +72,37 @@ describe("Codex CLI tool summaries", () => {
 
     expect(output.toolSummary).toEqual({ calls: 1, tools: ["docs.read"], failures: 1 });
   });
+
+  it("counts a declined command terminal as a failure", async () => {
+    const output = await runCodexFixture("codex-tool-summary-declined-command");
+
+    expect(output.toolSummary).toEqual({ calls: 1, tools: ["bash"], failures: 1 });
+  });
+
+  it.each([
+    {
+      fixture: "codex-tool-summary-collab-paired",
+      tool: "collab.spawn_agent",
+      failures: 0,
+    },
+    {
+      fixture: "codex-tool-summary-collab-terminal-only",
+      tool: "collab.wait",
+      failures: 0,
+    },
+    {
+      fixture: "codex-tool-summary-collab-failed",
+      tool: "collab.send_input",
+      failures: 1,
+    },
+    {
+      fixture: "codex-tool-summary-collab-close-agent",
+      tool: "collab.close_agent",
+      failures: 0,
+    },
+  ])("projects $fixture lifecycle metadata", async ({ fixture, tool, failures }) => {
+    const output = await runCodexFixture(fixture);
+
+    expect(output.toolSummary).toEqual({ calls: 1, tools: [tool], failures });
+  });
 });
