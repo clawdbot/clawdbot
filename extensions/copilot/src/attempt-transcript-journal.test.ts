@@ -59,7 +59,10 @@ function event(
   } as SessionEvent;
 }
 
-async function createFixture(trigger?: string) {
+async function createFixture(
+  trigger?: string,
+  resultContentSourceByToolName?: ReadonlyMap<string, "network">,
+) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-journal-"));
   tempDirs.push(tempDir);
   const target: SessionTranscriptTargetParams = {
@@ -124,6 +127,7 @@ async function createFixture(trigger?: string) {
       journal,
       modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
       now: () => 2,
+      ...(resultContentSourceByToolName ? { resultContentSourceByToolName } : {}),
     },
   });
   return { attempt, bridge, journal, recorder, session, target, tempDir };
@@ -633,6 +637,54 @@ describe("Copilot attempt transcript journal", () => {
     );
     const files = await fs.readdir(tempDir, { recursive: true });
     expect(files.some((file) => file.endsWith(".jsonl"))).toBe(false);
+  });
+
+  it("persists network-result taint on the result and subsequent assistant", async () => {
+    const { bridge, journal, session, target } = await createFixture(
+      undefined,
+      new Map<string, "network">([["fake_web_tool", "network"]]),
+    );
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit(
+      event("assistant.message", "assistant-tool", {
+        content: "researching",
+        messageId: "assistant-tool",
+        toolRequests: [
+          { arguments: { query: "topic" }, name: "fake_web_tool", toolCallId: "call-web" },
+        ],
+      }),
+    );
+    session.emit(
+      event("tool.execution_start", "start-web", {
+        toolCallId: "call-web",
+        toolName: "fake_web_tool",
+      }),
+    );
+    session.emit(
+      event("tool.execution_complete", "result-web", {
+        result: { content: "untrusted page" },
+        success: true,
+        toolCallId: "call-web",
+      }),
+    );
+    const finalAssistant = event("assistant.message", "assistant-final-tainted", {
+      content: "summary",
+      messageId: "assistant-final-tainted",
+    });
+    session.emit(finalAssistant);
+    bridge.recordSendResult(finalAssistant);
+    await journal.barrier("tainted turn");
+
+    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
+    expect(rows[2]?.message).toMatchObject({
+      role: "toolResult",
+      __openclaw: { resultContentSource: "network" },
+    });
+    expect(rows[3]?.message).toMatchObject({
+      role: "assistant",
+      __openclaw: { turnTainted: true },
+    });
   });
 
   it("groups assistant chunks from one API call before matching tool results", async () => {
