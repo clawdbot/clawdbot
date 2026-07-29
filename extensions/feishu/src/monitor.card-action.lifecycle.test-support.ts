@@ -42,6 +42,10 @@ const lifecycleConfig = createFeishuLifecycleConfig({
   channelConfig: {
     dmPolicy: "open",
     allowFrom: ["ou_user1"],
+    groupPolicy: "open",
+    groups: {
+      oc_group_require_mention: { requireMention: true },
+    },
   },
   accountConfig: {
     dmPolicy: "open",
@@ -253,6 +257,25 @@ describe("Feishu card-action lifecycle", () => {
     expect(dispatcherParams.chatId).toBe(chatId);
     expect(dispatcherParams.replyToMessageId).toBe("om_card_v2");
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-v2-context");
+  });
+
+  it("routes authenticated group callbacks when the group requires a mention", async () => {
+    const onCardAction = await setupLifecycleMonitor();
+
+    await onCardAction(
+      createCardActionEvent({
+        token: "tok-card-require-mention",
+        action: "feishu.quick_actions.help",
+        command: "/help",
+        chatId: "oc_group_require_mention",
+        chatType: "group",
+      }),
+    );
+
+    expect(lastRuntime?.error).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expect(latestReplyDispatcherParams().chatId).toBe("oc_group_require_mention");
+    expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-require-mention");
   });
 
   it("prefers the original context message id over a temporary callback id", async () => {
