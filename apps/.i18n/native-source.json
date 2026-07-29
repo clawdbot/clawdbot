@@ -12219,7 +12219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1132,
+      "line": 1206,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMarkdown.kt",
       "source": "Image",
       "surface": "android",
@@ -12227,7 +12227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1138,
+      "line": 1212,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMarkdown.kt",
       "source": "Image unavailable",
       "surface": "android",
@@ -40219,7 +40219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 277,
+      "line": 284,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift",
       "source": "Details",
       "surface": "apple",
@@ -40227,7 +40227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 728,
+      "line": 735,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift",
       "source": "Image",
       "surface": "apple",
