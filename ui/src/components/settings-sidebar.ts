@@ -6,6 +6,7 @@ import {
   navigationIconForRoute,
   scheduleRoutePreload,
   SETTINGS_NAVIGATION_GROUPS,
+  SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
@@ -81,7 +82,11 @@ function filterSettingsNavigationGroups(
   }
   const sidebarRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
   const searchableRoutes = [
-    ...new Set([...sidebarRoutes, ...blockMatches.map((block) => block.routeId)]),
+    ...new Set([
+      ...sidebarRoutes,
+      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
+      ...blockMatches.map((block) => block.routeId),
+    ]),
   ];
   const directRoutes = searchableRoutes.filter((routeId) =>
     [

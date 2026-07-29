@@ -205,6 +205,7 @@ const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
   "model-setup",
   "lobsterdex",
 ];
+export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
 const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
   Readonly<Record<NavigationRouteId, NavigationRouteId>>
 > = {
