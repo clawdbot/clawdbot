@@ -659,8 +659,9 @@ ${this.windowsPluginIsolationScript()}`,
     });
   }
 
-  private runDevChannelUpdate(): void {
-    this.guestPowerShell(
+  private async runDevChannelUpdate(): Promise<void> {
+    await this.guestPowerShellBackground(
+      "update-dev",
       `$ErrorActionPreference = 'Stop'
 ${windowsPortableGitPathScript}
 $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
@@ -679,7 +680,7 @@ Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'; O
 if ($script:OpenClawUpdateExit -ne 0) { throw "openclaw update failed with exit code $script:OpenClawUpdateExit" }
 Invoke-OpenClaw --version
 Invoke-OpenClaw update status --json`,
-      { timeoutMs: this.updateTimeoutSeconds * 1000 },
+      this.updateTimeoutSeconds * 1000,
     );
   }
 

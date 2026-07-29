@@ -1642,8 +1642,10 @@ exit 0
 
     expect(script).toContain('guestPowerShellBackground(\n      "install-latest"');
     expect(script).toContain("guestPowerShellBackground(\n      `install-main-${");
+    expect(script).toContain('guestPowerShellBackground(\n      "update-dev"');
     expect(script).not.toMatch(/private installMain\(tempName: string\): void/u);
     expect(script).not.toMatch(/private installLatestRelease\(\): void/u);
+    expect(script).not.toMatch(/private runDevChannelUpdate\(\): void/u);
   });
 
   it("runs the macOS dev update through a detached done-file runner", () => {
