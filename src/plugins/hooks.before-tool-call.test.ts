@@ -504,3 +504,48 @@ describe("before_tool_call hook merger — requireApproval", () => {
     expect(lowerPriorityHook).not.toHaveBeenCalled();
   });
 });
+
+describe("before_tool_call matcher scoping", () => {
+  it("skips uncovered tools and executes an alias-covered policy once", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true, blockReason: "covered" }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [
+        {
+          pluginId: "shell-policy",
+          matcher: ["exec_command"],
+          result: { block: true, blockReason: "covered" },
+          handler,
+        },
+      ],
+    });
+    const runner = createHookRunner(registry);
+
+    await expect(
+      runner.runBeforeToolCall(
+        { toolName: "web_search", params: {} },
+        { ...stubCtx, toolName: "web_search" },
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      runner.runBeforeToolCall({ toolName: "Bash", params: {} }, { ...stubCtx, toolName: "Bash" }),
+    ).resolves.toMatchObject({ block: true, blockReason: "covered" });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an omitted matcher as match-all", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [{ pluginId: "legacy-policy", result: { block: true }, handler }],
+    });
+
+    await createHookRunner(registry).runBeforeToolCall(
+      { toolName: "web_search", params: {} },
+      { ...stubCtx, toolName: "web_search" },
+    );
+    expect(handler).toHaveBeenCalledOnce();
+  });
+});

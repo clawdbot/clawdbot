@@ -297,7 +297,10 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
       /** Host-enforced turn triggers that may invoke this reply hook. */
       eligibleTriggers?: readonly [PluginHookAgentTrigger, ...PluginHookAgentTrigger[]];
     }
-  : { eligibleTriggers?: never });
+  : { eligibleTriggers?: never }) &
+  (K extends "before_tool_call" | "after_tool_call"
+    ? { matcher?: readonly string[] }
+    : { matcher?: never });
 
 export type PluginHookAgentContext = {
   runId?: string;
@@ -1426,6 +1429,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   registrationId?: string;
   hookName: K;
   handler: PluginHookHandlerMap[K];
+  matcher?: readonly string[];
   priority?: number;
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];

@@ -75,6 +75,7 @@ type PluginToolPolicyDecision =
 export type PluginTrustedToolPolicyRegistration = {
   id: string;
   description: string;
+  matcher?: readonly string[];
   evaluate: (
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,

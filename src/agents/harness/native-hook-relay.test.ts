@@ -556,7 +556,9 @@ describe("native hook relay registry", () => {
 
   it("builds pre-tool relay commands only when before-tool policy is active", () => {
     initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: vi.fn(), matcher: ["exec_command"] },
+      ]),
     );
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -571,6 +573,7 @@ describe("native hook relay registry", () => {
     });
 
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.toolMatcherForEvent("pre_tool_use")).toBe("Bash|exec|exec_command");
     expect(relay.commandForEvent("pre_tool_use")).toBe(
       `${NATIVE_HOOK_RELAY_EXEC_PREFIX}/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id ` +
         `${relay.relayId} ${nativeHookRelayStateDbArgForTests()} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
@@ -624,7 +627,9 @@ describe("native hook relay registry", () => {
 
   it("builds relay commands only for native events with matching local hooks", () => {
     initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "after_tool_call", handler: vi.fn() }]),
+      createMockPluginRegistry([
+        { hookName: "after_tool_call", handler: vi.fn(), matcher: ["Write"] },
+      ]),
     );
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -639,6 +644,7 @@ describe("native hook relay registry", () => {
 
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
     expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
+    expect(relay.toolMatcherForEvent("post_tool_use")).toBe("Edit|Write|apply_patch");
     expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
     expect(relay.commandForEvent("post_tool_use")).toBe(
       `${NATIVE_HOOK_RELAY_EXEC_PREFIX}/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id ` +

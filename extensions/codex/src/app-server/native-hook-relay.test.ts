@@ -312,6 +312,27 @@ describe("Codex native hook relay config", () => {
     );
   });
 
+  it("installs command handlers only for covered exact and alias tool names", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({
+        matchers: {
+          pre_tool_use: "Bash|exec|exec_command",
+          post_tool_use: "Edit|Write|apply_patch",
+        },
+      }),
+      events: ["pre_tool_use", "post_tool_use"],
+      loopDetectionPreToolUseRelay: false,
+    });
+
+    expect(config["hooks.PreToolUse"]).toEqual([
+      expect.objectContaining({ matcher: "Bash|exec|exec_command" }),
+    ]);
+    expect(config["hooks.PostToolUse"]).toEqual([
+      expect.objectContaining({ matcher: "Edit|Write|apply_patch" }),
+    ]);
+    expect(JSON.stringify(config)).not.toContain("web_search");
+  });
+
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
       "features.hooks": false,
@@ -373,6 +394,9 @@ describe("Codex native hook relay config", () => {
 
 function createRelay(options?: {
   inactiveEvents?: readonly NativeHookRelayRegistrationHandle["allowedEvents"][number][];
+  matchers?: Partial<
+    Record<NativeHookRelayRegistrationHandle["allowedEvents"][number], string | undefined>
+  >;
 }): NativeHookRelayRegistrationHandle {
   const inactiveEvents = new Set(options?.inactiveEvents ?? []);
   return {
@@ -385,6 +409,7 @@ function createRelay(options?: {
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
+    toolMatcherForEvent: (event) => options?.matchers?.[event],
     commandForEvent: (event, commandOptions) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
         event === "pre_tool_use" && inactiveEvents.has(event)

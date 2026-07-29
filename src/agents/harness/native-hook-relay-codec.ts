@@ -1,5 +1,5 @@
+import { normalizePluginToolName } from "../../plugins/tool-hook-matcher.js";
 import { stableStringify } from "../stable-stringify.js";
-import { normalizeToolName } from "../tool-policy.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   JsonValue,
@@ -15,10 +15,6 @@ import {
   readOptionalString,
   shellQuoteArgs,
 } from "./native-hook-relay-utils.js";
-
-const NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
-  exec_command: "exec",
-};
 
 const nativeHookRelayProviderAdapters: Record<
   NativeHookRelayProvider,
@@ -183,6 +179,5 @@ export function readNativeHookRelayApprovalMode(rawPayload: JsonValue): "report"
 }
 
 export function normalizeNativeHookToolName(toolName: string | undefined): string {
-  const normalized = normalizeToolName(toolName ?? "tool");
-  return NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
+  return normalizePluginToolName(toolName ?? "tool");
 }

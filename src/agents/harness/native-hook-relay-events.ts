@@ -1,5 +1,14 @@
-import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
-import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import {
+  getAgentToolResultMiddlewareMatcherScope,
+  listAgentToolResultMiddlewares,
+} from "../../plugins/agent-tool-result-middleware.js";
+import { getGlobalHookRunnerRegistry } from "../../plugins/hook-runner-global-state.js";
+import { getGlobalToolHookMatcherScope, hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import {
+  buildCodexNativeToolMatcher,
+  mergePluginToolMatcherScopes,
+} from "../../plugins/tool-hook-matcher.js";
+import { getTrustedToolPolicyMatcherScope } from "../../plugins/trusted-tool-policy.js";
 import {
   cancelDeferredPluginToolApproval,
   hasBeforeToolCallPolicy,
@@ -58,6 +67,32 @@ export function nativeHookRelayEventHasLocalWork(
     return hasGlobalHooks("before_agent_finalize");
   }
   return true;
+}
+
+export function nativeHookRelayEventToolMatcher(
+  registration: ActiveNativeHookRelayRegistration,
+  event: NativeHookRelayEvent,
+): string | undefined {
+  if (event === "pre_tool_use") {
+    if (nativePreToolUseMayRunLoopDetection(registration)) {
+      return undefined;
+    }
+    return buildCodexNativeToolMatcher(
+      mergePluginToolMatcherScopes([
+        getGlobalToolHookMatcherScope("before_tool_call"),
+        getTrustedToolPolicyMatcherScope(getGlobalHookRunnerRegistry()),
+      ]),
+    );
+  }
+  if (event === "post_tool_use") {
+    return buildCodexNativeToolMatcher(
+      mergePluginToolMatcherScopes([
+        getGlobalToolHookMatcherScope("after_tool_call"),
+        getAgentToolResultMiddlewareMatcherScope("codex"),
+      ]),
+    );
+  }
+  return undefined;
 }
 
 export async function processNativeHookRelayInvocation(params: {

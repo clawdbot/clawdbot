@@ -6,7 +6,7 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   validatePluginsUiDescriptorsResult,
   validatePluginsUiDescriptorsParams,
@@ -330,6 +330,49 @@ describe("host-hook fixture plugin contract", () => {
         pluginId: "external-middleware",
         message: "plugin must be explicitly enabled to register agent tool result middleware",
       },
+    ]);
+  });
+
+  it("keeps repeated middleware runtime and matcher scopes paired", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const handler = vi.fn(() => undefined);
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "scoped-middleware",
+        name: "Scoped Middleware",
+        origin: "bundled",
+        contracts: { agentToolResultMiddleware: ["openclaw", "codex"] },
+      }),
+      register(api) {
+        api.registerAgentToolResultMiddleware(handler, {
+          runtimes: ["codex"],
+          matcher: ["exec_command"],
+        });
+        api.registerAgentToolResultMiddleware(handler, {
+          runtimes: ["openclaw"],
+          matcher: ["Write"],
+        });
+      },
+    });
+
+    const registration = expectDefined(registry.registry.agentToolResultMiddlewares[0]);
+    const event = {
+      toolCallId: "call-1",
+      args: {},
+      result: { content: [{ type: "text" as const, text: "ok" }] },
+    };
+    await registration.handler({ ...event, toolName: "Bash" }, { runtime: "codex" });
+    await registration.handler({ ...event, toolName: "apply_patch" }, { runtime: "codex" });
+    await registration.handler({ ...event, toolName: "Write" }, { runtime: "openclaw" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "openclaw" });
+
+    expect(registry.registry.agentToolResultMiddlewares).toHaveLength(1);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls.map(([call, ctx]) => [call.toolName, ctx.runtime])).toEqual([
+      ["Bash", "codex"],
+      ["Write", "openclaw"],
     ]);
   });
 
@@ -704,6 +747,35 @@ describe("host-hook fixture plugin contract", () => {
       block: true,
       blockReason: "blocked by fixture policy",
     });
+  });
+
+  it("scopes trusted policies through the shared alias model", async () => {
+    const evaluate = vi.fn(() => ({ block: true, blockReason: "covered" }));
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "shell-policy",
+        source: "test",
+        policy: {
+          id: "shell-policy",
+          description: "covers shell tools",
+          matcher: ["exec_command"],
+          evaluate,
+        },
+      },
+    ];
+
+    await expect(
+      runTrustedToolPolicies(
+        { toolName: "web_search", params: {} },
+        { toolName: "web_search" },
+        { registry },
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      runTrustedToolPolicies({ toolName: "Bash", params: {} }, { toolName: "Bash" }, { registry }),
+    ).resolves.toMatchObject({ block: true, blockReason: "covered" });
+    expect(evaluate).toHaveBeenCalledOnce();
   });
 
   it("fails closed when a trusted policy throws during evaluation", async () => {

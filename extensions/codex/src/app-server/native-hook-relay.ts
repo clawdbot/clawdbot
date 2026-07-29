@@ -293,8 +293,10 @@ export function buildCodexNativeHookRelayConfig(params: {
     const command = params.relay.commandForEvent(event, {
       timeoutMs: resolveCodexNativeHookRelayCommandTimeoutMs(timeout),
     });
+    const matcher = selectedNoopPreToolUse ? undefined : params.relay.toolMatcherForEvent(event);
     config[`hooks.${codexEvent}`] = [
       {
+        ...(matcher ? { matcher } : {}),
         hooks: [
           {
             type: "command",
@@ -311,6 +313,7 @@ export function buildCodexNativeHookRelayConfig(params: {
       trusted_hash: codexCommandHookTrustedHash({
         event,
         command,
+        matcher,
         timeout,
         statusMessage: "OpenClaw native hook relay",
       }),
@@ -354,6 +357,7 @@ function resolveCodexNativeHookRelayCommandTimeoutMs(hookTimeoutSec: number | un
 function codexCommandHookTrustedHash(params: {
   event: NativeHookRelayEvent;
   command: string;
+  matcher?: string;
   timeout: number;
   statusMessage: string;
 }): string {
@@ -362,6 +366,7 @@ function codexCommandHookTrustedHash(params: {
   // trust identity even though both forms match all tools.
   const identity = {
     event_name: CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[params.event],
+    ...(params.matcher ? { matcher: params.matcher } : {}),
     hooks: [
       {
         async: false,

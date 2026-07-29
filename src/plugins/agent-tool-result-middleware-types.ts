@@ -34,5 +34,11 @@ export type AgentToolResultMiddleware = (
 ) => Promise<AgentToolResultMiddlewareResult | void> | AgentToolResultMiddlewareResult | void;
 
 export type AgentToolResultMiddlewareOptions = {
+  matcher?: readonly string[];
   runtimes?: AgentToolResultMiddlewareRuntime[];
+};
+
+export type AgentToolResultMiddlewareScope = {
+  matcher?: readonly string[];
+  runtimes: AgentToolResultMiddlewareRuntime[];
 };

@@ -16,6 +16,12 @@ import type {
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import {
+  createPluginToolMatcherScope,
+  normalizePluginToolMatcher,
+  pluginToolMatcherCoversTool,
+  type PluginToolMatcherScope,
+} from "./tool-hook-matcher.js";
 
 type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
 type TrustedToolPolicyRegistry =
@@ -106,6 +112,27 @@ function readTrustedPolicy(registration: TrustedPolicyRegistration):
   } catch {
     return { ok: false };
   }
+}
+
+function readTrustedPolicyMatcher(
+  policy: PluginTrustedToolPolicyRegistration,
+): readonly string[] | undefined {
+  try {
+    return normalizePluginToolMatcher(policy.matcher);
+  } catch {
+    return undefined;
+  }
+}
+
+export function getTrustedToolPolicyMatcherScope(
+  registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
+): PluginToolMatcherScope | undefined {
+  return createPluginToolMatcherScope(
+    copyTrustedPolicyRegistrations(registry).map((registration) => {
+      const policy = readTrustedPolicy(registration);
+      return policy.ok ? readTrustedPolicyMatcher(policy.policy) : undefined;
+    }),
+  );
 }
 
 function readTrustedPolicyId(registration: TrustedPolicyRegistration): string {
@@ -264,6 +291,9 @@ export async function runTrustedToolPolicies(
     const policy = readTrustedPolicy(registration);
     if (!policy.ok) {
       return trustedPolicyFailureResult(registration, "policy is unreadable");
+    }
+    if (!pluginToolMatcherCoversTool(readTrustedPolicyMatcher(policy.policy), event.toolName)) {
+      continue;
     }
 
     let decision: Awaited<ReturnType<PluginTrustedToolPolicyRegistration["evaluate"]>>;
