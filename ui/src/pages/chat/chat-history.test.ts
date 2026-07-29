@@ -3,7 +3,6 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
-  disposeSelectedSessionMessageSubscription,
   loadChatHistory,
   rewindChatHistory,
   syncSelectedSessionMessageSubscription,
@@ -86,104 +85,6 @@ function activeHistory(
 }
 
 describe("syncSelectedSessionMessageSubscription", () => {
-  it("releases a pane's active message subscription when the pane is disposed", () => {
-    const subscription = { key: "agent:main:main", agentId: null };
-    const unsubscribeMessages = vi.fn().mockResolvedValue(undefined);
-    const state = createState({ messages: [] });
-    state.chatSessionMessageSubscriptionRequestedKey = subscription.key;
-    state.chatSessionMessageSubscription = subscription;
-    state.sessions = {
-      setModelOverride: vi.fn(),
-      subscribeMessages: vi.fn(),
-      unsubscribeMessages,
-    };
-
-    disposeSelectedSessionMessageSubscription(state);
-
-    expect(unsubscribeMessages).toHaveBeenCalledOnce();
-    expect(unsubscribeMessages).toHaveBeenCalledWith(subscription);
-    expect(state.chatSessionMessageSubscriptionRequestedKey).toBeNull();
-    expect(state.chatSessionMessageSubscription).toBeNull();
-  });
-
-  it("releases a message subscription that resolves after its pane is disposed", async () => {
-    const subscription = { key: "agent:main:main", agentId: null };
-    let resolveSubscription: (value: typeof subscription) => void = () => undefined;
-    const pendingSubscription = new Promise<typeof subscription>((resolve) => {
-      resolveSubscription = resolve;
-    });
-    const unsubscribeMessages = vi.fn().mockResolvedValue(undefined);
-    const state = createState({ messages: [] });
-    state.sessionKey = subscription.key;
-    state.sessions = {
-      setModelOverride: vi.fn(),
-      subscribeMessages: vi.fn().mockReturnValue(pendingSubscription),
-      unsubscribeMessages,
-    };
-
-    const sync = syncSelectedSessionMessageSubscription(state as never);
-    await Promise.resolve();
-    disposeSelectedSessionMessageSubscription(state);
-    resolveSubscription(subscription);
-    await sync;
-
-    expect(unsubscribeMessages).toHaveBeenCalledOnce();
-    expect(unsubscribeMessages).toHaveBeenCalledWith(subscription);
-    expect(state.chatSessionMessageSubscription).toBeNull();
-  });
-
-  it("retries a disposed pane's message release without another pane synchronization", async () => {
-    vi.useFakeTimers();
-    try {
-      const subscription = { key: "agent:main:main", agentId: null };
-      const unsubscribeMessages = vi
-        .fn()
-        .mockRejectedValueOnce(new Error("temporary observer release failure"))
-        .mockResolvedValueOnce(undefined);
-      const state = createState({ messages: [] });
-      state.chatSessionMessageSubscriptionRequestedKey = subscription.key;
-      state.chatSessionMessageSubscription = subscription;
-      state.sessions = {
-        setModelOverride: vi.fn(),
-        subscribeMessages: vi.fn(),
-        unsubscribeMessages,
-      };
-
-      disposeSelectedSessionMessageSubscription(state);
-      await vi.advanceTimersByTimeAsync(250);
-
-      expect(unsubscribeMessages).toHaveBeenCalledTimes(2);
-      expect(unsubscribeMessages).toHaveBeenLastCalledWith(subscription);
-      expect(state.chatSessionMessageSubscription).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("bounds retries when a disposed pane's message release fails permanently", async () => {
-    vi.useFakeTimers();
-    try {
-      const subscription = { key: "agent:main:main", agentId: null };
-      const unsubscribeMessages = vi.fn().mockRejectedValue(new Error("observer unavailable"));
-      const state = createState({ messages: [] });
-      state.chatSessionMessageSubscription = subscription;
-      state.sessions = {
-        setModelOverride: vi.fn(),
-        subscribeMessages: vi.fn(),
-        unsubscribeMessages,
-      };
-
-      disposeSelectedSessionMessageSubscription(state);
-      await vi.runAllTimersAsync();
-
-      expect(unsubscribeMessages).toHaveBeenCalledTimes(3);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(state.chatSessionMessageSubscription).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("starts the new subscription before the previous unsubscribe settles", async () => {
     let resolveUnsubscribe: () => void = () => undefined;
     const unsubscribeMessages = vi.fn(

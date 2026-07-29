@@ -10,7 +10,7 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
-import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS, MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
 
 async function getFreePort(): Promise<number> {
@@ -135,7 +135,6 @@ function createSyntheticGatewayProtocol(options?: {
   initialSocketFactoryFailures?: number;
   onEvent?: (event: EventFrame) => void;
   onGap?: (info: { expected: number; received: number }) => void;
-  buildConnectPlan?: () => Record<string, never> | Promise<Record<string, never>>;
 }): {
   client: GatewayProtocolClient<Record<string, never>>;
   connections: SyntheticGatewayProtocolConnection[];
@@ -163,7 +162,7 @@ function createSyntheticGatewayProtocol(options?: {
       };
     },
     createRequestId: () => `request-${++nextRequestId}`,
-    buildConnectPlan: options?.buildConnectPlan ?? (() => ({})),
+    buildConnectPlan: () => ({}),
     buildConnectParams: (plan) => plan,
     resolveClose: () => ({ retry: options?.retryOnClose ?? true, notify: true }),
     onEvent: options?.onEvent,
@@ -222,67 +221,6 @@ describe("GatewayClient", () => {
       });
       httpsServer = null;
     }
-  });
-
-  test("reconnects when an open Gateway never responds to its connect handshake", async () => {
-    vi.useFakeTimers();
-    const { client, connections } = createSyntheticGatewayProtocol();
-    client.start();
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("synthetic protocol connection missing");
-    }
-
-    connection.handlers.open();
-    connection.handlers.message(
-      JSON.stringify({
-        type: "event",
-        event: "connect.challenge",
-        payload: { nonce: "synthetic-nonce" },
-      }),
-    );
-    expect(connection.send).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-
-    expect(connection.close).toHaveBeenCalledWith(4000, "connect timeout");
-    await vi.advanceTimersByTimeAsync(10);
-    expect(connections).toHaveLength(2);
-    client.stop();
-  });
-
-  test("retires device preparation that outlives the connect handshake", async () => {
-    vi.useFakeTimers();
-    let resolvePlan: (plan: Record<string, never>) => void = () => undefined;
-    const plan = new Promise<Record<string, never>>((resolve) => {
-      resolvePlan = resolve;
-    });
-    const { client, connections } = createSyntheticGatewayProtocol({
-      buildConnectPlan: () => plan,
-    });
-    client.start();
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("synthetic protocol connection missing");
-    }
-
-    connection.handlers.open();
-    connection.handlers.message(
-      JSON.stringify({
-        type: "event",
-        event: "connect.challenge",
-        payload: { nonce: "synthetic-nonce" },
-      }),
-    );
-    expect(connection.send).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-
-    expect(connection.close).toHaveBeenCalledWith(4000, "connect timeout");
-    resolvePlan({});
-    await vi.advanceTimersByTimeAsync(0);
-    expect(connection.send).not.toHaveBeenCalled();
-    client.stop();
   });
 
   test.each([

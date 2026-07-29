@@ -746,7 +746,9 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
           if (attempt + 1 === MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS) {
             return;
           }
-          await new Promise<void>((resolve) => globalThis.setTimeout(resolve, retryDelayMs));
+          await new Promise<void>((resolve) => {
+            globalThis.setTimeout(resolve, retryDelayMs);
+          });
           retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
         }
       }

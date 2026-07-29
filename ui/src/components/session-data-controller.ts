@@ -254,13 +254,13 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     globalThis.removeEventListener("focus", this.handleSessionCatalogPageActivation);
   }
 
-  retireSessionCatalogData(): void {
+  retireSessionCatalogData(resetConnection = false): void {
     this.sessionScopeGeneration += 1;
     this.sidebarSessionPaginationState.listRequestToken = null;
     this.sidebarSessionPaginationState.pageRequestToken = null;
     this.sessionsLoading = false;
     this.loadingMoreSessionCatalogIds = new Set();
-    this.sessionCatalogLive.clear();
+    this.sessionCatalogLive.retireConnection(resetConnection);
   }
 
   resetSessionCatalogConnection(): void {
@@ -509,12 +509,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
     this.notify();
     if (!sourceOrClientChanged) {
-      this.retireSessionCatalogData();
-      if (!connected) {
-        // Preserve visible rows while reconnecting, but retire negotiation so
-        // a late response cannot disable streaming on the replacement socket.
-        this.sessionCatalogLive.resetConnection();
-      }
+      this.retireSessionCatalogData(!connected);
       if (connected && this.sessionsSource && this.host.sidebarSessionStatusFilter() !== "active") {
         void this.refreshSidebarSessions();
       }
