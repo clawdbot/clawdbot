@@ -78,9 +78,24 @@ const FORCED_COPY_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.repla
 );
 
 const FORCED_CREATE_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
-  "        os.fsync(file_fd)\n        completed = True",
-  "        raise OSError(errno.ENOSPC, 'forced create failure')\n        os.fsync(file_fd)\n        completed = True",
+  "        os.fsync(file_fd)",
+  "        raise OSError(errno.ENOSPC, 'forced create failure')\n        os.fsync(file_fd)",
 );
+
+const FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON =
+  SANDBOX_PINNED_MUTATION_PYTHON.replace(
+    "        os.fsync(file_fd)",
+    [
+      "        os.unlink(basename, dir_fd=parent_fd)",
+      "        replacement_fd = os.open(basename, WRITE_FLAGS, 0o600, dir_fd=parent_fd)",
+      "        try:",
+      "            os.write(replacement_fd, b'replacement')",
+      "        finally:",
+      "            os.close(replacement_fd)",
+      "        raise OSError(errno.ENOSPC, 'forced create failure after replacement')",
+      "        os.fsync(file_fd)",
+    ].join("\n"),
+  );
 
 const FORCED_EXDEV_WITH_LATE_SOURCE_WRITE_MUTATION_PYTHON = FORCED_EXDEV_MUTATION_PYTHON.replace(
   "        remove_copied_entry(src_parent_fd, src_basename, ('dir', entry_identity(src_stat), copied_children))",
@@ -162,9 +177,10 @@ describe("sandbox pinned mutation helper", () => {
     });
   });
 
-  it("removes a partial exclusive-create target when writing fails", async () => {
+  it("retains a failed exclusive-create target rather than unlinking by pathname", async () => {
     await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
       const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
       await fs.mkdir(workspace, { recursive: true });
 
       const result = runMutationWithSource(
@@ -175,7 +191,25 @@ describe("sandbox pinned mutation helper", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("forced create failure");
-      await expectPathMissing(path.join(workspace, "note.txt"));
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("partial");
+    });
+  });
+
+  it("preserves a replacement raced into a failed exclusive-create target", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "partial",
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("forced create failure after replacement");
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
     });
   });
 
