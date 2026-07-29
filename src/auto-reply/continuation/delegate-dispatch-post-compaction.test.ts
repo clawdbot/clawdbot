@@ -38,6 +38,7 @@ vi.mock("../../infra/system-events.js", () => ({
 }));
 
 import { dispatchStagedPostCompactionDelegates } from "./post-compaction-staged-dispatch.js";
+import { POST_COMPACTION_DELEGATE_TTL_MS } from "./post-compaction-staleness.js";
 
 const ROLE_MARKED_DELEGATE_TASK = [
   "do important continuation work",
@@ -522,5 +523,98 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
       "system event message",
     );
     expect(eventMessage).toContain(longTask);
+  });
+});
+
+// RFC §4.4 stale-TTL enforcement at TaskFlow release. This dispatcher is shared
+// by the live post-compaction release (post-compaction-release.ts) and by
+// startup recovery (delegate-dispatch-recovery.ts), so gating here covers both
+// and is what stops a crash-orphaned row from materializing an expired snapshot
+// at a later compaction (karmaterminal/openclaw#1198).
+describe("dispatchStagedPostCompactionDelegates stale TTL", () => {
+  const STALE_SECRET_TASK = "STALE_TASK_SENTINEL_1198";
+  const STALE_SECRET_ATTACHMENT = "STALE_ATTACHMENT_SENTINEL_1198";
+
+  function emittedText(): string {
+    return [
+      ...mockState.warnLog.mock.calls.flat(),
+      ...mockState.infoLog.mock.calls.flat(),
+      ...mockState.enqueueSystemEvent.mock.calls.flat(),
+    ]
+      .map((value) => (typeof value === "string" ? value : JSON.stringify(value)))
+      .join("\n");
+  }
+
+  it("drops staged work older than the TTL before any spawn or attachment materialization", async () => {
+    const sessionKey = "session-stale-release";
+    const now = Date.now();
+
+    const result = await dispatchStagedPostCompactionDelegates(
+      [
+        {
+          task: STALE_SECRET_TASK,
+          firstArmedAt: now - POST_COMPACTION_DELEGATE_TTL_MS - 1,
+          attachments: [{ name: "state.md", content: STALE_SECRET_ATTACHMENT }],
+          attachAs: { mountPath: "handoff" },
+        },
+      ],
+      sessionKey,
+      { agentSessionKey: sessionKey },
+    );
+
+    expect(result).toMatchObject({ dispatched: 0, failed: 1, dispatchedFlowIds: [] });
+    expect(mockState.spawnSubagentDirect).not.toHaveBeenCalled();
+    // Diagnostics carry only the age, never task prose or attachment bytes.
+    const emitted = emittedText();
+    expect(emitted).toContain("[continuation:post-compaction-release-stale]");
+    expect(emitted).not.toContain(STALE_SECRET_TASK);
+    expect(emitted).not.toContain(STALE_SECRET_ATTACHMENT);
+  });
+
+  it("releases work at exactly the TTL and drops it one millisecond later", async () => {
+    const sessionKey = "session-stale-boundary";
+    // The boundary is exact, so the clock must not advance between arming the
+    // fixture and the dispatcher reading `Date.now()`.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-26T22:30:00.000Z"));
+    try {
+      const now = Date.now();
+      mockState.spawnSubagentDirect.mockResolvedValue({ status: "accepted" });
+
+      const atBoundary = await dispatchStagedPostCompactionDelegates(
+        [{ task: "boundary", firstArmedAt: now - POST_COMPACTION_DELEGATE_TTL_MS }],
+        sessionKey,
+        { agentSessionKey: sessionKey },
+      );
+      expect(atBoundary).toMatchObject({ dispatched: 1, failed: 0 });
+
+      const pastBoundary = await dispatchStagedPostCompactionDelegates(
+        [{ task: "expired", firstArmedAt: now - POST_COMPACTION_DELEGATE_TTL_MS - 1 }],
+        sessionKey,
+        { agentSessionKey: sessionKey },
+      );
+      expect(pastBoundary).toMatchObject({ dispatched: 0, failed: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps fresh and unstamped staged work releasing unchanged", async () => {
+    const sessionKey = "session-stale-fresh";
+    mockState.spawnSubagentDirect.mockResolvedValue({ status: "accepted" });
+
+    const result = await dispatchStagedPostCompactionDelegates(
+      [
+        { task: "fresh", firstArmedAt: Date.now() - 1_000 },
+        // Legacy rows predate `firstArmedAt`; an unstamped row reads as freshly
+        // armed rather than ancient, so releases keep their current behavior.
+        { task: "unstamped" },
+      ],
+      sessionKey,
+      { agentSessionKey: sessionKey },
+    );
+
+    expect(result).toMatchObject({ dispatched: 2, failed: 0 });
+    expect(mockState.spawnSubagentDirect).toHaveBeenCalledTimes(2);
   });
 });
