@@ -189,7 +189,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
     ).resolves.not.toHaveProperty("requirements");
   });
 
-  it("reports setup for an auth-method-only provider", async () => {
+  it("does not gate readiness on an auth-method-only provider", async () => {
     probePluginSetup.mockResolvedValueOnce({
       ok: true,
       pluginId: "evidence",
@@ -204,19 +204,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
         env: {},
         deps: { preflightPlugin, probePlugin: probePluginSetup },
       }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        requirements: [
-          {
-            kind: "plugin-setup",
-            plugin: "evidence",
-            provider: "oauth-only",
-            envVars: [],
-            authMethods: ["oauth"],
-          },
-        ],
-      }),
-    );
+    ).resolves.not.toHaveProperty("requirements");
   });
 
   it("accepts declared local auth evidence", async () => {

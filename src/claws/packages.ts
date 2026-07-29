@@ -161,8 +161,9 @@ function resolveClawPluginSetupRequirements(params: {
   return providers.flatMap((provider) => {
     const envVars = provider.envVars ?? [];
     const authEvidence = provider.authEvidence ?? [];
-    const authMethods = provider.authMethods ?? [];
-    if (envVars.length === 0 && authEvidence.length === 0 && authMethods.length === 0) {
+    // Dry-run has no persisted setup state, so only gate on credential evidence
+    // it can actually observe. Auth methods remain descriptive metadata.
+    if (envVars.length === 0 && authEvidence.length === 0) {
       return [];
     }
     return [
