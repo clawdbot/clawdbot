@@ -1513,7 +1513,10 @@ function installControlUiMockGateway(input: {
       if (!response) {
         throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
       }
-      const resolvedPayload = payload ?? buildResponse(response.method, response.params);
+      const resolvedPayload = applyScenarioAgentModel(
+        response.method,
+        payload ?? buildResponse(response.method, response.params),
+      );
       if (
         response.method === "sessions.create" ||
         response.method === "sessions.catalog.continue"
