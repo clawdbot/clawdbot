@@ -241,7 +241,7 @@ describe("formatInboundEnvelope", () => {
       },
     });
     expect(options).toEqual({
-      timezone: "user",
+      timezone: "Europe/Vienna",
       includeTimestamp: true,
       includeElapsed: true,
       userTimezone: "Europe/Vienna",
