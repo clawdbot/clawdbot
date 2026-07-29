@@ -38,6 +38,7 @@ import {
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -4856,9 +4857,11 @@ describe("gateway healthHandlers.health cache freshness", () => {
     fresh?: Record<string, unknown>;
     runtimeSnapshot?: Record<string, unknown>;
     context?: Record<string, unknown>;
+    refreshHealthSnapshot?: ReturnType<typeof vi.fn>;
   }) {
     const respond = vi.fn();
-    const refreshHealthSnapshot = vi.fn().mockResolvedValue(params.fresh ?? params.cached);
+    const refreshHealthSnapshot =
+      params.refreshHealthSnapshot ?? vi.fn().mockResolvedValue(params.fresh ?? params.cached);
     await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
       healthHandlers,
       {
@@ -4890,8 +4893,39 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
+  });
+
+  it("rate-limits request-driven refreshes for fresh cached health", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    for (let index = 0; index < 3; index += 1) {
+      await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+    }
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(HEALTH_REFRESH_INTERVAL_MS - 1);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not throttle stale cached health refreshes", async () => {
+    const cached = createHealthSnapshot({ ts: Date.now() - HEALTH_REFRESH_INTERVAL_MS });
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+    await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {

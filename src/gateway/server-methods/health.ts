@@ -11,9 +11,27 @@ import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js"
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
+const requestRefreshStartedAt = new WeakMap<
+  GatewayRequestContext["refreshHealthSnapshot"],
+  number
+>();
+
+function shouldScheduleRequestRefresh(
+  refresh: GatewayRequestContext["refreshHealthSnapshot"],
+  now: number,
+): boolean {
+  const startedAt = requestRefreshStartedAt.get(refresh);
+  if (startedAt !== undefined && now - startedAt < HEALTH_REFRESH_INTERVAL_MS) {
+    return false;
+  }
+  // Scope the throttle to the Gateway refresh owner so independent servers do
+  // not suppress each other while request bursts share one cadence.
+  requestRefreshStartedAt.set(refresh, now);
+  return true;
+}
 
 function cachedAccountForRuntimeSnapshot(params: {
   cachedChannel: ChannelHealthSummary | undefined;
@@ -165,11 +183,11 @@ export const healthHandlers: GatewayRequestHandlers = {
         undefined,
         { cached: true },
       );
-      // Serve the fresh-enough cache immediately but still refresh in the
-      // background so the next caller sees updated expensive probe data.
-      void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
-        logHealth.error(`background health refresh failed: ${formatError(err)}`),
-      );
+      if (shouldScheduleRequestRefresh(refreshHealthSnapshot, now)) {
+        void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
+          logHealth.error(`background health refresh failed: ${formatError(err)}`),
+        );
+      }
       return;
     }
     try {
