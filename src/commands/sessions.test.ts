@@ -183,6 +183,79 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("exports channel route metadata in JSON output for conversation tooling", async () => {
+    const store = await writeStore({
+      "agent:main:telegram:direct:123456789": {
+        sessionId: "tg-direct-session",
+        updatedAt: Date.now() - 60_000,
+        chatType: "direct",
+        channel: "telegram",
+        lastChannel: "telegram",
+        lastTo: "123456789",
+        lastAccountId: "123456789",
+        deliveryContext: {
+          channel: "telegram",
+          to: "123456789",
+          accountId: "123456789",
+        },
+        origin: {
+          provider: "telegram",
+          accountId: "123456789",
+          chatType: "direct",
+          to: "123456789",
+          nativeDirectUserId: "123456789",
+        },
+        model: "test:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        channel?: string;
+        lastChannel?: string;
+        lastTo?: string;
+        lastAccountId?: string;
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+        };
+        origin?: {
+          provider?: string;
+          accountId?: string;
+          chatType?: string;
+          to?: string;
+          nativeDirectUserId?: string;
+        };
+      }>;
+    }>(sessionsCommand, store);
+
+    const row = payload.sessions?.find(
+      (entry) => entry.key === "agent:main:telegram:direct:123456789",
+    );
+    expect(row).toMatchObject({
+      channel: "telegram",
+      lastChannel: "telegram",
+      lastTo: "123456789",
+      lastAccountId: "123456789",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123456789",
+        accountId: "123456789",
+      },
+      origin: {
+        provider: "telegram",
+        accountId: "123456789",
+        chatType: "direct",
+        to: "123456789",
+        nativeDirectUserId: "123456789",
+      },
+    });
+
+    cleanupStore(store);
+  });
+
   it("reports the SQLite database and omits the retired sessionFile field", async () => {
     const store = await writeStore({
       main: {
