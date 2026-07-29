@@ -53,6 +53,15 @@ type StateDbTestDatabase = Pick<
 
 const stateDbTempDirs: string[] = [];
 
+/**
+ * Doctor reports the pre-migration snapshot it takes before bumping the schema
+ * version. Matched rather than compared literally because the path carries the
+ * temp state directory and the snapshot timestamp.
+ */
+const BACKED_UP_BEFORE_MIGRATION = expect.stringMatching(
+  /^Backed up shared state database before schema migration → .+pre-migration-backups.+\.sqlite$/,
+);
+
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
 }
@@ -1291,6 +1300,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        BACKED_UP_BEFORE_MIGRATION,
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
@@ -1323,6 +1333,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        BACKED_UP_BEFORE_MIGRATION,
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
       ],
       warnings: [],
@@ -2067,6 +2078,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        BACKED_UP_BEFORE_MIGRATION,
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Migrated shared state tables to SQLite STRICT typing (3)",
       ],

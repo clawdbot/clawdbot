@@ -74,7 +74,11 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import { createPreMigrationStateBackup } from "./openclaw-state-pre-migration-backup.js";
+import {
+  createPreMigrationStateBackup,
+  PRE_MIGRATION_BACKUP_RETENTION,
+  type PreMigrationBackupResult,
+} from "./openclaw-state-pre-migration-backup.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export {
@@ -241,13 +245,22 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     // in place, so an older build (or a botched upgrade) still has a recovery
     // copy. Must run before the transaction below, because VACUUM INTO cannot
     // execute inside one. Best effort (see helper).
-    const preMigrationBackup = createPreMigrationStateBackup(
-      db,
-      pathname,
-      readSqliteUserVersion(db),
-      OPENCLAW_STATE_SCHEMA_VERSION,
-      Date.now(),
-    );
+    //
+    // Gated on the same condition markCurrentStateSchemaVersion uses: a pre-v2
+    // database (no audit ledger) keeps its recorded version here, because repair
+    // leaves that bump to normal open, which creates the complete schema first.
+    // Without this guard a database that is NOT being migrated gets copied, which
+    // is both wasted disk and a misleading "backed up before migration" report.
+    const willBumpSchemaVersion = tableExists(db, "audit_events");
+    const preMigrationBackup: PreMigrationBackupResult = willBumpSchemaVersion
+      ? createPreMigrationStateBackup(
+          db,
+          pathname,
+          readSqliteUserVersion(db),
+          OPENCLAW_STATE_SCHEMA_VERSION,
+          Date.now(),
+        )
+      : { status: "skipped", reason: "repair leaves a pre-v2 database version untouched" };
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runSqliteImmediateTransactionSync(
       db,
@@ -335,6 +348,13 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
       preMigrationBackup.status === "created"
         ? [
             `Backed up shared state database before schema migration → ${preMigrationBackup.backupPath}`,
+            // Deleting a recovery copy is worth saying out loud, so an operator
+            // looking for an older snapshot knows why it is not there.
+            ...(preMigrationBackup.prunedPaths.length > 0
+              ? [
+                  `Pruned ${preMigrationBackup.prunedPaths.length} older pre-migration backup(s), keeping the newest ${PRE_MIGRATION_BACKUP_RETENTION}`,
+                ]
+              : []),
           ]
         : [];
     const preMigrationWarnings =

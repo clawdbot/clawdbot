@@ -6,11 +6,18 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   createPreMigrationStateBackup,
   PRE_MIGRATION_BACKUP_DIRNAME,
+  PRE_MIGRATION_BACKUP_RETENTION,
 } from "./openclaw-state-pre-migration-backup.js";
 
+const tempDirs: string[] = [];
+
 afterEach(() => {
-  cleanupTempDirs();
+  cleanupTempDirs(tempDirs);
 });
+
+function makeStateDir(): string {
+  return makeTempDir(tempDirs, "openclaw-pre-migration-backup-");
+}
 
 function seedStateDb(dbPath: string, userVersion: number): void {
   const db = new DatabaseSync(dbPath);
@@ -22,7 +29,7 @@ function seedStateDb(dbPath: string, userVersion: number): void {
 
 describe("createPreMigrationStateBackup", () => {
   it("snapshots the database before a forward migration", () => {
-    const dir = makeTempDir();
+    const dir = makeStateDir();
     const dbPath = path.join(dir, "openclaw.sqlite");
     seedStateDb(dbPath, 5);
     const db = new DatabaseSync(dbPath);
@@ -60,8 +67,83 @@ describe("createPreMigrationStateBackup", () => {
     }
   });
 
+  it("writes the snapshot 0600 inside a 0700 directory", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    const db = new DatabaseSync(dbPath);
+    try {
+      const result = createPreMigrationStateBackup(db, dbPath, 5, 6, Date.now());
+      expect(result.status).toBe("created");
+      if (result.status !== "created") return;
+      // Shared state is sensitive, so a copy of it must not be world readable.
+      expect(fs.statSync(result.backupPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.dirname(result.backupPath)).mode & 0o777).toBe(0o700);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps only the newest snapshots and reports what it pruned", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    const db = new DatabaseSync(dbPath);
+    try {
+      // One migration per minute, so the timestamps (and therefore the pruning
+      // order) are distinct and predictable.
+      const base = Date.parse("2026-07-25T09:00:00Z");
+      const created: string[] = [];
+      const total = PRE_MIGRATION_BACKUP_RETENTION + 2;
+      for (let i = 0; i < total; i += 1) {
+        const result = createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000);
+        expect(result.status).toBe("created");
+        if (result.status !== "created") return;
+        created.push(result.backupPath);
+        // Nothing to prune until the cap is exceeded, and exactly one after that:
+        // every migration prunes back down to the cap, so they never pile up.
+        expect(result.prunedPaths.length).toBe(i + 1 > PRE_MIGRATION_BACKUP_RETENTION ? 1 : 0);
+      }
+
+      const backupDir = path.join(dir, PRE_MIGRATION_BACKUP_DIRNAME);
+      expect(fs.readdirSync(backupDir).length).toBe(PRE_MIGRATION_BACKUP_RETENTION);
+      // The survivors are the newest ones, and the oldest are gone.
+      for (const survivor of created.slice(-PRE_MIGRATION_BACKUP_RETENTION)) {
+        expect(fs.existsSync(survivor)).toBe(true);
+      }
+      for (const evicted of created.slice(0, total - PRE_MIGRATION_BACKUP_RETENTION)) {
+        expect(fs.existsSync(evicted)).toBe(false);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("leaves unrelated files in the backup directory alone", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    const backupDir = path.join(dir, PRE_MIGRATION_BACKUP_DIRNAME);
+    fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    const parked = path.join(backupDir, "operator-notes.txt");
+    fs.writeFileSync(parked, "do not delete me");
+    const db = new DatabaseSync(dbPath);
+    try {
+      const base = Date.parse("2026-07-25T09:00:00Z");
+      for (let i = 0; i < PRE_MIGRATION_BACKUP_RETENTION + 2; i += 1) {
+        expect(createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000).status).toBe(
+          "created",
+        );
+      }
+      // Pruning only ever considers files this module wrote.
+      expect(fs.existsSync(parked)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
   it("skips when the database is already at the target version", () => {
-    const dir = makeTempDir();
+    const dir = makeStateDir();
     const dbPath = path.join(dir, "openclaw.sqlite");
     seedStateDb(dbPath, 6);
     const db = new DatabaseSync(dbPath);
@@ -75,7 +157,7 @@ describe("createPreMigrationStateBackup", () => {
   });
 
   it("skips a brand new (version 0) database", () => {
-    const dir = makeTempDir();
+    const dir = makeStateDir();
     const dbPath = path.join(dir, "openclaw.sqlite");
     seedStateDb(dbPath, 0);
     const db = new DatabaseSync(dbPath);
