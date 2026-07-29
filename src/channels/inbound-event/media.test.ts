@@ -3,7 +3,7 @@ import { kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { describe, expect, it } from "vitest";
 import {
-  hasStagedMediaProjection,
+  hasStagedMediaFacts,
   normalizeMediaFacts,
   projectMediaFacts,
   resolveMediaFacts,
@@ -488,11 +488,11 @@ describe("channel inbound media facts", () => {
     );
 
     const stageableFacts = facts.filter((fact) => Boolean(normalizeOptionalString(fact.path)));
-    expect(hasStagedMediaProjection(source)).toBe(
-      legacyMode === "staged-MediaStaged" ||
-        legacyMode === "staged-MediaWorkspaceDir" ||
-        (stageableFacts.length > 0 &&
-          stageableFacts.every((fact) => Boolean(normalizeOptionalString(fact.workspaceDir)))),
+    expect(hasStagedMediaFacts(facts)).toBe(
+      stageableFacts.length > 0 &&
+        stageableFacts.every(
+          (fact) => Boolean(normalizeOptionalString(fact.workspaceDir)) || fact.staged === true,
+        ),
     );
     expect(facts).toHaveLength(expectedCount);
     for (let index = 0; index < expectedCount; index += 1) {
@@ -529,27 +529,23 @@ describe("channel inbound media facts", () => {
     for (const [index, expectedFact] of expected.entries()) {
       expect(facts[index]).toMatchObject(expectedFact);
     }
-    expect(hasStagedMediaProjection(source)).toBe(expectedStaged);
+    expect(hasStagedMediaFacts(facts)).toBe(expectedStaged);
   });
 
-  it("requires every stageable fact to carry a workspace before skipping staging", () => {
+  it("requires every stageable fact to carry staging proof before skipping staging", () => {
     expect(
-      hasStagedMediaProjection({
-        media: [
-          { path: "media/inbound/staged.png", workspaceDir: "/tmp/workspace" },
-          { path: "/tmp/unstaged.png" },
-          { kind: "document" },
-        ],
-      }),
+      hasStagedMediaFacts([
+        { path: "media/inbound/staged.png", workspaceDir: "/tmp/workspace" },
+        { path: "/tmp/unstaged.png" },
+        { kind: "document" },
+      ]),
     ).toBe(false);
     expect(
-      hasStagedMediaProjection({
-        media: [
-          { path: "media/inbound/one.png", workspaceDir: "/tmp/workspace" },
-          { path: "media/inbound/two.png", workspaceDir: "/tmp/workspace" },
-          { kind: "document" },
-        ],
-      }),
+      hasStagedMediaFacts([
+        { path: "media/inbound/one.png", workspaceDir: "/tmp/workspace" },
+        { path: "media/inbound/two.png", workspaceDir: "/tmp/workspace" },
+        { kind: "document" },
+      ]),
     ).toBe(true);
   });
 
@@ -602,7 +598,6 @@ describe("channel inbound media facts", () => {
     expect(buildMediaPayload(media)).toEqual(compact);
 
     const aligned = { ...compact, MediaTypes: ["image/png", ""] };
-    expect(projectMediaFacts(media, "aligned")).toEqual(aligned);
     expect(buildMediaPayload(media, { preserveMediaTypeCardinality: true })).toEqual(aligned);
   });
 
@@ -625,10 +620,6 @@ describe("channel inbound media facts", () => {
     expect(projectMediaFacts(richerMedia, "compact")).toEqual(compact);
     expect(buildAgentMediaPayload(richerMedia)).toEqual(compact);
     expect(buildMediaPayload(richerMedia)).toEqual(compact);
-    expect(projectMediaFacts(richerMedia, "aligned")).toEqual({
-      ...compact,
-      MediaTypes: [""],
-    });
     expect(buildMediaPayload(richerMedia, { preserveMediaTypeCardinality: true })).toEqual({
       ...compact,
       MediaTypes: [""],

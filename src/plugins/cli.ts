@@ -9,7 +9,7 @@ import {
   type PluginCliLoaderOptions,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.js";
+import type { OpenClawPluginCliRootCommandDescriptor, PluginLogger } from "./types.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy";
 
@@ -88,7 +88,7 @@ export async function getPluginCliCommandDescriptors(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
-): Promise<OpenClawPluginCliCommandDescriptor[]> {
+): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
   return loadPluginCliDescriptors({ cfg, env, loaderOptions, logger: quietDescriptorLogger });
 }
 

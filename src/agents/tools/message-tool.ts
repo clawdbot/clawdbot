@@ -52,6 +52,10 @@ import { resolveMessageActionTurnCapability } from "../../gateway/message-action
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import {
+  resolveMessageBroadcastAccountPlan,
+  validateExplicitMessageAccountSelection,
+} from "../../infra/outbound/message-account-selection.js";
+import {
   parseInteractiveParam,
   parseJsonMessageParam,
 } from "../../infra/outbound/message-action-params.js";
@@ -1035,6 +1039,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  runSessionKey?: string;
   runId?: string;
   sessionId?: string;
   agentId?: string;
@@ -1362,7 +1367,7 @@ function buildMessageToolDescription(options?: {
   }
 
   return appendMessageToolVisibleReplyHint(
-    `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`,
+    `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`,
     resolvedOptions.sourceReplyDeliveryMode,
     resolvedOptions.requireExplicitTarget,
   );
@@ -1555,17 +1560,44 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
+      const requestedAccountId = readStringParam(params, "accountId");
+      const requestedScope = resolveMessageSecretScope({
+        channel: params.channel,
+        target: params.target,
+        targets: params.targets,
+        accountId: requestedAccountId,
+      });
       const scope = resolveMessageSecretScope({
         channel: params.channel,
         target: params.target,
         targets: params.targets,
         fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
-        accountId: params.accountId,
+        accountId: requestedAccountId,
         fallbackAccountId: agentAccountId,
       });
+      const unscopedExplicitBroadcast =
+        action === "broadcast" && !requestedScope.channel && requestedAccountId !== undefined;
+      const explicitAccountId = validateExplicitMessageAccountSelection({
+        cfg: rawConfig,
+        channel: unscopedExplicitBroadcast ? undefined : scope.channel,
+        accountId: requestedAccountId,
+        checkResolvedAccount: false,
+      });
+      if (explicitAccountId) {
+        scope.accountId = explicitAccountId;
+        params.accountId = explicitAccountId;
+      }
+      const broadcastAccountPlan =
+        unscopedExplicitBroadcast && explicitAccountId
+          ? resolveMessageBroadcastAccountPlan({
+              cfg: rawConfig,
+              accountId: explicitAccountId,
+            })
+          : undefined;
       const scopedTargets = getScopedSecretTargetsForTool({
         config: rawConfig,
-        channel: scope.channel,
+        channel: broadcastAccountPlan ? undefined : scope.channel,
+        ...(broadcastAccountPlan ? { channels: broadcastAccountPlan.secretChannels } : {}),
         accountId: scope.accountId,
       });
       const cfg = (
@@ -1578,10 +1610,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         })
       ).resolvedConfig;
 
-      const accountId = readStringParam(params, "accountId") ?? agentAccountId;
-      if (accountId) {
-        params.accountId = accountId;
-      }
+      const accountId = explicitAccountId ?? agentAccountId;
       const pollVoteEchoRoute = resolvePollVoteEchoRoute({
         action,
         args: params,
@@ -1723,9 +1752,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           },
           senderIsOwner: options?.senderIsOwner,
           conversationReadOrigin: options?.conversationReadOrigin,
+          broadcastAccountPlan,
           gateway,
           toolContext,
           sessionKey: options?.agentSessionKey,
+          sourceReplySessionKey: options?.runSessionKey,
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,

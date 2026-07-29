@@ -65,8 +65,11 @@ function migratedConversation(
   persistedChatType?: string,
   sessionKey?: string,
 ) {
-  const delivery = migratedObject(entry, "deliveryContext");
-  const origin = migratedObject(entry, "origin");
+  const canonicalDelivery = migratedObject(entry, "delivery");
+  const delivery =
+    migratedObject(canonicalDelivery ?? {}, "context") ?? migratedObject(entry, "deliveryContext");
+  const origin =
+    migratedObject(canonicalDelivery ?? {}, "origin") ?? migratedObject(entry, "origin");
   const deliveryRouteTarget = migratedText(delivery?.to);
   const kind = inferMigratedChatType({
     entry,

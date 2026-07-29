@@ -9,6 +9,7 @@ import {
   addEnvBackedAgentCredentials,
   type AgentDiscoveryAuthLookupOptions,
 } from "./agent-auth-discovery-core.js";
+import { isAmbientCredentialAllowedByProviderAuthPin } from "./auth-profiles/ambient-auth.js";
 import type { ExternalCliAuthDiscovery } from "./auth-profiles/external-cli-discovery.js";
 import {
   ensureAuthProfileStore,
@@ -70,6 +71,19 @@ export function resolveAgentCredentialsForDiscovery(
     options?.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
   for (const provider of syntheticAuthProviderRefs) {
     if (credentials[provider]) {
+      continue;
+    }
+    if (
+      !isAmbientCredentialAllowedByProviderAuthPin({
+        config: options?.config,
+        authAliasLookupParams: {
+          ...(options?.env ? { env: options.env } : {}),
+          ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+        },
+        provider,
+        type: "api_key",
+      })
+    ) {
       continue;
     }
     // Synthetic auth is a plugin/runtime fallback. Only fill empty providers so

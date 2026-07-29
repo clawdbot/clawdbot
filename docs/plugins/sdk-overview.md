@@ -241,8 +241,8 @@ before returning do not need this helper.
 
 #### Requester-scoped MCP connections
 
-Keep the MCP server **identity** static (name, tool filter) in `mcp.servers` or a
-bundle manifest. Optionally register a connection resolver so each trusted
+Keep the MCP server **identity** static (name, tool filter) in `mcp.servers`, a
+native plugin's `mcpServers` manifest field, or a bundle manifest. Optionally register a connection resolver so each trusted
 message requester gets their own transport:
 
 ```ts
@@ -542,6 +542,19 @@ api.registerCli(
 );
 ```
 
+A root descriptor can also declare `machineOutput({ argv, stdoutIsTTY })` when
+the command reserves stdout for JSON, JSONL, or another machine-readable format
+without relying exclusively on a literal `--json` flag. OpenClaw evaluates this
+resolver before plugin activation so startup diagnostics can be routed to
+stderr. The resolver must be synchronous, pure, and dependency-light: inspect
+only the supplied raw argv and stdout TTY state. Reuse the same resolver in
+lightweight CLI metadata and full registration so discovery and execution do
+not disagree. Use `getRootOptionAwareCommandPath` from
+`openclaw/plugin-sdk/cli-argv` when the resolver needs command-path tokens; it
+accepts supported root options before or after the command root. `machineOutput`
+is root metadata; nested descriptors cannot use it because their owning root
+must already be active before they are visible.
+
 Nested commands receive the resolved parent command as `program`:
 
 ```typescript
@@ -588,15 +601,17 @@ AI CLI backend such as `claude-cli` or `my-cli`.
 - Use `prepareExecution` for backend-owned launch environment or temporary
   auth/config bridges. Its `ctx.contextTokenBudget` is the effective token
   limit selected for the run, so native-compaction backends can align their
-  own threshold without provider-specific core branches.
+  own threshold without provider-specific core branches. It also receives the
+  core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
 - Backends that can disable all native tools for a specific run may declare
   `nativeToolMode: "selectable"`. Restricted calls pass an exact
-  `ctx.toolAvailability.native` list plus an exact host-isolated MCP allowlist;
-  `resolveExecutionArgs` must enforce both on the final fresh or resume argv.
-  To accept runtime caps such as cron `toolsAllow`, the backend must also
-  implement `resolveRuntimeToolAvailability`; OpenClaw disables all native
-  tools and fails closed if the backend cannot translate or enforce the MCP
-  cap.
+  `ctx.toolAvailability.native` list plus canonical
+  `ctx.toolAvailability.openClaw` names. Declare
+  `toolAvailabilityEnforcement: "execution-args"` and enforce the contract in
+  final fresh/resume argv, or declare `"prepare-execution"`, enforce it in
+  staged policy, and return `toolAvailabilityEnforced: true`. OpenClaw disables
+  native tools for runtime caps such as cron `toolsAllow` and fails closed when
+  the declared enforcement path is incomplete.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).

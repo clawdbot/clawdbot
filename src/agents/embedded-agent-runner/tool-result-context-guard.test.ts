@@ -14,6 +14,7 @@ import {
   installToolResultContextGuard,
   markTranscriptPromptText,
 } from "./tool-result-context-guard.js";
+import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
 
 const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
 
@@ -225,6 +226,24 @@ describe("installToolResultContextGuard", () => {
         expectDefined(contextForNextCall[0], "contextForNextCall[0] test invariant"),
       ),
     ).toBe("z".repeat(5_000));
+  });
+
+  it("truncates dense CJK output that the ASCII safety floor would undercount", async () => {
+    const agent = makeGuardableAgent();
+    const cjk = "你".repeat(300);
+    const contextForNextCall = [makeToolResult("call_cjk", cjk)];
+
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+    const transformedText = getToolResultText(
+      expectDefined(transformed[0], "transformed[0] test invariant"),
+    );
+
+    expect(transformedText.length).toBeLessThan(cjk.length);
+    expect(
+      estimateToolResultTextChars(transformedText, { minimumRawWeight: 2 }),
+    ).toBeLessThanOrEqual(1_024);
+    expectOpenClawTruncation(transformedText);
+    expect(getToolResultText(contextForNextCall[0]!)).toBe(cjk);
   });
 
   it("wraps an existing transformContext and guards the transformed output", async () => {

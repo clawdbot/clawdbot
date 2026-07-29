@@ -155,6 +155,78 @@
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
+/* ── Advanced tier ──
+ * Lives here rather than config.css because every schema-driven surface
+ * (config pages and the channel detail forms) renders the same split. */
+
+.config-tier-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.config-advanced-divider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding: 0 var(--space-4) var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.config-advanced-divider__toggle {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.config-advanced-divider__toggle:hover {
+  text-decoration: underline;
+}
+
+.config-advanced-ghost {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--secondary);
+  text-align: left;
+  transition: background var(--duration-fast) ease;
+}
+
+.config-advanced-ghost:hover {
+  background: var(--bg-hover);
+}
+
+.config-advanced-ghost__count {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.config-advanced-ghost__action {
+  color: var(--accent);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
 /* ── Row ── */
 
 .settings-row {
@@ -237,6 +309,15 @@
 .settings-row--stacked .settings-row__control {
   max-width: none;
   justify-content: flex-start;
+}
+
+/* Trailing action rows hold only a button cluster: give it the full row
+   (definite width, see the wrap note on .settings-row__control) so nowrap
+   button labels wrap as whole buttons instead of squeezing into 60%. */
+.settings-row--actions .settings-row__control {
+  width: 100%;
+  max-width: none;
+  flex-wrap: wrap;
 }
 
 /* Label-wrapped toggle row: whole row toggles the switch. */
@@ -446,11 +527,16 @@ select.settings-select {
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
-/* Inside generic .field wrappers (Model Providers) the select is
-   appearance: none with a background chevron; the padding shorthand above
-   collapses its 36px gutter to 10px and long model names run under the arrow. */
-.field select.settings-select {
+/* Single-value selects draw the themed chevron; the engine's stock arrow
+   ignores the 32px control box and renders misaligned. Multi-select list
+   boxes keep native rendering. */
+select.settings-select:not([multiple]) {
+  appearance: none;
+  -webkit-appearance: none;
   padding-right: 36px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
 }
 
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {

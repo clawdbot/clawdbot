@@ -19,6 +19,12 @@ import {
 } from "../internal/anthropic-inline-images.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
+  AnthropicEffort,
+  AnthropicOptions,
+  AnthropicThinkingDisplay,
+} from "../provider-options.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
+import type {
   AnthropicMessagesCompat,
   Api,
   AssistantMessage,
@@ -31,7 +37,6 @@ import type {
   SimpleStreamOptions,
   StopReason,
   StreamFunction,
-  StreamOptions,
   TextContent,
   ThinkingContent,
   Tool,
@@ -42,6 +47,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { formatProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -53,8 +59,9 @@ import {
 } from "./anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
-  prepareClaudeSonnet5RequestContext,
+  prepareClaudeNoPrefillRequestContext,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -66,10 +73,10 @@ import {
 import { applyAnthropicRefusal } from "./anthropic-refusal.js";
 import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
   applyAnthropicFallbackBoundary,
-  buildAnthropicServerSideFallbacks,
   readAnthropicFallbackBoundary,
+  resolveAnthropicFallbackServingModelCost,
 } from "./anthropic-server-fallback.js";
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
@@ -243,9 +250,11 @@ async function convertContentBlocks(
   return blocks;
 }
 
-export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
-
-export type AnthropicThinkingDisplay = "summarized" | "omitted";
+export type {
+  AnthropicEffort,
+  AnthropicOptions,
+  AnthropicThinkingDisplay,
+} from "../provider-options.js";
 
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
@@ -264,51 +273,6 @@ function getAnthropicCompat(model: Model<"anthropic-messages">): Required<Anthro
     supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? !isFireworks,
     allowEmptySignature: model.compat?.allowEmptySignature ?? false,
   };
-}
-
-export interface AnthropicOptions extends StreamOptions {
-  /**
-   * Enable extended thinking.
-   * For Opus 4.6+ and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).
-   * For older models: uses budget-based thinking with thinkingBudgetTokens.
-   */
-  thinkingEnabled?: boolean;
-  /**
-   * Token budget for extended thinking (older models only).
-   * Ignored for Opus 4.6+ and Sonnet 4.6, which use adaptive thinking.
-   */
-  thinkingBudgetTokens?: number;
-  /**
-   * Effort level for adaptive thinking (Opus 4.6+ and Sonnet 4.6).
-   * Controls how much thinking Claude allocates:
-   * - "max": Always thinks with no constraints (Opus 4.6 only)
-   * - "xhigh": Highest reasoning level (Opus 4.7+)
-   * - "high": Always thinks, deep reasoning (default)
-   * - "medium": Moderate thinking, may skip for simple queries
-   * - "low": Minimal thinking, skips for simple tasks
-   * Ignored for older models.
-   */
-  effort?: AnthropicEffort;
-  /**
-   * Controls how thinking content is returned in API responses.
-   * - "summarized": Thinking blocks contain summarized thinking text (default here).
-   * - "omitted": Thinking blocks return an empty thinking field; the encrypted
-   *   signature still travels back for multi-turn continuity. Use for faster
-   *   time-to-first-text-token when your UI does not surface thinking.
-   *
-   * Note: Anthropic's API default for Claude Opus 4.7+ and Claude Mythos Preview
-   * is "omitted". We default to "summarized" here to keep behavior consistent
-   * with older Claude 4 models. Set this explicitly to "omitted" to opt in.
-   */
-  thinkingDisplay?: AnthropicThinkingDisplay;
-  interleavedThinking?: boolean;
-  toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
-  /**
-   * Pre-built Anthropic client instance. When provided, skips internal client
-   * construction entirely. Use this to inject alternative SDK clients such as
-   * `AnthropicVertex` that shares the same messaging API.
-   */
-  client?: Anthropic;
 }
 
 function mergeHeaders(
@@ -380,7 +344,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
   options?: AnthropicOptions,
 ) => {
   const stream = new AssistantMessageEventStream();
-  const requestContext = prepareClaudeSonnet5RequestContext(model, context);
+  const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
   const requestOptions = normalizeAnthropicThinkingOptions(model, options);
 
   void (async () => {
@@ -559,7 +523,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             // Cost intentionally mirrors top-level usage (serving attempt at
             // serving-model rates). A mid-stream decline's billed partial is
             // only in usage.iterations and is not folded in here.
-            costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+            costModel = {
+              ...model,
+              cost: resolveAnthropicFallbackServingModelCost({
+                requestedModelId: model.id,
+                servingModelId: fallbackBoundary.toModel,
+                requestedCost: model.cost,
+              }),
+            };
             calculateCost(costModel, output.usage);
             eventSink.push({ type: "start", partial: output });
             for (const [i, block] of blocks.entries()) {
@@ -796,7 +767,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       }
 
       if (requestOptions?.signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(requestOptions.signal);
       }
 
       if (output.stopReason === "aborted" || output.stopReason === "error") {
@@ -817,7 +788,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         output.content = [];
       }
       output.stopReason = requestOptions?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      // A bare JSON.stringify here dies on the circular error objects HTTP/socket
+      // layers raise, and the throw escapes this catch so stream.end() never runs
+      // and the consumer hangs. formatProviderError guards that conversion, matching
+      // the other provider terminal paths.
+      output.errorMessage = formatProviderError(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     }
@@ -946,7 +921,7 @@ export const streamSimpleAnthropic: StreamFunction<
         ? "low"
         : "high"
       : options?.reasoning;
-  if (resolveClaudeSonnet5ModelIdentity(model)) {
+  if (resolveClaudeOpus5ModelIdentity(model) || resolveClaudeSonnet5ModelIdentity(model)) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
@@ -1018,7 +993,11 @@ function isAnthropicPublicEndpoint(baseUrl: string | undefined): boolean {
  * identity) requests are excluded until the beta is verified there.
  */
 function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
-  if (!usesClaudeFable5MessagesContract(model) || model.provider !== "anthropic") {
+  if (
+    (!usesClaudeFable5MessagesContract(model) &&
+      resolveClaudeOpus5ModelIdentity(model) === undefined) ||
+    model.provider !== "anthropic"
+  ) {
     return false;
   }
   return isAnthropicPublicEndpoint(model.baseUrl);
@@ -1227,12 +1206,11 @@ async function buildParams(
     params.system = system;
   }
 
-  // Fable safety classifiers can decline benign-adjacent work; server-side
-  // fallback re-serves the same call on claude-opus-4-8 instead of failing
-  // the turn. Only set when createClient added the matching beta header.
+  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Anthropic owns the per-category fallback recommendation so routing can
+  // evolve without a client release.
   if (serverSideFallback) {
-    (params as { fallbacks?: Array<{ model: string }> }).fallbacks =
-      buildAnthropicServerSideFallbacks();
+    (params as { fallbacks?: "default" }).fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
   }
 
   // Thinking and post-4.6 Claude models reject custom temperature values.

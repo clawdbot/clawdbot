@@ -36,6 +36,7 @@ function createContext(): ApplicationContext {
     client: null,
     phase: "stopped",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",

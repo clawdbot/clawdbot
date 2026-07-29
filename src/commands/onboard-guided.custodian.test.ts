@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -40,6 +41,16 @@ const readConfigFileSnapshot = vi.hoisted(() =>
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
+vi.mock("./onboard-agent.js", () => ({
+  ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({
+    config: {
+      ...config,
+      agents: { ...config.agents, list: [{ id: "main", default: true }] },
+    },
+    agentId: "main",
+    bootstrapPending: true,
+  }),
+}));
 
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
@@ -105,6 +116,9 @@ function setupDeps(params: {
   const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
     params.runSystemAgentChat ?? (async () => {}),
   );
+  const runSetupMemoryImportStep = vi.fn<
+    NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
+  >(params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })));
   return {
     createPrompter: () => params.prompter,
     persistAccessMode: vi.fn(async () => undefined),
@@ -134,7 +148,7 @@ function setupDeps(params: {
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
-    runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
+    runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ??
       vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),

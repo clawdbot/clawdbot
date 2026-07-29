@@ -279,8 +279,6 @@ const SandboxPruneSchema = z
 export const AgentContextLimitsSchema = z
   .object({
     memoryGetMaxChars: z.number().int().min(1).max(250_000).optional(),
-    memoryGetDefaultLines: z.number().int().min(1).max(5_000).optional(),
-    toolResultMaxChars: z.number().int().min(1).max(1_000_000).optional(),
     postCompactionMaxChars: z.number().int().min(1).max(50_000).optional(),
   })
   .strict()
@@ -531,6 +529,8 @@ const ToolExecBaseShape = {
     .strict()
     .optional(),
   backgroundMs: z.number().int().positive().optional(),
+  // The documented global setting and per-agent override share one strict contract.
+  approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),
   notifyOnExit: z.boolean().optional(),
@@ -551,15 +551,6 @@ function addExecPolicyModeConflictIssue(
     message: "tools.exec.mode cannot be combined with tools.exec.security or tools.exec.ask",
   });
 }
-
-const AgentToolExecSchema = z
-  .object({
-    ...ToolExecBaseShape,
-    approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
-  })
-  .strict()
-  .superRefine(addExecPolicyModeConflictIssue)
-  .optional();
 
 const ToolExecSchema = z
   .object(ToolExecBaseShape)
@@ -599,9 +590,10 @@ const ToolSearchSchema = z
 const CodeModeSchema = z
   .union([
     z.boolean(),
+    z.literal("auto"),
     z
       .object({
-        enabled: z.boolean().optional(),
+        enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
         runtime: z.literal("quickjs-wasi").optional(),
         mode: z.literal("only").optional(),
         languages: z.array(z.enum(["javascript", "typescript"])).optional(),
@@ -736,7 +728,7 @@ const AgentToolsSchema = z
       })
       .strict()
       .optional(),
-    exec: AgentToolExecSchema,
+    exec: ToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
     message: MessageToolConfigSchema,
@@ -940,7 +932,6 @@ export const AgentEntrySchema = z
       .optional(),
     humanDelay: HumanDelaySchema.optional(),
     typingMode: TypingModeSchema.optional(),
-    typingIntervalSeconds: z.number().int().positive().optional(),
     tts: AgentTtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
@@ -1026,12 +1017,7 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
-    experimental: z
-      .object({
-        planTool: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    updatePlan: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

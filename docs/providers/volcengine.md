@@ -75,19 +75,23 @@ Both providers are configured from a single API key. Setup registers both automa
 
 <Tabs>
   <Tab title="General (volcengine)">
-    | Model ref                                    | Name                            | Input       | Context |
-    | -------------------------------------------- | ------------------------------- | ----------- | ------- |
-    | `volcengine/deepseek-v3-2-251201`            | DeepSeek V3.2                   | text, image | 128,000 |
-    | `volcengine/doubao-seed-1-8-251228`          | Doubao Seed 1.8                 | text, image | 256,000 |
-    | `volcengine/doubao-seed-code-preview-251028` | doubao-seed-code-preview-251028 | text, image | 256,000 |
-    | `volcengine/glm-4-7-251222`                  | GLM 4.7                         | text, image | 200,000 |
-    | `volcengine/kimi-k2-5-260127`                | Kimi K2.5                       | text, image | 256,000 |
+    | Model ref                                      | Name                    | Input              | Context   |
+    | ---------------------------------------------- | ----------------------- | ------------------ | --------- |
+    | `volcengine/doubao-seed-evolving`              | Doubao Seed Evolving    | text, image, video | 1,024,000 |
+    | `volcengine/doubao-seed-2-1-pro-260628`        | Doubao Seed 2.1 Pro     | text, image, video | 256,000   |
+    | `volcengine/doubao-seed-2-1-turbo-260628`      | Doubao Seed 2.1 Turbo   | text, image, video | 256,000   |
+    | `volcengine/glm-5-2-260617`                    | GLM 5.2                 | text               | 1,024,000 |
+    | `volcengine/deepseek-v4-pro-260425`            | DeepSeek V4 Pro         | text               | 1,024,000 |
+    | `volcengine/deepseek-v4-flash-260425`          | DeepSeek V4 Flash       | text               | 1,024,000 |
   </Tab>
   <Tab title="Coding (volcengine-plan)">
-    | Model ref                                         | Name                     | Input | Context |
-    | ------------------------------------------------- | ------------------------ | ----- | ------- |
-    | `volcengine-plan/ark-code-latest`                 | Ark Coding Plan          | text  | 256,000 |
-    | `volcengine-plan/doubao-seed-code`                | Doubao Seed Code         | text  | 256,000 |
+    | Model ref                                  | Name                  | Input              | Context   |
+    | ------------------------------------------ | --------------------- | ------------------ | --------- |
+    | `volcengine-plan/ark-code-latest`          | Ark Coding Plan       | text               | 256,000   |
+    | `volcengine-plan/doubao-seed-2.1-turbo`    | Doubao Seed 2.1 Turbo | text, image, video | 256,000   |
+    | `volcengine-plan/glm-5.2`                  | GLM 5.2               | text               | 1,024,000 |
+    | `volcengine-plan/deepseek-v4-pro`          | DeepSeek V4 Pro       | text               | 1,024,000 |
+    | `volcengine-plan/deepseek-v4-flash`        | DeepSeek V4 Flash     | text               | 1,024,000 |
   </Tab>
 </Tabs>
 

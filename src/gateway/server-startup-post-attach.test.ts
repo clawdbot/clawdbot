@@ -2504,6 +2504,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     },
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
     activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
+    pluginManifestRecords: [],
     pluginRegistry: {
       plugins: [
         { id: "beta", status: "loaded" },

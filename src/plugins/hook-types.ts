@@ -57,6 +57,8 @@ export type {
 export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundMessageMetadata,
+  PluginHookMediaFact,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -262,6 +264,8 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
   channel?: string;
+  /** Channel account used by the agent when multiple accounts are configured. */
+  accountId?: string;
   /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
   chatId?: string;
   /** Sender identity for channel-originated runs when available. */

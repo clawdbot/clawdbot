@@ -129,8 +129,7 @@ async function processDiscordMessageInner(
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const routedAgentConfig = resolveAgentConfig(cfg, route.agentId);
   const configuredTypingMode = routedAgentConfig?.typingMode ?? cfg.agents?.defaults?.typingMode;
-  const configuredTypingInterval =
-    routedAgentConfig?.typingIntervalSeconds ?? cfg.agents?.defaults?.typingIntervalSeconds;
+  const configuredTypingInterval = cfg.agents?.defaults?.typingIntervalSeconds;
   const shouldDisableCoreTypingKeepalive =
     sourceRepliesAreToolOnly &&
     configuredTypingMode === undefined &&
@@ -317,7 +316,7 @@ async function processDiscordMessageInner(
       if (!replies.length) {
         return { visibleReplySent: false };
       }
-      await deliverDiscordReply({
+      const result = await deliverDiscordReply({
         cfg,
         replies,
         target: deliverTarget,
@@ -336,8 +335,10 @@ async function processDiscordMessageInner(
         mediaLocalRoots,
         kind: "block",
       });
-      replyReference.markSent();
-      return { visibleReplySent: true };
+      if (result.visibleReplySent) {
+        replyReference.markSent();
+      }
+      return result;
     }
     if (
       isFinal &&
@@ -465,7 +466,7 @@ async function processDiscordMessageInner(
             : undefined;
           const replyToId = replyReference.use();
           notifyFinalReplyStart();
-          await deliverDiscordReply({
+          const deliveryResult = await deliverDiscordReply({
             cfg,
             replies: [fallbackPayload],
             target: deliverTarget,
@@ -485,7 +486,7 @@ async function processDiscordMessageInner(
             allowedMentions,
             kind: info.kind,
           });
-          return true;
+          return deliveryResult.visibleReplySent;
         },
         onNormalDelivered: () => {
           markUserFacingFinalDelivered();
@@ -524,7 +525,7 @@ async function processDiscordMessageInner(
             : receiptLine,
         }
       : deliverablePayload;
-    await deliverDiscordReply({
+    const result = await deliverDiscordReply({
       cfg,
       replies: [payloadForDelivery],
       target: deliverTarget,
@@ -543,6 +544,9 @@ async function processDiscordMessageInner(
       mediaLocalRoots,
       kind: info.kind,
     });
+    if (!result.visibleReplySent) {
+      return result;
+    }
     replyReference.markSent();
     if (isFinal && deliverablePayload.isError !== true) {
       if (receiptLine) {
@@ -560,7 +564,7 @@ async function processDiscordMessageInner(
         await draftStream?.clear();
       }
     }
-    return { visibleReplySent: true };
+    return result;
   };
   const onDiscordDeliveryError = (err: unknown, info: { kind: string }) => {
     if (info.kind === "final" && finalReplyStartNotified && !userFacingFinalDelivered) {
@@ -626,7 +630,7 @@ async function processDiscordMessageInner(
         onFreshSettledDelivery: deliverPendingToolWarningFinalIfNeeded,
       },
       delivery: {
-        deliver: deliverDiscordPayload,
+        deliverWithProviderMessageSending: deliverDiscordPayload,
         onError: onDiscordDeliveryError,
       },
       record: turn.record,

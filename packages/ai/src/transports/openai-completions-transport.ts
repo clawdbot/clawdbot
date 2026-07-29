@@ -4,30 +4,27 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
+import { getEnvApiKey } from "../env-api-keys.js";
+import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
+import { convertMessages } from "../openai-completions-messages.js";
+import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
-  convertMessages,
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
   isOpenAIGpt56Model,
-  mapOpenAIStopReason,
-  normalizeOpenAIStrictToolParameters,
-  projectOpenAITools,
-  reconcileOpenAICompletionsToolChoice,
   resolveOpenAIReasoningEffortForModel,
   type OpenAIReasoningEffort,
-} from "../internal/openai.js";
+} from "../providers/openai-reasoning-effort.js";
 import {
-  applyProviderReportedUsageCost,
-  calculateCost,
-  createFirstStreamEventAbortController,
-  createReasoningTagTextPartitioner,
-  getEnvApiKey,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-  parseStreamingJson,
-  withFirstStreamEventTimeout,
-} from "../internal/runtime.js";
-import { stripSystemPromptCacheBoundary } from "../internal/shared.js";
+  resolveOpenAICompletionsResponseFormat,
+  shouldOmitOllamaCompatResponseFormat,
+} from "../providers/openai-response-format.js";
+import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
+import {
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+} from "../providers/openai-tool-projection.js";
+import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import {
   clearPendingCommentaryText,
   rememberPendingCommentaryTags,
@@ -35,6 +32,16 @@ import {
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  withFirstStreamEventTimeout,
+} from "../utils/stream-first-event-timeout.js";
+import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   buildGuardedModelFetch,
@@ -56,6 +63,7 @@ import {
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
   getCompat,
+  resolveCodeModeResponsesVisibleToolNames,
   resolveOpenAIStrictToolFlagWithDiagnostics,
 } from "./openai-transport-params.js";
 import {
@@ -67,7 +75,6 @@ import {
   sortTransportToolsByName,
   throwIfModelStreamAborted,
   type MutableAssistantOutput,
-  type OpenAICompletionsOptions,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 import { failTransportStream, finalizeTransportStream } from "./transport-stream-shared.js";
@@ -315,8 +322,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           (options as { openclawCodeModeToolSurface?: unknown } | undefined)
             ?.openclawCodeModeToolSurface === true
         ) {
-          enforceCodeModeResponsesToolSurface(params);
-          assertCodeModeResponsesToolSurface(params);
+          const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
+          enforceCodeModeResponsesToolSurface(params, visibleToolNames);
+          assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
         const compat = getCompat(model as OpenAIModeModel);
         if (compat.requiresNonEmptyUserOrAssistantMessage) {
@@ -329,7 +337,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, firstEventAbort.signal),
+          buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+            timeoutMs: options?.timeoutMs,
+            maxRetries: options?.maxRetries,
+          }),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
@@ -626,6 +637,8 @@ async function processOpenAICompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
+    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
+    notifyLlmRequestActivity(options?.signal);
     const chunk = rawChunk as ChatCompletionChunk;
     output.responseId ||= chunk.id;
     let hasReasoningUsageActivity = false;
@@ -1754,8 +1767,18 @@ export function buildOpenAICompletionsParams(
   if (options?.topP !== undefined) {
     params.top_p = options.topP;
   }
-  if (options?.responseFormat !== undefined) {
-    params.response_format = options.responseFormat;
+  const responseFormat = resolveOpenAICompletionsResponseFormat(
+    shouldOmitOllamaCompatResponseFormat({
+      provider: model.provider,
+      baseUrl: model.baseUrl,
+      hasTools: () => Boolean(context.tools?.length),
+    })
+      ? undefined
+      : options?.responseFormat,
+    compat.supportsJsonSchemaResponseFormat,
+  );
+  if (responseFormat !== undefined) {
+    params.response_format = responseFormat;
   }
   if (options?.frequencyPenalty !== undefined) {
     params.frequency_penalty = options.frequencyPenalty;

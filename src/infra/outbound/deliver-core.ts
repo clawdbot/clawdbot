@@ -222,8 +222,9 @@ export async function deliverOutboundPayloadsCore(
     to,
     accountId,
     sessionKeyForInternalHooks,
-    mirrorIsGroup,
-    mirrorGroupId,
+    isGroup: mirrorIsGroup,
+    groupId: mirrorGroupId,
+    logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);

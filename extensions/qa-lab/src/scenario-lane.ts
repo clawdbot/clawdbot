@@ -24,6 +24,10 @@ export function describeQaProviderLaneMismatches(params: {
     mismatches.push(`providerMode=${requiredProviderMode}`);
   }
   const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
+    mismatches.push(`channelDriver=${requiredChannelDriver}`);
+  }
   const effectiveChannel =
     effectiveChannelDriver === "qa-channel"
       ? "qa-channel"
@@ -31,6 +35,11 @@ export function describeQaProviderLaneMismatches(params: {
   const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
   if (scenarioChannel && effectiveChannel !== scenarioChannel) {
     mismatches.push(`channel=${scenarioChannel}`);
+  }
+  const allowedChannels =
+    params.scenario.execution.kind === "flow" ? params.scenario.execution.channels : undefined;
+  if (allowedChannels && !allowedChannels.includes(effectiveChannel ?? "")) {
+    mismatches.push(`channel=${allowedChannels.join("|")}`);
   }
   const selected = splitQaModelRef(params.primaryModel);
   const requiredProvider = normalizeQaConfigString(config.requiredProvider);

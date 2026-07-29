@@ -75,7 +75,7 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
 const sessionParams = {
   sessionIdUsed: "session-1",
   sessionId: "session-1",
-  sessionKey: "agent:main",
+  sessionKey: "agent:main:main",
   sessionFile: "sessions/main.jsonl",
 };
 

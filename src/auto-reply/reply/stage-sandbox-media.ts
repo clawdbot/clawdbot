@@ -15,7 +15,7 @@ import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
-import { resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -47,7 +47,7 @@ export async function stageSandboxMedia(params: {
   remoteMediaMode?: "sandbox-or-cache" | "cache";
 }): Promise<StageSandboxMediaResult> {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
-  const media = resolveMediaFacts(ctx);
+  const media = normalizeMediaFacts(ctx.media);
   const pathEntries = media.flatMap((fact, index) => {
     const mediaPath = normalizeOptionalString(fact.path);
     return mediaPath ? [{ index, path: mediaPath }] : [];

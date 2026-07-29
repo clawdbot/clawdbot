@@ -6,15 +6,19 @@ type CodeModeBridgeMethod =
   | "describe"
   | "call"
   | "callValue"
+  | "nodes"
   | "yield"
   | "namespace"
   | "agentSpawn"
   | "agentWait"
+  | "skillsList"
+  | "skillsRead"
   | "swarmNote";
 
 export type CodeModeConfig = {
   timeoutMs: number;
   memoryLimitBytes: number;
+  maxOutputBytes: number;
   maxPendingToolCalls: number;
   maxSnapshotBytes: number;
 };
@@ -40,7 +44,7 @@ export type CodeModeNamespaceDescriptor = {
   scope: SerializedCodeModeNamespaceValue;
 };
 
-export type CodeModeWorkerInput =
+type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
@@ -55,7 +59,16 @@ export type CodeModeWorkerInput =
       snapshotBytes: Uint8Array;
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
+      pendingRequests?: PendingBridgeRequest[];
     };
+
+export type CodeModeWorkerPayload = CodeModeWorkerInput & {
+  wasmModule: WebAssembly.Module;
+};
+
+export type CodeModeSettlementMode =
+  | { kind: "awaiting" }
+  | { kind: "draining"; requiredRequestIds: string[] };
 
 export type CodeModeWorkerResult =
   | {
@@ -67,6 +80,7 @@ export type CodeModeWorkerResult =
       status: "waiting";
       snapshotBytes: Uint8Array;
       pendingRequests: PendingBridgeRequest[];
+      settlementMode: CodeModeSettlementMode;
       output: unknown[];
     }
   | {
@@ -76,6 +90,7 @@ export type CodeModeWorkerResult =
         | "invalid_input"
         | "runtime_unavailable"
         | "timeout"
+        | "output_limit_exceeded"
         | "snapshot_limit_exceeded"
         | "internal_error";
       output: unknown[];

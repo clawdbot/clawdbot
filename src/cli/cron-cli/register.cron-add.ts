@@ -12,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseStrictPositiveIntOrUndefined } from "../program/helpers.js";
+import { listCronJobsFromGateway } from "./list-jobs.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -56,14 +57,14 @@ export function registerCronListCommand(cron: Command) {
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listParams: Record<string, unknown> = {
+          const listParams: { includeDisabled: boolean; agentId?: string } = {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = normalizeOptionalString(opts.agent);
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
           }
-          const res = await callGatewayFromCli("cron.list", opts, listParams);
+          const res = await listCronJobsFromGateway(opts, listParams);
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(res));
             return;
@@ -220,6 +221,7 @@ export function registerCronAddCommand(cron: Command) {
               const commandShell = normalizeOptionalString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               const scriptPath = normalizeOptionalString(opts.script);
+              const toolsAllow = parseCronToolsAllow(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new Error(
                   "Pass the cron job message either positionally or with --message, not both.",
@@ -243,7 +245,11 @@ export function registerCronAddCommand(cron: Command) {
                 );
               }
               if (systemEvent) {
-                return { kind: "systemEvent" as const, text: systemEvent };
+                return {
+                  kind: "systemEvent" as const,
+                  text: systemEvent,
+                  ...(toolsAllow ? { toolsAllow } : {}),
+                };
               }
               if (scriptPath) {
                 const scriptTimeoutSeconds = parseStrictPositiveIntOrUndefined(
@@ -261,7 +267,7 @@ export function registerCronAddCommand(cron: Command) {
                   scriptPath,
                   timeoutSeconds: scriptTimeoutSeconds,
                   toolBudget: scriptToolBudget,
-                  toolsAllow: parseCronToolsAllow(opts.tools),
+                  toolsAllow,
                 };
               }
               const timeoutSeconds = parseStrictPositiveIntOrUndefined(opts.timeoutSeconds);
@@ -303,6 +309,7 @@ export function registerCronAddCommand(cron: Command) {
                       : undefined,
                   outputMaxBytes:
                     outputMaxBytes && Number.isFinite(outputMaxBytes) ? outputMaxBytes : undefined,
+                  ...(toolsAllow ? { toolsAllow } : {}),
                 };
               }
               return {
@@ -314,7 +321,7 @@ export function registerCronAddCommand(cron: Command) {
                 timeoutSeconds:
                   timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
                 lightContext: opts.lightContext === true ? true : undefined,
-                toolsAllow: parseCronToolsAllow(opts.tools),
+                toolsAllow,
               };
             })();
             const resolvedPayload = await (async () => {

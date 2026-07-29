@@ -539,7 +539,7 @@ export function buildQaSuiteEvidenceSummary(
         provider,
         channel: {
           id: params.channelId,
-          live: false,
+          live: channelDriver?.id === "live",
           driver: channelDriver?.id,
         },
         packageSource,

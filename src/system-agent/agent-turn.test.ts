@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -114,6 +115,7 @@ beforeEach(() => {
           ],
         }),
         nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "execution-args",
         sideQuestionToolMode: "disabled",
         resolveExecutionArgs: (context) => context.baseArgs,
       },
@@ -266,13 +268,12 @@ describe("runSystemAgentTurn", () => {
       mocks.runEmbeddedAgent.mock.calls[1]?.[0]?.sessionFile,
       "missing second embedded transcript path",
     );
-    expect(firstPath).toContain(`${first.sessionId}.jsonl`);
-    expect(secondPath).toContain(`${second.sessionId}.jsonl`);
+    expect(firstPath).toBe(`in-memory:${first.sessionId}`);
+    expect(secondPath).toBe(`in-memory:${second.sessionId}`);
     expect(firstPath).not.toBe(secondPath);
-
-    await fs.promises.writeFile(firstPath, "transcript");
+    expect(first.sessionManager).not.toBe(second.sessionManager);
     await cleanupSystemAgentSession(first);
-    await expect(fs.promises.access(firstPath)).rejects.toThrow();
+    expect(first.sessionManager).toBeUndefined();
   });
 
   it("uses the default agent CLI route while keeping OpenClaw session identity", async () => {
@@ -329,7 +330,7 @@ describe("runSystemAgentTurn", () => {
       sessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`),
+      sessionFile: `in-memory:${session.sessionId}`,
       messageChannel: "openclaw",
       messageProvider: "openclaw",
     });
@@ -337,7 +338,7 @@ describe("runSystemAgentTurn", () => {
     expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
     expect(call.cliToolAvailability).toEqual({
       native: [],
-      mcp: ["mcp__openclaw__openclaw"],
+      openClaw: ["openclaw"],
     });
     expect(call.toolsAllow).toBeUndefined();
     expect(requireValue(call.systemAgentTool, "missing CLI OpenClaw tool").proposalRef).toBe(
@@ -403,7 +404,7 @@ describe("runSystemAgentTurn", () => {
   });
 
   it("resumes Claude's native transcript through fresh per-turn processes", async () => {
-    const stateDir = useTempStateDir();
+    useTempStateDir();
     const config = {
       agents: {
         defaults: {
@@ -452,13 +453,10 @@ describe("runSystemAgentTurn", () => {
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
     });
-    const transcript = path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`);
-    await fs.promises.writeFile(transcript, "transcript");
-
     await cleanupSystemAgentSession(session);
 
     expect(session.cliSession).toBeUndefined();
-    await expect(fs.promises.access(transcript)).rejects.toThrow();
+    expect(session.sessionManager).toBeUndefined();
   });
 
   it("runs a canonical Anthropic model through its configured Claude CLI runtime", async () => {
@@ -811,6 +809,7 @@ describe("runSystemAgentTurn", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(runCliAgent).not.toHaveBeenCalled();
     const call = requireValue(runEmbeddedAgent.mock.calls[0]?.[0], "missing embedded runner call");
+    expect(call).not.toHaveProperty("streamParams");
     expect(call).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
@@ -822,14 +821,14 @@ describe("runSystemAgentTurn", () => {
       sessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`),
+      sessionFile: `in-memory:${session.sessionId}`,
       messageChannel: "openclaw",
       messageProvider: "openclaw",
       toolsAllow: ["openclaw"],
       disableMessageTool: true,
     });
     expect(call.agentHarnessId).toBeUndefined();
-    expect(call.config?.agents?.list?.find((agent) => agent.id === "openclaw")).toEqual({
+    expect(listAgentEntries(call.config ?? {}).find((agent) => agent.id === "openclaw")).toEqual({
       id: "openclaw",
       params: { temperature: 0.2 },
       tools: { allow: ["read"], deny: ["exec"] },

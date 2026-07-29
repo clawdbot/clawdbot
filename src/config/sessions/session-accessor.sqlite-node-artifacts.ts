@@ -5,18 +5,24 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
-export function clearSessionMembersForKey(
+export function clearSessionCollaborationForKey(
   database: OpenClawAgentDatabase,
   sessionKey: string,
 ): void {
-  if (!readSessionNodeArtifactTables(database).has("session_members")) {
-    return;
-  }
+  const presentTables = readSessionNodeArtifactTables(database);
   const db = getSessionKysely(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    db.deleteFrom("session_members").where("session_key", "=", sessionKey),
-  );
+  if (presentTables.has("session_members")) {
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_members").where("session_key", "=", sessionKey),
+    );
+  }
+  if (presentTables.has("session_suggestions")) {
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_suggestions").where("session_key", "=", sessionKey),
+    );
+  }
 }
 
 export function rehomeLegacySessionNodeArtifacts(
@@ -154,6 +160,15 @@ export function rehomeLegacySessionNodeArtifacts(
       );
     }
   }
+  if (presentTables.has("session_suggestions")) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_suggestions")
+        .set({ session_key: canonicalKey })
+        .where("session_key", "=", legacyKey),
+    );
+  }
 }
 
 export function deleteSessionNodeArtifacts(
@@ -178,7 +193,7 @@ export function deleteSessionNodeArtifacts(
       db.deleteFrom("heartbeat_outcomes").where("session_key", "=", sessionKey),
     );
   }
-  clearSessionMembersForKey(database, sessionKey);
+  clearSessionCollaborationForKey(database, sessionKey);
 }
 
 function readSessionNodeArtifactTables(database: OpenClawAgentDatabase): Set<string> {
@@ -195,6 +210,7 @@ function readSessionNodeArtifactTables(database: OpenClawAgentDatabase): Set<str
           "board_widgets",
           "heartbeat_outcomes",
           "session_members",
+          "session_suggestions",
         ]),
     ).rows.flatMap((row) => (row.name ? [row.name] : [])),
   );

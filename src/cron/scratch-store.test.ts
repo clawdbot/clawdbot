@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
 import {
   hashCronScratchSource,
   readCronJobScratchState,
   writeCronJobScratch,
 } from "./scratch-store.js";
+import { cronStoreKey } from "./store/key.js";
+import { replaceCronRows, upsertCronJobRow } from "./store/row-codec.js";
+import type { CronJob } from "./types.js";
 
 const tempDirs: string[] = [];
 
@@ -21,10 +27,27 @@ async function createFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-scratch-"));
   tempDirs.push(root);
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  return {
+  const fixture = {
     storePath: path.join(root, "cron", "jobs.json"),
     options: { env },
   };
+  const job: CronJob = {
+    id: "job-1",
+    name: "scratch-owner",
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "test" },
+    state: {},
+  };
+  runOpenClawStateWriteTransaction(
+    ({ db }) => upsertCronJobRow(db, cronStoreKey(fixture.storePath), job, 0),
+    fixture.options,
+  );
+  return fixture;
 }
 
 describe("cron job scratch store", () => {
@@ -115,6 +138,27 @@ describe("cron job scratch store", () => {
       ok: true,
       currentRevision: 4,
       scratch: { content: "recreated", revision: 4, updatedAtMs: 60 },
+    });
+  });
+
+  it("rejects a late write after the owning job is durably deleted", async () => {
+    const fixture = await createFixture();
+    runOpenClawStateWriteTransaction(
+      ({ db }) => replaceCronRows(db, cronStoreKey(fixture.storePath), { version: 1, jobs: [] }),
+      fixture.options,
+    );
+
+    expect(
+      writeCronJobScratch({
+        ...fixture,
+        jobId: "job-1",
+        content: "orphaned heartbeat scratch",
+        expectedRevision: 0,
+        nowMs: 10,
+      }),
+    ).toEqual({ ok: false, reason: "revision-conflict", currentRevision: 0 });
+    expect(readCronJobScratchState(fixture.storePath, "job-1", fixture.options)).toEqual({
+      currentRevision: 0,
     });
   });
 

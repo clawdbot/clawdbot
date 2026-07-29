@@ -1,16 +1,18 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  isCloudModelRef,
+  type ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
-  OLLAMA_GLM52_CLOUD_MODEL_ID,
-  OLLAMA_GLM52_CONTEXT_WINDOW,
   OLLAMA_LOCAL_CONTEXT_TOKENS,
 } from "./defaults.js";
 
@@ -38,6 +40,7 @@ export type OllamaModelWithContext = OllamaTagModel & {
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
+const MAX_OLLAMA_DISCOVERY_PROBES = OLLAMA_CONTEXT_ENRICH_LIMIT * 4;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
@@ -152,6 +155,7 @@ export async function queryOllamaModelShowInfo(
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return {};
       }
       const data = await readProviderJsonResponse<{
@@ -256,35 +260,39 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
-type OllamaModelSource = "cloud" | "local";
-
-function parseOllamaModelSourceSuffix(
-  modelName: string,
-): { base: string; source: OllamaModelSource } | undefined {
-  const sourceSeparator = modelName.lastIndexOf(":");
-  if (sourceSeparator < 0) {
-    return undefined;
+export async function enrichOllamaCompletionModels(
+  apiBase: string,
+  models: OllamaTagModel[],
+  opts?: { apiKey?: string; requireCompletionCapability?: boolean },
+): Promise<OllamaModelWithContext[]> {
+  const completionModels: OllamaModelWithContext[] = [];
+  const probeLimit = Math.min(models.length, MAX_OLLAMA_DISCOVERY_PROBES);
+  for (
+    let index = 0;
+    index < probeLimit && completionModels.length < OLLAMA_CONTEXT_ENRICH_LIMIT;
+    index += OLLAMA_SHOW_CONCURRENCY
+  ) {
+    const batch = await enrichOllamaModelsWithContext(
+      apiBase,
+      models.slice(index, Math.min(index + OLLAMA_SHOW_CONCURRENCY, probeLimit)),
+      opts?.apiKey ? { apiKey: opts.apiKey } : undefined,
+    );
+    for (const model of batch) {
+      const canComplete = model.capabilities?.includes("completion");
+      if (!canComplete && (opts?.requireCompletionCapability || model.capabilities)) {
+        continue;
+      }
+      completionModels.push(model);
+      if (completionModels.length === OLLAMA_CONTEXT_ENRICH_LIMIT) {
+        break;
+      }
+    }
   }
-  const source = modelName.slice(sourceSeparator + 1);
-  if (source === "cloud" || source === "local") {
-    return { base: modelName.slice(0, sourceSeparator), source };
-  }
-  if (!source.includes("/") && source.endsWith("-cloud")) {
-    return {
-      base: modelName.slice(0, sourceSeparator + 1) + source.slice(0, -"-cloud".length),
-      source: "cloud",
-    };
-  }
-  return undefined;
+  return completionModels;
 }
 
 export function isOllamaCloudModel(modelName: string | undefined): boolean {
-  const normalized = modelName?.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  const parsed = parseOllamaModelSourceSuffix(normalized);
-  return parsed?.source === "cloud" && parseOllamaModelSourceSuffix(parsed.base) === undefined;
+  return isCloudModelRef(modelName);
 }
 
 export function isReasoningModelHeuristic(modelId: string): boolean {
@@ -292,11 +300,12 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
 }
 
 function isKnownOllamaCloudReasoningModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return (
-    normalized === OLLAMA_GLM52_CLOUD_MODEL_ID ||
-    /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized)
-  );
+  // Match both the canonical direct-host id and the local `:cloud` routing alias.
+  const normalized = modelId
+    .trim()
+    .toLowerCase()
+    .replace(/:cloud$/, "");
+  return normalized === "glm-5.2" || /^deepseek-v4-(?:flash|pro)$/.test(normalized);
 }
 
 export function buildOllamaModelDefinition(
@@ -313,10 +322,15 @@ export function buildOllamaModelDefinition(
       : capabilities.includes("thinking"));
   const compat =
     capabilities === undefined
-      ? { supportsTools: true, supportsUsageInStreaming: true }
+      ? {
+          supportsTools: true,
+          supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
+        }
       : {
           supportsTools: capabilities.includes("tools"),
           supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
         };
   return {
     id: modelId,
@@ -326,11 +340,26 @@ export function buildOllamaModelDefinition(
     cost: OLLAMA_DEFAULT_COST,
     contextWindow:
       contextWindow ??
-      (modelId.trim().toLowerCase() === OLLAMA_GLM52_CLOUD_MODEL_ID
-        ? OLLAMA_GLM52_CONTEXT_WINDOW
+      (modelId
+        .trim()
+        .toLowerCase()
+        .replace(/:cloud$/, "") === "glm-5.2"
+        ? 1_000_000
         : OLLAMA_DEFAULT_CONTEXT_WINDOW),
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
     compat,
+  };
+}
+
+export function buildDefaultOllamaCloudModelDefinition(
+  model: (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number],
+): ModelDefinitionConfig {
+  return {
+    ...buildOllamaModelDefinition(model.id, model.contextWindow, [...model.capabilities]),
+    compat: {
+      supportsTools: true,
+      supportsUsageInStreaming: true,
+    },
   };
 }
 
@@ -380,6 +409,7 @@ export async function fetchOllamaModels(
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return { reachable: true, models: [] };
       }
       const data = await readProviderJsonResponse<OllamaTagsResponse>(
@@ -406,11 +436,7 @@ export async function buildOllamaProvider(
   if (!reachable && !opts?.quiet) {
     console.warn(`Ollama could not be reached at ${apiBase}.`);
   }
-  const discovered = await enrichOllamaModelsWithContext(
-    apiBase,
-    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
-    auth,
-  );
+  const discovered = await enrichOllamaCompletionModels(apiBase, models, auth);
   return {
     baseUrl: apiBase,
     api: "ollama",

@@ -370,7 +370,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<
       string,
-      import("openclaw/plugin-sdk/reply-history").HistoryEntry[]
+      import("./message-handler.history.js").DiscordHistoryEntry[]
     >();
     const { botUserId, botUserName } = await fetchDiscordBotIdentity({
       client,

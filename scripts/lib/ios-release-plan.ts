@@ -31,13 +31,13 @@ const RELEASED_APP_STORE_VERSION_STATES = new Set([
   "DEVELOPER_REMOVED_FROM_SALE",
 ]);
 
-export type IosRemoteAppStoreVersion = {
+type IosRemoteAppStoreVersion = {
   id: string;
   state: string;
   versionString: string;
 };
 
-export type IosRemoteBuildUpload = {
+type IosRemoteBuildUpload = {
   buildNumber: string;
   shortVersion: string;
   state: string;

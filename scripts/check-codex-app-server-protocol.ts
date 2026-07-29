@@ -71,7 +71,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "ReviewDecision.ts",
-    snippets: ['"approved"', '"approved_for_session"', '"denied"', '"abort"'],
+    snippets: ['"approved"', '"approved_for_session"', "denied: { rejection: string }", '"abort"'],
   },
   {
     file: "v2/PlanDeltaNotification.ts",

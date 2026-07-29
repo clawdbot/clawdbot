@@ -3,6 +3,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
@@ -314,11 +315,19 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
+  // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
+  // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const dispatchGeneration = 0;
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,
+    allowProviderPreview,
     bot,
     cfg,
     chatId: dispatchContext.chatId,

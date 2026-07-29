@@ -38,8 +38,8 @@ skill name appears in multiple places, the highest source wins.
 | ----------- | ---------------------- | --------------------------------------- |
 | 1 — highest | Workspace skills       | `<workspace>/skills`                    |
 | 2           | Project agent skills   | `<workspace>/.agents/skills`            |
-| 3           | Personal agent skills  | `~/.agents/skills`                      |
-| 4           | Managed / local skills | `~/.openclaw/skills`                    |
+| 3           | Personal agent skills  | `~/.agents/skills` (default state only) |
+| 4           | Managed / local skills | `<state-dir>/skills`                    |
 | 5           | Bundled skills         | shipped with the install                |
 | 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills |
 
@@ -81,13 +81,18 @@ files. See [Nodes](/nodes#node-hosted-skills) for pairing and off-switches.
 In multi-agent setups, each agent has its own workspace. Use the path that
 matches your desired visibility:
 
-| Scope          | Path                         | Visible to                  |
-| -------------- | ---------------------------- | --------------------------- |
-| Per-agent      | `<workspace>/skills`         | Only that agent             |
-| Project-agent  | `<workspace>/.agents/skills` | Only that workspace's agent |
-| Personal-agent | `~/.agents/skills`           | All agents on this machine  |
-| Shared managed | `~/.openclaw/skills`         | All agents on this machine  |
-| Extra dirs     | `skills.load.extraDirs`      | All agents on this machine  |
+| Scope          | Path                         | Visible to                     |
+| -------------- | ---------------------------- | ------------------------------ |
+| Per-agent      | `<workspace>/skills`         | Only that agent                |
+| Project-agent  | `<workspace>/.agents/skills` | Only that workspace's agent    |
+| Personal-agent | `~/.agents/skills`           | Agents using the default state |
+| Shared managed | `<state-dir>/skills`         | All agents using that state    |
+| Extra dirs     | `skills.load.extraDirs`      | All agents using that config   |
+
+When `OPENCLAW_STATE_DIR` points somewhere other than the default
+`~/.openclaw`, session skill indexes exclude home-scoped personal or
+compatibility skill roots such as `~/.agents/skills`. Workspace, project,
+bundled, extra, and state-owned managed skills continue to load normally.
 
 ## Agent allowlists
 
@@ -164,6 +169,7 @@ publish and sync.
 | Action                             | Command                                                |
 | ---------------------------------- | ------------------------------------------------------ |
 | Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |
+| Install an external skills.sh ref  | `openclaw skills install skills-sh:owner/repo/slug`    |
 | Install from a Git repository      | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill directory    | `openclaw skills install ./path/to/skill --as my-tool` |
 | Install for all local agents       | `openclaw skills install @owner/<slug> --global`       |
@@ -555,13 +561,13 @@ aligned.
           extraDirs: ["~/Projects/agent-scripts/skills"],
           allowSymlinkTargets: ["~/Projects/manager/skills"],
           watch: true, // default
-          watchDebounceMs: 250, // default
         },
       },
     }
     ```
 
-    Use `allowSymlinkTargets` for intentional symlinked layouts where a skill
+    Watcher events use a built-in 250 ms debounce. Use `allowSymlinkTargets`
+    for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/Projects/manager/skills`.
     Enable `skills.workshop.allowSymlinkTargetWrites` only when Skill Workshop

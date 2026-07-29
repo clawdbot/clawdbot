@@ -64,6 +64,41 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun manualTransportClassifiesTheHostFromPastedAuthorities() {
+    val cases =
+      listOf(
+        "192.168.1.20:18790" to false,
+        "gateway.local:18790" to false,
+        "GATEWAY.LOCAL.:18790" to false,
+        "[::1]:18790" to false,
+        "gateway.example:443" to true,
+        "gateway.local.evil.com:18790" to true,
+        "100.64.0.9:18790" to true,
+        "[2001:db8::1]:443" to true,
+      )
+
+    for ((hostInput, requiresTls) in cases) {
+      val presentation =
+        gatewayManualTransportPresentation(
+          hostInput = hostInput,
+          requestedTls = false,
+        )
+
+      assertEquals(hostInput, requiresTls, presentation.requiresTls)
+      assertEquals(hostInput, requiresTls, presentation.effectiveTls)
+      assertEquals(
+        hostInput,
+        if (requiresTls) {
+          "Secure connection is required for this host."
+        } else {
+          "Use only on a trusted private network."
+        },
+        presentation.helperText,
+      )
+    }
+  }
+
+  @Test
   fun parseGatewayEndpointUsesDefaultTlsPortForBareWssUrls() {
     val parsed = parseGatewayEndpoint("wss://gateway.example")
 
@@ -813,6 +848,29 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun composeGatewayManualUrlPreservesAllCompleteEndpointSchemes() {
+    val cases =
+      listOf(
+        "ws://gateway.local:18790" to true,
+        "http://192.168.1.20:18790/gateway?mode=manual" to true,
+        "wss://gateway.example:8443" to false,
+        "https://gateway.example/gateway?mode=manual" to false,
+        "HTTPS://gateway.example:443" to false,
+        "WS://GATEWAY.LOCAL.:18790" to true,
+        "ws://[::1]:18790" to true,
+        "wss://[2001:db8::1]:443" to false,
+      )
+
+    for ((hostInput, staleTls) in cases) {
+      assertEquals(
+        hostInput,
+        hostInput,
+        composeGatewayManualUrl(hostInput, "not-a-port", tls = staleTls),
+      )
+    }
+  }
+
+  @Test
   fun composeGatewayManualUrlPreservesCompleteEndpointValidationError() {
     val url = composeGatewayManualUrl("ws://gateway.example:18789", "18789", tls = false)
 
@@ -836,6 +894,143 @@ class GatewayConfigResolverTest {
     assertEquals("192.168.178.57", resolved?.host)
     assertEquals(18790, resolved?.port)
     assertEquals(false, resolved?.tls)
+  }
+
+  @Test
+  fun composeGatewayManualUrlPreservesPastedManualAuthorities() {
+    for (case in pastedManualAuthorityCases) {
+      val url = composeGatewayManualUrl(case.hostInput, case.portInput, case.tls)
+
+      assertEquals(case.hostInput, case.expectedUrl, url)
+      assertEquals(case.hostInput, case.expectedEndpoint, url?.let(::parseGatewayEndpoint))
+    }
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigPreservesPastedManualAuthorities() {
+    for (case in pastedManualAuthorityCases) {
+      val resolved =
+        resolveGatewayConnectConfig(
+          useSetupCode = false,
+          setupCode = "",
+          manualHostInput = case.hostInput,
+          manualPortInput = case.portInput,
+          manualTlsInput = case.tls,
+          bootstrapTokenInput = "",
+          tokenInput = "",
+          passwordInput = "",
+        )
+
+      assertEquals(
+        case.hostInput,
+        GatewayConnectConfig(
+          host = case.expectedHost,
+          port = case.expectedPort,
+          tls = case.tls,
+          bootstrapToken = "",
+          token = "",
+          password = "",
+        ),
+        resolved,
+      )
+    }
+  }
+
+  @Test
+  fun resolveGatewayConnectPlanPreservesSavedAuthForPastedManualAuthorities() {
+    for (case in pastedManualAuthorityCases) {
+      val plan =
+        resolveGatewayConnectPlan(
+          useSetupCode = false,
+          setupCode = "",
+          savedManualHost = case.expectedHost,
+          savedManualPort = case.expectedPort.toString(),
+          savedManualTls = case.tls,
+          manualHostInput = case.hostInput,
+          manualPortInput = case.portInput,
+          manualTlsInput = case.tls,
+          bootstrapTokenInput = "",
+          tokenInput = "",
+          passwordInput = "",
+        )
+
+      assertEquals(case.hostInput, GatewaySavedAuthAction.PRESERVE, plan?.savedAuthAction)
+    }
+  }
+
+  @Test
+  fun composeGatewayManualUrlRejectsInvalidPastedAuthorityPorts() {
+    val hosts =
+      listOf(
+        "192.168.1.20:",
+        "192.168.1.20:0",
+        "192.168.1.20:-1",
+        "192.168.1.20:65536",
+        "192.168.1.20:99999999999999999999",
+        "gateway.local:",
+        "gateway.local:not-a-port",
+        "gateway.local:65536",
+        "[::1]:",
+        "[::1]:0",
+        "[::1]:65536",
+        "[::1]:99999999999999999999",
+        "[::1]:not-a-port",
+      )
+
+    for (hostInput in hosts) {
+      assertNull(hostInput, composeGatewayManualUrl(hostInput, "18789", tls = false))
+      assertNull(
+        hostInput,
+        resolveGatewayConnectConfig(
+          useSetupCode = false,
+          setupCode = "",
+          manualHostInput = hostInput,
+          manualPortInput = "18789",
+          manualTlsInput = false,
+          bootstrapTokenInput = "",
+          tokenInput = "",
+          passwordInput = "",
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun composeGatewayManualUrlRejectsPastedAuthorityUserInfoQueriesAndFragments() {
+    val hosts =
+      listOf(
+        "gateway.local@evil.example:443",
+        "gateway.local:18789@evil.example:443",
+        "user:password@gateway.local:18789",
+        "gateway.local:18789?redirect=evil.example",
+        "gateway.local:18789#evil.example",
+        "[::1]:18789?redirect=evil.example",
+        "[::1]:18789#evil.example",
+      )
+
+    for (hostInput in hosts) {
+      assertNull(hostInput, composeGatewayManualUrl(hostInput, "18789", tls = true))
+      assertNull(
+        hostInput,
+        resolveGatewayConnectConfig(
+          useSetupCode = false,
+          setupCode = "",
+          manualHostInput = hostInput,
+          manualPortInput = "18789",
+          manualTlsInput = true,
+          bootstrapTokenInput = "",
+          tokenInput = "",
+          passwordInput = "",
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun composeGatewayManualUrlRejectsInvalidSeparatelyEnteredPorts() {
+    for (portInput in listOf("0", "-1", "65536", "99999999999999999999", "not-a-port")) {
+      assertNull(portInput, composeGatewayManualUrl("gateway.local", portInput, tls = false))
+    }
   }
 
   @Test
@@ -890,18 +1085,72 @@ class GatewayConfigResolverTest {
 
   @Test
   fun composeGatewayManualUrl_bracketsIpv6ForEndpointParsing() {
-    for (hostInput in listOf("::1", "[::1]")) {
+    val cases =
+      listOf(
+        ManualAuthorityCase(
+          hostInput = "::1",
+          expectedHost = "::1",
+          expectedPort = 18789,
+          portInput = "18789",
+        ),
+        ManualAuthorityCase(
+          hostInput = "[::1]",
+          expectedHost = "::1",
+          expectedPort = 18789,
+          portInput = "18789",
+        ),
+        ManualAuthorityCase(
+          hostInput = "::ffff:127.0.0.1",
+          expectedHost = "::ffff:127.0.0.1",
+          expectedPort = 18789,
+          portInput = "18789",
+        ),
+        ManualAuthorityCase(
+          hostInput = "[::ffff:127.0.0.1]",
+          expectedHost = "::ffff:127.0.0.1",
+          expectedPort = 18789,
+          portInput = "18789",
+        ),
+        ManualAuthorityCase(
+          hostInput = "2001:db8::1",
+          expectedHost = "2001:db8::1",
+          expectedPort = 18789,
+          tls = true,
+          portInput = "18789",
+        ),
+        ManualAuthorityCase(
+          hostInput = "[2001:db8::1]",
+          expectedHost = "2001:db8::1",
+          expectedPort = 18789,
+          tls = true,
+          portInput = "18789",
+        ),
+      )
+
+    for (case in cases) {
+      val url = composeGatewayManualUrl(case.hostInput, case.portInput, case.tls)
+
+      assertEquals(case.hostInput, case.expectedUrl, url)
+      assertEquals(case.hostInput, case.expectedEndpoint, url?.let(::parseGatewayEndpoint))
+    }
+  }
+
+  @Test
+  fun composeGatewayManualUrlPreservesIpv6ZoneValidationErrors() {
+    val hosts =
+      listOf(
+        "fe80::1%25eth0",
+        "[fe80::1%25eth0]",
+        "[fe80::1%25eth0]:18789",
+      )
+
+    for (hostInput in hosts) {
       val url = composeGatewayManualUrl(hostInput, "18789", tls = false)
 
-      assertEquals("http://[::1]:18789", url)
       assertEquals(
-        GatewayEndpointConfig(
-          host = "::1",
-          port = 18789,
-          tls = false,
-          displayUrl = "http://[::1]:18789",
-        ),
-        parseGatewayEndpoint(url!!),
+        hostInput,
+        GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED,
+        url?.let(::parseGatewayEndpointResult)?.error,
       )
     }
   }
@@ -923,6 +1172,90 @@ class GatewayConfigResolverTest {
     assertEquals("mydevice.tail1234.ts.net", resolved?.host)
     assertEquals(443, resolved?.port)
     assertEquals(true, resolved?.tls)
+  }
+
+  private val pastedManualAuthorityCases =
+    listOf(
+      ManualAuthorityCase(
+        hostInput = "192.168.178.57:18790",
+        expectedHost = "192.168.178.57",
+        expectedPort = 18790,
+      ),
+      ManualAuthorityCase(
+        hostInput = "192.168.178.57:1",
+        expectedHost = "192.168.178.57",
+        expectedPort = 1,
+      ),
+      ManualAuthorityCase(
+        hostInput = "gateway.local:18790",
+        expectedHost = "gateway.local",
+        expectedPort = 18790,
+      ),
+      ManualAuthorityCase(
+        hostInput = "gateway.local:65535",
+        expectedHost = "gateway.local",
+        expectedPort = 65535,
+      ),
+      ManualAuthorityCase(
+        hostInput = "GATEWAY.LOCAL.:18790",
+        expectedHost = "GATEWAY.LOCAL.",
+        expectedPort = 18790,
+        portInput = "65536",
+      ),
+      ManualAuthorityCase(
+        hostInput = "gateway.example:443",
+        expectedHost = "gateway.example",
+        expectedPort = 443,
+        tls = true,
+      ),
+      ManualAuthorityCase(
+        hostInput = "gateway.example:8443",
+        expectedHost = "gateway.example",
+        expectedPort = 8443,
+        tls = true,
+      ),
+      ManualAuthorityCase(
+        hostInput = "mydevice.tail1234.ts.net:8443",
+        expectedHost = "mydevice.tail1234.ts.net",
+        expectedPort = 8443,
+        tls = true,
+        portInput = "",
+      ),
+      ManualAuthorityCase(
+        hostInput = "[::1]:18790",
+        expectedHost = "::1",
+        expectedPort = 18790,
+      ),
+      ManualAuthorityCase(
+        hostInput = "[2001:db8::1]:8443",
+        expectedHost = "2001:db8::1",
+        expectedPort = 8443,
+        tls = true,
+      ),
+    )
+
+  private data class ManualAuthorityCase(
+    val hostInput: String,
+    val expectedHost: String,
+    val expectedPort: Int,
+    val tls: Boolean = false,
+    val portInput: String = "not-a-port",
+  ) {
+    val expectedUrl: String
+      get() {
+        val scheme = if (tls) "https" else "http"
+        val formattedHost = if (expectedHost.contains(':')) "[$expectedHost]" else expectedHost
+        return "$scheme://$formattedHost:$expectedPort"
+      }
+
+    val expectedEndpoint: GatewayEndpointConfig
+      get() =
+        GatewayEndpointConfig(
+          host = expectedHost,
+          port = expectedPort,
+          tls = tls,
+          displayUrl = if (tls && expectedPort == 443) expectedUrl.removeSuffix(":443") else expectedUrl,
+        )
   }
 
   private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))

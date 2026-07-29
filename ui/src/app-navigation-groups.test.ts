@@ -16,7 +16,8 @@ const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.route
 
 describe("sidebar entries", () => {
   it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual(["route:usage", "route:cron", "route:plugins"]);
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual(["route:cron", "route:plugins"]);
+    expect(DEFAULT_SIDEBAR_ENTRIES).not.toContain("route:usage");
   });
 
   it("drops retired routes from persisted entries", () => {

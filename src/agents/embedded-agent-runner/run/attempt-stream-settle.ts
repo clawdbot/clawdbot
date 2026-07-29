@@ -3,6 +3,7 @@
  */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -52,7 +53,7 @@ type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise
 
 type StreamSettleResult = {
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   messagesSnapshot: AgentMessage[];
@@ -75,7 +76,7 @@ export async function settleEmbeddedAttemptStream(input: {
   subscription: EmbeddedAttemptSubscription;
   state: {
     promptError: unknown;
-    promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+    promptErrorSource: AgentRunAttemptFailureSource | null;
     yieldAborted: boolean;
     sessionIdUsed: string;
   };
@@ -159,8 +160,6 @@ export async function settleEmbeddedAttemptStream(input: {
       promptErrorSource = "prompt";
       state.promptError = promptError;
       state.promptErrorSource = promptErrorSource;
-    } else if (asyncTaskWait.waitedRunIds.length > 0) {
-      await input.sessionLockController.waitForSessionEvents(activeSession);
     }
   }
 
@@ -234,7 +233,6 @@ export async function settleEmbeddedAttemptStream(input: {
   let lastCallUsage: NormalizedUsage | undefined;
   let promptCache: EmbeddedRunAttemptResult["promptCache"];
 
-  await input.sessionLockController.waitForSessionEvents(activeSession);
   await input.withOwnedSessionWriteLock(async () => {
     const { timedOutDuringCompaction } = input.readLifecycleState();
     compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;

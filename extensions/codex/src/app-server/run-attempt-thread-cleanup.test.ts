@@ -7,6 +7,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
 import {
@@ -168,7 +169,7 @@ describe("Codex app-server main thread cleanup", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("unsubscribes the main Codex thread after a completed turn", async () => {
+  it("retains a subscribed persistent Codex thread after a completed turn", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const requests: Array<{ method: string; params: unknown }> = [];
@@ -215,17 +216,27 @@ describe("Codex app-server main thread cleanup", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(request).toHaveBeenCalledWith(
-      "thread/unsubscribe",
-      { threadId: "thread-1" },
-      { timeoutMs: 5_000 },
-    );
-    expect(requests.map((entry) => entry.method)).toEqual([
-      "thread/start",
-      "turn/start",
-      "thread/unsubscribe",
-    ]);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect({
+      clientId: firstBinding?.clientId,
+      threadId: firstBinding?.threadId,
+      preserveNativeModel: firstBinding?.preserveNativeModel,
+      connectionScope: firstBinding?.connectionScope,
+      ringZeroConfigFingerprint: firstBinding?.ringZeroConfigFingerprint,
+      contextEngine: firstBinding?.contextEngine,
+      pluginAppsFingerprint: firstBinding?.pluginAppsFingerprint,
+    }).toEqual({
+      clientId: "test-client-1",
+      threadId: "thread-1",
+      preserveNativeModel: undefined,
+      connectionScope: undefined,
+      ringZeroConfigFingerprint: undefined,
+      contextEngine: undefined,
+      pluginAppsFingerprint: expect.any(String),
+    });
+
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
   });
 
   it("keeps an incognito thread subscribed for live in-process reuse", async () => {
@@ -274,7 +285,8 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+    const result = await run;
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
     expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
     expect(requests[0]?.params).toEqual(expect.objectContaining({ ephemeral: true }));
   });

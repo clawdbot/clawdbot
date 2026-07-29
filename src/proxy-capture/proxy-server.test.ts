@@ -5,10 +5,10 @@ import {
   createServer as createHttpServer,
   type IncomingMessage,
 } from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
 import { startDebugProxyServer } from "./proxy-server.js";
@@ -228,6 +228,190 @@ async function postThroughProxy(params: {
   });
 }
 
+type StreamingProxyOrigin = {
+  state: {
+    closedResponses: number;
+    drainWaits: number;
+    finishedResponses: number;
+    queuedBytes: number;
+  };
+  stop: () => Promise<void>;
+  url: string;
+};
+
+async function startStreamingProxyOrigin(responseBodyBytes: number): Promise<StreamingProxyOrigin> {
+  const state = {
+    closedResponses: 0,
+    drainWaits: 0,
+    finishedResponses: 0,
+    queuedBytes: 0,
+  };
+  const chunk = Buffer.alloc(64 * 1024, "x");
+  const server = createHttpServer((req, res) => {
+    req.resume();
+    if (req.url === "/healthy") {
+      res.writeHead(200, {
+        "content-length": 2,
+        "content-type": "text/plain; charset=utf-8",
+      });
+      res.end("ok");
+      return;
+    }
+
+    res.writeHead(200, {
+      "content-length": responseBodyBytes,
+      "content-type": "text/plain; charset=utf-8",
+    });
+    res.on("close", () => {
+      state.closedResponses++;
+    });
+    res.on("finish", () => {
+      state.finishedResponses++;
+    });
+
+    const writeNextChunk = () => {
+      while (state.queuedBytes < responseBodyBytes && !res.destroyed) {
+        const chunkBytes = Math.min(chunk.byteLength, responseBodyBytes - state.queuedBytes);
+        state.queuedBytes += chunkBytes;
+        if (!res.write(chunk.subarray(0, chunkBytes))) {
+          state.drainWaits++;
+          res.once("drain", writeNextChunk);
+          return;
+        }
+      }
+      if (state.queuedBytes === responseBodyBytes && !res.destroyed) {
+        res.end();
+      }
+    };
+    writeNextChunk();
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    state,
+    stop: async () =>
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      }),
+    url: `http://127.0.0.1:${address.port}`,
+  };
+}
+
+async function rawSlowGetThroughProxy(params: {
+  abortAfterBytes?: number;
+  abortWithReset?: boolean;
+  onResume?: () => void;
+  pauseBeforeReadMs: number;
+  proxyUrl: string;
+  targetUrl: string;
+}): Promise<{
+  aborted: boolean;
+  bodyBytes: number;
+  receivedBytes: number;
+  resumed: boolean;
+  statusLine: string;
+}> {
+  const proxy = new URL(params.proxyUrl);
+  return await new Promise((resolve, reject) => {
+    let aborted = false;
+    let bodyBytes = 0;
+    let contentLength: number | undefined;
+    let headerBytes = Buffer.alloc(0);
+    let receivedBytes = 0;
+    let resumed = false;
+    let settled = false;
+    let statusLine = "";
+    let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
+    const socket = net.connect(Number(proxy.port), proxy.hostname);
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      if (!settled) {
+        settled = true;
+        reject(new Error("slow proxy client timed out"));
+      }
+    }, 15000);
+    const finish = () => {
+      clearTimeout(timeout);
+      clearTimeout(resumeTimeout);
+      if (!settled) {
+        settled = true;
+        resolve({ aborted, bodyBytes, receivedBytes, resumed, statusLine });
+      }
+    };
+    const maybeFinishCompleteBody = () => {
+      if (contentLength !== undefined && bodyBytes >= contentLength) {
+        socket.destroy();
+        finish();
+      }
+    };
+    socket.on("connect", () => {
+      socket.write(
+        `GET ${params.targetUrl} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
+      );
+      socket.pause();
+      resumeTimeout = setTimeout(() => {
+        resumed = true;
+        params.onResume?.();
+        socket.resume();
+      }, params.pauseBeforeReadMs);
+    });
+    socket.on("data", (chunk) => {
+      receivedBytes += chunk.length;
+      if (contentLength === undefined) {
+        headerBytes = Buffer.concat([headerBytes, Buffer.from(chunk)]);
+        const headerEnd = headerBytes.indexOf("\r\n\r\n");
+        if (headerEnd === -1) {
+          return;
+        }
+        const headerText = headerBytes.subarray(0, headerEnd).toString("latin1");
+        statusLine = headerText.split("\r\n")[0] ?? "";
+        const contentLengthHeader = headerText
+          .split("\r\n")
+          .find((line) => line.toLowerCase().startsWith("content-length:"));
+        const parsedContentLength = Number(contentLengthHeader?.split(":")[1]?.trim());
+        contentLength = Number.isFinite(parsedContentLength) ? parsedContentLength : 0;
+        bodyBytes += headerBytes.byteLength - headerEnd - 4;
+        headerBytes = Buffer.alloc(0);
+      } else {
+        bodyBytes += chunk.length;
+      }
+      if (params.abortAfterBytes !== undefined && bodyBytes >= params.abortAfterBytes) {
+        aborted = true;
+        if (params.abortWithReset) {
+          socket.resetAndDestroy();
+        } else {
+          socket.destroy();
+        }
+        finish();
+        return;
+      }
+      maybeFinishCompleteBody();
+    });
+    socket.on("error", (error) => {
+      clearTimeout(timeout);
+      clearTimeout(resumeTimeout);
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    socket.on("close", finish);
+  });
+}
+
 afterEach(async () => {
   await cleanupTestRoot();
 });
@@ -263,6 +447,148 @@ describe("startDebugProxyServer", () => {
         capturePreviewBytes: 8192,
         captureTruncated: true,
       });
+    } finally {
+      await proxy.stop();
+      await origin.stop();
+    }
+  });
+
+  it("pauses the upstream response while downstream forwarding is backpressured", async () => {
+    const settings = await makeSettings();
+    const responseBodyBytes = 16 * 1024 * 1024;
+    const origin = await startStreamingProxyOrigin(responseBodyBytes);
+    const proxy = await startDebugProxyServer({ settings });
+    let queuedBytesAtResume = 0;
+
+    try {
+      const forwarded = await rawSlowGetThroughProxy({
+        onResume: () => {
+          queuedBytesAtResume = origin.state.queuedBytes;
+        },
+        pauseBeforeReadMs: 150,
+        proxyUrl: proxy.proxyUrl,
+        targetUrl: `${origin.url}/capture`,
+      });
+
+      expect(forwarded).toMatchObject({
+        aborted: false,
+        bodyBytes: responseBodyBytes,
+        resumed: true,
+        statusLine: "HTTP/1.1 200 OK",
+      });
+      expect(queuedBytesAtResume).toBeLessThan(responseBodyBytes);
+      expect(origin.state.drainWaits).toBeGreaterThan(0);
+      expect(origin.state.queuedBytes).toBe(responseBodyBytes);
+      const captureEvents = getDebugProxyCaptureStore()
+        .getSessionEvents(settings.sessionId, 20)
+        .filter((event) => event.path === "/capture");
+      expect(captureEvents.filter((event) => event.kind === "error")).toEqual([]);
+      expect(captureEvents.filter((event) => event.kind === "response")).toEqual([
+        expect.objectContaining({ direction: "inbound", status: 200 }),
+      ]);
+    } finally {
+      await proxy.stop();
+      await origin.stop();
+    }
+  });
+
+  it("closes the upstream response when a slow downstream client aborts", async () => {
+    const settings = await makeSettings();
+    const responseBodyBytes = 16 * 1024 * 1024;
+    const origin = await startStreamingProxyOrigin(responseBodyBytes);
+    const proxy = await startDebugProxyServer({ settings });
+
+    try {
+      const aborted = await rawSlowGetThroughProxy({
+        abortAfterBytes: 64 * 1024,
+        pauseBeforeReadMs: 0,
+        proxyUrl: proxy.proxyUrl,
+        targetUrl: `${origin.url}/capture`,
+      });
+
+      expect(aborted).toMatchObject({
+        aborted: true,
+        resumed: true,
+        statusLine: "HTTP/1.1 200 OK",
+      });
+      expect(aborted.bodyBytes).toBeGreaterThanOrEqual(64 * 1024);
+
+      await vi.waitFor(() => {
+        expect(origin.state.closedResponses).toBe(1);
+        expect(origin.state.finishedResponses).toBe(0);
+        const captureEvents = getDebugProxyCaptureStore()
+          .getSessionEvents(settings.sessionId, 20)
+          .filter((event) => event.path === "/capture");
+        const capturedRequest = captureEvents.find((event) => event.kind === "request");
+        expect(capturedRequest).toBeDefined();
+        expect(captureEvents.filter((event) => event.kind === "error")).toEqual([
+          expect.objectContaining({
+            direction: "local",
+            errorText: "Downstream response closed before completion",
+            flowId: capturedRequest?.flowId,
+          }),
+        ]);
+        expect(captureEvents.filter((event) => event.kind === "response")).toEqual([]);
+      });
+
+      const healthy = await getThroughProxy(proxy.proxyUrl, `${origin.url}/healthy`);
+      expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
+      expect(
+        getDebugProxyCaptureStore()
+          .getSessionEvents(settings.sessionId, 20)
+          .filter((event) => event.path === "/healthy" && event.kind === "error"),
+      ).toEqual([]);
+    } finally {
+      await proxy.stop();
+      await origin.stop();
+    }
+  });
+
+  it("records a reset downstream client as exactly one local capture error", async () => {
+    const settings = await makeSettings();
+    const origin = await startStreamingProxyOrigin(16 * 1024 * 1024);
+    const proxy = await startDebugProxyServer({ settings });
+
+    try {
+      const aborted = await rawSlowGetThroughProxy({
+        abortAfterBytes: 64 * 1024,
+        abortWithReset: true,
+        pauseBeforeReadMs: 0,
+        proxyUrl: proxy.proxyUrl,
+        targetUrl: `${origin.url}/capture`,
+      });
+
+      expect(aborted).toMatchObject({
+        aborted: true,
+        resumed: true,
+        statusLine: "HTTP/1.1 200 OK",
+      });
+
+      await vi.waitFor(() => {
+        expect(origin.state.closedResponses).toBe(1);
+        expect(origin.state.finishedResponses).toBe(0);
+        const captureEvents = getDebugProxyCaptureStore()
+          .getSessionEvents(settings.sessionId, 20)
+          .filter((event) => event.path === "/capture");
+        const capturedRequest = captureEvents.find((event) => event.kind === "request");
+        expect(capturedRequest).toBeDefined();
+        expect(captureEvents.filter((event) => event.kind === "error")).toEqual([
+          expect.objectContaining({
+            direction: "local",
+            errorText: expect.any(String),
+            flowId: capturedRequest?.flowId,
+          }),
+        ]);
+        expect(captureEvents.filter((event) => event.kind === "response")).toEqual([]);
+      });
+
+      const healthy = await getThroughProxy(proxy.proxyUrl, `${origin.url}/healthy`);
+      expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
+      expect(
+        getDebugProxyCaptureStore()
+          .getSessionEvents(settings.sessionId, 20)
+          .filter((event) => event.path === "/healthy" && event.kind === "error"),
+      ).toEqual([]);
     } finally {
       await proxy.stop();
       await origin.stop();

@@ -1,5 +1,6 @@
 import { definePage, type RouteLoaderOptions, type RouteLocation } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
@@ -33,8 +34,7 @@ async function loadPluginsRouteData(
 }
 
 export const page = definePage({
-  id: "plugins",
-  path: "/settings/plugins",
+  ...routePageSpec("plugins"),
   // Query-only tab changes need distinct matches; without this the router
   // reuses the cached loader result and the hub keeps the previous tab.
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>

@@ -185,14 +185,11 @@ describe("slack socket reconnect helpers", () => {
     );
     client.emit(
       "ws_message",
-      Buffer.from(JSON.stringify({ type: "hello", num_connections: 2 })),
-      false,
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 4 })),
+      true,
     );
-    client.emit(
-      "ws_message",
-      Buffer.from(JSON.stringify({ type: "hello", num_connections: 3 })),
-      false,
-    );
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 3 }), false);
 
     expect(onSharedConnection).toHaveBeenCalledTimes(1);
     expect(onSharedConnection).toHaveBeenCalledWith(2);

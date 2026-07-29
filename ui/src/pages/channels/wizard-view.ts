@@ -233,7 +233,10 @@ function renderWhatsAppLinking(props: ChannelWizardViewProps) {
       : html`
           <div class="channels-wizard__qr">
             ${props.whatsappQrDataUrl
-              ? html`<img src=${props.whatsappQrDataUrl} alt="WhatsApp pairing QR code" />`
+              ? html`<img
+                  src=${props.whatsappQrDataUrl}
+                  alt=${t("channels.setup.whatsappQrAlt")}
+                />`
               : html`<div class="channels-wizard__spinner">
                   ${props.whatsappBusy
                     ? t("channels.setup.whatsappQrLoading")

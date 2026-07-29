@@ -26,7 +26,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
 import {
@@ -99,7 +99,10 @@ export function resolveRestartRecoveryResumeBlockReason(params: {
     return "pre-hook recovery runtime config is unavailable";
   }
   try {
-    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    const agentId = resolveAgentIdFromSessionKey(
+      params.sessionKey,
+      resolveDefaultAgentId(params.cfg),
+    );
     ensureRuntimePluginsLoaded({
       config: params.cfg,
       workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
@@ -140,7 +143,7 @@ export function resolveRestartRecoveryDeliveryContext(params: {
   const hasActiveRunDeliveryClaim =
     normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
   const deliveryContext =
-    normalizeDeliveryContext(params.entry.pendingFinalDeliveryContext) ??
+    normalizeDeliveryContext(params.entry.pendingFinalDelivery?.context) ??
     activeRunDeliveryContext ??
     (params.includeSessionDeliveryFallback && !hasActiveRunDeliveryClaim
       ? deliveryContextFromSession(params.entry)

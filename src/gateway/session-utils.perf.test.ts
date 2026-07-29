@@ -3,12 +3,18 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, test, expect, vi } from "vitest";
+import {
+  readAcpSessionMetaBatch,
+  readAcpSessionMetaForEntry,
+  writeAcpSessionMetaForMigration,
+} from "../acp/runtime/session-meta.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import { listSessionsFromStore } from "./session-utils.js";
@@ -131,6 +137,129 @@ describe("listSessionsFromStore resolver cache", () => {
       } finally {
         thinkingSpy.mockRestore();
         costSpy.mockRestore();
+      }
+    });
+  });
+
+  test("batches ACP metadata reads once per list without changing row results", async () => {
+    await withStateDirEnv("openclaw-perf-acp-", async ({ stateDir }) => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const cfg = {
+        agents: { defaults: { model: { primary: "openai/gpt-5" } } },
+      } as OpenClawConfig;
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+
+      const stateKey = "agent:default:webchat:dm:state";
+      const missingKey = "agent:default:webchat:dm:missing";
+      const markerKey = "agent:default:webchat:dm:marker";
+      const stateEntry: SessionEntry = {
+        sessionId: "state-session",
+        updatedAt: 3,
+        modelProvider: "openai",
+        model: "gpt-5",
+      };
+      const missingEntry: SessionEntry = {
+        sessionId: "missing-session",
+        updatedAt: 2,
+        modelProvider: "openai",
+        model: "gpt-5",
+      };
+      const staleAliasEntry: SessionEntry = {
+        sessionId: "stale-alias-session",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5",
+      };
+      const markerMeta = {
+        backend: "marker",
+        agent: "marker-agent",
+        runtimeSessionName: markerKey,
+        mode: "persistent" as const,
+        state: "idle" as const,
+        lastActivityAt: 1,
+      };
+      const markerEntry: SessionEntry = {
+        sessionId: "marker-session",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5",
+        acp: markerMeta,
+      };
+      const stateMeta = {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: stateKey,
+        mode: "persistent" as const,
+        state: "idle" as const,
+        lastActivityAt: 2,
+      };
+      writeAcpSessionMetaForMigration({
+        sessionKey: stateKey,
+        sessionId: stateEntry.sessionId,
+        meta: stateMeta,
+      });
+
+      const perRowState = readAcpSessionMetaForEntry({ sessionKey: stateKey, entry: stateEntry });
+      const perRowMissing = readAcpSessionMetaForEntry({
+        sessionKey: missingKey,
+        entry: missingEntry,
+      });
+      expect(
+        readAcpSessionMetaBatch({
+          entries: [
+            { sessionKey: stateKey, entry: stateEntry },
+            { sessionKey: stateKey, entry: staleAliasEntry },
+            { sessionKey: missingKey, entry: missingEntry },
+            { sessionKey: markerKey, entry: markerEntry },
+          ],
+        }),
+      ).toEqual(
+        new Map<SessionEntry, ReturnType<typeof readAcpSessionMetaForEntry>>([
+          [markerEntry, markerMeta],
+          [stateEntry, perRowState],
+          [staleAliasEntry, undefined],
+          [missingEntry, perRowMissing],
+        ]),
+      );
+
+      const aboveSqliteVariableLimit = Array.from({ length: 33_000 }, (_, index) => ({
+        sessionKey: `agent:default:webchat:dm:missing-${index}`,
+        entry: {
+          sessionId: `missing-session-${index}`,
+          updatedAt: index,
+        } satisfies SessionEntry,
+      }));
+      const largeBatch = readAcpSessionMetaBatch({ entries: aboveSqliteVariableLimit });
+      expect(largeBatch.size).toBe(aboveSqliteVariableLimit.length);
+      expect(largeBatch.get(aboveSqliteVariableLimit[0]!.entry)).toBeUndefined();
+      expect(largeBatch.get(aboveSqliteVariableLimit.at(-1)!.entry)).toBeUndefined();
+
+      const database = openOpenClawStateDatabase();
+      const originalPrepare = database.db.prepare.bind(database.db);
+      let acpSelects = 0;
+      const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
+        if (/^select\b.*\bacp_sessions\b/is.test(sql)) {
+          acpSelects += 1;
+        }
+        return originalPrepare(sql);
+      });
+      try {
+        const result = listSessionsFromStore({
+          cfg,
+          storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
+          store: {
+            [stateKey]: stateEntry,
+            [missingKey]: missingEntry,
+            [markerKey]: markerEntry,
+          },
+          opts: { limit: 3 },
+        });
+        expect(result.sessions).toHaveLength(3);
+        expect(acpSelects).toBe(1);
+      } finally {
+        prepareSpy.mockRestore();
       }
     });
   });

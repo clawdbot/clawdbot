@@ -1,5 +1,6 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
+import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   "channels.discord.activities":
@@ -71,16 +72,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
-  "cloudWorkers.profiles":
-    "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings.",
-  "cloudWorkers.profiles.*":
-    "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
-  "cloudWorkers.profiles.*.provider":
-    "Worker provider id registered by a plugin. The configured plugin must expose this id before the gateway can provision environments from the profile.",
-  "cloudWorkers.profiles.*.install":
-    'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
-  "cloudWorkers.profiles.*.settings":
-    "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
+  ...CLOUD_WORKER_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
@@ -98,7 +90,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.terminal":
     "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":
-    "Enables the operator terminal for admin-scope clients when true (default: false). This exposes a browser/mobile shell with the gateway process environment, so enable it only for trusted operator deployments. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
+    "Enables the operator terminal for admin-scope clients (default: true). This exposes a browser/mobile shell with the gateway process environment; set false to opt out on deployments where admin operators should not get a host shell. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
   "gateway.terminal.shell":
     "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
   "gateway.terminal.detachedSessionTimeoutSeconds":
@@ -216,7 +208,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.consultFastMode":
     "Use this to set true or false fast mode for the regular agent run behind Talk realtime consults.",
   "talk.speechLocale":
-    'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
+    'BCP 47 locale id for Talk speech recognition on device nodes and the iOS system-voice fallback, for example "ru-RU". Leave unset to use each device default.',
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
   "talk.silenceTimeoutMs": `Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (${describeTalkSilenceTimeoutDefaults()}).`,
@@ -273,10 +265,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":
     "Default max characters returned by memory_get before truncation metadata and continuation notice are added. Increase to approximate older larger excerpts, but keep it bounded.",
-  "agents.defaults.contextLimits.memoryGetDefaultLines":
-    "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
-  "agents.defaults.contextLimits.toolResultMaxChars":
-    "Advanced ceiling for a single live tool result before truncation. Leave unset to use the model-context auto cap; explicit values affect both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
   "agents.entries":
@@ -289,10 +277,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
   "agents.entries.*.contextLimits.memoryGetMaxChars":
     "Per-agent override for the default memory_get max character budget.",
-  "agents.entries.*.contextLimits.memoryGetDefaultLines":
-    "Per-agent override for the default memory_get line window when lines is omitted.",
-  "agents.entries.*.contextLimits.toolResultMaxChars":
-    "Per-agent advanced ceiling for the live tool-result max character budget. Omit to inherit defaults or the model-context auto cap.",
   "agents.entries.*.contextLimits.postCompactionMaxChars":
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
   "agents.entries.*.thinkingDefault":
@@ -321,6 +305,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.timeoutSeconds":
     "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
+  "agents.defaults.heartbeat.agentId":
+    "Agent that owns ambient heartbeat runs when no per-agent heartbeat configuration exists. Leave unset to preserve configured-default routing.",
   "agents.entries.*.heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
+  "agents.defaults.systemAgent":
+    "Target settings for ambient OpenClaw system-agent and Custodian inference.",
+  "agents.defaults.systemAgent.agentId":
+    "Agent whose model and credentials own ambient system-agent and Custodian consults. Delegated consults still use their requesting agent.",
+  "talk.agentId":
+    "Agent that owns Talk sessions created without an explicit agent-scoped session key.",
 };

@@ -55,18 +55,6 @@
   flex-direction: column;
 }
 
-.board-session-surface--dock-left .board-session-surface__chat {
-  order: 0;
-}
-
-.board-session-surface--dock-left .board-session-surface__divider {
-  order: 1;
-}
-
-.board-session-surface--dock-left .board-session-surface__board {
-  order: 2;
-}
-
 .board-session-surface__board {
   display: flex;
   flex-direction: column;
@@ -160,7 +148,6 @@ openclaw-workboard-card-chip {
   flex: 0 0 auto;
   min-width: 0;
   min-height: 0;
-  max-width: 80%;
   overflow: hidden;
   background: var(--panel);
 }
@@ -176,8 +163,6 @@ openclaw-workboard-card-chip {
   z-index: 2;
 }
 
-.board-session-surface--dock-hidden .board-session-surface__chat,
-.board-session-surface--dock-hidden .board-session-surface__divider,
 .board-session-surface__reopen[hidden] {
   display: none;
 }
