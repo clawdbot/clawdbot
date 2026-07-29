@@ -4711,7 +4711,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(specs[0]?.env.NODE_OPTIONS).toBe("--max-old-space-size=12288 --max_old_space_size=8192");
   });
 
-  it("splits the Testbox full extension shard into bounded project processes", () => {
+  it("splits the Testbox agentic and extension shards into bounded processes", () => {
     vi.stubEnv("CI", "1");
     vi.stubEnv("GITHUB_ACTIONS", "");
     vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "1");
@@ -4720,8 +4720,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     try {
       const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
 
-      expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
+      expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
       expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
     } finally {
       vi.unstubAllEnvs();
