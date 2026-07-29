@@ -581,10 +581,11 @@ describe("native hook relay registry", () => {
   });
 
   it("unions hook and trusted-policy matcher scopes for pre-tool relays", () => {
-    const registry = createMockPluginRegistry([
+    const hookRegistry = createMockPluginRegistry([
       { hookName: "before_tool_call", handler: vi.fn(), matcher: ["exec_command"] },
     ]);
-    registry.trustedToolPolicies = [
+    const policyRegistry = createMockPluginRegistry([]);
+    policyRegistry.trustedToolPolicies = [
       {
         pluginId: "policy-plugin",
         pluginName: "Policy Plugin",
@@ -597,8 +598,8 @@ describe("native hook relay registry", () => {
         },
       },
     ];
-    setActivePluginRegistry(registry);
-    initializeGlobalHookRunner(registry);
+    setActivePluginRegistry(policyRegistry);
+    initializeGlobalHookRunner(hookRegistry);
 
     const relay = registerNativeHookRelay({
       provider: "codex",

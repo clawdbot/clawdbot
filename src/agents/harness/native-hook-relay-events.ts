@@ -77,10 +77,13 @@ export function nativeHookRelayEventToolMatcher(
     if (nativePreToolUseMayRunLoopDetection(registration)) {
       return undefined;
     }
+    // Relay selection and policy execution must read the same composed registry
+    // so active, pinned, and isolated plugin sources cannot diverge.
+    const policyRegistry = getGlobalHookRunnerRegistry();
     return buildCodexNativeToolMatcher(
       mergePluginToolMatcherScopes([
         getGlobalToolHookMatcherScope("before_tool_call"),
-        getTrustedToolPolicyMatcherScope(getGlobalHookRunnerRegistry()),
+        getTrustedToolPolicyMatcherScope(policyRegistry),
       ]),
     );
   }
