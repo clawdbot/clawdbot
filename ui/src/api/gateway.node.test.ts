@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
-  MAX_SAFE_TIMEOUT_DELAY_MS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
@@ -681,10 +680,7 @@ describe("GatewayBrowserClient", () => {
         });
         await vi.advanceTimersByTimeAsync(0);
 
-        expect(setIntervalSpy).toHaveBeenLastCalledWith(
-          expect.any(Function),
-          MAX_SAFE_TIMEOUT_DELAY_MS,
-        );
+        expect(setIntervalSpy).toHaveBeenLastCalledWith(expect.any(Function), 2_147_483_647);
         await vi.advanceTimersByTimeAsync(5_000);
         expect(ws.lastClose).toBeNull();
       } finally {
