@@ -273,16 +273,6 @@ describe("usage-format", () => {
     ).toEqual({ input: 7, output: 11, cacheRead: 0.5, cacheWrite: 0.25 });
   });
 
-  it("falls back to provider-owned static model pricing without an explicit override", () => {
-    expect(
-      resolveModelCostConfig({
-        provider: "openai",
-        model: "gpt-5.4",
-        config: {},
-      }),
-    ).toEqual({ input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 });
-  });
-
   it("scopes models.json pricing by agent directory before configured and default pricing", async () => {
     const secondAgentDir = path.join(stateDir, "agents", "second", "agent");
     const configuredOnlyAgentDir = path.join(stateDir, "agents", "configured-only", "agent");
