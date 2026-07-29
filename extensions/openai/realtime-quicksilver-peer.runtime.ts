@@ -10,11 +10,17 @@ const OPUS_FRAME_DURATION_MS = 20;
 const RELAY_FRAME_SAMPLES = 480;
 const RELAY_FRAME_BYTES = RELAY_FRAME_SAMPLES * 2;
 const MAX_PENDING_RELAY_FRAMES = 250;
+const INBOUND_REORDER_DEPTH = 4;
+// More than two seconds behind cannot be useful 20 ms reordering; fail instead of corrupting Opus state.
+const INBOUND_MAX_LATE_PACKETS = 100;
+const RTP_SEQUENCE_MODULUS = 0x1_0000;
+const RTP_SEQUENCE_HALF_RANGE = RTP_SEQUENCE_MODULUS / 2;
 
 type WeriftModule = typeof import("werift");
 type LibopusModule = typeof import("libopus-wasm");
 type WeriftPeerConnection = InstanceType<WeriftModule["RTCPeerConnection"]>;
 type WeriftTransceiver = ReturnType<WeriftPeerConnection["addTransceiver"]>;
+type WeriftRtpPacket = InstanceType<WeriftModule["RtpPacket"]>;
 type WeriftTrack = Parameters<WeriftPeerConnection["onTrack"]["subscribe"]>[0] extends (
   track: infer T,
 ) => unknown
@@ -22,6 +28,11 @@ type WeriftTrack = Parameters<WeriftPeerConnection["onTrack"]["subscribe"]>[0] e
   : never;
 type LibopusEncoder = Awaited<ReturnType<LibopusModule["createEncoder"]>>;
 type LibopusDecoder = Awaited<ReturnType<LibopusModule["createDecoder"]>>;
+type InboundRtpState = {
+  flushTimer?: ReturnType<typeof setTimeout>;
+  nextSequence?: number;
+  pendingPackets: Map<number, WeriftRtpPacket>;
+};
 
 export type OpenAIQuicksilverAudioPeerCallbacks = {
   onAudio: (audio: Buffer) => void;
@@ -70,6 +81,10 @@ function convertQuicksilverPcmToRelayPcm(pcm48kStereo: Int16Array): Buffer {
     mono48k.writeInt16LE(Math.round((left + right) / 2), frame * 2);
   }
   return resamplePcm(mono48k, QUICKSILVER_SAMPLE_RATE, RELAY_SAMPLE_RATE);
+}
+
+function forwardSequenceDistance(expected: number, sequenceNumber: number): number {
+  return (sequenceNumber - expected + RTP_SEQUENCE_MODULUS) & 0xffff;
 }
 
 /** Pure-TypeScript WebRTC media peer with a WASM-only Opus codec. */
@@ -149,6 +164,8 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
 
   private connected = false;
   private closed = false;
+  private activeInboundSsrc: number | undefined;
+  private inboundRtpState: InboundRtpState = { pendingPackets: new Map() };
   private mediaTimer: ReturnType<typeof setInterval> | undefined;
   private pendingAudio = Buffer.alloc(0);
   private sequenceNumber = randomInt(0x1_0000);
@@ -227,6 +244,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.mediaTimer = undefined;
     }
     this.pendingAudio = Buffer.alloc(0);
+    this.resetInboundRtpState();
     this.state.encoder.free();
     this.state.decoder.free();
     void this.state.peer.close().catch(() => undefined);
@@ -237,22 +255,147 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       return;
     }
     this.subscribedTracks.add(track.uuid);
-    track.onReceiveRtp.subscribe((packet) => {
+    track.onReceiveRtp.subscribe((packet) => this.handleInboundRtp(packet));
+  }
+
+  private handleInboundRtp(packet: WeriftRtpPacket): void {
+    if (this.closed) {
+      return;
+    }
+    try {
+      this.state.callbacks.onRtpPacket?.();
+      const sequenceNumber = packet.header.sequenceNumber;
+      if (this.activeInboundSsrc === undefined) {
+        this.activeInboundSsrc = packet.header.ssrc;
+      } else if (packet.header.ssrc !== this.activeInboundSsrc) {
+        throw new Error("GPT-Live WebRTC audio source changed unexpectedly");
+      }
+      const state = this.inboundRtpState;
+      if (state.nextSequence === undefined) {
+        state.nextSequence = (sequenceNumber + 1) & 0xffff;
+        this.decodeInboundPacket(packet);
+        return;
+      }
+      const distance = forwardSequenceDistance(state.nextSequence, sequenceNumber);
+      if (distance >= RTP_SEQUENCE_HALF_RANGE) {
+        const backwardDistance = forwardSequenceDistance(sequenceNumber, state.nextSequence);
+        if (backwardDistance <= INBOUND_MAX_LATE_PACKETS) {
+          return;
+        }
+        throw new Error("GPT-Live WebRTC RTP sequence changed unexpectedly");
+      }
+      if (state.pendingPackets.has(sequenceNumber)) {
+        return;
+      }
+      if (distance === 0) {
+        state.nextSequence = (state.nextSequence + 1) & 0xffff;
+        this.decodeInboundPacket(packet);
+        this.clearInboundFlushTimer(state);
+        this.drainInboundPackets(state);
+        return;
+      }
+      state.pendingPackets.set(sequenceNumber, packet);
+      this.flushInboundReorderWindow(state);
+      this.scheduleInboundFlush(state);
+    } catch (error) {
+      this.state.callbacks.onError(toError(error));
+    }
+  }
+
+  private resetInboundRtpState(): void {
+    this.clearInboundFlushTimer(this.inboundRtpState);
+    this.inboundRtpState.nextSequence = undefined;
+    this.inboundRtpState.pendingPackets.clear();
+  }
+
+  private flushInboundReorderWindow(state: InboundRtpState, force = false): void {
+    const expected = state.nextSequence;
+    if (expected === undefined || state.pendingPackets.size === 0) {
+      return;
+    }
+    const pending = [...state.pendingPackets.keys()]
+      .map((sequenceNumber) => ({
+        sequenceNumber,
+        distance: forwardSequenceDistance(expected, sequenceNumber),
+      }))
+      .filter(({ distance }) => distance < RTP_SEQUENCE_HALF_RANGE)
+      .sort((left, right) => left.distance - right.distance);
+    const nearest = pending[0];
+    const farthest = pending.at(-1);
+    if (!nearest || !farthest || (!force && farthest.distance < INBOUND_REORDER_DEPTH)) {
+      return;
+    }
+    this.clearInboundFlushTimer(state);
+
+    // Four 20 ms packets cover ordinary Internet reordering. The matching timer
+    // flushes a short final tail; concealment is capped before a large discontinuity resync.
+    const concealCount = Math.min(nearest.distance, INBOUND_REORDER_DEPTH);
+    for (let index = 0; index < concealCount; index += 1) {
+      state.nextSequence = ((state.nextSequence ?? 0) + 1) & 0xffff;
+      this.decodeInboundPacketLoss();
+    }
+    if (nearest.distance > INBOUND_REORDER_DEPTH) {
+      state.nextSequence = nearest.sequenceNumber;
+    }
+    this.drainInboundPackets(state);
+  }
+
+  private drainInboundPackets(state: InboundRtpState): void {
+    while (state.nextSequence !== undefined) {
+      const packet = state.pendingPackets.get(state.nextSequence);
+      if (!packet) {
+        break;
+      }
+      state.pendingPackets.delete(state.nextSequence);
+      state.nextSequence = (state.nextSequence + 1) & 0xffff;
+      this.decodeInboundPacket(packet);
+    }
+    if (state.pendingPackets.size === 0) {
+      this.clearInboundFlushTimer(state);
+    } else {
+      this.scheduleInboundFlush(state);
+    }
+  }
+
+  private scheduleInboundFlush(state: InboundRtpState): void {
+    if (this.closed || state.flushTimer || state.pendingPackets.size === 0) {
+      return;
+    }
+    state.flushTimer = setTimeout(() => {
+      state.flushTimer = undefined;
       if (this.closed) {
         return;
       }
       try {
-        this.state.callbacks.onRtpPacket?.();
-        const opusPacket = this.state.werift.dePacketizeRtpPackets("opus", [packet]).data;
-        const decoded = this.state.decoder.decode(opusPacket, { maxFrameSize: 5_760 });
-        const relayPcm = convertQuicksilverPcmToRelayPcm(decoded);
-        if (relayPcm.length > 0) {
-          this.state.callbacks.onAudio(relayPcm);
-        }
+        this.flushInboundReorderWindow(state, true);
       } catch (error) {
         this.state.callbacks.onError(toError(error));
       }
-    });
+    }, INBOUND_REORDER_DEPTH * OPUS_FRAME_DURATION_MS);
+    state.flushTimer.unref?.();
+  }
+
+  private clearInboundFlushTimer(state: InboundRtpState): void {
+    if (state.flushTimer) {
+      clearTimeout(state.flushTimer);
+      state.flushTimer = undefined;
+    }
+  }
+
+  private decodeInboundPacket(packet: WeriftRtpPacket): void {
+    const opusPacket = this.state.werift.dePacketizeRtpPackets("opus", [packet]).data;
+    this.emitInboundPcm(this.state.decoder.decode(opusPacket, { maxFrameSize: 5_760 }));
+  }
+
+  private decodeInboundPacketLoss(): void {
+    this.emitInboundPcm(this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES));
+  }
+
+  private emitInboundPcm(decoded: Int16Array): void {
+    const relayPcm = convertQuicksilverPcmToRelayPcm(decoded);
+    if (relayPcm.length > 0) {
+      this.state.callbacks.onAudio(relayPcm);
+    }
   }
 
   private startMediaPump(): void {

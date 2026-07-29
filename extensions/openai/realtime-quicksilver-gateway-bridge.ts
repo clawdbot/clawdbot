@@ -44,6 +44,18 @@ function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const value = error as { code?: unknown; message?: unknown; name?: unknown };
+  return (
+    value.name === "AbortError" ||
+    value.code === "ABORT_ERR" ||
+    value.message === "This operation was aborted"
+  );
+}
+
 type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
   voice: string;
@@ -440,7 +452,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       }
       text = result.text;
     } catch (error) {
-      if (params.signal.aborted) {
+      // Host steering aborts the runner's registered chat signal, not this bridge-owned signal.
+      // Abort-shaped rejection is therefore the runner boundary's cancellation marker.
+      if (params.signal.aborted || isAbortLikeError(error)) {
         return;
       }
       this.config.logger.warn(

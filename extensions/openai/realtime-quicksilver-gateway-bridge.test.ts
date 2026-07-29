@@ -30,12 +30,17 @@ function createRelayTone(): Buffer {
 
 type TestableAudioPeer = {
   connected: boolean;
+  handleInboundRtp(packet: unknown): void;
   pendingAudio: Buffer;
   sequenceNumber: number;
   timestamp: number;
   sendNextAudioFrame(): void;
   takeNextRelayFrame(): Buffer;
   state: {
+    decoder: {
+      decode(packet: Uint8Array | null, options?: { maxFrameSize?: number }): Int16Array;
+      decodePacketLoss(frameSize?: number): Int16Array;
+    };
     peer: {
       connectionStateChange: {
         execute(state: "closed" | "disconnected"): void;
@@ -48,6 +53,88 @@ type TestableAudioPeer = {
     };
   };
 };
+
+type TestableGatewayBridge = {
+  sideband?: {
+    socket: FakeSocket;
+    requestIds: { realtimeSessionId: string; sessionId: string; threadId: string };
+  };
+  runDelegation(params: {
+    delegationId: string;
+    prompt: string;
+    runAgentConsult: (params: {
+      prompt: string;
+      signal?: AbortSignal;
+    }) => Promise<{ text: string }>;
+    signal: AbortSignal;
+  }): Promise<void>;
+};
+
+function createDelegationBridge(
+  runAgentConsult: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>,
+) {
+  const logger = { debug: vi.fn(), warn: vi.fn() };
+  const bridge = new OpenAIQuicksilverGatewayBridge({
+    providerConfig: {},
+    model: "gpt-live-1-codex",
+    voice: "marin",
+    audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+    onAudio: vi.fn(),
+    onClearAudio: vi.fn(),
+    runAgentConsult,
+    logger,
+    resolveAuth: vi.fn(async () => ({
+      type: "oauth" as const,
+      token: "oauth-token",
+      accountId: "account-1",
+    })),
+  });
+  const socket = new FakeSocket("manual");
+  socket.readyState = 1;
+  const testBridge = bridge as unknown as TestableGatewayBridge;
+  testBridge.sideband = {
+    socket,
+    requestIds: {
+      realtimeSessionId: "realtime-session",
+      sessionId: "session",
+      threadId: "thread",
+    },
+  };
+  return { bridge, logger, socket, testBridge };
+}
+
+async function createInboundAudioHarness(params?: { onRtpPacket?: () => void }) {
+  const { RtpHeader, RtpPacket } = await import("werift");
+  const onAudio = vi.fn();
+  const onError = vi.fn();
+  const peer = await OpenAIQuicksilverAudioPeer.create({
+    callbacks: { onAudio, onError, onRtpPacket: params?.onRtpPacket },
+    iceServers: [],
+  });
+  const testPeer = peer as unknown as TestableAudioPeer;
+  const decodeOrder: Array<number | "plc"> = [];
+  const decode = vi.spyOn(testPeer.state.decoder, "decode").mockImplementation((packet) => {
+    decodeOrder.push(packet?.[0] ?? -1);
+    return new Int16Array(960 * 2);
+  });
+  const decodePacketLoss = vi
+    .spyOn(testPeer.state.decoder, "decodePacketLoss")
+    .mockImplementation(() => {
+      decodeOrder.push("plc");
+      return new Int16Array(960 * 2);
+    });
+  const packet = (sequenceNumber: number, ssrc = 1) =>
+    new RtpPacket(
+      new RtpHeader({
+        payloadType: 111,
+        sequenceNumber,
+        ssrc,
+        timestamp: (sequenceNumber * 960) >>> 0,
+      }),
+      Buffer.from([sequenceNumber & 0xff]),
+    );
+  return { decode, decodeOrder, decodePacketLoss, onAudio, onError, packet, peer, testPeer };
+}
 
 describe("GPT-Live werift audio peer", () => {
   it("creates a full-candidate Opus sendrecv offer without a data channel", async () => {
@@ -63,6 +150,42 @@ describe("GPT-Live werift audio peer", () => {
       expect(offer).toMatch(/^a=candidate:/m);
       expect(offer).toMatch(/^a=end-of-candidates$/m);
       expect(offer).not.toMatch(/^m=application /m);
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("rejects a second SSRC before it can share Opus decoder state", async () => {
+    const { decodeOrder, decodePacketLoss, onError, packet, peer, testPeer } =
+      await createInboundAudioHarness();
+    try {
+      testPeer.handleInboundRtp(packet(10, 1));
+      testPeer.handleInboundRtp(packet(200, 2));
+
+      expect(decodeOrder).toEqual([10]);
+      expect(decodePacketLoss).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "GPT-Live WebRTC audio source changed unexpectedly" }),
+      );
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("fails closed on a large same-SSRC sequence discontinuity", async () => {
+    const { decodeOrder, decodePacketLoss, onError, packet, peer, testPeer } =
+      await createInboundAudioHarness();
+    try {
+      testPeer.handleInboundRtp(packet(40_000));
+      testPeer.handleInboundRtp(packet(10_000));
+
+      expect(decodeOrder).toEqual([40_000 & 0xff]);
+      expect(decodePacketLoss).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "GPT-Live WebRTC RTP sequence changed unexpectedly",
+        }),
+      );
     } finally {
       peer.close();
     }
@@ -99,6 +222,94 @@ describe("GPT-Live werift audio peer", () => {
     } finally {
       encoder.free();
       decoder.free();
+    }
+  });
+
+  it("decodes reordered inbound RTP packets in sequence order", async () => {
+    const { decodeOrder, onAudio, onError, packet, peer, testPeer } =
+      await createInboundAudioHarness();
+    try {
+      testPeer.handleInboundRtp(packet(10));
+      testPeer.handleInboundRtp(packet(12));
+      expect(decodeOrder).toEqual([10]);
+      testPeer.handleInboundRtp(packet(11));
+
+      expect(decodeOrder).toEqual([10, 11, 12]);
+      expect(onAudio).toHaveBeenCalledTimes(3);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("emits an Opus PLC frame for a dropped inbound RTP packet", async () => {
+    const { decodeOrder, decodePacketLoss, onAudio, onError, packet, peer, testPeer } =
+      await createInboundAudioHarness();
+    try {
+      for (const sequenceNumber of [20, 22, 23, 24, 25]) {
+        testPeer.handleInboundRtp(packet(sequenceNumber));
+      }
+
+      expect(decodeOrder).toEqual([20, "plc", 22, 23, 24, 25]);
+      expect(decodePacketLoss).toHaveBeenCalledWith(960);
+      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(6 * 480 * 2);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("flushes a short reordered tail after the 80 ms window", async () => {
+    const { decodeOrder, onError, packet, peer, testPeer } = await createInboundAudioHarness();
+    vi.useFakeTimers();
+    try {
+      for (const sequenceNumber of [40, 42, 43, 44]) {
+        testPeer.handleInboundRtp(packet(sequenceNumber));
+      }
+      await vi.advanceTimersByTimeAsync(79);
+      expect(decodeOrder).toEqual([40]);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(decodeOrder).toEqual([40, "plc", 42, 43, 44]);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards inbound RTP packets that arrive beyond the reorder window", async () => {
+    const { decode, onError, packet, peer, testPeer } = await createInboundAudioHarness();
+    try {
+      for (const sequenceNumber of [30, 32, 33, 34, 35]) {
+        testPeer.handleInboundRtp(packet(sequenceNumber));
+      }
+      const decodedBeforeLatePacket = decode.mock.calls.length;
+      testPeer.handleInboundRtp(packet(31));
+
+      expect(decode).toHaveBeenCalledTimes(decodedBeforeLatePacket);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("reports RTP activity callback failures through the peer error boundary", async () => {
+    const activityError = new Error("activity callback failed");
+    const onRtpPacket = vi.fn(() => {
+      throw activityError;
+    });
+    const { decode, onError, packet, peer, testPeer } = await createInboundAudioHarness({
+      onRtpPacket,
+    });
+    try {
+      testPeer.handleInboundRtp(packet(50));
+
+      expect(onRtpPacket).toHaveBeenCalledOnce();
+      expect(decode).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(activityError);
+    } finally {
+      peer.close();
     }
   });
 
@@ -327,6 +538,58 @@ describe("GPT-Live gateway relay bridge", () => {
 
     await expect(connection).rejects.toThrow("sideband startup stopped");
     expect(socket.closed).toBe(true);
+  });
+
+  it("does not append failure text when the host cancels a delegation", async () => {
+    const abortError = new Error("The operation was aborted");
+    abortError.name = "AbortError";
+    const runAgentConsult = vi.fn(async () => {
+      throw abortError;
+    });
+    const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
+    try {
+      await testBridge.runDelegation({
+        delegationId: "delegation-cancelled",
+        prompt: "stop this",
+        runAgentConsult,
+        signal: new AbortController().signal,
+      });
+
+      expect(socket.sent).toEqual([]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("keeps the speakable failure response for genuine delegation errors", async () => {
+    const runAgentConsult = vi.fn(async () => {
+      throw new Error("workspace unavailable");
+    });
+    const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
+    try {
+      await testBridge.runDelegation({
+        delegationId: "delegation-failed",
+        prompt: "do work",
+        runAgentConsult,
+        signal: new AbortController().signal,
+      });
+
+      expect(parseSent(socket)).toContainEqual({
+        type: "delegation.context.append",
+        delegation_item_id: "delegation-failed",
+        channel: "speakable",
+        content: [
+          {
+            type: "input_text",
+            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
+          },
+        ],
+      });
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("workspace unavailable"));
+    } finally {
+      bridge.close();
+    }
   });
 
   it("bounds peer creation and closes a peer that resolves after the deadline", async () => {
