@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"thread-collab-terminal"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"collab-terminal","type":"collab_tool_call","tool":"wait","sender_thread_id":"thread-parent","receiver_thread_ids":["thread-child"],"prompt":null,"agents_states":{"thread-child":{"status":"completed","message":"done"}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"message-collab-terminal","type":"agent_message","text":"collab terminal"}}
+{"type":"turn.completed","usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2,"reasoning_output_tokens":0}}

@@ -1,5 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  listAgentEntries,
+  readAgentRosterProperty,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
   normalizeAgentModelMapForConfig,
@@ -111,7 +116,8 @@ function normalizeModelProviderRefs(
 
 export function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
-  const agentList = cfg.agents?.list;
+  const agentList = listAgentEntries(cfg);
+  const roster = readAgentRosterProperty(cfg);
   const providers = cfg.models?.providers;
   const normalizedAgentList = normalizeAgentListModelRefs(agentList);
   const normalizedProviders = normalizeModelProviderRefs(providers) as typeof providers | undefined;
@@ -139,9 +145,11 @@ export function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawC
                   },
                 }
               : undefined),
-            ...(normalizedAgentList !== agentList
-              ? { list: normalizedAgentList as typeof agentList }
-              : undefined),
+            ...(normalizedAgentList !== agentList && roster?.kind === "entries"
+              ? { entries: toAgentEntriesRecord(normalizedAgentList as typeof agentList) }
+              : normalizedAgentList !== agentList && roster?.kind === "list"
+                ? { list: normalizedAgentList as typeof agentList }
+                : undefined),
           },
         }
       : undefined),

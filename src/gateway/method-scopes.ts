@@ -2,7 +2,10 @@
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
 import { isAdminOnlyNodeInvokeCommand } from "../infra/node-commands.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import {
+  getActivePluginHttpRouteRegistry,
+  getActivePluginSessionExtensionRegistry,
+} from "../plugins/runtime.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
@@ -19,6 +22,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -31,6 +35,7 @@ export {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -47,8 +52,8 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 ];
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
-  // Core descriptors are authoritative, then reserved namespace policy, then active plugin
-  // descriptors. Node/dynamic sentinels are intentionally excluded from operator scopes.
+  // Gateway-pinned plugin descriptors prevent agent-scoped registry loads from
+  // changing gateway authorization. Node/dynamic sentinels are not operator scopes.
   const explicitScope = resolveCoreOperatorGatewayMethodScope(method);
   if (explicitScope) {
     return explicitScope;
@@ -57,7 +62,7 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
+  const pluginDescriptor = getActivePluginHttpRouteRegistry()?.gatewayMethodDescriptors?.find(
     (descriptor) => descriptor.name === method,
   );
   const pluginScope = pluginDescriptor?.scope;
@@ -89,6 +94,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "agentId",
   "label",
   "category",
+  "boardFace",
   "icon",
   "pinned",
   "archived",
@@ -134,7 +140,7 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
+  const registration = getActivePluginSessionExtensionRegistry()?.sessionActions?.find(
     (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
   );
   if (!registration) {
@@ -323,6 +329,12 @@ export function authorizeOperatorScopesForRequiredScope(
       return { allowed: true };
     }
     return { allowed: false, missingScope: READ_SCOPE };
+  }
+  if (requiredScope === TALK_SCOPE) {
+    if (scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE)) {
+      return { allowed: true };
+    }
+    return { allowed: false, missingScope: TALK_SCOPE };
   }
   if (scopes.includes(requiredScope)) {
     return { allowed: true };

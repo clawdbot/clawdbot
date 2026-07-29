@@ -1,6 +1,7 @@
 // Slack plugin module owns durable Events API admission and replay.
 import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
@@ -112,12 +113,7 @@ type SlackDurableIngress = {
   waitForIdle: () => Promise<void>;
 };
 
-class SlackIngressPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SlackIngressPayloadError";
-  }
-}
+const SlackIngressPayloadError = createChannelIngressError("SlackIngressPayloadError");
 
 function resolveSlackEventId(body: unknown): string | null {
   const eventId = asOptionalRecord(body)?.event_id;

@@ -10,8 +10,8 @@ import { readQaSuiteFailedScenarioCountFromFile } from "../../suite-summary.js";
 // Qa Lab plugin module implements cli behavior.
 import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
-import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./profiles.js";
 import { resolveTelegramQaRunOptions } from "./run-options.runtime.js";
+import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./scenario-selection.js";
 
 const TELEGRAM_QA_SUT_OPENCLAW_COMMAND_ENV = "OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND";
 const TELEGRAM_QA_SUT_UID_ENV = "OPENCLAW_QA_TELEGRAM_SUT_UID";

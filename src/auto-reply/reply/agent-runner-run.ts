@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -294,14 +295,22 @@ export async function runReplyAgent(
       },
     );
     if (steerOutcome.queued) {
+      if (replyOperationRunState) {
+        // Transcript commit has already transferred this turn to the active
+        // session. Keep that acceptance even if ingress adoption is later lost:
+        // the losing dispatch must neither replay nor emit its own fallback.
+        replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+      }
       activeReplyOperation?.recordActivity();
       try {
         await turnAdoptionLifecycle?.onAdopted();
       } catch (error) {
         if (isIngressAdoptionLostError(error)) {
           // Claim was tombstoned/superseded/guillotined after transcript commit.
-          // Cancel the active run so steered tools do not keep executing; do not
-          // rethrow — replaying ingress would duplicate the injected user turn.
+          // Cancel the active run so steered tools do not keep executing. Keep
+          // admission accepted and do not rethrow: ingress ownership is gone,
+          // so replay or a local no-visible-reply fallback would duplicate or
+          // misreport the already-injected user turn.
           const abortKey = sessionKey ?? queueKey;
           if (abortKey) {
             replyRunRegistry.abort(abortKey);
@@ -387,6 +396,9 @@ export async function runReplyAgent(
       typing.cleanup();
       return undefined;
     }
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "accepted", mode: "followup" };
+    }
     // The queue must stay dormant while the active owner can still collect
     // messages. Registering after enqueue closes the owner-clear race.
     const activeReplyOperation = replyRunRegistry.get(queueKey);
@@ -415,6 +427,7 @@ export async function runReplyAgent(
     originatingAccountId: followupRun.originatingAccountId,
     agentAccountId: followupRun.run.agentAccountId,
   });
+  followupRun.run.agentId ??= resolveDefaultAgentId(followupRun.run.config);
 
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
@@ -534,7 +547,8 @@ export async function runReplyAgent(
         const admittedSessionFile = resolveAdmittedRunSessionFile({
           agentId: followupRun.run.agentId,
           sessionId: replyOperation.sessionId,
-          sessionFile: admittedSessionEntry.sessionFile,
+          sessionFile: undefined,
+          sessionKey: replySessionKey,
           storePath,
         });
         if (admittedSessionFile) {

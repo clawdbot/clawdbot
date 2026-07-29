@@ -470,13 +470,14 @@ function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
     joined === "agents.defaults.models" ||
     joined === "models.providers" ||
     (path.length === 3 && path[0] === "models" && path[1] === "providers") ||
+    joined === "agents.entries" ||
     joined === "plugins.entries" ||
     joined === "auth.profiles"
   );
 }
 
 function isProtectedArrayReplacementPath(path: PathSegment[]): boolean {
-  return isProviderModelListPath(path) || path.join(".") === "agents.list";
+  return isProviderModelListPath(path);
 }
 
 function formatRemovedEntries(entries: string[]): string {

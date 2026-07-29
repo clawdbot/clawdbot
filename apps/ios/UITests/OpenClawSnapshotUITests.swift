@@ -181,10 +181,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
     func testSidebarEdgeDragPreservesPushedScreenBackGesture() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "sidebar-pushed-screen-back-gesture"), appearance: nil, screenshotMode: false)
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "settings",
+                initialDestination: "settings",
+                name: "sidebar-pushed-screen-back-gesture"),
+            appearance: nil,
+            screenshotMode: false)
 
         if self.app?.buttons["Close"].waitForExistence(timeout: 2) == true {
             self.app?.buttons["Close"].tap()
@@ -473,12 +476,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(dictationButton.frame.maxX, composerSurface.frame.maxX)
         XCTAssertGreaterThanOrEqual(talkButton.frame.minX, composerSurface.frame.minX)
         XCTAssertLessThanOrEqual(talkButton.frame.maxX, composerSurface.frame.maxX)
-        XCTAssertGreaterThanOrEqual(attachmentButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(attachmentButton.frame.height, 44)
-        XCTAssertGreaterThanOrEqual(dictationButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(dictationButton.frame.height, 44)
-        XCTAssertGreaterThanOrEqual(talkButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(talkButton.frame.height, 44)
+        self.assertMinimumTouchTarget(attachmentButton)
+        self.assertMinimumTouchTarget(dictationButton)
+        self.assertMinimumTouchTarget(talkButton)
         let compactHeight = textField.frame.height
         XCTAssertLessThanOrEqual(compactHeight, 44)
         XCTAssertLessThanOrEqual(abs(attachmentButton.frame.midY - dictationButton.frame.midY), 1)
@@ -499,12 +499,66 @@ final class OpenClawSnapshotUITests: XCTestCase {
         wait(for: [composerGrew], timeout: 4)
         XCTAssertTrue(sendButton.waitForExistence(timeout: 3))
         XCTAssertTrue(talkButton.waitForNonExistence(timeout: 3))
-        XCTAssertGreaterThanOrEqual(sendButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(sendButton.frame.height, 44)
+        self.assertMinimumTouchTarget(sendButton)
         self.attachScreenshot(named: "chat-composer-expanded")
 
         self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         XCTAssertTrue(self.app?.keyboards.firstMatch.waitForNonExistence(timeout: 3) == true)
+    }
+
+    func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-voice-note-stop-active-response"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = app.textFields["chat-message-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running while I record a voice note.")
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        XCTAssertTrue(stop.isEnabled)
+
+        let microphone = app.buttons["chat-dictation-control"]
+        XCTAssertTrue(microphone.waitForExistence(timeout: 5))
+        microphone.press(forDuration: 0.8)
+
+        let recordVoiceNote = app.buttons["Record Voice Note"]
+        XCTAssertTrue(recordVoiceNote.waitForExistence(timeout: 5))
+        recordVoiceNote.tap()
+
+        let finishVoiceNote = app.buttons["Finish voice note"]
+        XCTAssertTrue(finishVoiceNote.waitForExistence(timeout: 8))
+        finishVoiceNote.tap()
+
+        let voiceNote = app.staticTexts["Voice note"]
+        XCTAssertTrue(voiceNote.waitForExistence(timeout: 8))
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        XCTAssertTrue(stop.isEnabled)
+        self.attachScreenshot(named: "voice-note-stop-active-response")
+
+        stop.tap()
+        XCTAssertTrue(send.waitForExistence(timeout: 8))
+        self.waitForEnabled(send)
+        XCTAssertTrue(voiceNote.exists)
+        send.tap()
+
+        XCTAssertTrue(voiceNote.waitForNonExistence(timeout: 8))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
+                .firstMatch.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "voice-note-sent-after-stopping-response")
     }
 
     func testKeyboardOpenSendFollowsLiveEdge() throws {
@@ -939,7 +993,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.staticTexts["Apple Health"].exists == true)
         self.attachScreenshot(named: "apple-health-disclosure")
     }
+}
 
+extension OpenClawSnapshotUITests {
     private func launchApp(
         for target: ScreenshotTarget,
         appearance: String? = "dark",
@@ -1037,6 +1093,19 @@ final class OpenClawSnapshotUITests: XCTestCase {
         timeout: TimeInterval = 3)
     {
         XCTAssertTrue(self.element(element, hasValue: value, timeout: timeout))
+    }
+
+    private func assertMinimumTouchTarget(
+        _ element: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line)
+    {
+        let minimum: CGFloat = 44
+        // XCUI converts screen coordinates through floating-point transforms.
+        // Permit rounding noise without accepting a genuinely undersized target.
+        let tolerance = minimum.ulp * 16
+        XCTAssertGreaterThanOrEqual(element.frame.width + tolerance, minimum, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(element.frame.height + tolerance, minimum, file: file, line: line)
     }
 
     private func element(_ element: XCUIElement, hasValue value: String, timeout: TimeInterval) -> Bool {

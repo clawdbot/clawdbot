@@ -1,6 +1,7 @@
 // Nostr plugin module owns durable relay-event admission and replay draining.
 import type { Event } from "nostr-tools";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressMonitorLifecycle,
@@ -41,15 +42,12 @@ type NostrIngressMonitor = {
   waitForIdle: () => Promise<void>;
 };
 
-export class NostrIngressAdmissionRejectedError extends Error {
-  readonly reason: "backpressure" | "oversized-event" | "rate-limited";
-
-  constructor(reason: "backpressure" | "oversized-event" | "rate-limited", message: string) {
-    super(message);
-    this.name = "NostrIngressAdmissionRejectedError";
-    this.reason = reason;
-  }
-}
+export const NostrIngressAdmissionRejectedError = createChannelIngressError<
+  "backpressure" | "oversized-event" | "rate-limited"
+>("NostrIngressAdmissionRejectedError", { withReason: true });
+export type NostrIngressAdmissionRejectedError = InstanceType<
+  typeof NostrIngressAdmissionRejectedError
+>;
 
 function deserializeNostrIngressEvent(rawEvent: string, claimedId: string): Event {
   let parsed: unknown;
@@ -113,11 +111,6 @@ export function createNostrIngress(options: {
     });
     return queue;
   };
-
-  const legacyMigration = migrateNostrLegacyRecentEventIds({
-    queue: getQueue(),
-    eventIds: options.legacyEventIds ?? [],
-  });
 
   const monitor = createChannelIngressMonitor<
     Event,
@@ -184,13 +177,20 @@ export function createNostrIngress(options: {
     createStoppedError,
     onError: (error) => options.onError?.(error as Error, "ingress drain"),
   });
-  const monitorStart = legacyMigration.then(() => {
+  const monitorStart = (async () => {
+    // Open through the shared monitor first so a denied queue is classified for
+    // gateway health before Nostr's legacy tombstone migration touches it.
+    monitor.ensureQueueAvailable();
+    await migrateNostrLegacyRecentEventIds({
+      queue: getQueue(),
+      eventIds: options.legacyEventIds ?? [],
+    });
     // stop() may run while the legacy migration is pending. Do not let that
     // deferred startup revive polling after shutdown has begun.
     if (!stopping) {
       monitor.start();
     }
-  });
+  })();
   void monitorStart.catch((error: unknown) => options.onError?.(error as Error, "ingress drain"));
 
   // Admission stays local because relay ack needs accepted/duplicate plus rate,
@@ -244,7 +244,7 @@ export function createNostrIngress(options: {
   };
 
   const admitOnce = async (prepared: PreparedNostrAdmission): Promise<"accepted" | "duplicate"> => {
-    await legacyMigration;
+    await monitorStart;
     const pending = await getQueue().listPending({ limit: options.maxPendingEvents });
     const claims = await getQueue().listClaims();
     if (pending.length + claims.length >= options.maxPendingEvents) {

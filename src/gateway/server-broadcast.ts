@@ -5,6 +5,7 @@ import {
 // Gateway WebSocket broadcaster.
 // Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import {
   ADMIN_SCOPE,
@@ -12,6 +13,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
 import type {
@@ -53,13 +55,14 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   shutdown: [],
   tick: [],
   "talk.event": [READ_SCOPE],
-  "talk.mode": [WRITE_SCOPE],
+  "talk.mode": [TALK_SCOPE],
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
+  "skills.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
@@ -177,6 +180,9 @@ function hasEventScope(
   if (required.includes(READ_SCOPE)) {
     return scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE);
   }
+  if (required.includes(TALK_SCOPE)) {
+    return scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE);
+  }
   return required.some((scope) => scopes.includes(scope));
 }
 
@@ -201,6 +207,10 @@ export function createGatewayBroadcaster(params: {
     targetConnIds?: ReadonlySet<string>,
     explicitPluginScope?: GatewayPluginEventScope,
   ) => {
+    if (event === "sessions.changed") {
+      // Delivery is queued here so process-local handlers run after websocket fanout returns.
+      queuePluginSessionsChanged(payload);
+    }
     if (params.clients.size === 0) {
       return;
     }
@@ -269,13 +279,13 @@ export function createGatewayBroadcaster(params: {
           SESSION_SUBSCRIPTION_EVENTS.has(event));
       if (
         requiresSessionSubscription &&
-        (!opts?.sessionKeys?.length ||
-          !opts.sessionKeys.some((sessionKey) =>
+        (!sessionKeys.length ||
+          !sessionKeys.some((sessionKey) =>
             params.sessionMessageSubscribers?.get(sessionKey).has(c.connId),
           ))
       ) {
-        // Scoped clients opt out of legacy broadcast fanout. The server-side
-        // subscription registry is the authority, so client filtering cannot leak a sibling tab.
+        // Scoped clients opt out of cross-session fanout, including critical observer announces.
+        // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
         continue;
       }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
@@ -324,9 +334,6 @@ export function createGatewayBroadcaster(params: {
     broadcastInternal(event, payload, opts);
 
   const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) => {
-    if (connIds.size === 0) {
-      return;
-    }
     broadcastInternal(event, payload, opts, connIds);
   };
 

@@ -7,7 +7,11 @@ import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./client.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
+import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolFunctionSpec,
+} from "./protocol.js";
 import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
@@ -286,6 +290,52 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   };
 }
 
+function createProvisionalPluginThreadConfigProvider(appId: string) {
+  const config: CodexPluginThreadConfig = {
+    enabled: true,
+    configPatch: {
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+        [appId]: {
+          enabled: true,
+          destructive_enabled: false,
+          open_world_enabled: true,
+          default_tools_approval_mode: "auto",
+        },
+      },
+    },
+    provisionalAppIds: [appId],
+    fingerprint: `plugin-config-${appId}`,
+    inputFingerprint: `plugin-input-${appId}`,
+    policyContext: {
+      fingerprint: `plugin-policy-${appId}`,
+      apps: {
+        [appId]: {
+          configKey: "linear",
+          marketplaceName: "openai-curated",
+          pluginName: "linear",
+          allowDestructiveActions: false,
+          destructiveApprovalMode: "deny",
+          mcpServerNames: [],
+        },
+      },
+      pluginAppIds: { linear: [appId] },
+    },
+    diagnostics: [],
+  };
+  return {
+    enabled: true,
+    inputFingerprint: config.inputFingerprint,
+    enabledPluginConfigKeys: ["linear"],
+    recoverablePluginConfigKeys: ["linear"],
+    build: vi.fn(async () => config),
+  };
+}
+
 async function seedAdoptedThreadBinding(params: EmbeddedRunAttemptParams, cwd: string) {
   const threadId = "thread-adopted";
   const request = vi.fn(async (method: string) => {
@@ -451,6 +501,102 @@ describe("Codex app-server native code mode config", () => {
     );
   });
 
+  it("adds native completion handoff guidance only when sessions_yield is available", () => {
+    const withSessionsYield = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [
+          {
+            type: "namespace",
+            name: "openclaw_direct",
+            description: "",
+            tools: [
+              {
+                type: "function",
+                name: "sessions_yield",
+                description: "End the current turn",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        ],
+      },
+    );
+    const withoutSessionsYield = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [],
+      },
+    );
+    const withWrongNamespace = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [
+          {
+            type: "namespace",
+            name: "openclaw",
+            description: "",
+            tools: [
+              {
+                type: "function",
+                name: "sessions_yield",
+                description: "Different tool with the same leaf name",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        ],
+      },
+    );
+
+    expect(withSessionsYield).toContain(
+      "end the current turn with `openclaw_direct.sessions_yield`",
+    );
+    expect(withSessionsYield).toContain(
+      "Use native `wait_agent` only for an intentional same-turn wait",
+    );
+    expect(withSessionsYield).toContain("Never loop-poll for native child completion.");
+    expect(withoutSessionsYield).not.toContain("`openclaw_direct.sessions_yield`");
+    expect(withoutSessionsYield).not.toContain("native `wait_agent`");
+    expect(withWrongNamespace).not.toContain("`openclaw_direct.sessions_yield`");
+    expect(withWrongNamespace).not.toContain("native `wait_agent`");
+  });
+
+  it.each([
+    { namespace: "openclaw_direct", exposesNativeYield: true },
+    { namespace: "openclaw", exposesNativeYield: false },
+  ])(
+    "materializes the $namespace native-yield namespace exactly once",
+    ({ namespace, exposesNativeYield }) => {
+      let namespaceReads = 0;
+      const yieldTool = {
+        type: "function" as const,
+        name: "sessions_yield",
+        description: "End the current turn",
+        inputSchema: { type: "object" },
+      };
+
+      const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+        dynamicTools: [
+          yieldTool,
+          {
+            type: "namespace",
+            name: namespace,
+            description: "",
+            get tools() {
+              namespaceReads += 1;
+              return [yieldTool];
+            },
+          },
+        ],
+      });
+
+      expect(namespaceReads).toBe(1);
+      expect(instructions.includes("`openclaw_direct.sessions_yield`")).toBe(exposesNativeYield);
+      expect(instructions.includes("native `wait_agent`")).toBe(exposesNativeYield);
+    },
+  );
+
   it("summarizes deferred dynamic tool names in developer instructions", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
@@ -489,6 +635,64 @@ describe("Codex app-server native code mode config", () => {
     );
     expect(instructions).toContain("Use `tool_search` to load exact callable specs before use.");
     expect(instructions).not.toContain("message,");
+  });
+
+  it("materializes namespaced prompt tools once while preserving all guidance", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    let namespaceReads = 0;
+    const tools: CodexDynamicToolFunctionSpec[] = [
+      {
+        type: "function" as const,
+        name: "zeta_tool",
+        description: "Deferred Zeta tool",
+        inputSchema: { type: "object" },
+        deferLoading: true,
+      },
+      {
+        type: "function" as const,
+        name: "message",
+        description: "Send a source reply",
+        inputSchema: { type: "object" },
+      },
+      {
+        type: "function" as const,
+        name: "skill_workshop",
+        description: "Manage skill proposals",
+        inputSchema: { type: "object" },
+        deferLoading: true,
+      },
+      {
+        type: "function" as const,
+        name: "alpha_tool",
+        description: "Deferred Alpha tool",
+        inputSchema: { type: "object" },
+        deferLoading: true,
+      },
+    ];
+
+    const instructions = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          get tools() {
+            namespaceReads += 1;
+            return tools;
+          },
+        },
+      ],
+    });
+
+    expect(namespaceReads).toBe(1);
+    expect(instructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
+    );
+    expect(instructions).toContain("## Skill Workshop");
+    expect(instructions).toContain("Visible source replies are not automatically delivered");
+    expect(instructions).toContain("Use `message(action=send)`");
+    expect(instructions).not.toContain("`openclaw_direct.sessions_yield`");
   });
 
   it("uses the shared Skill Workshop guidance when skill_workshop is available", () => {
@@ -1105,6 +1309,49 @@ describe("Codex app-server native code mode config", () => {
 });
 
 describe("Codex app-server turn input image sanitizing", () => {
+  it("carries native workspace temporary-root overrides into turn policy", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/tmp/qa/workspace",
+      appServer: {
+        ...createAppServerOptions(),
+        start: {
+          args: [
+            "app-server",
+            "-c",
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "-c",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+          ],
+        },
+      } as never,
+    });
+
+    expect(request.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/qa/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
+  });
+
+  it("preserves implicit temporary writable roots for ordinary Codex turns", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/tmp/qa/workspace",
+      appServer: createAppServerOptions() as never,
+    });
+
+    expect(request.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/qa/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
   it("uses an explicit turn sandbox policy override when provided", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
@@ -1674,6 +1921,212 @@ describe("Codex plugin binding recovery", () => {
   });
 });
 
+describe("Codex provisional plugin app attestation", () => {
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-plugin-attestation-"));
+    resetCodexTestBindingStore();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("attests the effective thread app before committing the binding", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-linear");
+      }
+      if (method === "app/installed") {
+        expect(requestParams).toEqual({
+          threadId: "thread-linear",
+          forceRefresh: true,
+        });
+        return {
+          apps: [
+            {
+              id: "linear-app",
+              runtimeName: "Linear",
+              enabled: true,
+              callable: true,
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const mutate = vi.fn(
+      async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) =>
+        await testCodexAppServerBindingStore.mutate(...args),
+    );
+    const bindingStore: CodexAppServerBindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate,
+    };
+
+    await startOrResumeThreadImpl({
+      client: { request } as never,
+      bindingStore,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "app/installed"]);
+    expect(request.mock.invocationCallOrder[1]).toBeLessThan(
+      mutate.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    await expect(
+      testCodexAppServerBindingStore.read(
+        sessionBindingIdentity({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      threadId: "thread-linear",
+      pluginAppsFingerprint: "plugin-config-linear-app",
+    });
+  });
+
+  it("deletes the persistent nonmaterialized thread when attestation fails", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const abandonClient = vi.fn(async () => undefined);
+    const request = vi.fn(
+      async (method: string, _requestParams?: unknown, _requestOptions?: unknown) => {
+        if (method === "thread/start") {
+          return threadStartResult("thread-linear-missing");
+        }
+        if (method === "app/installed") {
+          return { apps: [] };
+        }
+        if (method === "thread/delete") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    );
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      }),
+    ).rejects.toThrow("linear-app:missing");
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "app/installed",
+      "thread/delete",
+    ]);
+    expect(request.mock.calls[2]?.[1]).toEqual({ threadId: "thread-linear-missing" });
+    expect(request.mock.calls[2]?.[2]).toEqual({ timeoutMs: 5_000 });
+    expect(abandonClient).not.toHaveBeenCalled();
+    await expect(
+      testCodexAppServerBindingStore.read(
+        sessionBindingIdentity({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("abandons the client when a persistent attestation failure cannot delete the thread", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const abandonClient = vi.fn(async () => undefined);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-linear-unsafe");
+      }
+      if (method === "app/installed") {
+        return { apps: [] };
+      }
+      if (method === "thread/delete") {
+        throw new Error("delete unavailable");
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      }),
+    ).rejects.toThrow("Codex plugin app attestation cleanup failed");
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "app/installed",
+      "thread/delete",
+      "thread/unsubscribe",
+    ]);
+    expect(abandonClient).toHaveBeenCalledOnce();
+  });
+
+  it("unsubscribes an ephemeral thread when attestation fails", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.sessionKey = "agent:main:internal-session-effects:incognito-plugin-attestation";
+    const abandonClient = vi.fn(async () => undefined);
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        expect(requestParams).toEqual(expect.objectContaining({ ephemeral: true }));
+        return threadStartResult("thread-linear-ephemeral");
+      }
+      if (method === "app/installed") {
+        return { apps: [] };
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      }),
+    ).rejects.toThrow("linear-app:missing");
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "app/installed",
+      "thread/unsubscribe",
+    ]);
+    expect(abandonClient).not.toHaveBeenCalled();
+  });
+});
+
 describe("Codex app-server adopted thread lifecycle", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-thread-adoption-"));
@@ -1955,6 +2408,141 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
     await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
+    });
+  });
+
+  it("cleans tracked supervision branches when provisional app attestation fails", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const abandonClient = vi.fn(async () => undefined);
+    const request = vi.fn(async (method: string, requestParams: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "app/installed") {
+        expect(requestParams).toEqual({
+          threadId: finalThreadId,
+          forceRefresh: true,
+        });
+        return { apps: [] };
+      }
+      if (method === "thread/delete") {
+        return {};
+      }
+      if (method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      }),
+    ).rejects.toThrow("linear-app:missing");
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/fork",
+      "thread/start",
+      "app/installed",
+      "thread/delete",
+      "thread/archive",
+    ]);
+    expect(request.mock.calls[4]?.[1]).toEqual({ threadId: finalThreadId });
+    expect(request.mock.calls[5]?.[1]).toEqual({ threadId: probeThreadId });
+    expect(abandonClient).not.toHaveBeenCalled();
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      pendingSupervisionBranch: {
+        sourceThreadId,
+      },
+    });
+    expect(
+      (await testCodexAppServerBindingStore.read(identity))?.pendingSupervisionBranch
+        ?.cleanupThreadIds ?? [],
+    ).toEqual([]);
+  });
+
+  it("abandons a supervised client when attestation cannot delete the canonical branch", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const abandonClient = vi.fn(async () => undefined);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "app/installed") {
+        return { apps: [] };
+      }
+      if (method === "thread/delete") {
+        throw new Error("delete unavailable");
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      }),
+    ).rejects.toThrow("Codex supervised plugin app attestation cleanup failed");
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/fork",
+      "thread/start",
+      "app/installed",
+      "thread/delete",
+      "thread/unsubscribe",
+    ]);
+    expect(abandonClient).toHaveBeenCalledOnce();
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      pendingSupervisionBranch: {
+        sourceThreadId,
+        cleanupThreadIds: [probeThreadId, finalThreadId],
+      },
     });
   });
 

@@ -6,7 +6,6 @@ scenario:
     primary:
       - whatsapp.inbound-media-download
   execution:
-    profiles: { "whatsapp:mock-default": 16 }
     kind: flow
     channel: whatsapp
     timeoutMs: 60000

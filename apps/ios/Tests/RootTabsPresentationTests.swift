@@ -713,6 +713,174 @@ struct RootTabsPresentationTests {
         #expect(events == ["patch", "message"])
     }
 
+    @Test func `sidebar replays actual observer visibility after each reconnect`() async {
+        var isVisible = true
+        var subscribeAttempts = 0
+        var declarations: [Bool] = []
+
+        await RootSidebarModel.consumeSubscribedSessionEvents(
+            makeStream: {
+                AsyncStream { continuation in
+                    continuation.finish()
+                }
+            },
+            subscribe: {
+                subscribeAttempts += 1
+            },
+            onEvent: { _ in false },
+            observerVisibility: { isVisible },
+            declareObserverVisibility: { visible in
+                declarations.append(visible)
+            },
+            retryDelays: [.zero],
+            sleep: { _ in
+                guard subscribeAttempts == 1 else {
+                    throw CancellationError()
+                }
+                isVisible = false
+            })
+
+        #expect(subscribeAttempts == 2)
+        #expect(declarations == [true, false])
+    }
+
+    @Test func `sidebar invalidates a confirmed same-route observer after resubscription`() async {
+        let route = "same-operator-route"
+        var subscribeAttempts = 0
+        var confirmation: (route: String, visible: Bool)? = (route, true)
+        var declarations: [Bool] = []
+
+        await RootSidebarModel.consumeSubscribedSessionEvents(
+            makeStream: {
+                AsyncStream { continuation in
+                    continuation.finish()
+                }
+            },
+            subscribe: {
+                subscribeAttempts += 1
+            },
+            onEvent: { _ in false },
+            invalidateObserverDeclaration: {
+                confirmation = nil
+            },
+            observerVisibility: { true },
+            declareObserverVisibility: { visible in
+                guard confirmation?.route != route || confirmation?.visible != visible else { return }
+                declarations.append(visible)
+                confirmation = (route, visible)
+            },
+            retryDelays: [.zero],
+            sleep: { _ in
+                guard subscribeAttempts == 1 else {
+                    throw CancellationError()
+                }
+            })
+
+        #expect(subscribeAttempts == 2)
+        #expect(declarations == [true, true])
+        #expect(confirmation?.route == route)
+        #expect(confirmation?.visible == true)
+    }
+
+    @Test func `sidebar rejects an old visibility acknowledgement after same-route resubscription`() async {
+        let route = "same-operator-route"
+        var subscribeAttempts = 0
+        var generation: UInt64 = 0
+        var confirmation: RootSidebarModel.SessionObserverDeclaration<String>?
+        var firstAcknowledgementGeneration: UInt64?
+        var rejectedOldAcknowledgement = false
+        var declarations: [Bool] = []
+
+        await RootSidebarModel.consumeSubscribedSessionEvents(
+            makeStream: {
+                AsyncStream { continuation in
+                    continuation.finish()
+                }
+            },
+            subscribe: {
+                subscribeAttempts += 1
+            },
+            onEvent: { _ in false },
+            invalidateObserverDeclaration: {
+                generation &+= 1
+                confirmation = nil
+
+                if let firstAcknowledgementGeneration {
+                    let oldAcknowledgement = RootSidebarModel.confirmedSessionObserverDeclaration(
+                        route: route,
+                        visible: true,
+                        generation: firstAcknowledgementGeneration,
+                        currentGeneration: generation,
+                        currentVisibility: true)
+                    rejectedOldAcknowledgement = oldAcknowledgement == nil
+                    if let oldAcknowledgement {
+                        confirmation = oldAcknowledgement
+                    }
+                }
+            },
+            observerVisibility: { true },
+            declareObserverVisibility: { visible in
+                let declaration = RootSidebarModel.SessionObserverDeclaration(
+                    route: route,
+                    visible: visible,
+                    generation: generation)
+                guard confirmation != declaration else { return }
+                declarations.append(visible)
+
+                if subscribeAttempts == 1 {
+                    firstAcknowledgementGeneration = generation
+                } else {
+                    confirmation = RootSidebarModel.confirmedSessionObserverDeclaration(
+                        route: route,
+                        visible: visible,
+                        generation: generation,
+                        currentGeneration: generation,
+                        currentVisibility: true)
+                }
+            },
+            retryDelays: [.zero],
+            sleep: { _ in
+                guard subscribeAttempts == 1 else {
+                    throw CancellationError()
+                }
+            })
+
+        #expect(subscribeAttempts == 2)
+        #expect(rejectedOldAcknowledgement)
+        #expect(declarations == [true, true])
+        #expect(confirmation?.route == route)
+        #expect(confirmation?.visible == true)
+        #expect(confirmation?.generation == 2)
+    }
+
+    @Test func `sidebar observer identity restarts for foreground and background transitions`() {
+        let foreground = RootTabs.SessionObserverTaskIdentity(
+            sidebarRefreshID: "gateway:main",
+            isSceneActive: true,
+            isSidebarVisible: true)
+        let background = RootTabs.SessionObserverTaskIdentity(
+            sidebarRefreshID: "gateway:main",
+            isSceneActive: false,
+            isSidebarVisible: true)
+        let foregroundAgain = RootTabs.SessionObserverTaskIdentity(
+            sidebarRefreshID: "gateway:main",
+            isSceneActive: true,
+            isSidebarVisible: true)
+        let hidden = RootTabs.SessionObserverTaskIdentity(
+            sidebarRefreshID: "gateway:main",
+            isSceneActive: true,
+            isSidebarVisible: false)
+
+        #expect(foreground != background)
+        #expect(background != foregroundAgain)
+        #expect(foreground == foregroundAgain)
+        #expect(foreground != hidden)
+        #expect(foreground.isObserverVisible)
+        #expect(!background.isObserverVisible)
+        #expect(foregroundAgain.isObserverVisible)
+        #expect(!hidden.isObserverVisible)
+    }
+
     @Test func `pinned pages storage round trips and preserves pin order`() {
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)

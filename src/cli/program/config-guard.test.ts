@@ -169,6 +169,11 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for remote gateway calls",
+      commandPath: ["gateway", "call"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for agent without legacy state",
       commandPath: ["agent"],
       expectedDoctorCalls: 0,
@@ -201,6 +206,12 @@ describe("ensureConfigReady", () => {
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
+  it("keeps remote gateway call config reads non-observing", async () => {
+    await runEnsureConfigReady(["gateway", "call"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
     const root = useTempOpenClawHome();
     writeLegacyTaskSidecarMarker(root);
@@ -213,6 +224,15 @@ describe("ensureConfigReady", () => {
       invalidConfigNote: false,
       observe: false,
     });
+  });
+
+  it("keeps remote gateway calls from migrating existing local legacy state", async () => {
+    const root = useTempOpenClawHome();
+    writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady(["gateway", "call"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
   it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(

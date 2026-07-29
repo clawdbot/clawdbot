@@ -5,6 +5,8 @@ export * from "./browser-device-auth.js";
 export * from "./connect-auth.js";
 export * from "./protocol-client.js";
 export * from "./reconnect-policy.js";
+export * from "./session-projection.js";
+export * from "./session-subscriptions.js";
 export { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "./timeouts.js";
 export * from "@openclaw/gateway-protocol/client-info";
 export * from "@openclaw/gateway-protocol/connect-error-details";

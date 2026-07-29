@@ -39,6 +39,7 @@ const pluginMethods = [
 const workboardDisabled = {
   id: "workboard",
   name: "Workboard",
+  packageName: "@openclaw/workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   version: "2026.7.9",
   kind: ["productivity"],
@@ -324,6 +325,46 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await browser?.close();
     await server?.close();
   });
+
+  it.each(["installed", "discover"] as const)(
+    "finds an existing plugin by scoped package identity in the %s catalog",
+    async (tab) => {
+      const context = await newContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        featureMethods: pluginMethods,
+        methodResponses: {
+          ...pluginMethodResponses(),
+          "plugins.search": { results: [] },
+        },
+      });
+
+      try {
+        await page.goto(`${server.baseUrl}settings/plugins`);
+        const workboardCard = page.locator('[data-plugin-id="workboard"]');
+        await workboardCard.waitFor({ state: "visible" });
+
+        if (tab === "discover") {
+          await page.getByRole("tab", { name: /^Discover/u }).click();
+          await workboardCard.waitFor({ state: "visible" });
+        }
+
+        await page.getByRole("searchbox", { name: "Search plugins" }).fill("@openclaw/workboard");
+        await workboardCard.waitFor({ state: "visible", timeout: 5_000 });
+        await captureScreenshot(page, `08-scoped-package-${tab}.png`);
+
+        if (tab === "discover") {
+          const searchRequest = await gateway.waitForRequest("plugins.search");
+          expect(requestParams(searchRequest)).toEqual({
+            query: "@openclaw/workboard",
+            limit: 20,
+          });
+        }
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("browses the catalog, installs from ClawHub, enables Workboard, and refreshes authoritative state", async () => {
     const context = await newContext();

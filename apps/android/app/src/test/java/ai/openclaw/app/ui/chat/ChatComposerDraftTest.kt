@@ -75,6 +75,19 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun restoredAttachmentsReplaceTheCurrentComposerSet() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
+    val state = ChatComposerStateStore()
+    val existing = PendingAttachment("existing", "existing.jpg", "image/jpeg", "YQ==")
+    val restored = PendingAttachment("restored", "image-1", "image/png", "Yg==")
+    state.addAttachments(owner, listOf(existing))
+
+    state.replaceAttachments(owner, listOf(restored))
+
+    assertEquals(listOf(restored), state.attachments.value[owner])
+  }
+
+  @Test
   fun textDraftSnapshotRestoresEveryOwnerAfterProcessRecreation() {
     var saved = arrayListOf<String>()
     val first = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")

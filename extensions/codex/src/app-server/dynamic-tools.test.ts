@@ -1,5 +1,8 @@
 // Codex tests cover dynamic tools plugin behavior.
 import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
@@ -23,6 +26,7 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
@@ -31,6 +35,7 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -282,6 +287,55 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
   });
 
+  it("keeps model-visible tools stable when plugin discovery order changes", () => {
+    const tools = [
+      createTool({ name: "web_search" }),
+      createTool({ name: "sessions_yield" }),
+      createTool({ name: "message" }),
+      createTool({ name: "computer", catalogMode: "direct-only" }),
+      createTool({ name: "agents_list" }),
+      createTool({ name: "browser", catalogMode: "direct-only" }),
+      createTool({ name: "openclaw" }),
+    ];
+    const createBridge = (orderedTools: AnyAgentTool[]) =>
+      createCodexDynamicToolBridge({
+        tools: orderedTools,
+        registeredTools: orderedTools,
+        signal: new AbortController().signal,
+        directToolNames: ["openclaw"],
+      });
+    const forward = createBridge(tools);
+    const reversed = createBridge(tools.toReversed());
+
+    expect(forward.availableSpecs).toEqual(reversed.availableSpecs);
+    expect(forward.specs).toEqual(reversed.specs);
+    expect(specNames(forward.specs)).toEqual([
+      "agents_list",
+      "openclaw",
+      "sessions_yield",
+      "message",
+      "web_search",
+      "browser",
+      "computer",
+    ]);
+    expect(forward.specs.filter((spec) => spec.type === "namespace")).toEqual([
+      expect.objectContaining({
+        name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        tools: [
+          expect.objectContaining({ name: "message", deferLoading: true }),
+          expect.objectContaining({ name: "web_search", deferLoading: true }),
+        ],
+      }),
+      expect.objectContaining({
+        name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+        tools: [
+          expect.objectContaining({ name: "browser" }),
+          expect.objectContaining({ name: "computer" }),
+        ],
+      }),
+    ]);
+  });
+
   it("can register a durable tool schema while denying execution for the current turn", async () => {
     const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
     const onAgentToolResult = vi.fn();
@@ -297,7 +351,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual(["message", HEARTBEAT_RESPONSE_TOOL_NAME]);
+    expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
 
     const result = await bridge.handleToolCall(
       {
@@ -1305,6 +1359,79 @@ describe("createCodexDynamicToolBridge", () => {
         mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
       },
     ]);
+  });
+
+  it("transfers remote Slack file uploads over the Codex app-server connection", async () => {
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "codex-remote-slack-upload-",
+    });
+    const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "codex-remote-upload-"));
+    try {
+      const relativePath = "reports/slack-upload.txt";
+      const localPath = path.join(workspaceDir, relativePath);
+      const remoteContent = "authoritative remote Slack attachment\n";
+      await mkdir(path.dirname(localPath), { recursive: true });
+      await writeFile(localPath, remoteContent);
+
+      const toolResult = textToolResult("Uploaded.", { messageId: "message-1" });
+      const execute = vi.fn(async () => toolResult);
+      const remotePath = `/remote/codex-workspace/${relativePath}`;
+      const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
+        dataBase64: Buffer.from(remoteContent).toString("base64"),
+      }));
+      const bridge = createCodexDynamicToolBridge({
+        tools: [createTool({ name: "message", execute })],
+        signal: new AbortController().signal,
+        hookContext: {
+          workspaceDir,
+          remoteWorkspaceRoot: "/remote/codex-workspace",
+          remoteWorkspaceRequestTimeoutMs: 90_000,
+        },
+      });
+      bridge.setRemoteWorkspaceFileReader?.(readRemoteWorkspaceFile);
+
+      const result = await handleMessageToolCall(bridge, {
+        action: "upload-file",
+        channel: "slack",
+        to: "channel:C123",
+        filePath: remotePath,
+      });
+
+      expect(result).toEqual(expectInputText("Uploaded."));
+      const executedArgs = requireRecord(
+        callArg(execute, 0, 1, "Slack upload args"),
+        "upload args",
+      );
+      const stagedPath = executedArgs.filePath;
+      expectExecuteCall(execute, {
+        callId: "call-1",
+        args: {
+          action: "upload-file",
+          channel: "slack",
+          to: "channel:C123",
+          filePath: stagedPath,
+        },
+      });
+      expect(stagedPath).not.toBe(localPath);
+      expect(stagedPath).toEqual(
+        expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`),
+      );
+      expect(readRemoteWorkspaceFile).toHaveBeenCalledWith({
+        path: remotePath,
+        maxBytes: 64 * 1024 * 1024,
+        workspaceRoot: "/remote/codex-workspace",
+        signal: expect.any(AbortSignal),
+        timeoutMs: expect.any(Number),
+      });
+      expect(readRemoteWorkspaceFile.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(0);
+      expect(readRemoteWorkspaceFile.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(90_000);
+      await expect(readFile(String(stagedPath), "utf8")).resolves.toBe(remoteContent);
+      await expect(readFile(localPath, "utf8")).resolves.toBe(remoteContent);
+    } finally {
+      await rm(workspaceDir, { recursive: true, force: true });
+      await openClawState.cleanup();
+    }
   });
 
   it("records internal UI source replies separately from outbound messaging evidence", async () => {

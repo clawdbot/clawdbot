@@ -1,13 +1,17 @@
 // Vitest agents embedded agent config wires the agents embedded agent test shard.
-import { agentsEmbeddedTestPatterns } from "./vitest.agents-paths.mjs";
+import { agentVitestProjectOwners } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createAgentsEmbeddedVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(agentsEmbeddedTestPatterns, {
-    dir: "src/agents",
+  const owner = agentVitestProjectOwners.embedded;
+  return createScopedVitestConfig(owner.include, {
+    dir: owner.dir,
     env,
+    exclude: owner.exclude,
     fileParallelism: false,
-    name: "agents-embedded-agent",
+    // Cold shared harness imports exceed the generic limit on 2-vCPU hosted release runners.
+    hookTimeout: 600_000,
+    name: owner.name,
   });
 }
 

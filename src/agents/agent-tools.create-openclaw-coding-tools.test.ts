@@ -160,6 +160,13 @@ function cronCreatorToolNames(
 }
 
 describe("createOpenClawCodingTools", () => {
+  it("forwards the session web-search gate to core tool materialization", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+    createOpenClawCodingTools({ webSearchEnabled: false });
+
+    expect(latestCreateOpenClawToolsOptions().webSearchEnabled).toBe(false);
+  });
+
   it("reads node-hosted skill content through the assembled workspace-only read tool", async () => {
     const locator = "node://node-1/skills/pond/SKILL.md";
     const tools = createOpenClawCodingTools({
@@ -533,6 +540,35 @@ describe("createOpenClawCodingTools", () => {
     const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
     expectListIncludes(inheritedAllow, ["sessions_spawn", "read"]);
     expect(inheritedAllow?.includes("exec")).toBe(false);
+  });
+
+  it("keeps restricted spawn inheritance in the caller-owned runtime snapshot", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const inheritedToolAllowlistRef: string[] = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+      inheritedToolAllowlistRef,
+    });
+
+    expect(latestCreateOpenClawToolsOptions().inheritedToolAllowlist).toBe(
+      inheritedToolAllowlistRef,
+    );
+    expectListIncludes(inheritedToolAllowlistRef, ["read", "sessions_spawn"]);
+    expect(inheritedToolAllowlistRef).not.toContain("exec");
+  });
+
+  it("does not snapshot additive alsoAllow policies for spawn inheritance", () => {
+    const inheritedToolAllowlistRef: string[] = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { alsoAllow: ["read"], deny: ["exec"] } },
+      inheritedToolAllowlistRef,
+    });
+
+    expect(inheritedToolAllowlistRef).toEqual([]);
+    expect(latestCreateOpenClawToolsOptions().inheritedToolDenylist).toContain("exec");
   });
 
   it("preserves runtime-allowed message through restrictive profiles", () => {

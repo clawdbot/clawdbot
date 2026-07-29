@@ -65,6 +65,7 @@ type MutableGateway = {
 
 type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
+  workboard: { captured: boolean; busy: boolean } | null;
   readonly updateComplete: Promise<boolean>;
 };
 
@@ -83,6 +84,7 @@ function createGateway(client: GatewayBrowserClient): MutableGateway {
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -215,14 +217,24 @@ describe("sessions page lifecycle", () => {
     });
 
     const archived = [
-      ...page.querySelectorAll<HTMLButtonElement>(".sessions-view-segment button"),
-    ].find((button) => button.textContent?.trim() === "Archived");
-    archived?.click();
+      ...page.querySelectorAll<HTMLElement & { checked: boolean }>(
+        ".sessions-view-segment wa-radio",
+      ),
+    ].find((radio) => radio.textContent?.trim() === "Archived");
+    const group = archived?.closest<HTMLElement & { value: string }>("wa-radio-group");
+    if (group) {
+      group.value = "archived";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     await page.updateComplete;
 
     expect(page.statusFilter).toBe("archived");
     expect(context.navigate).toHaveBeenCalledWith("sessions", { search: "?status=archived" });
-    expect(archived?.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      [...page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-radio")].find(
+        (radio) => radio.textContent?.trim() === "Archived",
+      )?.checked,
+    ).toBe(true);
   });
 
   it("re-enumerates all archived sessions before bulk deletion", async () => {
@@ -372,7 +384,7 @@ describe("sessions page lifecycle", () => {
     await toast.updateComplete;
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
     await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(mutableGateway.setSessionKey).toHaveBeenLastCalledWith(key));
+    expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
 
     expect(patch).toHaveBeenNthCalledWith(1, key, { archived: true }, { agentId: undefined });
     expect(patch).toHaveBeenNthCalledWith(
@@ -601,6 +613,81 @@ describe("sessions page lifecycle", () => {
     await menu.updateComplete;
     expect(menu.forkDisabled).toBe(true);
     expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "offers capture when only an archived Workboard card matches",
+      metadata: { archivedAt: 10 },
+      captured: false,
+    },
+    {
+      name: "recognizes an active Workboard card",
+      metadata: undefined,
+      captured: true,
+    },
+  ])("$name", async ({ metadata, captured }) => {
+    const row = { key: "agent:main:captured", kind: "direct" } as GatewaySessionRow;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, createSessions());
+    context.runtimeConfig.state.configSnapshot = {
+      config: { plugins: { entries: { workboard: { enabled: true } } } },
+    };
+    context.workboard.state.cards = [
+      {
+        id: "captured-card",
+        title: "Captured session",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 2,
+        sessionKey: row.key,
+        metadata,
+      },
+    ];
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const page = await createRenderedPage(context, result);
+
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sessions page menu");
+    }
+    await menu.updateComplete;
+
+    expect(menu.workboard).toEqual({ captured, busy: false });
+    expect(menu.querySelector('[value="workboard"]')?.textContent).toContain(
+      captured ? "Open Workboard card" : "Add to Workboard",
+    );
+  });
+
+  it("disables the Workboard action for every concurrently captured session", async () => {
+    const row = { key: "agent:main:second-capture", kind: "direct" } as GatewaySessionRow;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, createSessions());
+    context.runtimeConfig.state.configSnapshot = {
+      config: { plugins: { entries: { workboard: { enabled: true } } } },
+    };
+    context.workboard.state.capturingSessionKeys.add("agent:main:first-capture");
+    context.workboard.state.capturingSessionKeys.add(row.key);
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const page = await createRenderedPage(context, result);
+
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sessions page menu");
+    }
+    await menu.updateComplete;
+
+    expect(menu.workboard).toEqual({ captured: false, busy: true });
+    expect(menu.querySelector('[value="workboard"]')?.hasAttribute("disabled")).toBe(true);
   });
 
   it("rejects preloaded data after a same-client reconnect and loads the current epoch", async () => {

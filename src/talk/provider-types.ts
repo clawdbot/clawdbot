@@ -128,6 +128,8 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
+  /** Host-injected agent delegation runner for provider-owned browser control channels. */
+  runAgentConsult?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
 };
 
 export type RealtimeVoiceBrowserAudioContract = {
@@ -191,6 +193,8 @@ export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;
   /** False when the provider cannot accept a tool result without starting a response. */
   supportsToolResultSuppression?: boolean;
+  /** Per-session override for provider-confirmed input-audio barge-in handling. */
+  handlesInputAudioBargeIn?: boolean;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;

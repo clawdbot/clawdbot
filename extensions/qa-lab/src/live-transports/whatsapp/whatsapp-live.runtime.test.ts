@@ -1011,64 +1011,20 @@ describe("WhatsApp QA live runtime", () => {
     });
   });
 
-  it("keeps mock-backed and native approval scenarios out of default live-frontier selection", () => {
-    const expectedDefaultIds = [
-      "whatsapp-canary",
-      "whatsapp-mention-gating",
-      "whatsapp-top-level-reply-shape",
-      "whatsapp-reply-to-message",
-      "whatsapp-group-reply-to-message",
-      "whatsapp-status-reactions",
-      "whatsapp-group-allowlist-block",
-    ];
+  it("derives live-frontier selection from taxonomy and provider eligibility", () => {
+    const scenarioIds = testing.resolveWhatsAppQaScenarioIds({ providerMode: "live-frontier" });
 
-    expect(
-      testing.resolveWhatsAppQaScenarioIds({ providerMode: "live-frontier" }).slice(0, -1),
-    ).toEqual(expectedDefaultIds);
+    expect(scenarioIds).toContain("whatsapp-canary");
+    expect(scenarioIds).toContain("whatsapp-mention-gating");
+    expect(scenarioIds).not.toContain("whatsapp-native-new-command");
   });
 
-  it("adds deterministic audio preflight to the default mock-openai WhatsApp selection", () => {
-    expect(testing.resolveWhatsAppQaScenarioIds({ providerMode: "mock-openai" })).toEqual([
-      "whatsapp-canary",
-      "whatsapp-mention-gating",
-      "whatsapp-group-pending-history-context",
-      "whatsapp-broadcast-group-fanout",
-      "whatsapp-group-activation-always",
-      "whatsapp-group-reply-to-bot-triggers",
-      "whatsapp-top-level-reply-shape",
-      "whatsapp-reply-to-message",
-      "whatsapp-group-reply-to-message",
-      "whatsapp-reply-to-mode-batched",
-      "whatsapp-agent-message-action-react",
-      "whatsapp-agent-message-action-upload-file",
-      "whatsapp-group-agent-message-action-react",
-      "whatsapp-group-agent-message-action-upload-file",
-      "whatsapp-inbound-reaction-no-trigger",
-      "whatsapp-reply-context-isolation",
-      "whatsapp-inbound-image-caption",
-      "whatsapp-audio-preflight",
-      "whatsapp-outbound-media-matrix",
-      "whatsapp-outbound-document-preserves-filename",
-      "whatsapp-outbound-poll",
-      "whatsapp-group-outbound-media",
-      "whatsapp-group-outbound-audio",
-      "whatsapp-group-outbound-poll",
-      "whatsapp-message-actions",
-      "whatsapp-inbound-structured-messages",
-      "whatsapp-group-audio-gating",
-      "whatsapp-reply-delivery-shape",
-      "whatsapp-stream-final-message-accounting",
-      "whatsapp-status-reactions",
-      "whatsapp-status-reaction-lifecycle",
-      "whatsapp-group-allowlist-block",
-      "whatsapp-help-command",
-      "whatsapp-commands-command",
-      "whatsapp-tools-compact-command",
-      "whatsapp-whoami-command",
-      "whatsapp-context-command",
-      "whatsapp-tool-only-usage-footer",
-      "whatsapp-native-new-command",
-    ]);
+  it("includes mock-only scenarios when the provider lane supports them", () => {
+    const scenarioIds = testing.resolveWhatsAppQaScenarioIds({ providerMode: "mock-openai" });
+
+    expect(scenarioIds).toContain("whatsapp-audio-preflight");
+    expect(scenarioIds).toContain("whatsapp-native-new-command");
+    expect(scenarioIds).toContain("whatsapp-tool-only-usage-footer");
   });
 
   it("defines Phase 2 WhatsApp group scenarios as mock-backed user-path scenarios", () => {

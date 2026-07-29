@@ -49,7 +49,6 @@ import {
   resolveSessionAgentId,
   resolveSessionModelRef,
   persistInboundImagesForTranscript,
-  sanitizeInboundSystemTags,
   sendDurableMessageBatch,
   canonicalizeSessionEntryAliases,
 } from "./server-node-events.runtime.js";
@@ -898,20 +897,16 @@ export const handleNodeEvent = async (
       if (!keyRaw) {
         return undefined;
       }
-      const key = sanitizeInboundSystemTags(keyRaw);
+      const key = keyRaw;
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
       }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
-      const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
-      const title = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeOptionalString(obj.title) ?? ""),
-      );
-      const text = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeOptionalString(obj.text) ?? ""),
-      );
+      const packageName = packageNameRaw ?? null;
+      const title = compactNotificationEventText(normalizeOptionalString(obj.title) ?? "");
+      const text = compactNotificationEventText(normalizeOptionalString(obj.text) ?? "");
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -947,7 +942,9 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      await ctx.nodeSubscribe(nodeId, sessionKey, opts?.connId);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
+      await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "chat.unsubscribe": {
@@ -958,7 +955,8 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      await ctx.nodeUnsubscribe(nodeId, sessionKey, opts?.connId);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "exec.started":
@@ -1005,22 +1003,17 @@ export const handleNodeEvent = async (
       if (evt.event === "exec.denied") {
         return undefined;
       }
-      const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
+      const command = normalizeOptionalString(obj.command) ?? "";
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
-      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
-      // matching the first balanced `(...)` and stray parens in user-supplied
-      // input would break the metadata/body boundary. We strip pre-sanitize so
-      // that legitimate `[System Message]` style tags can still be converted to
-      // `(System Message)` by sanitizeInboundSystemTags afterward.
-      const reason = sanitizeInboundSystemTags(
-        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
-      );
+      const output = normalizeOptionalString(obj.output) ?? "";
+      // Strip parens from the raw reason: the `Exec denied (node=..., <reason>): cmd`
+      // wire format is parsed by matching the first balanced `(...)`, and stray
+      // parens in user-supplied input would break the metadata/body boundary.
+      const reason = (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, "");
 
       let text;
       if (evt.event === "exec.started") {

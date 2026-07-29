@@ -31,6 +31,104 @@ describe("setPluginEnabledInConfig", () => {
     });
   });
 
+  it.each([
+    { action: "enables", enabled: true },
+    { action: "disables", enabled: false },
+  ])("$action one canonical compatibility entry without losing its config", ({ enabled }) => {
+    const config = {
+      plugins: {
+        allow: [" GOOGLE-GEMINI-CLI "],
+        entries: {
+          "GOOGLE-GEMINI-CLI": {
+            enabled: !enabled,
+            custom: "preserved",
+            config: { region: "us" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = setPluginEnabledInConfig(config, "google", enabled);
+
+    expect(next.plugins?.allow).toEqual(["google"]);
+    expect(next.plugins?.entries).toEqual({
+      google: {
+        enabled,
+        custom: "preserved",
+        config: { region: "us" },
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "canonical entry last",
+      entries: {
+        "GOOGLE-GEMINI-CLI": {
+          config: {
+            region: "us",
+            nested: { legacy: true, shared: "legacy" },
+          },
+          custom: "legacy",
+          enabled: true,
+        },
+        google: {
+          config: {
+            model: "gemini",
+            nested: { canonical: true, shared: "canonical" },
+          },
+          custom: "canonical",
+          enabled: false,
+        },
+      },
+    },
+    {
+      name: "canonical entry first",
+      entries: {
+        google: {
+          config: {
+            model: "gemini",
+            nested: { canonical: true, shared: "canonical" },
+          },
+          custom: "canonical",
+          enabled: false,
+        },
+        "GOOGLE-GEMINI-CLI": {
+          config: {
+            region: "us",
+            nested: { legacy: true, shared: "legacy" },
+          },
+          custom: "legacy",
+          enabled: true,
+        },
+      },
+    },
+  ])("deep-merges compatibility settings with $name", ({ entries }) => {
+    const config = {
+      plugins: {
+        entries,
+      },
+    } as OpenClawConfig;
+
+    const next = setPluginEnabledInConfig(config, "google", true);
+
+    expect(next.plugins?.entries).toEqual({
+      google: {
+        config: {
+          model: "gemini",
+          nested: {
+            canonical: true,
+            legacy: true,
+            shared: "canonical",
+          },
+          region: "us",
+        },
+        custom: "canonical",
+        enabled: true,
+      },
+    });
+  });
+
   it("keeps built-in channel and plugin entry flags in sync", () => {
     const config = {
       channels: {

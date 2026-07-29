@@ -1,11 +1,13 @@
 // Microsoft Teams plugin owns durable Bot Framework activity admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { classifyMSTeamsSendError } from "./errors.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -48,20 +50,9 @@ type MSTeamsIngress = {
   stop: () => Promise<void>;
 };
 
-class MSTeamsIngressPayloadError extends Error {
-  constructor(
-    readonly reason: "invalid-activity" | "invalid-json" | "unsupported-activity",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MSTeamsIngressPayloadError";
-  }
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const MSTeamsIngressPayloadError = createChannelIngressError<
+  "invalid-activity" | "invalid-json" | "unsupported-activity"
+>("MSTeamsIngressPayloadError", { withReason: true });
 
 function isDispatchableActivity(activity: MSTeamsIngressActivity): boolean {
   return (

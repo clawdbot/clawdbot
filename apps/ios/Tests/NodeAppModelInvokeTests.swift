@@ -88,6 +88,18 @@ private actor ApprovalResolutionCapture {
     }
 }
 
+private actor WatchApprovalReadbackProbe {
+    private var approvalIDs: [String] = []
+
+    func record(_ approvalID: String) {
+        self.approvalIDs.append(approvalID)
+    }
+
+    func snapshot() -> [String] {
+        self.approvalIDs
+    }
+}
+
 private actor MockHealthSummaryService: HealthSummaryServicing {
     private(set) var periods: [OpenClawHealthSummaryPeriod] = []
 
@@ -2868,6 +2880,44 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(talkMode.cancelPushToTalk(captureId: second.captureId).status == "cancelled")
     }
 
+    @Test @MainActor func `transcribed PTT releases audio once before replacement capture`() async throws {
+        var ownershipEvents: [String] = []
+        let talkMode = TalkModeManager(
+            allowSimulatorCapture: true,
+            audioSessionDeactivationAction: { ownershipEvents.append("deactivate") })
+        talkMode.setPushToTalkAudioOwnershipEndHandler {
+            ownershipEvents.append("release:\($0)")
+        }
+        defer {
+            talkMode.setPushToTalkAudioOwnershipEndHandler(nil)
+            talkMode.stop()
+        }
+
+        let first = try await talkMode.beginPushToTalk(transcriptionOnly: true)
+        await talkMode._test_handlePushToTalkTranscript(
+            "transcription survives release",
+            isFinal: false,
+            captureId: first.captureId)
+
+        let finished = talkMode.endPushToTalk(captureId: first.captureId)
+
+        #expect(finished.status == "transcribed")
+        #expect(finished.transcript == "transcription survives release")
+        #expect(ownershipEvents == ["deactivate", "release:\(first.captureId)"])
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(talkMode._test_pushToTalkCaptureIsIdle())
+
+        let replacement = try await talkMode.beginPushToTalk(transcriptionOnly: true)
+        #expect(replacement.captureId != first.captureId)
+        #expect(talkMode.cancelPushToTalk(captureId: replacement.captureId).status == "cancelled")
+        #expect(ownershipEvents == [
+            "deactivate",
+            "release:\(first.captureId)",
+            "deactivate",
+            "release:\(replacement.captureId)",
+        ])
+    }
+
     @Test @MainActor func `standalone PTT deactivates audio before releasing ownership`() async throws {
         var events: [String] = []
         let talkMode = TalkModeManager(
@@ -3708,6 +3758,23 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
+    @Test @MainActor func `cancelled background timer cannot suppress a replacement background lease`() async {
+        let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+        defer { appModel.setScenePhase(.active) }
+
+        appModel.setScenePhase(.background)
+        appModel.setScenePhase(.active)
+        appModel.setScenePhase(.background)
+
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+
+        #expect(appModel.isBackgrounded)
+        #expect(!appModel._test_backgroundReconnectIsSuppressed())
+        #expect(appModel.gatewayStatusText != "Background idle")
+    }
+
     @Test @MainActor func `stale foreground resume cannot reopen Talk after rebackgrounding`() async {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(talkMode: talkMode)
@@ -4472,6 +4539,65 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let snapshot = try #require(watchService.lastSentExecApprovalSnapshot)
         #expect(snapshot.requestId == "snapshot-held-all")
         #expect(snapshot.approvals.map(\.id) == approvalIDs.sorted())
+    }
+
+    @Test @MainActor func `watch readback classifies cached persisted and held approvals once in owner order`()
+        async throws
+    {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        NodeAppModel._test_setPersistedWatchExecApprovalBridgeStateJSON(#"""
+        {
+          "approvals": [],
+          "pendingApprovalReadbacks": [{
+            "approvalId": "approval-persisted-owner",
+            "gatewayStableID": "test-gateway"
+          }]
+        }
+        """#)
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-cached-owner",
+                commandText: "echo cached",
+                expiresAtMs: 4_000_000_000_000)))
+
+        let expectedApprovalIDs = [
+            "approval-cached-owner",
+            "approval-persisted-owner",
+            "approval-held-owner",
+        ]
+        let probe = WatchApprovalReadbackProbe()
+        appModel._test_setUnifiedExecApprovalGetResponses(
+            expectedApprovalIDs.map {
+                (approvalID: $0, json: makePendingExecApprovalJSON($0))
+            },
+            beforeResponse: { approvalID in
+                await probe.record(approvalID)
+            })
+
+        await appModel._test_refreshWatchExecApprovalSnapshotOnDemand(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-canonical-owner-order",
+                gatewayStableID: "test-gateway",
+                heldApprovals: [WatchExecApprovalSnapshotRequestItem(
+                    approvalId: "approval-held-owner",
+                    activeResolutionAttemptId: nil)],
+                sentAtMs: 226,
+                transport: "sendMessage"))
+
+        #expect(await probe.snapshot() == expectedApprovalIDs)
+        let snapshot = try #require(watchService.sentExecApprovalSnapshots.first {
+            $0.requestId == "snapshot-canonical-owner-order"
+        })
+        #expect(snapshot.requestId == "snapshot-canonical-owner-order")
+        #expect(snapshot.requestGatewayStableID == "test-gateway")
+        #expect(snapshot.approvals.map(\.id) == expectedApprovalIDs.sorted())
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().isEmpty)
     }
 
     @Test @MainActor func `canonical watch refresh does not acknowledge byte distinct owner`() async throws {
@@ -5583,6 +5709,43 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(items.map(\.text) == ["Still worth reading"])
     }
 
+    @Test func `canonical watch chat owner keeps the last five readable projected rows`() throws {
+        let rawMessages = try (0..<7).map { index in
+            try makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Readable message \(index)",
+                timestamp: Double(index + 1))
+        }
+
+        let items = WatchChatPresentation.makeItems(from: rawMessages)
+
+        #expect(items.map(\.text) == (2..<7).map { "Readable message \($0)" })
+    }
+
+    @Test func `canonical watch chat owner anchors terminal tool mirrors to the submitted turn`() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(
+                role: "user",
+                text: "Send the update",
+                timestamp: 3000,
+                idempotencyKey: "watch-run:user"),
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Update sent",
+                timestamp: 4000,
+                serverId: "tool-result-1",
+                isMessageToolMirror: true),
+        ]
+
+        let reply = WatchChatPresentation.replyText(
+            from: rawMessages,
+            runID: "watch-run",
+            submittedText: "Send the update",
+            submittedAtMs: 2500)
+
+        #expect(reply == "Update sent")
+    }
+
     @Test func `watch chat preview reads responses output text`() throws {
         let rawMessages = try [
             makeWatchChatRawMessage(
@@ -6000,6 +6163,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         _ = outbox.ingest(reply, isAvailable: false, gatewayStableID: "gateway-a")
 
         #expect(outbox.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a") == reply)
+    }
+
+    @Test func `watch messages only override thinking for quick replies`() {
+        #expect(NodeAppModel.watchThinkingOverride(for: .chat) == nil)
+        #expect(NodeAppModel.watchThinkingOverride(for: .quickReply) == "low")
     }
 
     @Test func `watch message outbox discards permanent gateway failures`() {
@@ -7734,6 +7902,41 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         {
         } else {
             Issue.record("expected delivered reply to remain deduped after restart")
+        }
+    }
+
+    @Test @MainActor func `watch message outbox tombstone rejects stale persisted queue`() throws {
+        let suiteName = "watch-message-stale-queue-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let event = WatchAppCommandEvent(
+            commandId: "delivered-before-crash",
+            command: .sendChat,
+            sessionKey: "main",
+            gatewayStableID: "gateway-a",
+            text: "Delivered reply",
+            sentAtMs: 1,
+            transport: "sendMessage",
+            messageKind: .quickReply)
+        let firstOutbox = WatchMessageOutbox(defaults: defaults)
+        _ = firstOutbox.ingest(event, isAvailable: true, gatewayStableID: "gateway-a")
+        let staleQueue = try #require(defaults.data(forKey: "watch.chat.command.queue.v1"))
+        firstOutbox.removeQueuedMessage(messageID: event.commandId, gatewayStableID: "gateway-a")
+
+        // Simulate termination after the delivery tombstone persisted but before
+        // the older queue snapshot was removed.
+        defaults.set(staleQueue, forKey: "watch.chat.command.queue.v1")
+        let restoredOutbox = WatchMessageOutbox(defaults: defaults)
+
+        #expect(restoredOutbox.queuedCount() == 0)
+        if case .deduped = restoredOutbox.ingest(
+            event,
+            isAvailable: true,
+            gatewayStableID: "gateway-a")
+        {
+        } else {
+            Issue.record("expected the delivery tombstone to reject the stale queue row")
         }
     }
 

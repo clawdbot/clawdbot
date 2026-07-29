@@ -1,54 +1,33 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
 import {
   loadTranscriptEventsSync,
   replaceTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
-import type { SqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
-import {
-  serializeJsonlLine,
-  writeJsonlEntriesSync,
-} from "../../config/sessions/transcript-jsonl.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
-  hasReadableSessionHeader,
   isIndexedSessionEntry,
   migrateToCurrentVersion,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
 } from "./session-manager-codec.js";
-import {
-  loadEntriesFromFileWithSnapshot,
-  loadSqliteMarkedSessionFile,
-  publishRememberedSessionFileSnapshot,
-  recoverCorruptSessionEntries,
-  rememberWrittenSessionEntries,
-  type LoadedSessionFile,
-} from "./session-manager-file.js";
 import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
   FileEntry,
   NewSessionOptions,
   PreservedOpaqueFileEntry,
   SessionEntry,
-  SessionFileSnapshot,
   SessionHeader,
   SessionLeafControl,
 } from "./session-manager-types.js";
 
-export type SqliteSessionManagerPersistence = SqliteSessionFileMarker & {
-  sessionKey: string;
-};
+export type SessionManagerPersistenceTarget = SessionTranscriptRuntimeTarget;
 
 export class SessionManagerCore {
+  migrated = false;
   protected sessionId = "";
-  protected sessionFile: string | undefined;
-  protected sessionDir: string;
   protected cwd: string;
-  protected shouldPersist: boolean;
-  protected flushed = false;
   protected fileEntries: FileEntry[] = [];
   protected opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   protected byId: Map<string, SessionEntry> = new Map();
@@ -59,141 +38,85 @@ export class SessionManagerCore {
   protected labelTimestampsById: Map<string, string> = new Map();
   protected leafId: string | null = null;
   protected appendParentId: string | null = null;
+  protected appendMode: "side" | undefined;
   protected promptReleasedSideBranchParentId: string | null | undefined;
-  protected recoveredCorruptHeader = false;
-  protected sessionFileSnapshot: SessionFileSnapshot | undefined;
-  protected sqlitePersistence: SqliteSessionManagerPersistence | undefined;
+  protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
+  protected persistenceHeaderPending = false;
 
   constructor(
     cwd: string,
-    sessionDir: string,
-    sessionFile: string | undefined,
-    persist: boolean,
-    loadedSessionFile?: LoadedSessionFile,
-    sqlitePersistence?: SqliteSessionManagerPersistence,
+    persistenceTarget?: SessionManagerPersistenceTarget,
+    loadedEntries?: FileEntry[],
   ) {
     this.cwd = cwd;
-    this.sessionDir = sessionDir;
-    this.shouldPersist = persist;
-    this.sqlitePersistence = sqlitePersistence;
-    if (persist && sessionDir && !existsSync(sessionDir)) {
-      mkdirSync(sessionDir, { recursive: true });
-    }
-
-    if (sessionFile) {
-      if (sqlitePersistence) {
-        this.setLoadedSqliteSessionFile(
-          sessionFile,
-          loadedSessionFile ?? { entries: [], snapshot: undefined },
-        );
-      } else {
-        this.setLoadedSessionFile(
-          sessionFile,
-          loadedSessionFile ?? loadEntriesFromFileWithSnapshot(sessionFile),
-        );
-      }
+    this.persistenceTarget = persistenceTarget;
+    if (persistenceTarget || loadedEntries) {
+      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
     } else {
       this.newSession();
     }
   }
 
-  setSessionFile(sessionFile: string): void {
-    const sqliteLoaded = loadSqliteMarkedSessionFile(
-      sessionFile,
-      (marker) => loadTranscriptEventsSync(marker) as FileEntry[],
-      { fallbackCwd: this.cwd },
+  setSessionTarget(target: SessionManagerPersistenceTarget): void {
+    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    if (sqliteLoaded) {
-      this.cwd = sqliteLoaded.cwd;
-      this.sqlitePersistence = {
-        ...sqliteLoaded.sqliteMarker,
-        sessionKey: sqliteLoaded.sessionKey,
-      };
-      this.setLoadedSqliteSessionFile(sessionFile, {
-        entries: sqliteLoaded.entries,
-        snapshot: undefined,
-      });
-      return;
+    this.setLoadedSessionTarget(target, entries);
+    if (header?.cwd) {
+      this.cwd = header.cwd;
     }
-    this.sqlitePersistence = undefined;
-    this.setLoadedSessionFile(sessionFile, loadEntriesFromFileWithSnapshot(sessionFile));
   }
 
-  protected setLoadedSessionFile(sessionFile: string, loaded: LoadedSessionFile): void {
-    this.sessionFile = resolve(sessionFile);
-    this.sessionFileSnapshot = undefined;
-    this.recoveredCorruptHeader = false;
-    if (!existsSync(this.sessionFile)) {
-      const explicitPath = this.sessionFile;
-      this.newSession();
-      this.sessionFile = explicitPath;
+  protected setLoadedSessionTarget(
+    target: SessionManagerPersistenceTarget | undefined,
+    entries: FileEntry[],
+  ): void {
+    const partitioned = partitionSessionFileEntries(entries);
+    // Only a physically empty transcript may initialize lazily. Opaque persisted rows still need
+    // a canonical header, or runtime would silently replace malformed history with a fresh session.
+    if (partitioned.fileEntries.length === 0 && partitioned.opaqueEntries.length === 0) {
+      this.persistenceTarget = target ? { ...target } : undefined;
+      this.initializeSession({ id: target?.sessionId });
+      this.persistenceHeaderPending = target !== undefined;
       return;
     }
-
-    const partitioned = partitionSessionFileEntries(loaded.entries);
+    const header = partitioned.fileEntries.find((entry) => entry.type === "session");
+    if (target && (header?.version ?? 1) < CURRENT_SESSION_VERSION) {
+      throw new Error(
+        "Persisted legacy session transcripts require doctor/import migration before runtime use",
+      );
+    }
+    this.persistenceHeaderPending = false;
+    this.persistenceTarget = target ? { ...target } : undefined;
     this.fileEntries = partitioned.fileEntries;
     this.opaqueFileEntries = partitioned.opaqueEntries;
-    this.sessionFileSnapshot = loaded.snapshot;
-    if (this.fileEntries.length === 0) {
-      const recoveredEntries = recoverCorruptSessionEntries(this.sessionFile, this.cwd);
-      if (recoveredEntries && hasReadableSessionHeader(recoveredEntries)) {
-        const recovered = partitionSessionFileEntries(recoveredEntries);
-        this.fileEntries = recovered.fileEntries;
-        this.opaqueFileEntries = recovered.opaqueEntries;
-        const header = this.fileEntries.find((entry) => entry.type === "session");
-        this.sessionId = header?.id ?? createSessionId();
-        migrateToCurrentVersion(this.fileEntries, recovered.fileEntriesByOriginalIndex);
-        this.buildIndex();
-        this.replacePersistedTranscript();
-        this.recoveredCorruptHeader = true;
-        this.flushed = true;
-        return;
-      }
-
-      const explicitPath = this.sessionFile;
-      this.newSession();
-      this.sessionFile = explicitPath;
-      this.replacePersistedTranscript();
-      this.flushed = true;
-      return;
-    }
-
-    const header = this.fileEntries.find((entry) => entry.type === "session");
-    this.sessionId = header?.id ?? createSessionId();
-    const migrated = migrateToCurrentVersion(
+    this.sessionId = header?.id ?? target?.sessionId ?? createSessionId();
+    this.migrated = migrateToCurrentVersion(
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
     );
     this.buildIndex();
-    if (migrated) {
-      this.replacePersistedTranscript();
-    }
-    this.flushed = true;
   }
 
-  protected setLoadedSqliteSessionFile(sessionFile: string, loaded: LoadedSessionFile): void {
-    this.sessionFile = sessionFile;
-    this.sessionFileSnapshot = undefined;
-    this.recoveredCorruptHeader = false;
-    const partitioned = partitionSessionFileEntries(loaded.entries);
-    if (partitioned.fileEntries.length === 0) {
-      this.newSession({ id: this.sqlitePersistence?.sessionId });
-      this.sessionFile = sessionFile;
-      return;
+  reloadPersistedTranscript(): void {
+    if (this.persistenceTarget) {
+      const runtimeCwd = this.cwd;
+      this.setSessionTarget(this.persistenceTarget);
+      this.cwd = runtimeCwd;
     }
-    this.fileEntries = partitioned.fileEntries;
-    this.opaqueFileEntries = partitioned.opaqueEntries;
-    const header = this.fileEntries.find((entry) => entry.type === "session");
-    this.sessionId = header?.id ?? this.sqlitePersistence?.sessionId ?? createSessionId();
-    migrateToCurrentVersion(this.fileEntries, partitioned.fileEntriesByOriginalIndex);
-    this.buildIndex();
-    this.flushed = true;
   }
 
   newSession(options?: NewSessionOptions): string | undefined {
-    this.recoveredCorruptHeader = false;
-    this.sessionFileSnapshot = undefined;
-    this.sessionId = options?.id ?? createSessionId();
+    if (this.persistenceTarget) {
+      throw new Error("Persisted session managers cannot change session identity in place");
+    }
+    return this.initializeSession(options);
+  }
+
+  private initializeSession(options?: NewSessionOptions): string | undefined {
+    this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createSessionId();
+    this.migrated = false;
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
       type: "session",
@@ -213,14 +136,9 @@ export class SessionManagerCore {
     this.labelTimestampsById.clear();
     this.leafId = null;
     this.appendParentId = null;
+    this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
-    this.flushed = false;
-
-    if (this.shouldPersist) {
-      const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-      this.sessionFile = join(this.getSessionDir(), `${fileTimestamp}_${this.sessionId}.jsonl`);
-    }
-    return this.sessionFile;
+    return this.persistenceTarget ? this.sessionId : undefined;
   }
 
   protected resolveOpaqueLeafTargetId(targetId: string | null): string | null {
@@ -273,6 +191,7 @@ export class SessionManagerCore {
     this.labelTimestampsById.clear();
     this.leafId = null;
     this.appendParentId = null;
+    this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
     let latestResetId: string | undefined;
@@ -308,6 +227,7 @@ export class SessionManagerCore {
           }
           this.leafId = effectiveLeafState.leafId;
           this.appendParentId = effectiveLeafState.appendParentId;
+          this.appendMode = effectiveLeafState.appendMode;
           this.promptReleasedSideBranchParentId =
             effectiveLeafState.appendMode === "side"
               ? effectiveLeafState.appendParentId
@@ -334,6 +254,10 @@ export class SessionManagerCore {
       }
       const entry = this.fileEntries[index];
       if (!isIndexedSessionEntry(entry)) {
+        continue;
+      }
+      if (entry.type === "label" && !this.byId.has(entry.targetId)) {
+        this.opaqueParentsById.set(entry.id, this.resolveCanonicalParentId(entry.parentId));
         continue;
       }
       const crossesResetBoundary =
@@ -368,9 +292,11 @@ export class SessionManagerCore {
       }
       this.appendParentId = entry.id;
       if (isSessionTranscriptSideAppendEntry(entry)) {
+        this.appendMode = "side";
         this.promptReleasedSideBranchParentId = entry.id;
       } else {
         this.leafId = entry.id;
+        this.appendMode = undefined;
         this.promptReleasedSideBranchParentId = undefined;
       }
       if (entry.type === "label") {
@@ -403,6 +329,9 @@ export class SessionManagerCore {
       ? (this.logicalParentsById.get(entry.id) ?? null)
       : this.resolveCanonicalParentId(entry.parentId);
     let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
+    if (normalized.parentId === normalized.id) {
+      normalized = { ...normalized, parentId: null };
+    }
     if (
       (normalized.type === "compaction" || normalized.type === "reset") &&
       normalized.firstKeptEntryId !== undefined &&
@@ -507,7 +436,15 @@ export class SessionManagerCore {
 
   protected rememberLeafControl(leafEntry: SessionLeafControl): void {
     this.opaqueFileEntries.push({ index: this.fileEntries.length, record: leafEntry });
-    this.opaqueParentsById.set(leafEntry.id, this.leafId);
+    this.opaqueParentsById.set(leafEntry.id, leafEntry.targetId);
+  }
+
+  getAppendParentId(): string | null {
+    return this.appendParentId;
+  }
+
+  getAppendMode(): "side" | undefined {
+    return this.appendMode;
   }
 
   protected getPersistedFileEntries(
@@ -570,8 +507,8 @@ export class SessionManagerCore {
     return entries;
   }
 
-  getSerializedFileLinesForRewrite(): string[] {
-    return this.getPersistedFileEntries().map(serializeJsonlLine);
+  getPersistedEntries(): unknown[] {
+    return this.getPersistedFileEntries();
   }
 
   clearPreservedOpaqueFileEntries(): void {
@@ -579,85 +516,42 @@ export class SessionManagerCore {
     this.opaqueParentsById.clear();
     this.invalidLeafControlIds.clear();
     this.appendParentId = null;
+    this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
   }
 
-  protected writeFullFile(
-    leafAppendParentId: string | null = this.appendParentId,
-    leafAppendMode?: "side",
-  ): string {
-    return this.sessionFile
-      ? writeJsonlEntriesSync(
-          this.sessionFile,
-          this.getPersistedFileEntries(leafAppendParentId, leafAppendMode),
-        )
-      : "";
-  }
-
   protected replacePersistedTranscript(options?: {
-    publishSnapshot?: boolean;
     leafAppendParentId?: string | null;
     leafAppendMode?: "side";
   }): void {
-    if (!this.shouldPersist) {
+    if (!this.persistenceTarget) {
       return;
     }
     const leafAppendParentId =
       options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
-    if (this.sqlitePersistence) {
-      replaceTranscriptEventsSync(
-        {
-          agentId: this.sqlitePersistence.agentId,
-          sessionId: this.sqlitePersistence.sessionId,
-          sessionKey: this.sqlitePersistence.sessionKey,
-          storePath: this.sqlitePersistence.storePath,
-        },
-        this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode),
-      );
-      this.flushed = true;
-      return;
-    }
-    if (!this.sessionFile) {
-      return;
-    }
-    const content = this.writeFullFile(leafAppendParentId, options?.leafAppendMode);
-    const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
-    this.sessionFileSnapshot = rememberedWrite.snapshot;
-    if (rememberedWrite.verifiedWrite && options?.publishSnapshot !== false) {
-      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
-    }
+    replaceTranscriptEventsSync(
+      this.persistenceTarget,
+      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
+    );
+    this.persistenceHeaderPending = false;
   }
 
-  /** Makes pending append-oriented persistence durable without replacing SQLite transcripts. */
-  protected flushPendingPersistence(): void {
-    if (!this.shouldPersist || this.sqlitePersistence || this.flushed || !this.sessionFile) {
-      return;
-    }
-    this.replacePersistedTranscript();
-    this.flushed = true;
-  }
+  /** SQLite appends are synchronous; retained for the AgentSession contract. */
+  protected flushPendingPersistence(): void {}
 
   isPersisted(): boolean {
-    return this.shouldPersist;
+    return this.persistenceTarget !== undefined;
   }
 
   getCwd(): string {
     return this.cwd;
   }
 
-  getSessionDir(): string {
-    return this.sessionDir;
-  }
-
   getSessionId(): string {
     return this.sessionId;
   }
 
-  wasRecoveredFromCorruptHeader(): boolean {
-    return this.recoveredCorruptHeader;
-  }
-
-  getSessionFile(): string | undefined {
-    return this.sessionFile;
+  getSessionTarget(): SessionManagerPersistenceTarget | undefined {
+    return this.persistenceTarget ? { ...this.persistenceTarget } : undefined;
   }
 }

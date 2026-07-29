@@ -23,12 +23,13 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { hasStagedMediaProjection } from "../../media/media-facts.js";
+import { hasStagedMediaFacts } from "../../media/media-facts.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   sessionDeliveryChannel,
@@ -240,7 +241,7 @@ export async function getReplyFromConfig(
       isFastTestEnv,
     }),
   );
-  const inboundMediaWasAlreadyStaged = hasStagedMediaProjection(ctx);
+  const inboundMediaWasAlreadyStaged = hasStagedMediaFacts(ctx.media);
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
@@ -501,6 +502,29 @@ export async function getReplyFromConfig(
     }
     throw error;
   }
+  if (!useFastTestBootstrap) {
+    try {
+      const baselineEntry = await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
+        ensureSessionDiffBaseline({
+          cwd:
+            normalizeOptionalString(sessionState.sessionEntry.spawnedCwd) ??
+            normalizeOptionalString(sessionState.sessionEntry.spawnedWorkspaceDir) ??
+            workspaceDir,
+          entry: sessionState.sessionEntry,
+          isNewSession: sessionState.isNewSession,
+          sessionKey: sessionState.sessionKey,
+          storePath: sessionState.storePath,
+        }),
+      );
+      sessionState.sessionEntry = baselineEntry;
+      sessionState.sessionEntryHandle.replaceCurrent(baselineEntry);
+      sessionState.sessionStore[sessionState.sessionKey] = baselineEntry;
+    } catch (error) {
+      logVerbose(
+        `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
   const {
     sessionCtx,
     sessionEntry,
@@ -530,11 +554,14 @@ export async function getReplyFromConfig(
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
+  const optsWithSessionSkillOverrides = sessionEntry.toolOverrides?.skills
+    ? { ...optsWithSkillFilter, skillOverrides: sessionEntry.toolOverrides.skills }
+    : optsWithSkillFilter;
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
     userMessage: finalized.agentText,
-    opts: optsWithSkillFilter,
+    opts: optsWithSessionSkillOverrides,
     disabled: sessionModelSelectionLocked,
   });
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
@@ -546,8 +573,8 @@ export async function getReplyFromConfig(
     storePath,
   });
 
-  if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
-    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
+  if (sessionEntry?.pendingFinalDelivery?.kind === "replayable") {
+    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
 
     // Heartbeats may safely clear ack-only pending state, but must not replay
     // user-facing pending finals through a different delivery target.
@@ -846,6 +873,7 @@ export async function getReplyFromConfig(
     resolvedBlockStreamingBreak,
     provider: resolvedProvider,
     model: resolvedModel,
+    requestedRouteResolution,
     modelState,
     contextTokens,
     inlineStatusRequested,
@@ -870,6 +898,7 @@ export async function getReplyFromConfig(
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
+      agentId,
       ctx,
       cfg,
       command,
@@ -877,6 +906,7 @@ export async function getReplyFromConfig(
       storePath,
       sessionEntry,
       previousSessionEntry,
+      onObservedReplyDelivery: resolvedOpts?.onObservedReplyDelivery,
       workspaceDir,
     });
   };
@@ -1025,7 +1055,7 @@ export async function getReplyFromConfig(
     !useFastTestBootstrap &&
     sessionKey &&
     !inboundMediaWasAlreadyStaged &&
-    !hasStagedMediaProjection(ctx) &&
+    !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
@@ -1073,6 +1103,9 @@ export async function getReplyFromConfig(
       modelState: runModelState,
       provider: runProvider,
       model: runModel,
+      requestedRouteResolution: runAutoFallbackPrimaryProbe
+        ? runModelState.requestedRouteResolution
+        : requestedRouteResolution,
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,

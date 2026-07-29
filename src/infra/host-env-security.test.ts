@@ -182,6 +182,7 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("CC")).toBe(true);
     expect(isDangerousHostEnvVarName("cpp")).toBe(true);
     expect(isDangerousHostEnvVarName("cxx")).toBe(true);
+    expect(isDangerousHostEnvVarName("cxxcpp")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);

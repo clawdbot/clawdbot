@@ -924,6 +924,74 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("voice-node setup code returns node token plus Talk-only operator handoff", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+      await import("../shared/device-bootstrap-profile.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-voice-node-",
+    );
+    const client = {
+      id: "node-host",
+      version: "1.0.0",
+      platform: "esp32",
+      mode: "node" as const,
+      deviceFamily: "ESP32",
+    };
+
+    try {
+      const issued = await issueDeviceBootstrapToken({
+        profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      });
+      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const initial = await connectReq(wsBootstrap, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      if (!initial.ok) {
+        throw new Error(`voice-node bootstrap failed: ${JSON.stringify(initial.error)}`);
+      }
+      expect(initial.ok).toBe(true);
+      const auth = (
+        initial.payload as
+          | {
+              auth?: {
+                role?: string;
+                scopes?: string[];
+                deviceToken?: string;
+                deviceTokens?: Array<{
+                  role?: string;
+                  scopes?: string[];
+                  deviceToken?: string;
+                }>;
+              };
+            }
+          | undefined
+      )?.auth;
+      expect(auth?.role).toBe("node");
+      expect(auth?.scopes).toEqual([]);
+      expect(auth?.deviceToken).toEqual(expect.any(String));
+      expect(auth?.deviceTokens?.find((entry) => entry.role === "operator")).toMatchObject({
+        scopes: ["operator.read", "operator.talk"],
+        deviceToken: expect.any(String),
+      });
+      expect((await listDevicePairing()).pending).toEqual([]);
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.roles).toEqual(["node", "operator"]);
+      expect(paired?.approvedScopes).toEqual(["operator.read", "operator.talk"]);
+      wsBootstrap.close();
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("qr setup code returns node token plus full operator handoff", async () => {
     const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");

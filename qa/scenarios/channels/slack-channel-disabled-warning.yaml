@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - slack.access-and-identity
+      - slack.channel-allowlists
   execution:
     kind: flow
     channel: slack

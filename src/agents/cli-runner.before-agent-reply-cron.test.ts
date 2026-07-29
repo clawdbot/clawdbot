@@ -217,6 +217,21 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledOnce();
   });
 
+  it("projects CLI tool summaries onto terminal run metadata", async () => {
+    executePreparedCliRunMock.mockResolvedValue({
+      text: "done",
+      toolSummary: { calls: 1, tools: ["github.search"], failures: 0 },
+    });
+
+    const result = await runCliAgent(baseRunParams);
+
+    expect(result.meta.toolSummary).toEqual({
+      calls: 1,
+      tools: ["github.search"],
+      failures: 0,
+    });
+  });
+
   it("preserves the send phase when execution fails before successful cleanup", async () => {
     executePreparedCliRunMock.mockRejectedValueOnce(new Error("CLI process failed"));
 

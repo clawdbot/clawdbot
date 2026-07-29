@@ -9,7 +9,6 @@ import {
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatUncaughtError } from "../../infra/errors.js";
 import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
@@ -32,6 +31,7 @@ import {
 } from "../../utils/message-channel.js";
 import {
   MediaOffloadError,
+  logAttachmentFailure,
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
   type ChatAttachment,
@@ -65,27 +65,6 @@ type AgentContentPhaseResult = {
   recipientThreadId?: string | number;
   to: string;
 };
-
-function formatAttachmentFailureForLog(err: unknown): string {
-  const primary = formatUncaughtError(err);
-  const cause = err instanceof Error ? err.cause : undefined;
-  if (cause === undefined) {
-    return primary;
-  }
-  const causeText = formatUncaughtError(cause);
-  return !causeText || causeText === primary ? primary : `${primary}\nCaused by: ${causeText}`;
-}
-
-function logAttachmentFailure(
-  logGateway: Pick<GatewayRequestHandlerOptions["context"]["logGateway"], "error">,
-  label: string,
-  err: unknown,
-): void {
-  logGateway.error(label, {
-    error: formatAttachmentFailureForLog(err),
-    consoleMessage: `${label}: ${formatForLog(err)}`,
-  });
-}
 
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;

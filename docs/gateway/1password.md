@@ -1,81 +1,96 @@
 ---
-summary: "Resolve Gateway secrets with the 1Password CLI and let agents use the bundled 1password skill"
+summary: "Use the 1Password plugin, bundled skill, or official MCP with OpenClaw"
 read_when:
   - You want API keys out of openclaw.json and inside 1Password
   - You run the Gateway headless and need service account auth for op
-  - You want agents to read or inject secrets with the op CLI
+  - You want agents to read, inject, or maintain secrets with 1Password
 title: "1Password"
 ---
 
-OpenClaw pairs with **1Password** in three independent ways:
+OpenClaw pairs with **1Password** in four independent ways:
 
 - **Config secrets:** any [SecretRef](/gateway/secrets) field in `openclaw.json` can resolve through the `op` CLI at runtime, so API keys never live in the config file.
 - **Agent workflows:** the bundled `1password` skill teaches agents to sign in and read or inject secrets with `op` for their own tasks.
+- **Desktop environments:** the official 1Password MCP server gives interactive desktop agents approved access to 1Password Environments.
 - **Browser sign-in:** the `claude-cli` backend can use Claude Code's Chrome integration with [1Password for Claude](https://support.1password.com/1password-claude/), letting the agent sign in to websites without the password ever reaching the model or OpenClaw.
 
 ## Requirements
 
-- The [1Password CLI](https://developer.1password.com/docs/cli/get-started/) (`op`) installed on the Gateway host (`brew install 1password-cli` on macOS).
-- An auth mode for `op`:
-  - **Service account** (recommended for headless Gateways): export `OP_SERVICE_ACCOUNT_TOKEN` in the Gateway service environment. No desktop app, no interactive sign-in.
-  - **Desktop app integration**: the 1Password app runs on the same machine with CLI integration enabled. First calls may trigger Touch ID or system auth.
-  - **Standalone sign-in**: `op signin` prompts per session. Workable for agents through the skill, but not suited for config secret resolution on a headless Gateway.
+- The [1Password CLI](https://developer.1password.com/docs/cli/get-started/)
+  (`op`) installed on the Gateway host.
+- A 1Password service account for the unattended plugin paths.
+- For direct skill workflows, either a service account, desktop app integration,
+  or standalone `op signin`.
 
-## Resolve config secrets with op
+## Resolve config secrets with the plugin
 
-Declare an exec secret provider that runs `op read` with an `op://vault/item/field` reference, then point any SecretRef-capable field at it:
+Enable the bundled plugin and create its service-account token file:
 
-```json5
-{
-  secrets: {
-    providers: {
-      onepassword_openai: {
-        source: "exec",
-        command: "/opt/homebrew/bin/op",
-        allowSymlinkCommand: true, // required for Homebrew symlinked binaries
-        trustedDirs: ["/opt/homebrew"],
-        args: ["read", "op://Personal/OpenClaw QA API Key/password"],
-        passEnv: ["HOME"],
-        jsonOnly: false,
-      },
-    },
-  },
-  models: {
-    providers: {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
-        models: [{ id: "gpt-5", name: "gpt-5" }],
-        apiKey: { source: "exec", provider: "onepassword_openai", id: "value" },
-      },
-    },
-  },
-}
+```bash
+openclaw plugins enable onepassword
+mkdir -p ~/.openclaw/credentials/onepassword
+chmod 700 ~/.openclaw/credentials/onepassword
+printf '%s' "$OP_SERVICE_ACCOUNT_TOKEN" > \
+  ~/.openclaw/credentials/onepassword/service-account-token
+chmod 600 ~/.openclaw/credentials/onepassword/service-account-token
+unset OP_SERVICE_ACCOUNT_TOKEN
 ```
 
-How the pieces fit:
+When `OPENCLAW_STATE_DIR` is set, use that directory instead of
+`~/.openclaw`. Then generate and apply a SecretRef plan:
 
-- `command` must be an absolute path; `trustedDirs` marks its directory as trusted, and `allowSymlinkCommand` is needed because Homebrew installs `op` as a symlink.
-- `args` carries the `op://vault/item/field` reference verbatim. OpenClaw does not parse the `op://` scheme itself; the `op` binary resolves it.
-- `passEnv` forwards the listed variables from the Gateway environment. Desktop app integration needs `HOME`; service accounts also need `OP_SERVICE_ACCOUNT_TOKEN` present in the Gateway service environment (add it to `passEnv`, or set it via `env` only if you accept the token being readable in the config file).
-- For single-value output keep `id: "value"`. With `jsonOnly: true` and a JSON payload, address fields with a JSON pointer id instead.
-- One provider entry per secret keeps references auditable; name providers after their consumer (`onepassword_openai`, `onepassword_telegram`).
+```bash
+openclaw onepassword secretref setup \
+  --openai-id op://Automation/OpenAI/credential \
+  --anthropic-id op://Automation/Anthropic/credential \
+  --plan-out ./openclaw-1password-secrets-plan.json
 
-See [Gateway secrets](/gateway/secrets) for resolution order, caching, and failure semantics, and [SecretRef Credential Surface](/reference/secretref-credential-surface) for every field that accepts SecretRefs.
+openclaw onepassword secretref status
+openclaw secrets apply --from ./openclaw-1password-secrets-plan.json --dry-run --allow-exec
+openclaw secrets apply --from ./openclaw-1password-secrets-plan.json --allow-exec
+openclaw secrets audit --check --allow-exec
+openclaw secrets reload
+```
 
-## Service account setup for headless Gateways
+The setup command requires at least one target. Before the plan is applied,
+status may report that the provider is not configured while still reporting
+`prerequisites ready: yes`; after apply, `ready: yes` confirms the provider,
+trusted `op` executable, and accepted non-empty token file are all ready.
 
-1. Create a service account in your 1Password account and grant it read access to only the vault items the Gateway needs.
-2. Provide `OP_SERVICE_ACCOUNT_TOKEN` to the Gateway service (launchd plist, systemd unit, or container env).
-3. Add `"OP_SERVICE_ACCOUNT_TOKEN"` to the provider `passEnv` list.
-4. Verify from the Gateway host environment: `op whoami` should print the service account without prompting.
-
-Service account reads require the vault to be named explicitly in the `op://` reference. Scope the account tightly; it is a bearer credential.
+The plugin accepts native
+`op://<vault>/<item>/<field>` and
+`op://<vault>/<item>/<section>/<field>` references. It resolves only
+registered OpenClaw credential targets, bounds parallel `op read` calls, and
+forces desktop-app integration off. See the
+[plugin guide](/plugins/onepassword) for manual configuration, custom targets,
+and the separate audited agent tool.
 
 ## The 1password skill for agents
 
-OpenClaw bundles a `1password` skill that turns agents into competent `op` operators: it detects the available auth mode (service account, desktop app integration, or standalone sign-in), verifies access with `op whoami` before reading anything, and prefers `op run` / `op inject` over writing secret values to disk. The skill requires the `op` binary and offers a Homebrew install when it is missing.
+OpenClaw bundles a `1password` skill that teaches agents to select an available
+auth mode, verify access, and prefer `op run` or `op inject` over writing secret
+values to disk.
 
-Agents use it for their own workflows, for example reading a deploy token mid-task or injecting env vars into a command. It is independent of config secret resolution; the Gateway resolves SecretRefs without any skill involved.
+Agents use it for workflows that intentionally exceed the plugin's narrow
+contracts, for example creating or rotating an item or injecting credentials
+into a one-off command. When a credential is already wired to an OpenClaw
+SecretRef target, the owning OpenClaw workflow should resolve it; the agent does
+not need to call `op` directly.
+
+## Official 1Password MCP server
+
+The official MCP server is a beta desktop workflow for
+[1Password Environments](https://developer.1password.com/docs/environments/mcp-server/).
+It requires the 1Password desktop app and explicit approval for each
+interaction. It can manage environment variable names and mount values into a
+local process through an in-memory `.env` file; secret values are not returned
+to the MCP client or model.
+
+It does not provide headless service-account access to arbitrary vault items,
+and the OpenClaw plugin does not call it. If an MCP-managed Environment launches
+OpenClaw with variables already mounted, use OpenClaw's `env` SecretRefs for
+those values. Use the plugin when the Gateway itself should resolve 1Password
+references on startup or reload.
 
 ## Browser sign-in with 1Password for Claude
 
@@ -95,13 +110,30 @@ One-time passcodes are filled by 1Password on the same page; never relay verific
 
 ## Security notes
 
-- Secret values resolved through exec providers stay in Gateway memory; config snapshots and `config.get` responses redact SecretRef fields.
-- Never place secret values in `openclaw.json`, logs, or chat. Keep item names in config, values in 1Password.
-- The 1Password audit trail shows every service account read, which makes key rotation and incident review practical.
+- Secret values resolved through exec providers stay in Gateway memory; config
+  snapshots and `config.get` responses redact SecretRef fields.
+- The plugin resolver and broker force
+  `OP_LOAD_DESKTOP_APP_SETTINGS=false` and
+  `OP_BIOMETRIC_UNLOCK_ENABLED=false` so unattended reads cannot trigger
+  desktop approval or macOS permission dialogs.
+- Before passing the service-account token, the plugin resolves the `op`
+  executable and rejects paths that are writable by another local account or
+  have unverifiable Windows ACLs or ownership. An absolute
+  `CLAW_1PASSWORD_OP` override is subject to the same check.
+- A resolver request is limited to 32 references. Reads run four at a time with
+  a seven-second per-read timeout; the provider-wide 90-second timeout covers
+  the full supported batch plus process and permission-check overhead.
+- Never place secret values in `openclaw.json`, logs, or chat. Scope the service
+  account to only the vaults and items OpenClaw needs.
 
 ## Troubleshooting
 
-- `command not found` or spawn errors: use the absolute `op` path and include its directory in `trustedDirs`.
-- `op` resolves but reads fail with symlink errors: set `allowSymlinkCommand: true` for Homebrew installs.
-- `account is not signed in`: for service accounts, confirm `OP_SERVICE_ACCOUNT_TOKEN` reaches the Gateway service and is listed in `passEnv`; for desktop integration, confirm the app is running and unlocked.
-- Slow first reads: raise `timeoutMs` on the provider; `op` cold starts can exceed strict timeouts on busy hosts.
+- `op` is missing: install the CLI on the Gateway host, ensure it is on `PATH`,
+  or set `CLAW_1PASSWORD_OP` to its absolute path.
+- `op` is not trusted: use an executable owned by the current user or root and
+  remove group/other write access from the executable and its parent chain.
+- Authentication fails: check the plugin token file, its contents, and the
+  service account's vault permissions with `openclaw onepassword status`.
+- A reference is rejected: include the vault explicitly and use stable vault,
+  item, section, and field IDs when names are long or contain unsupported
+  1Password reference characters.

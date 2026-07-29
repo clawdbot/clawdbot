@@ -512,7 +512,7 @@
 
 .session-avatar--group {
   color: var(--info);
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--info-subtle);
 }
 
 .session-avatar--global {

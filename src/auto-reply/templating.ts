@@ -38,7 +38,7 @@ type StickerContextMetadata = {
   isVideo?: boolean;
 } & Record<string, unknown>;
 
-type UntrustedStructuredContextEntry = {
+export type ChannelStructuredContextEntry = {
   label: string;
   source?: string;
   type?: string;
@@ -56,6 +56,9 @@ export type SessionTranscriptContext = {
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
 };
+
+/** @deprecated Use ChannelStructuredContextEntry. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
+export type UntrustedStructuredContextEntry = ChannelStructuredContextEntry;
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
 export type SupplementalContextFacts = {
@@ -84,7 +87,9 @@ export type SupplementalContextFacts = {
     modelParentSessionKey?: string;
     senderAllowed?: boolean;
   };
-  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
+  channelStructuredContext?: ChannelStructuredContextEntry[];
+  /** @deprecated Use channelStructuredContext. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
+  untrustedContext?: ChannelStructuredContextEntry[];
   groupSystemPrompt?: string;
   /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
   untrustedGroupSystemPrompt?: string;
@@ -224,25 +229,35 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   ThreadHistoryBody?: string;
   IsFirstThreadTurn?: boolean;
   ThreadLabel?: string;
+  /** @deprecated Use `media?.[0]?.path`. */
   MediaPath?: string;
+  /** @deprecated Use `media?.[0]?.url`. */
   MediaUrl?: string;
+  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
   MediaType?: string;
+  /** @deprecated Derive the directory from `media?.[0]?.path` at the consuming boundary. */
   MediaDir?: string;
+  /** @deprecated Use `media?.map((entry) => entry.path)`. */
   MediaPaths?: string[];
+  /** @deprecated Use `media?.map((entry) => entry.url)`. */
   MediaUrls?: string[];
+  /** @deprecated Use `media?.map((entry) => entry.contentType ?? entry.kind)`. */
   MediaTypes?: string[];
   /** Ordered current-turn media facts; array position is attachment identity. */
   media?: MediaFact[];
   /** Original message modality before transcription or other media normalization. */
   SourceModality?: InboundSourceModality;
+  /** @deprecated Use each media fact's `workspaceDir`. */
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
+  /** @deprecated Use each media fact's `transcribed` field. */
   MediaTranscribedIndexes?: number[];
   /**
    * Marker: skip downstream stageSandboxMedia. chat.send RPC sets this so
    * staging runs synchronously before respond() and surfaces 5xx to the
    * client; any later failure only reaches the broadcast channel.
    */
+  /** @deprecated Use each media fact's `workspaceDir` or `staged` proof. */
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
@@ -276,9 +291,13 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * projects these to the existing flat reply/forward/thread/group prompt fields.
    */
   SupplementalContext?: SupplementalContextFacts;
-  /** Untrusted metadata that must not be treated as system instructions. */
+  /** Channel-provided metadata that must not be treated as system instructions. */
+  ChannelPromptContext?: string[];
+  /** @deprecated Use ChannelPromptContext. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
   UntrustedContext?: string[];
-  /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
+  /** Structured channel metadata rendered by prompt assembly as fenced JSON. */
+  ChannelStructuredContext?: ChannelStructuredContextEntry[];
+  /** @deprecated Use ChannelStructuredContext. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
@@ -437,10 +456,23 @@ export type TemplateContext = RuntimeMsgContext & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
-  /** Documented singular media variables projected only at template execution. */
+  /** Local path for the attachment currently being processed. */
+  AttachmentPath?: string;
+  /** Original URL/reference for the attachment currently being processed. */
+  AttachmentUrl?: string;
+  /** MIME content type for the attachment currently being processed. */
+  AttachmentContentType?: string;
+  /** Directory containing AttachmentPath. */
+  AttachmentDir?: string;
+  /** Stable zero-based source fact index for the attachment currently being processed. */
+  AttachmentIndex?: number;
+  /** @deprecated Use AttachmentPath. */
   MediaPath?: string;
+  /** @deprecated Use AttachmentUrl. */
   MediaUrl?: string;
+  /** @deprecated Use AttachmentContentType. */
   MediaType?: string;
+  /** @deprecated Use AttachmentDir. */
   MediaDir?: string;
 };
 

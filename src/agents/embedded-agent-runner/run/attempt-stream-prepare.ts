@@ -271,7 +271,9 @@ export function prepareEmbeddedAttemptStream(input: {
       silentExpected: attempt.silentExpected,
       suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
       config: attempt.config,
-      sessionKey: input.sandboxSessionKey,
+      // Live events belong to the transcript session. The sandbox key is only
+      // authority context and may intentionally point at a visible parent.
+      sessionKey: attempt.sessionKey,
       currentChannelId: attempt.currentChannelId,
       currentMessagingTarget: attempt.currentMessagingTarget,
       currentThreadId: attempt.currentThreadTs,
@@ -366,6 +368,7 @@ export function prepareEmbeddedAttemptStream(input: {
       );
     },
     isStreaming: () => input.activeSession.isStreaming,
+    isAborted: () => input.getRunState().aborted,
     isStopped: () =>
       !acceptingSteerMessages ||
       input.getRunState().aborted ||

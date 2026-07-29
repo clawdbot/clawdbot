@@ -6,7 +6,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -20,9 +20,10 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   buildCodexOpenClawPromptContext,
   buildCodexSystemPromptReport,
@@ -59,6 +60,7 @@ import {
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexServerNotification,
+  type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 
@@ -105,6 +107,30 @@ import {
   codexDynamicToolsFingerprint,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+const agentHarnessRuntimeMocks = vi.hoisted(() => ({
+  forceModelToolsUnsupported: false,
+  skipRequesterScopedMcpMaterialization: false,
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    supportsModelTools: (...args: Parameters<typeof actual.supportsModelTools>) =>
+      agentHarnessRuntimeMocks.forceModelToolsUnsupported
+        ? false
+        : actual.supportsModelTools(...args),
+    materializeRequesterScopedMcpToolsForHarnessRun: async (
+      ...args: Parameters<typeof actual.materializeRequesterScopedMcpToolsForHarnessRun>
+    ) => {
+      if (agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization) {
+        return undefined;
+      }
+      return await actual.materializeRequesterScopedMcpToolsForHarnessRun(...args);
+    },
+  };
+});
 
 const testing = {
   buildDeveloperInstructions,
@@ -217,11 +243,11 @@ async function writeExistingBinding(
   });
 }
 
-function attachSqliteSessionTarget(
+async function attachSqliteSessionTarget(
   params: EmbeddedRunAttemptParams,
   storePath: string,
   sessionId: string,
-): void {
+): Promise<void> {
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
   params.sessionTarget = {
@@ -230,6 +256,12 @@ function attachSqliteSessionTarget(
     sessionKey: params.sessionKey,
     storePath,
   };
+  await upsertSessionEntry({
+    agentId: "main",
+    sessionKey: params.sessionKey,
+    storePath,
+    entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
+  });
 }
 
 async function readTranscriptMessagesByIdentity(
@@ -376,12 +408,7 @@ async function buildCodexTurnContextForTest(
     sessionAgentId,
     memoryToolNames,
   });
-  const threadDeveloperInstructions = [
-    testing.buildDeveloperInstructions(params, { dynamicTools }),
-    workspaceBootstrapContext.developerInstructions,
-  ]
-    .filter((section) => section?.trim())
-    .join("\n\n");
+  const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -465,8 +492,8 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     if (method === "thread/start") {
       return threadStartResult();
     }
-    if (method === "app/list") {
-      throw new Error("app/list should not run when runtime toolsAllow is empty.");
+    if (method === "app/installed" || method === "app/read") {
+      throw new Error("App inventory should not run when runtime toolsAllow is empty.");
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -608,26 +635,21 @@ type GoogleCalendarCacheKeyInput = {
   agentDir: string;
 };
 
-function googleCalendarAppListResult(isEnabled: boolean) {
+function googleCalendarAppInfo(isEnabled: boolean): v2.AppInfo {
   return {
-    data: [
-      {
-        id: "google-calendar-app",
-        name: "Google Calendar",
-        description: null,
-        logoUrl: null,
-        logoUrlDark: null,
-        distributionChannel: null,
-        branding: null,
-        appMetadata: null,
-        labels: null,
-        installUrl: null,
-        isAccessible: true,
-        isEnabled,
-        pluginDisplayNames: [],
-      },
-    ],
-    nextCursor: null,
+    id: "google-calendar-app",
+    name: "Google Calendar",
+    description: null,
+    logoUrl: null,
+    logoUrlDark: null,
+    distributionChannel: null,
+    branding: null,
+    appMetadata: null,
+    labels: null,
+    installUrl: null,
+    isAccessible: true,
+    isEnabled,
+    pluginDisplayNames: [],
   };
 }
 
@@ -686,10 +708,12 @@ const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
   },
 } as const;
 
-function createGoogleCalendarRequest(appList?: () => unknown) {
+function createGoogleCalendarRequest(
+  appInventory?: (method: "app/installed" | "app/read") => unknown,
+) {
   return vi.fn(async (method: string) => {
-    if (method === "app/list" && appList) {
-      return appList();
+    if ((method === "app/installed" || method === "app/read") && appInventory) {
+      return appInventory(method);
     }
     if (method === "plugin/list") {
       return GOOGLE_CALENDAR_PLUGIN_LIST_RESULT;
@@ -711,7 +735,8 @@ async function primeGoogleCalendarAppInventory(key: string, isEnabled: boolean):
   defaultCodexAppInventoryCache.clear();
   await defaultCodexAppInventoryCache.refreshNow({
     key,
-    request: async () => googleCalendarAppListResult(isEnabled),
+    request: async (method, params) =>
+      codexAppInventoryResponse(method, [googleCalendarAppInfo(isEnabled)], params),
   });
 }
 
@@ -963,6 +988,11 @@ function installCleanupTrackingClient(turnStartError?: Error) {
 }
 
 setupRunAttemptTestHooks();
+
+beforeEach(() => {
+  agentHarnessRuntimeMocks.forceModelToolsUnsupported = false;
+  agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = false;
+});
 
 describe("runCodexAppServerAttempt", () => {
   it("executes and reports the same materialized SecretRef credential", async () => {
@@ -1599,7 +1629,6 @@ describe("runCodexAppServerAttempt", () => {
       type: string;
     }> = [];
     Object.assign(params, {
-      trajectorySessionFile: `sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`,
       trajectoryRecorder: {
         recordEvent: (type: string, data?: { prompt?: string; systemPrompt?: string }) => {
           trajectoryEvents.push({ type, data });
@@ -1766,7 +1795,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, "session-early-prompt");
+    await attachSqliteSessionTarget(params, storePath, "session-early-prompt");
     params.prompt = "external channel prompt";
     const onUserMessagePersisted = vi.fn();
     params.onUserMessagePersisted = onUserMessagePersisted;
@@ -1804,7 +1833,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-suppressed-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, "session-suppressed-early-prompt");
+    await attachSqliteSessionTarget(params, storePath, "session-suppressed-early-prompt");
     params.prompt = "already persisted prompt";
     params.suppressNextUserMessagePersistence = true;
     const run = runCodexAppServerAttempt(params);
@@ -2200,7 +2229,8 @@ describe("runCodexAppServerAttempt", () => {
       open_world_enabled: false,
     });
     expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/list");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -2228,7 +2258,8 @@ describe("runCodexAppServerAttempt", () => {
       destructive_enabled: false,
       open_world_enabled: false,
     });
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/list");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
   });
   it("retires the shared Codex app-server client after one-shot cleanup turns", async () => {
     const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
@@ -2383,7 +2414,7 @@ describe("runCodexAppServerAttempt", () => {
       ]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2436,7 +2467,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2476,7 +2507,7 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2534,7 +2565,7 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
     sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
     const harness = createStartedThreadHarness();
@@ -2576,7 +2607,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt - 2_000),
     );
@@ -2709,7 +2740,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
@@ -2753,7 +2784,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
       idempotencyKey: "client-run:user",
@@ -2800,7 +2831,7 @@ describe("runCodexAppServerAttempt", () => {
       ...originalBinding,
       historyCoveredThrough: new Date(originalBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await firstHarness.waitForMethod("turn/start");
@@ -2838,7 +2869,7 @@ describe("runCodexAppServerAttempt", () => {
       ...oldBinding,
       historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
     );
@@ -2881,19 +2912,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(secondInputText).toContain("continue from there");
   });
 
-  it("passes stable workspace files as Codex developer instructions and routes MEMORY.md through tools", async () => {
+  it("routes AGENTS.md natively and MEMORY.md through tools", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
     const soulGuidance = "Soul voice goes here.";
     const identityGuidance = "Identity guidance goes here.";
-    const toolGuidance = "Tool guidance goes here.";
     const userProfile = "User profile goes here.";
     const memorySummary = "Memory summary goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
     await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
-    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
     registerMemoryPromptForTest();
@@ -2912,10 +2941,8 @@ describe("runCodexAppServerAttempt", () => {
       systemPromptReport,
       threadDeveloperInstructions,
     } = await buildCodexTurnContextForTest(params, workspaceDir);
-    expect(threadDeveloperInstructions).toContain("OpenClaw Workspace Instructions");
     expect(threadDeveloperInstructions).not.toContain(soulGuidance);
     expect(threadDeveloperInstructions).not.toContain(identityGuidance);
-    expect(threadDeveloperInstructions).toContain(toolGuidance);
     expect(threadDeveloperInstructions).not.toContain(userProfile);
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
@@ -2927,7 +2954,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain("</AGENT_SOUL>");
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
-    expect(collaborationInstructions).not.toContain(toolGuidance);
     expect(collaborationInstructions).toContain(userProfile);
     expect(collaborationInstructions).toContain("## Memory Recall");
     expect(collaborationInstructions).toContain("MEMORY.md + memory/*.md");
@@ -2949,7 +2975,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain("not developer policy");
     expect(inputText).not.toContain(soulGuidance);
     expect(inputText).not.toContain(identityGuidance);
-    expect(inputText).not.toContain(toolGuidance);
     expect(inputText).not.toContain(userProfile);
     expect(inputText).not.toContain(memorySummary);
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
@@ -2973,11 +2998,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(fileStats.get("IDENTITY.md")).toMatchObject({
       rawChars: identityGuidance.length,
       injectedChars: identityGuidance.length,
-      truncated: false,
-    });
-    expect(fileStats.get("TOOLS.md")).toMatchObject({
-      rawChars: toolGuidance.length,
-      injectedChars: toolGuidance.length,
       truncated: false,
     });
     expect(fileStats.get("USER.md")).toMatchObject({
@@ -3050,18 +3070,16 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(memorySummary);
   });
-  it("sends workspace bootstrap instructions through Codex app-server payloads", async () => {
+  it("sends turn-scoped workspace instructions through Codex app-server payloads", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
     const soulGuidance = "Soul voice goes here.";
     const identityGuidance = "Identity guidance goes here.";
-    const toolGuidance = "Tool guidance goes here.";
     const userProfile = "User profile goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
     await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
-    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -3079,8 +3097,6 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions?: string;
     };
     expect(threadStartParams.config?.instructions).toBeUndefined();
-    expect(threadStartParams.developerInstructions).toContain("OpenClaw Workspace Instructions");
-    expect(threadStartParams.developerInstructions).toContain(toolGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
@@ -3102,7 +3118,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
     expect(collaborationInstructions).toContain(userProfile);
-    expect(collaborationInstructions).not.toContain(toolGuidance);
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(agentsGuidance);
@@ -3556,7 +3571,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, sessionId);
+    await attachSqliteSessionTarget(params, storePath, sessionId);
     params.prompt = "Send the update to Alice.";
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -4086,7 +4101,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
-  it("surfaces Codex-native image generation saved paths as reply media", async () => {
+  it("materializes Codex-native image generation into Gateway-owned reply media", async () => {
     const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
     const harness = createAppServerHarness(async (method) => {
       if (method === "thread/start") {
@@ -4115,8 +4130,10 @@ describe("runCodexAppServerAttempt", () => {
     const result = await runCodexAppServerAttempt(createRunParams());
     expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result.assistantTexts).toEqual([]);
-    expect(result.toolMediaUrls).toEqual([savedPath]);
-    expect(result.hostOwnedToolMediaUrls).toEqual([savedPath]);
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(Buffer.from("foo"));
   });
   it("does not complete on unscoped turn/completed notifications", async () => {
     const harness = createStartedThreadHarness();
@@ -4278,7 +4295,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     const elicitation = installElicitationClient(request);
     const params = createRunParams();
-    attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "session-computer-use");
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "sessions.json"),
+      "session-computer-use",
+    );
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: {
         computerUse: {
@@ -4416,8 +4437,8 @@ describe("runCodexAppServerAttempt", () => {
           accountId: "account-work",
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => {
-        throw new Error("app/list should use the account-keyed cache entry");
+      appInventory: () => {
+        throw new Error("App discovery should use the account-keyed cache entry");
       },
       configure: (params: EmbeddedRunAttemptParams) => {
         params.authProfileId = "openai:work";
@@ -4436,10 +4457,11 @@ describe("runCodexAppServerAttempt", () => {
           },
         };
       },
-      expectsAppList: false,
+      expectsAppInventory: false,
+      expectedAppEnabled: true,
     },
     {
-      name: "sends a thread/start app enable override when app/list cached the app as disabled",
+      name: "does not expose a cached disabled app when runtime callability is unknown",
       cachedEnabled: false,
       cacheKey: ({ appServer, agentDir }: GoogleCalendarCacheKeyInput) =>
         buildCodexPluginAppCacheKey({
@@ -4447,10 +4469,10 @@ describe("runCodexAppServerAttempt", () => {
           agentDir,
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => {
-        throw new Error("app/list should use the cached inventory entry");
-      },
-      expectsAppList: false,
+      appInventory: (method: "app/installed" | "app/read") =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(false)]),
+      expectsAppInventory: true,
+      expectedAppEnabled: undefined,
     },
     {
       name: "keys plugin app inventory by inherited API key fallback credentials",
@@ -4465,39 +4487,55 @@ describe("runCodexAppServerAttempt", () => {
           }),
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
-      appList: () => googleCalendarAppListResult(true),
+      appInventory: (method: "app/installed" | "app/read") =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(true)]),
       configure: () => {
         vi.stubEnv("CODEX_API_KEY", "new-codex-env-key");
         vi.stubEnv("OPENAI_API_KEY", "");
       },
-      expectsAppList: true,
+      expectsAppInventory: true,
+      expectedAppEnabled: true,
     },
-  ])("$name", async ({ cachedEnabled, cacheKey, appList, configure, expectsAppList }) => {
-    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
-    const pluginConfig = GOOGLE_CALENDAR_PLUGIN_CONFIG;
-    const appServer = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: readCodexPluginConfig(pluginConfig),
-    });
-    await primeGoogleCalendarAppInventory(cacheKey({ appServer, agentDir }), cachedEnabled);
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
-      createGoogleCalendarRequest(appList),
-    );
-    const params = createParams(sessionFile, workspaceDir);
-    params.agentDir = agentDir;
-    configure?.(params);
-    const run = runCodexAppServerAttempt(params, { pluginConfig });
-    await completeStartedRun(run, waitForMethod, completeTurn);
-    const threadStart = requests.find((entry) => entry.method === "thread/start");
-    const threadStartParams = threadStart?.params as
-      | { config?: { apps?: Record<string, { enabled?: boolean }> } }
-      | undefined;
-    expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(true);
-    if (expectsAppList) {
-      expect(requests.map((entry) => entry.method)).toContain("app/list");
-    } else {
-      expect(requests.map((entry) => entry.method)).not.toContain("app/list");
-    }
-  });
+  ])(
+    "$name",
+    async ({
+      cachedEnabled,
+      cacheKey,
+      appInventory,
+      configure,
+      expectsAppInventory,
+      expectedAppEnabled,
+    }) => {
+      const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+      const pluginConfig = GOOGLE_CALENDAR_PLUGIN_CONFIG;
+      const appServer = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: readCodexPluginConfig(pluginConfig),
+      });
+      await primeGoogleCalendarAppInventory(cacheKey({ appServer, agentDir }), cachedEnabled);
+      const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
+        createGoogleCalendarRequest(appInventory),
+      );
+      const params = createParams(sessionFile, workspaceDir);
+      params.agentDir = agentDir;
+      configure?.(params);
+      const run = runCodexAppServerAttempt(params, { pluginConfig });
+      await completeStartedRun(run, waitForMethod, completeTurn);
+      const threadStart = requests.find((entry) => entry.method === "thread/start");
+      const threadStartParams = threadStart?.params as
+        | { config?: { apps?: Record<string, { enabled?: boolean }> } }
+        | undefined;
+      expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(
+        expectedAppEnabled,
+      );
+      if (expectsAppInventory) {
+        expect(requests.map((entry) => entry.method)).toContain("app/installed");
+        expect(requests.map((entry) => entry.method)).toContain("app/read");
+      } else {
+        expect(requests.map((entry) => entry.method)).not.toContain("app/installed");
+        expect(requests.map((entry) => entry.method)).not.toContain("app/read");
+      }
+    },
+  );
 
   it("times out app-server startup before thread setup can hang forever", async () => {
     setCodexAppServerClientFactoryForTest(() => new Promise<never>(() => {}));
@@ -4650,7 +4688,6 @@ describe("runCodexAppServerAttempt", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },
@@ -4694,7 +4731,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "pre-binding native-owned context: keep the original plan",
@@ -4766,7 +4803,6 @@ describe("runCodexAppServerAttempt", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },
@@ -4949,6 +4985,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     } as EmbeddedRunAttemptParams;
+    setCodexTestModelSupportsTools(params, false);
     const run = runCodexAppServerAttempt(params, { pluginConfig: {} });
     await completeStartedRun(run, waitForMethod, completeTurn);
     const startRequest = requests.find((request) => request.method === "thread/start");
@@ -5143,10 +5180,14 @@ describe("runCodexAppServerAttempt", () => {
     });
     const clientFactory = vi.fn(async () => harness.client);
     testing.setOpenClawCodingToolsFactoryForTests(() => []);
+    // This test owns review-policy projection, not requester-scoped MCP discovery.
+    agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
+    agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = true;
     const params = createParams(sessionFile, workspaceDir);
     params.provider = "anthropic";
     params.modelId = "claude-opus-4-6";
     params.model = createCodexTestModel("anthropic");
+    params.fastMode = true;
     setCodexTestModelSupportsTools(params, false);
     params.config = {
       ...params.config,
@@ -5173,11 +5214,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeParams).not.toHaveProperty("model");
     expect(resumeParams).not.toHaveProperty("modelProvider");
     expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+    expect(resumeParams?.serviceTier).toBe("priority");
     const turnRequest = harness.requests.find((request) => request.method === "turn/start");
     const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnParams).not.toHaveProperty("model");
     expect(turnParams).not.toHaveProperty("modelProvider");
     expect(turnParams?.approvalsReviewer).toBe("auto_review");
+    expect(turnParams?.serviceTier).toBe("priority");
   });
   it("fails before client startup when a successor generation hides a private supervision binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -5222,6 +5265,90 @@ describe("runCodexAppServerAttempt", () => {
       threadId: "thread-existing",
       connectionScope: "supervision",
     });
+  });
+
+  it("starts sequential ephemeral generations that share a stable session key", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const sessionKey = "agent:main:ephemeral-helper";
+    const storePath = path.join(tempDir, "ephemeral-sessions.json");
+    let generation = 0;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        generation += 1;
+        return threadStartResult(`thread-ephemeral-${generation}`);
+      }
+      if (method === "turn/start") {
+        return turnStartResult(`turn-ephemeral-${generation}`);
+      }
+      return undefined;
+    });
+
+    for (const [index, sessionId] of ["session-ephemeral-1", "session-ephemeral-2"].entries()) {
+      const params = createParams(sessionFile, workspaceDir);
+      params.sessionId = sessionId;
+      params.sessionKey = sessionKey;
+      params.sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
+      params.config = { ...params.config, session: { store: storePath } };
+
+      const run = runCodexAppServerAttempt(params);
+      let startupError: unknown;
+      void run.catch((error: unknown) => {
+        startupError = error;
+      });
+      const expectedGeneration = index + 1;
+      await vi.waitFor(() => {
+        if (startupError) {
+          throw startupError instanceof Error
+            ? startupError
+            : new Error("Codex attempt failed.", { cause: startupError });
+        }
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
+          expectedGeneration,
+        );
+      }, fastWait);
+      const threadId = `thread-ephemeral-${expectedGeneration}`;
+      const turnId = `turn-ephemeral-${expectedGeneration}`;
+      await harness.completeTurn({ threadId, turnId });
+      await expect(run).resolves.toBeDefined();
+    }
+    expect(harness.requests.filter((request) => request.method === "thread/start")).toHaveLength(2);
+  });
+
+  it("rejects a run whose physical generation mismatches its durable session row", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const sessionKey = "agent:main:durable-generation";
+    const durableSessionId = "session-durable-current";
+    const storePath = path.join(tempDir, "durable-sessions.json");
+    registerCodexTestSessionIdentity(sessionFile, durableSessionId, sessionKey);
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-durable-current",
+      cwd: workspaceDir,
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId: durableSessionId, updatedAt: Date.now() },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionId = "session-durable-stale";
+    params.sessionKey = sessionKey;
+    params.sessionTarget = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey,
+      storePath,
+    };
+    params.config = { ...params.config, session: { store: storePath } };
+    const clientFactory = vi.fn(async () => {
+      throw new Error("client must not start");
+    });
+
+    await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toMatchObject({
+      name: "AgentHarnessSessionSupersededError",
+      message: "Codex session generation is no longer current: session-durable-stale",
+    });
+    expect(clientFactory).not.toHaveBeenCalled();
   });
 
   it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {

@@ -148,6 +148,27 @@ const createJsonResponse = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), { status });
 const createGraphCollectionResponse = (value: unknown[]) => createJsonResponse({ value });
 const createNotFoundResponse = () => new Response("not found", { status: 404 });
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
 const createRedirectResponse = (location: string, status = 302) =>
   new Response(null, { status, headers: { location } });
 const asFetchFn = (fetchFn: unknown): FetchFn => fetchFn as FetchFn;
@@ -323,6 +344,32 @@ describe("msteams graph attachments", () => {
   });
 
   it.each<GraphMediaSuccessCase>(GRAPH_MEDIA_SUCCESS_CASES)("$label", runGraphMediaSuccessCase);
+
+  it("cancels non-OK Graph collection bodies before returning empty hosted content", async () => {
+    const tracked = cancelTrackedResponse("missing hosted contents", { status: 404 });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = resolveRequestUrl(input);
+      if (url === DEFAULT_MESSAGE_URL) {
+        return createJsonResponse({ attachments: [] });
+      }
+      if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
+        return tracked.response;
+      }
+      return createNotFoundResponse();
+    });
+
+    const media = await downloadMSTeamsGraphMedia({
+      messageUrl: DEFAULT_MESSAGE_URL,
+      tokenProvider: createTokenProvider(),
+      maxBytes: DEFAULT_MAX_BYTES,
+      fetchFn: asFetchFn(fetchMock),
+      resolveFn: resolvePublicHost,
+    });
+
+    expect(media.media).toEqual([]);
+    expect(media.hostedStatus).toBe(404);
+    expect(tracked.wasCanceled()).toBe(true);
+  });
 
   it("does not forward Authorization for SharePoint redirects outside auth allowlist", async () => {
     const tokenProvider = createTokenProvider("top-secret-token");

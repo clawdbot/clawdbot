@@ -44,41 +44,90 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
-  it("uses a dedicated, actionable migration for the retired device-auth bypass", () => {
-    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
-      (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
+  it.each([
+    [
+      "strips the retired compaction gate while keeping an enabled byte threshold",
+      { truncateAfterCompaction: true, maxActiveTranscriptBytes: "20mb" },
+      { maxActiveTranscriptBytes: "20mb" },
+      ["Removed retired agents.defaults.compaction.truncateAfterCompaction."],
+      true,
+    ],
+    [
+      "preserves an explicit retired compaction opt-out",
+      { truncateAfterCompaction: false, maxActiveTranscriptBytes: "20mb" },
+      {},
+      [
+        "Removed maxActiveTranscriptBytes to preserve truncateAfterCompaction: false.",
+        "Removed retired agents.defaults.compaction.truncateAfterCompaction.",
+      ],
+      false,
+    ],
+    [
+      "strips the retired compaction gate without adding a byte threshold",
+      { truncateAfterCompaction: true },
+      {},
+      ["Removed retired agents.defaults.compaction.truncateAfterCompaction."],
+      false,
+    ],
+    [
+      "leaves compaction config without the retired gate untouched",
+      { maxActiveTranscriptBytes: "20mb" },
+      { maxActiveTranscriptBytes: "20mb" },
+      [],
+      false,
+    ],
+  ] as const)("%s", (_name, compaction, expected, expectedChanges, checkRule) => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-config-keys",
     );
     expect(migration).toBeDefined();
-    const raw = {
-      gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } },
-    };
+    const raw = { agents: { defaults: { compaction: structuredClone(compaction) } } };
     const changes: string[] = [];
+
     migration?.apply(raw, changes);
 
-    expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
-    expect(changes).toEqual([
-      "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
-    ]);
-    expect(migration?.legacyRules?.[0]?.message).toContain("reopen the Control UI over HTTPS");
+    expect(raw.agents.defaults.compaction).toEqual(expected);
+    expect(changes).toEqual(expectedChanges);
+    if (checkRule) {
+      const retiredRule = migration?.legacyRules?.find(
+        (candidate) =>
+          candidate.path.join(".") === "agents.defaults.compaction.truncateAfterCompaction",
+      );
+      expect(retiredRule?.message).toBe(
+        'agents.defaults.compaction.truncateAfterCompaction is retired; byte-triggered compaction now opts in via maxActiveTranscriptBytes alone. Run "openclaw doctor --fix".',
+      );
+    }
   });
 
-  it("removes a disabled retired device-auth bypass without requiring pairing", () => {
+  it.each([
+    [
+      "uses a dedicated, actionable migration for the retired device-auth bypass",
+      true,
+      "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
+    ],
+    [
+      "removes a disabled retired device-auth bypass without requiring pairing",
+      false,
+      "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+    ],
+  ] as const)("%s", (_name, bypassEnabled, expectedChange) => {
     const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
       (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
     );
     expect(migration).toBeDefined();
-    const raw = {
-      gateway: { controlUi: { dangerouslyDisableDeviceAuth: false } },
-    };
+    const raw = { gateway: { controlUi: { dangerouslyDisableDeviceAuth: bypassEnabled } } };
     const changes: string[] = [];
 
-    expect(migration?.legacyRules?.[0]?.match?.(false, raw)).toBe(true);
+    if (!bypassEnabled) {
+      expect(migration?.legacyRules?.[0]?.match?.(false, raw)).toBe(true);
+    }
     migration?.apply(raw, changes);
 
     expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
-    expect(changes).toEqual([
-      "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
-    ]);
+    expect(changes).toEqual([expectedChange]);
+    if (bypassEnabled) {
+      expect(migration?.legacyRules?.[0]?.message).toContain("reopen the Control UI over HTTPS");
+    }
   });
 
   it("consolidates modality model lists with capability tags and exact deduplication", () => {
@@ -276,6 +325,121 @@ describe("retired runtime config migrations", () => {
     );
   });
 
+  it("preserves wildcard entries while pruning emptied named descendants", () => {
+    const result = applyAll({
+      cloudWorkers: {
+        profiles: {
+          keep: { lifetime: "1h", region: "eu" },
+          prune: { lifetime: "1h" },
+          malformed: "keep",
+        },
+      },
+      agents: {
+        defaults: {
+          cliBackends: {
+            keep: { reliability: { outputLimits: { maxChars: 1 }, enabled: true } },
+            prune: { reliability: { outputLimits: { maxChars: 1 } } },
+            malformed: null,
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toMatchObject({
+      cloudWorkers: {
+        profiles: {
+          keep: { region: "eu" },
+          prune: {},
+          malformed: "keep",
+        },
+      },
+      agents: {
+        defaults: {
+          cliBackends: {
+            keep: { reliability: { enabled: true } },
+            prune: {},
+            malformed: null,
+          },
+        },
+      },
+    });
+    expect(result.changes).toEqual([
+      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    ]);
+  });
+
+  it("visits channel roots before ordered object-shaped accounts", () => {
+    const result = applyAll({
+      channels: {
+        googlechat: {
+          serviceAccountRef: "root-google",
+          accounts: {
+            z: { serviceAccountRef: "z-google" },
+            malformed: "keep-google",
+            a: { serviceAccountRef: "a-google" },
+          },
+        },
+        slack: {
+          identity: "root-slack",
+          accounts: {
+            z: { identity: "z-slack", postAs: "canonical-z" },
+            malformed: 42,
+            a: { identity: "a-slack" },
+          },
+        },
+        imessage: {
+          coalesceSameSenderDms: true,
+          accounts: {
+            z: { coalesceSameSenderDms: true },
+            malformed: false,
+            a: { coalesceSameSenderDms: true },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toMatchObject({
+      channels: {
+        googlechat: {
+          serviceAccount: "root-google",
+          accounts: {
+            z: { serviceAccount: "z-google" },
+            malformed: "keep-google",
+            a: { serviceAccount: "a-google" },
+          },
+        },
+        slack: {
+          postAs: "root-slack",
+          accounts: {
+            z: { postAs: "canonical-z" },
+            malformed: 42,
+            a: { postAs: "a-slack" },
+          },
+        },
+        imessage: {
+          accounts: {
+            z: {},
+            malformed: false,
+            a: {},
+          },
+        },
+      },
+    });
+    expect(result.changes).toEqual([
+      "Moved channels.googlechat.serviceAccountRef → channels.googlechat.serviceAccount.",
+      "Moved channels.googlechat.accounts.z.serviceAccountRef → channels.googlechat.accounts.z.serviceAccount.",
+      "Moved channels.googlechat.accounts.a.serviceAccountRef → channels.googlechat.accounts.a.serviceAccount.",
+      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+      "Moved channels.slack.identity → channels.slack.postAs.",
+      "Removed channels.slack.accounts.z.identity (channels.slack.accounts.z.postAs already set).",
+      "Moved channels.slack.accounts.a.identity → channels.slack.accounts.a.postAs.",
+      "Removed channels.imessage.coalesceSameSenderDms.",
+      "Removed channels.imessage.accounts.z.coalesceSameSenderDms.",
+      "Removed channels.imessage.accounts.a.coalesceSameSenderDms.",
+    ]);
+  });
+
   it("migrates the config tranche while preserving canonical settings", () => {
     const result = applyAll({
       ui: {
@@ -324,7 +488,6 @@ describe("retired runtime config migrations", () => {
     });
 
     expect(result.raw).toMatchObject({
-      ui: { prefs: { showAdvancedSettings: true } },
       skills: { load: { watch: true } },
       agents: {
         defaults: {
@@ -336,11 +499,15 @@ describe("retired runtime config migrations", () => {
       },
       messages: { inbound: { byChannel: { whatsapp: 4_000 } } },
     });
+    expect(result.raw).not.toHaveProperty("ui");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.default.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.work.debounceMs");
     expect(result.changes).toContain(
       "Collapsed conflicting WhatsApp debounce values into messages.inbound.byChannel.whatsapp using channels.whatsapp.accounts.work.debounceMs (4000 ms); account-specific debounce is no longer supported.",
+    );
+    expect(result.changes).toContain(
+      "Removed browser-local ui.prefs keys: ui.prefs.chatMessageMaxWidth, ui.prefs.textScale, ui.prefs.sidebarLiveActivity, ui.prefs.showAdvancedSettings.",
     );
   });
 
@@ -413,6 +580,28 @@ describe("retired runtime config migrations", () => {
     expect(result.raw).not.toHaveProperty("tui");
     expect(result.raw).not.toHaveProperty("commands.modelsWrite");
     expect(result.changes.length).toBeGreaterThan(8);
+  });
+
+  it("lifts the retired plan-tool switch out of the tools.experimental container", () => {
+    const result = applyAll({ tools: { experimental: { planTool: false } } });
+
+    expect(result.raw).toHaveProperty("tools.updatePlan", false);
+    expect(result.raw).not.toHaveProperty("tools.experimental");
+    expect(result.changes).toContain("Moved tools.experimental.planTool → tools.updatePlan.");
+  });
+
+  it("drops the tools.experimental container when the canonical plan-tool switch wins", () => {
+    const canonicalWins = applyAll({
+      tools: { updatePlan: true, experimental: { planTool: false } },
+    });
+    const emptyContainer = applyAll({ tools: { experimental: {} } });
+
+    expect(canonicalWins.raw).toHaveProperty("tools.updatePlan", true);
+    expect(canonicalWins.raw).not.toHaveProperty("tools.experimental");
+    expect(emptyContainer.raw).not.toHaveProperty("tools.experimental");
+    expect(emptyContainer.changes).toContain(
+      "Removed tools.experimental; tools.updatePlan now owns the switch.",
+    );
   });
 
   it("consolidates the approved tier-eval tranche with canonical values winning", () => {

@@ -124,7 +124,10 @@ type SystemAgentHistoryTurn = {
 
 type GatewaySystemAgentSession = {
   engine: {
-    handle: (message: string) => Promise<{
+    handle: (
+      message: string,
+      options?: { uiContext?: { page: string } },
+    ) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
@@ -155,6 +158,7 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
   notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
@@ -310,6 +314,8 @@ export type GatewayRequestOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   methodRegistry?: GatewayMethodRegistryView;
+  /** In-process caller lifetime; never serialized into a Gateway request frame. */
+  signal?: AbortSignal;
 };
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
@@ -327,6 +333,8 @@ export type GatewayRequestHandlerOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** In-process caller lifetime; absent for ordinary transport requests. */
+  signal?: AbortSignal;
 };
 
 /** Single gateway method implementation. */

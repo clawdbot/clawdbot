@@ -8,7 +8,7 @@ import { formatUnknownText } from "../lib/format.ts";
 import type { ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   hasSensitiveConfigData,
-  REDACTED_PLACEHOLDER,
+  redactedPlaceholder,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { renderSettingsSegmented } from "./settings-ui.ts";
@@ -157,11 +157,14 @@ export function wrapSensitiveControl(
 }
 
 export function renderTags(tags: string[]): TemplateResult | typeof nothing {
-  if (tags.length === 0) {
+  const visibleTags = tags.filter((tag) => tag !== "advanced");
+  if (visibleTags.length === 0) {
     return nothing;
   }
   return html`
-    <div class="cfg-tags">${tags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}</div>
+    <div class="cfg-tags">
+      ${visibleTags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}
+    </div>
   `;
 }
 
@@ -174,8 +177,12 @@ export function renderFieldRow(params: {
   stacked?: boolean;
   error?: unknown;
 }): TemplateResult {
+  // Array/map item rows resolve their meta from the parent path (numeric and
+  // wildcard segments collapse), so their help is the parent's. Showing it again
+  // per item is noise; a row with no label of its own gets no help of its own.
+  const help = params.showLabel ? params.help : undefined;
   const hasText =
-    params.showLabel || Boolean(params.help) || params.tags.length > 0 || Boolean(params.error);
+    params.showLabel || Boolean(help) || params.tags.length > 0 || Boolean(params.error);
   // Control-only rows (array/map item values) stack so the control gets full width.
   const stacked = params.stacked || !hasText;
   const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
@@ -187,9 +194,7 @@ export function renderFieldRow(params: {
               ${params.showLabel
                 ? html`<span class="settings-row__title">${params.label}</span>`
                 : nothing}
-              ${params.help
-                ? html`<span class="settings-row__desc">${params.help}</span>`
-                : nothing}
+              ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
               ${renderTags(params.tags)}
               ${params.error
                 ? html`<span class="cfg-field__error">${params.error}</span>`
@@ -244,7 +249,7 @@ export function renderJsonTextareaControl(params: {
   const textareaControl = html`
     <textarea
       class="settings-input${sensitiveState.isRedacted ? " cfg-redacted" : ""}"
-      placeholder=${sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : t("configForm.jsonValue")}
+      placeholder=${sensitiveState.isRedacted ? redactedPlaceholder() : t("configForm.jsonValue")}
       rows=${params.rows}
       .value=${sensitiveState.isRedacted ? "" : fallback}
       ?disabled=${disabled}

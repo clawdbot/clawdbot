@@ -41,6 +41,7 @@ export const nl: TranslationMap = {
     unselect: "Deselecteren",
     enabled: "Ingeschakeld",
     disabled: "Uitgeschakeld",
+    failed: "Mislukt",
     none: "geen",
     na: "n.v.t.",
     never: "nooit",
@@ -244,11 +245,6 @@ export const nl: TranslationMap = {
       schemaUnavailable: "Schema niet beschikbaar. Gebruik Raw.",
       channelSchemaUnavailable: "Schema voor kanaalconfiguratie niet beschikbaar.",
       loadingSchema: "Configuratieschema laden…",
-    },
-    health: {
-      title: "Kanaalstatus",
-      subtitle: "Momentopnamen van kanaalstatus vanuit de Gateway.",
-      noSnapshotYet: "Nog geen momentopname.",
     },
     generic: {
       subtitle: "Kanaalstatus en -configuratie.",
@@ -599,6 +595,10 @@ export const nl: TranslationMap = {
     worktreeName: "Worktree-naam",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree-namen gebruiken kleine letters, cijfers en koppeltekens.",
+    incognito: "Incognito",
+    incognitoDescription: "Bewaar deze thread alleen totdat de Gateway opnieuw start",
+    draft: "Concept",
+    draftDescription: "Houd deze thread voor jezelf totdat je hem publiceert",
     messagePlaceholder: "Waar moet deze sessie aan werken?",
     readingAttachment: "Bijlage lezen",
     start: "Sessie starten",
@@ -607,6 +607,12 @@ export const nl: TranslationMap = {
     createOutcomeUnknown:
       "De Gateway is gewijzigd terwijl deze sessie werd gestart. Controleer recente sessies voordat u deze taak opnieuw start.",
     catalogUnavailable: "Dit sessiedoel is niet beschikbaar.",
+  },
+  dashboardsPage: {
+    emptyTitle: "Nog geen dashboards",
+    emptyDescription:
+      "Open een thread en schakel over naar de Dashboard-weergave om het hier toe te voegen.",
+    loadError: "Kon dashboards niet laden: {error}",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -620,7 +626,8 @@ export const nl: TranslationMap = {
     limit: "Limiet",
     filters: "Filters",
     createdBy: "Gemaakt door {name}",
-    filterByCreator: "Filteren op maker",
+    archivedBy: "Gearchiveerd door {name}",
+    people: "Personen",
     allCreators: "Alle personen",
     filterControls: "Sessiefilters",
     sourceFilters: "Filters voor sessiebron",
@@ -680,6 +687,8 @@ export const nl: TranslationMap = {
     openWorkboardCard: "Workboard-kaart openen",
     dashboardAvailable: "Dashboard beschikbaar",
     approvalNeeded: "Goedkeuring vereist",
+    queuedMessage: "{count} bericht in wachtrij om te verzenden",
+    queuedMessages: "{count} berichten in wachtrij om te verzenden",
     noSessions: "Geen sessies gevonden.",
     noActiveSessions: "Geen actieve threads.",
     noArchivedSessions: "Geen gearchiveerde sessies.",
@@ -728,6 +737,7 @@ export const nl: TranslationMap = {
     runErrorTimedOut: "Time-out",
     runErrorUnknown: "Onbekende fout",
     attentionRequired: "Sessie vereist aandacht",
+    openSession: "Thread openen",
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",
@@ -748,6 +758,7 @@ export const nl: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "Incognito thread",
     cloudWorkerPlacement: "Cloudworker: {state}",
     cloudWorkerPlacementConflict: "Cloud worker: {state} · 1 workspaceconflict",
     cloudWorkerPlacementConflicts: "Cloud worker: {state} · {count} workspaceconflicten",
@@ -985,6 +996,9 @@ export const nl: TranslationMap = {
       notCreatedYet: "Nog niet aangemaakt",
       updatedUnknown: "Bijgewerkt onbekend",
       missingHint: "Dit bestand ontbreekt. Opslaan maakt het aan in de agent-workspace.",
+      addFile: "Bestand toevoegen…",
+      createHint:
+        "Dit bestand bestaat nog niet. Bij het opslaan wordt het aangemaakt in de agent-werkruimte.",
       content: "Inhoud",
       words: "{count} woorden",
       lines: "regels",
@@ -1019,7 +1033,9 @@ export const nl: TranslationMap = {
   },
   configForm: {
     showAdvanced: "Geavanceerd tonen",
-    advancedCount: "Geavanceerd ({count})",
+    advancedHidden: "{count} geavanceerde instelling verborgen",
+    advancedHiddenPlural: "{count} geavanceerde instellingen verborgen",
+    advancedDivider: "Geavanceerd",
     hideValue: "Waarde verbergen",
     revealValue: "Waarde tonen",
     disableStreamToReveal: "Schakel streammodus uit om de waarde te tonen",
@@ -1124,9 +1140,9 @@ export const nl: TranslationMap = {
         label: "Broadcast",
         description: "Instellingen voor broadcast en meldingen",
       },
-      audio: {
-        label: "Audio",
-        description: "Instellingen voor audio-invoer/-uitvoer",
+      tts: {
+        label: "Stem",
+        description: "Tekst-naar-spraakuitvoer, stemmen en persona's",
       },
       session: {
         label: "Sessie",
@@ -1136,17 +1152,9 @@ export const nl: TranslationMap = {
         label: "Cron",
         description: "Geplande taken en automatisering",
       },
-      web: {
-        label: "Web",
-        description: "Instellingen voor webserver en API",
-      },
       discovery: {
         label: "Discovery",
         description: "Service discovery en netwerken",
-      },
-      canvasHost: {
-        label: "Canvas Host",
-        description: "Canvas-rendering en -weergave",
       },
       talk: {
         label: "Spraak",
@@ -1211,6 +1219,8 @@ export const nl: TranslationMap = {
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} bezocht",
       lobsterdexFirstVisited: "{name} · voor het eerst bezocht op {date}",
+      lobsterdexCardFirstVisited: "Eerst bezocht {date}",
+      lobsterdexOpen: "Lobsterdex openen",
     },
     security: {
       title: "Beveiliging",
@@ -1309,7 +1319,7 @@ export const nl: TranslationMap = {
       broadcast: "Broadcast",
       notifications: "Meldingen",
       talk: "Talk",
-      audio: "Audio",
+      tts: "Stem",
       commands: "Opdrachten",
       hooks: "Hooks",
       bindings: "Bindings",
@@ -1318,12 +1328,9 @@ export const nl: TranslationMap = {
       security: "Beveiligingsbeleid",
       plugins: "Plugins",
       gateway: "Gateway",
-      web: "Web",
       browser: "Browser",
       nodeHost: "Node Host",
-      canvasHost: "Canvas Host",
       discovery: "Ontdekking",
-      media: "Media",
       acp: "ACP",
       mcp: "MCP",
       theme: "Thema",
@@ -1407,6 +1414,11 @@ export const nl: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Browserlokale chatvoorkeuren.",
+      messageWidth: "Berichtbreedte",
+      messageWidthHint:
+        "Optionele CSS-breedte voor het gecentreerde transcript, zoals 960px, 82% of min(1280px, 82%).",
+      messageWidthInvalid:
+        "Voer een CSS-breedte in zoals 960px, 82%, min(1280px, 82%) of calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Zijbalk",
@@ -1449,7 +1461,6 @@ export const nl: TranslationMap = {
     open: "Open",
     applying: "Toepassen…",
     autoSaveSaving: "Opslaan…",
-    autoSaveSaved: "Opgeslagen",
     autoSaveFailed: "Opslaan mislukt",
     autoSaveConflict: "Instellingen elders gewijzigd",
     retry: "Opnieuw proberen",
@@ -1471,8 +1482,11 @@ export const nl: TranslationMap = {
     revealEnvValues: "Env-waarden tonen",
     peek: "Bekijken",
     loadingSchema: "Schema laden…",
-    formUnsafe:
-      "Je configuratie bevat velden die de formuliereditor niet veilig kan weergeven. Gebruik de Raw-modus om die items te bewerken.",
+    formUnsafeCount: "1 instelling in deze config kan alleen als tekst worden bewerkt: {paths}",
+    formUnsafeCountPlural:
+      "{count} instellingen in deze config kunnen alleen als tekst worden bewerkt: {paths}",
+    formUnsafeMore: "+{count} meer",
+    openRawEditor: "Raw-editor openen",
     rawConfig: "Raw config (JSON/JSON5)",
     secretCount: "{count} geheim",
     secretCountPlural: "{count} geheimen",
@@ -1694,6 +1708,7 @@ export const nl: TranslationMap = {
     blockedAgentFilter: "geblokkeerd door agentfilter",
   },
   nav: {
+    account: "Account",
     back: "Terug",
     forward: "Vooruit",
     chat: "Chat",
@@ -1826,13 +1841,16 @@ export const nl: TranslationMap = {
     skillWorkshop: "Skill Workshop",
     nodes: "Nodes",
     chat: "Chat",
+    dashboards: "Dashboards",
     custodian: "OpenClaw",
     config: "Config",
     profile: "Profiel",
     communications: "Communicatie",
     appearance: "Weergave",
+    lobsterdex: "Lobsterdex",
     automation: "Automatisering",
     mcp: "MCP",
+    memory: "Geheugen",
     infrastructure: "Infrastructuur",
     labs: "Labs",
     about: "Over",
@@ -1862,13 +1880,16 @@ export const nl: TranslationMap = {
     skillWorkshop: "Bekijk, verfijn en pas voorstellen toe voordat ze live Skills worden.",
     nodes: "Gekoppelde apparaten en commando's.",
     chat: "Gateway-chat voor snelle interventies.",
+    dashboards: "Threads die openen op hun dashboard-weergave.",
     custodian: "Systeeminstellingen en onderhoud.",
     config: "Bewerk openclaw.json.",
     profile: "De statistieken, reeksen en het leven in het rif van je agent.",
     communications: "Kanalen, berichten en audio-instellingen.",
     appearance: "Thema, UI en instellingen voor de installatiewizard.",
+    lobsterdex: "Elk lobster-palet dat deze browser heeft bezocht.",
     automation: "Commando's, hooks, cron en plugins.",
     mcp: "MCP-servers, auth, tools en diagnostiek.",
+    memory: "Geheugenengine, backend, zoeken en dromen.",
     infrastructure: "Gateway-, web-, browser- en media-instellingen.",
     labs: "Experimentele agent- en toolmogelijkheden.",
     about: "Control UI en verbonden Gateway build-identiteit.",
@@ -1925,6 +1946,15 @@ export const nl: TranslationMap = {
       pair: "Koppelen",
       more: "Meer aanmeldopties",
     },
+    prepare: {
+      title: "Een lokaal model instellen",
+      intro: "Download of bereid een lokaal model voor op deze Gateway.",
+      button: "Model instellen / downloaden",
+      ollamaLabel: "Ollama",
+      ollamaHint: "Download een tools-geschikt model van je Ollama-server",
+      llamaCppLabel: "Lokaal model (llama.cpp)",
+      llamaCppHint: "Download een lokaal model van ongeveer 5,0 GB; vereist 16 GB RAM",
+    },
     manual: {
       title: "Verbinding maken met een API-sleutel of token",
       provider: "Provider",
@@ -1955,8 +1985,11 @@ export const nl: TranslationMap = {
     },
     wizard: {
       dialogLabel: "Aanmelden bij provider",
+      prepareDialogLabel: "Lokaal model instellen",
       title: "Aanmelden met een provider",
+      prepareTitle: "Een lokaal model instellen",
       starting: "Aanmelding bij provider starten…",
+      prepareStarting: "Bezig met opzetten van lokaal model…",
       checking: "Je modelconfiguratie controleren…",
       working: "Bezig…",
       continue: "Doorgaan",
@@ -2128,6 +2161,160 @@ export const nl: TranslationMap = {
     tlsVerifyOff: "TLS-verificatie uit",
     mtls: "mTLS",
   },
+  memoryPage: {
+    tablistLabel: "Geheugensecties",
+    tabs: {
+      overview: "Overzicht",
+      search: "Zoeken",
+      dreaming: "Dromen",
+    },
+    engine: {
+      title: "Engine",
+      description:
+        "Precies één geheugenplug-in bezit de geheugenslot. Een engine selecteren schakelt deze in en de andere uit.",
+      rowTitle: "Geheugenengine",
+      off: "Uit",
+      autoHint:
+        "Er is geen engine vastgezet in de configuratie, dus de slot valt terug op de standaardeigenaar.",
+      explicitHint: "Deze engine is vastgezet in de config onder plugins.slots.memory.",
+      offHint: "Geheugen is uitgeschakeld in de config: plugins.slots.memory is ingesteld op none.",
+      catalogUnavailable: "Maak verbinding met de gateway om de geheugen-engine te wijzigen.",
+      changeFailed: "Kon de geheugen-engine niet wijzigen",
+      disabledTitle: "Deze engine is uitgeschakeld",
+      disabledHint:
+        "De geheugenslot wijst naar deze plugin, maar de plugin zelf is uitgeschakeld, dus geheugen draait niet.",
+      enable: "Inschakelen",
+    },
+    backend: {
+      title: "Backend",
+      description: "Hoe geheugen wordt opgeslagen en opgehaald voor de geselecteerde engine.",
+      rowTitle: "Ophaal-backend",
+      builtin: "Ingebouwd",
+      qmd: "QMD",
+      builtinHint: "Geheugenbestanden worden geïndexeerd en doorzocht door OpenClaw zelf.",
+      qmdHint: "Ophalen wordt gedelegeerd aan QMD. De instellingen ervan verschijnen hieronder.",
+    },
+    addons: {
+      title: "Add-ons",
+      description:
+        "Deze plugins komen bovenop de engine in plaats van te concurreren om de slot, dus elke combinatie kan tegelijk draaien.",
+      activeMemory: {
+        title: "Actief geheugen",
+      },
+      memoryWiki: {
+        title: "Geheugen-wiki",
+      },
+      stateUnknown: "Onbekend",
+      manage: "Add-ons in- of uitschakelen",
+      manageLink: "Plug-ins openen",
+    },
+    import: {
+      title: "Importeren",
+      description: "Breng bestaand geheugen van andere assistenten naar een agent-werkruimte.",
+      link: "Geheugenimport openen",
+    },
+    search: {
+      intro:
+        "Standaardinstellingen voor embedding en ophalen die worden gedeeld door elke agent zonder geheugenoverschrijving.",
+    },
+    dreaming: {
+      intro:
+        "Dreaming draait als één beheerde cron-taak over alle agent-werkruimtes, dus deze instellingen zijn globaal. Ze worden beheerd door de {plugin}-plugin.",
+      schedule: {
+        title: "Planning",
+        description: "Wanneer de volledige sweep draait en welk model deze vertelt.",
+      },
+      frequency: {
+        label: "Dreaming-frequentie",
+        help: "Cron-cadans voor de volledige dreaming-sweep (light, REM, dan deep). Laat leeg voor de plugin-standaard.",
+        placeholder: "0 3 * * *",
+      },
+      timezone: {
+        label: "Tijdzone",
+        help: "IANA-tijdzone die wordt gebruikt om de cron-cadans te interpreteren.",
+        placeholder: "Europe/Vienna",
+      },
+      model: {
+        label: "Dreaming-model",
+        help: "Provider/model-overschrijving voor de vertelling van het droomdagboek. Vereist dat overschrijvingen van subagent-modellen zijn toegestaan.",
+        placeholder: "anthropic/claude-sonnet-4-6",
+      },
+      verboseLogging: {
+        label: "Uitgebreide logging",
+        help: "Log elke dreaming-fase in detail. Handig bij het afstemmen van drempels.",
+      },
+      storage: {
+        title: "Opslag",
+        description: "Waar gepromote herinneringen en dreaming-rapporten worden geschreven.",
+        modeLabel: "Opslagmodus",
+        modeHelp:
+          "Inline schrijft naar het geheugenbestand; separate houdt een apart rapportbestand aan.",
+        modes: {
+          inline: "Inline",
+          separate: "Apart",
+          both: "Beide",
+        },
+        separateReportsLabel: "Aparte rapporten",
+        separateReportsHelp: "Houd dreaming-rapporten buiten het hoofdgeheugenbestand.",
+      },
+      phases: {
+        light: {
+          title: "Lichte fase",
+          description: "Goedkope recente-activiteitscan die replay-kandidaten voorbereidt.",
+        },
+        deep: {
+          title: "Diepe fase",
+          description:
+            "Gescoorde promotiescan die kortetermijnitems naar het geheugen laat doorstromen.",
+        },
+        rem: {
+          title: "REM-fase",
+          description:
+            "Patroonscan die zoekt naar terugkerende thema's binnen het terugkijkvenster.",
+        },
+      },
+      phaseFields: {
+        enabled: "Ingeschakeld",
+        enabledHelp: "Voer deze fase uit tijdens de sweep.",
+        lookbackDays: "Terugkijkdagen",
+        lookbackDaysHelp: "Hoe ver deze fase terugleest. Laat leeg voor de plugin-standaard.",
+        limit: "Limiet",
+        limitHelp: "Maximumaantal items dat deze fase per run verwerkt.",
+        dedupeSimilarity: "Dedupe-gelijkenis",
+        dedupeSimilarityHelp:
+          "Gelijkenis waarboven twee kandidaten als duplicaten worden behandeld.",
+        minScore: "Minimale score",
+        minScoreHelp: "Promotiescore die een item moet bereiken.",
+        minRecallCount: "Minimale recalls",
+        minRecallCountHelp:
+          "Hoe vaak een item moet worden opgehaald voordat het kan worden gepromoot.",
+        minUniqueQueries: "Minimum aantal unieke query's",
+        minUniqueQueriesHelp: "Hoeveel verschillende query's het item moeten hebben opgeleverd.",
+        recencyHalfLifeDays: "Recentheid-halfwaardetijd (dagen)",
+        recencyHalfLifeDaysHelp: "Hoe snel oudere recall-signalen aan gewicht verliezen.",
+        maxAgeDays: "Maximumleeftijd (dagen)",
+        maxAgeDaysHelp: "Negeer kortetermijnitems die ouder zijn dan dit.",
+        maxPromotedSnippetTokens: "Max. tokens gepromoveerd fragment",
+        maxPromotedSnippetTokensHelp:
+          "Tokenbudget voor elk gepromoveerd fragment. De herkomst blijft gekoppeld.",
+        minPatternStrength: "Minimale patroonsterkte",
+        minPatternStrengthHelp:
+          "Sterkte die een terugkerend patroon moet bereiken om te worden gerapporteerd.",
+      },
+      agentScope: {
+        title: "Agentweergave",
+        description:
+          "De bovenstaande instellingen zijn globaal. Het droomdagboek, de kortetermijntellingen en de onderhoudsacties hieronder horen bij één agent.",
+        rowTitle: "Agent",
+      },
+      unsupported: {
+        title: "Droominstellingen",
+        rowTitle: "Niet beschikbaar voor deze engine",
+        description:
+          "De {plugin}-plugin bezit de geheugenslot en het configuratieschema heeft geen droomsectie, dus deze instellingen kunnen niet worden opgeslagen. Wijzig de engine op het tabblad Overzicht om ze te bewerken.",
+      },
+    },
+  },
   sessionsPage: {
     hubTablistLabel: "Threads-secties",
   },
@@ -2291,6 +2478,21 @@ export const nl: TranslationMap = {
       empty: "Geen actieve swarms.",
       defaultPhase: "Zonder fase",
     },
+    toolSearch: {
+      title: "Tool Search",
+      description:
+        "Houd een begrensde toolmap zichtbaar en stel de rest uit achter zoeken, zodat grote MCP- en plugincatalogi de prompt niet langer overspoelen.",
+    },
+    localModelLean: {
+      title: "Slanke tools voor lokale modellen",
+      description:
+        "Laat zware standaardtools vallen die kleinere lokale modellen slecht aankunnen, waardoor een kortere set overblijft die ze betrouwbaar kunnen gebruiken.",
+    },
+    auditMessages: {
+      title: "Metadata voor berichtaudit",
+      description:
+        "Registreer inhoudsvrije metadata voor directe gesprekken in het auditregister. Berichtinhoud wordt nooit opgeslagen.",
+    },
   },
   aboutPage: {
     productName: "OpenClaw",
@@ -2420,6 +2622,8 @@ export const nl: TranslationMap = {
     toolRuns: "{count} uitvoeringen",
     identity: {
       title: "Identiteit",
+      menuLabel: "Identiteitsmenu",
+      menuButtonLabel: "Identiteits- en app-menu voor {name}",
       description: "Je profiel op deze gateway.",
       loading: "Je identiteit laden…",
       profileUnavailable: "Je identiteitsprofiel kon niet worden geladen.",
@@ -3045,6 +3249,7 @@ export const nl: TranslationMap = {
     eventStale: "Verlopen sessie",
   },
   connection: {
+    queuedCount: "{count} in wachtrij",
     reconnecting: "Opnieuw verbinden…",
     retryNow: "Nu opnieuw proberen",
     access: {
@@ -3068,7 +3273,6 @@ export const nl: TranslationMap = {
       title: "Momentopname",
       subtitle: "Meest recente informatie over de Gateway-handshake.",
       status: "Status",
-      uptime: "Bedrijfstijd",
       tickInterval: "Tickinterval",
       lastChannelsRefresh: "Laatste vernieuwing van kanalen",
       lastError: "Laatste fout",
@@ -3084,6 +3288,7 @@ export const nl: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "Onbekende fout",
     cronFailed: "{count} cronjob(s) mislukt",
     cronOverdue: "{count} cronjob(s) te laat",
     modelAuthExpired: "Modelauthenticatie verlopen: {providers}",
@@ -3180,14 +3385,18 @@ export const nl: TranslationMap = {
       on: "Dromen aan",
       off: "Dromen uit",
     },
-    restartConfirmation: {
-      title: "Start Gateway opnieuw om wijziging toe te passen",
-      subtitle: "Het wijzigen van de Dromen-modus start de Gateway opnieuw.",
-      warning:
-        "Deze actie start de Gateway opnieuw en kan chats, automatiseringen en verbonden kanalen tijdelijk onderbreken.",
-      confirm: "Herstart bevestigen",
-      restarting: "Opnieuw starten…",
-      failed: "Kan wijziging niet toepassen. Controleer je verbinding en probeer het opnieuw.",
+    toggleConfirmation: {
+      subtitle: "Dreaming is een globale instelling; deze geldt niet alleen voor deze agent.",
+      enableTitle: "Dreaming inschakelen voor alle agents",
+      enableDetail:
+        "De nachtelijke dreaming-sweep draait over elke geconfigureerde agent-werkruimte en promoveert kortetermijnherinneringen naar langetermijngeheugen. Dit geldt direct.",
+      enableConfirm: "Dreaming inschakelen",
+      disableTitle: "Dreaming uitschakelen voor alle agents",
+      disableDetail:
+        "De nachtelijke dreaming-sweep stopt voor elke geconfigureerde agent, niet alleen voor deze. Reeds opgeslagen herinneringen blijven; er wordt niets nieuws gepromoveerd. Dit geldt direct.",
+      disableConfirm: "Dreaming uitschakelen",
+      saving: "Opslaan…",
+      failed: "Kon wijziging niet toepassen. Controleer je verbinding en probeer het opnieuw.",
     },
     status: {
       active: "Dromen actief",
@@ -3716,6 +3925,16 @@ export const nl: TranslationMap = {
   },
   login: {
     subtitle: "Gateway-dashboard",
+    deviceAuthMigration: {
+      banner: "Deze browser heeft na de update nog eenmalige apparaatgoedkeuring nodig.",
+      action: "Beveilig deze browser",
+      secureContextRequired:
+        "Deze verouderde browser blijft tijdelijk beschikbaar. Open hem opnieuw via HTTPS of localhost om hem te beveiligen met apparaatidentiteit.",
+      pendingUnavailable:
+        "Het koppelingsverzoek van de browser is nog niet beschikbaar. Probeer het zo meteen opnieuw.",
+      loadFailed: "Kon het koppelingsverzoek van deze browser niet laden: {error}",
+      approvalFailed: "Kon deze browser niet beveiligen: {error}",
+    },
     passwordPlaceholder: "optioneel",
     showToken: "Token weergeven",
     hideToken: "Token verbergen",
@@ -3818,6 +4037,9 @@ export const nl: TranslationMap = {
   },
   chat: {
     disconnected: "Verbinding met Gateway verbroken.",
+    sendErrors: {
+      activeLeafChanged: "De thread is van vertakking gewisseld — controleer en verstuur opnieuw.",
+    },
     waitingForApproval: "Wachten op goedkeuring…",
     startupStatus: {
       preparingWorkspace: "Werkruimte voorbereiden…",
@@ -3827,6 +4049,42 @@ export const nl: TranslationMap = {
     },
     outputTokens: "{count} uitvoertokens",
     archivedSessionDisabled: "Herstel deze sessie om berichten te verzenden.",
+    sessionRoute: {
+      chooseTitle: "Kies een sessie",
+      multipleMatches: "Meer dan één sessie komt overeen met {shortId}.",
+      additionalMatches: "Er blijven zoekresultaten over. Gebruik een langere id-prefix.",
+    },
+    sessionSharing: {
+      menu: "Thread delen",
+      current: "Zichtbaarheid van thread: {visibility}",
+      visibility: "Zichtbaarheid",
+      shared: "Gedeeld",
+      readOnly: "Alleen-lezen",
+      suggest: "Voorstellen",
+      draft: "Concept",
+      publishDraft: "Concept publiceren",
+      members: "Leden",
+      selected: "Lid",
+      noPeople: "Geen gekoppelde personen gevonden.",
+      readOnlyNotice:
+        "Alleen de eigenaar en leden van de thread kunnen actie ondernemen in deze thread.",
+    },
+    sessionSuggestions: {
+      suggest: "Voorstellen",
+      suggestMessage: "Bericht voorstellen",
+      attachmentsUnsupported: "Verwijder bijlagen voordat je een tekstvoorstel indient.",
+      sendNow: "Voorstel van {author} nu verzenden",
+      queue: "Voorstel van {author} in wachtrij zetten",
+      edit: "Voorstel van {author} bewerken",
+      dismiss: "Voorstel van {author} negeren",
+      typing: "{name} is aan het typen…",
+      typingMany: "{names} zijn aan het typen…",
+      state: {
+        pending: "In afwachting",
+        accepted: "Geaccepteerd",
+        dismissed: "Genegeerd",
+      },
+    },
     loadOlder: "Oudere laden",
     sessionHeader: {
       renameTooltip: "Sessie hernoemen",
@@ -3840,6 +4098,7 @@ export const nl: TranslationMap = {
       copyPath: "Pad kopiëren",
       copyBranch: "Branchnaam kopiëren",
       copied: "Gekopieerd",
+      incognito: "Incognito-thread",
       branches: "Threadvertakkingen",
       branchSwitchUnavailable: "Vertakking wisselen is niet beschikbaar terwijl de agent werkt.",
       branchSwitchRequiresAdmin:
@@ -3848,6 +4107,15 @@ export const nl: TranslationMap = {
       oneMessage: "{count} bericht",
       messages: "{count} berichten",
       activeBranch: "Actieve vertakking",
+      gatewayPicker: {
+        menuLabel: "Gateway: {gateway}",
+        primaryTag: "primair",
+        setPrimary: "Instellen als primair…",
+        openSettings: "Gateway-instellingen…",
+        connected: "Verbonden",
+        unreachable: "Onbereikbaar",
+        unknown: "Onbekende status",
+      },
     },
     board: {
       faceLabel: "Threadweergave",
@@ -3929,7 +4197,7 @@ export const nl: TranslationMap = {
     followUpModeUsingServer: "Serverstandaard gebruiken ({mode})",
     followUpModeOverriding: "Serverstandaard overschrijven ({mode})",
     followUpModeReset: "Terugzetten naar serverstandaard",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Externe sessies openen in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Uitgeschakeld tijdens configuratie",
@@ -4038,7 +4306,9 @@ export const nl: TranslationMap = {
       threads: "Threads",
       groups: "Groepen",
       coding: "Programmeren",
-      groupCatalogSessionsByProject: "Groeperen op project",
+      catalogViewOptions: "Weergaveopties",
+      catalogGroupByProject: "Project",
+      catalogGroupByPerson: "Persoon",
       openSessionMenu: "Open session menu",
       sortBy: "Sorteren op",
       sortCreated: "Aangemaakt",
@@ -4130,6 +4400,7 @@ export const nl: TranslationMap = {
       openInCanvas: "Openen in canvas",
       reply: "Beantwoorden",
       replyToMessage: "Op bericht reageren",
+      replyingTo: "Antwoorden op {name}",
       rewind: "Terugspoelen",
       rewindConfirm: "Terugspoelen naar voor dit bericht?",
       rewindToHere: "Naar hier terugspoelen",
@@ -4148,35 +4419,43 @@ export const nl: TranslationMap = {
       usingDefault: "Standaard uit Instellingen wordt gebruikt",
       resetToDefault: "Terugzetten naar standaard ({model})",
     },
-    sideChat: {
-      title: "Zijgesprek",
-      notSaved: "Niet opgeslagen in chatgeschiedenis",
-      thinking: "Aan het nadenken…",
-      clear: "Zijgesprek wissen",
-      close: "Zijgesprek sluiten",
-      followUp: "Vervolgvraag…",
-      followUpLabel: "Vervolgen in zijgesprek",
-      sendFollowUp: "Vervolgvraag verzenden",
-    },
-    observer: {
-      title: "Sessieobservator",
-      expand: "Sessieobservator uitvouwen",
-      collapse: "Sessieobservator invouwen",
-      hide: "Sessieobservator verbergen",
-      show: "Sessieobservator tonen",
+    rail: {
+      title: "Sessiehulp",
+      subtitle: "Stel een vraag over deze sessie of het bijbehorende project",
+      expand: "Sessiebalk uitvouwen",
+      collapse: "Sessiebalk invouwen",
+      hide: "Sessiebalk verbergen",
+      show: "Sessiebalk tonen",
+      clear: "Hulpthread wissen",
       plan: "Plan",
       progress: "{completed} van {total}",
       pullRequests: "Pull requests",
-      running: "Actief",
       checksPassing: "{count} geslaagd",
       checksFailing: "{count} mislukt",
       checksPending: "{count} actief",
-      askLabel: "Vraag over deze sessie",
-      askPlaceholder: "Waarom doet het dat?",
+      finished: "Voltooid {time}",
+      empty: "Stel een alleen-lezen vraag over deze sessie of het bijbehorende project.",
+      askLabel: "Vraag de sessiehulp",
+      askPlaceholder: "Wat moet ik weten?",
       askSubmit: "Vragen",
-      askPending: "Observaties controleren…",
-      askBusy: "De observer beantwoordt al een vraag.",
-      askUnavailable: "De observer kan nu niet antwoorden.",
+      askPending: "Sessie controleren…",
+      askBusy: "De hulp beantwoordt al een vraag.",
+      askUnavailable: "De hulp kan nu geen antwoord geven.",
+      asOf: "vanaf {time}",
+      health: {
+        "on-track": "Op koers",
+        grinding: "Bezig",
+        stuck: "Vastgelopen",
+        "waiting-on-user": "Wacht op jou",
+        "wrapping-up": "Afronden",
+        done: "Klaar",
+        failed: "Mislukt",
+      },
+    },
+    observer: {
+      title: "Sessieobservator",
+      plan: "Plan",
+      progress: "{completed} van {total}",
       boardCurrentStatus: "Huidige status",
       boardTimeline: "Gezondheidstijdlijn",
       boardCurrentRun: "Huidige run",
@@ -4209,6 +4488,16 @@ export const nl: TranslationMap = {
       noPreviewableMarkdown: "Geen markdown-inhoud om te bekijken.",
       noContent: "Geen inhoud beschikbaar",
     },
+    sidebarColumns: {
+      chat: "Chat",
+      discussion: "Discussie",
+      detail: "Details",
+      close: "{panel} sluiten",
+      drag: "{panel} slepen",
+      dropOnEmptyLeft: "Verplaats {panel} naar de lege linkerzijbalk",
+      dropOnEmptyRight: "Verplaats {panel} naar de lege rechterzijbalk",
+      resize: "Grootte van {panel} aanpassen",
+    },
     thread: {
       search: "Berichten zoeken",
       searchPlaceholder: "Berichten zoeken...",
@@ -4228,6 +4517,8 @@ export const nl: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Offline — berichten worden in de wachtrij geplaatst en verzonden zodra de verbinding terugkeert.",
+      offlineQueuedHint:
+        "Offline — {count} in wachtrij; berichten worden verzonden zodra de verbinding terugkeert.",
       preparingModel: "Model voorbereiden...",
       responding: "{name} reageert...",
       sendingMessage: "Bericht verzenden...",
@@ -4414,7 +4705,8 @@ export const nl: TranslationMap = {
       toolUseOne: "1 toolgebruik",
       toolUseMany: "{count} toolgebruiken",
       expandTask: "Details weergeven voor {title}",
-      collapseTask: "Details verbergen voor {title}",
+      detailTitle: "Taakdetails",
+      backToTasks: "Terug naar achtergrondtaken",
       detailLoading: "Taakdetails laden…",
       detailFailed: "Kan taakdetails niet laden.",
       prompt: "Prompt",

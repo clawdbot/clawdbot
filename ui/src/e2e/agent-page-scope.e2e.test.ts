@@ -67,6 +67,12 @@ const emptyUsage = {
   },
 };
 
+const multiAgentRoster = [
+  { id: "main", identity: { name: "Main" }, name: "Main" },
+  { id: "reviewer", identity: { name: "Reviewer" }, name: "Reviewer" },
+  { id: "writer", identity: { name: "Writer" }, name: "Writer" },
+];
+
 describeControlUiE2e("Control UI agent page scope", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -81,7 +87,7 @@ describeControlUiE2e("Control UI agent page scope", () => {
     await server?.close();
   });
 
-  it("scopes pages from the chip, exposes All agents, and keeps Agents settings independent", async () => {
+  it("scopes pages from the chip and keeps Agents settings independent", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -94,10 +100,19 @@ describeControlUiE2e("Control UI agent page scope", () => {
           defaultId: "main",
           mainKey: "main",
           scope: "agent",
-          agents: [
-            { id: "main", identity: { name: "Main" }, name: "Main" },
-            { id: "writer", identity: { name: "Writer" }, name: "Writer" },
-          ],
+          agents: multiAgentRoster,
+        },
+        "chat.startup": {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+            agents: multiAgentRoster,
+          },
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
         },
         "sessions.list": {
           count: 0,
@@ -115,10 +130,22 @@ describeControlUiE2e("Control UI agent page scope", () => {
       await gateway.waitForRequest("agents.list");
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
-        .locator('wa-dropdown-item[value="agent:writer"]')
-        .click();
+      const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+      // The card sits at the top of the sidebar: the menu drops below it so the
+      // agent you clicked (and its checkmark row) stays visible.
+      await expect
+        .poll(async () => {
+          const [card, menu] = await Promise.all([
+            sidebar.locator(".sidebar-agent-card__main").boundingBox(),
+            agentMenu.locator('[part~="menu"], .wa-dropdown__menu').first().boundingBox(),
+          ]);
+          if (!card || !menu) {
+            return null;
+          }
+          return { belowCard: menu.y >= card.y + card.height, leftAligned: menu.x <= card.x + 4 };
+        })
+        .toEqual({ belowCard: true, leftAligned: true });
+      await agentMenu.locator('wa-dropdown-item[value="agent:writer"]').click();
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expect
         .poll(async () =>
@@ -127,7 +154,7 @@ describeControlUiE2e("Control UI agent page scope", () => {
         .toBe("Writer");
 
       await sidebar.getByRole("link", { name: "Home" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
       await sidebar.locator(".sidebar-identity-card").click();
       await sidebar
         .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
@@ -142,36 +169,94 @@ describeControlUiE2e("Control UI agent page scope", () => {
         .toBe("writer");
       await screenshot(page, "01-writer-usage.png");
 
-      const scopeTrigger = pageScope.locator(".agent-select__trigger");
-      const usageRequestsBeforeAll = (await gateway.getRequests("sessions.usage")).length;
-      await scopeTrigger.click();
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-agent-menu")
+        .locator('wa-dropdown-item[value="command:agent-settings"]')
+        .click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/writer");
+      expect(new URL(page.url()).searchParams.get("agent")).toBeNull();
+      await screenshot(page, "03-writer-settings.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("updates the compact session scope label and exposes All agents", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+          agents: multiAgentRoster,
+        },
+        "sessions.list": {
+          count: 0,
+          defaults: { contextTokens: null, model: null, modelProvider: null },
+          path: "",
+          sessions: [],
+          ts: Date.now(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}sessions`);
+      await gateway.waitForRequest("agents.list");
+      const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await expect
+        .poll(() =>
+          pageScope.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+        )
+        .toBe("main");
+
+      await pageScope.locator(".agent-select__trigger").click();
+      await pageScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "Writer" })
+        .click();
+
+      await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
+      await expect
+        .poll(() =>
+          pageScope.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+        )
+        .toBe("writer");
+      await expect
+        .poll(async () => (await pageScope.locator(".agent-select__label").textContent())?.trim())
+        .toBe("Writer");
+      await screenshot(page, "05-first-session-scope-switch.png");
+
+      const sessionRequestsBeforeAll = (await gateway.getRequests("sessions.list")).length;
+      await pageScope.locator(".agent-select__trigger").click();
       await pageScope
         .locator("wa-dropdown-item[data-agent-option]")
         .filter({ hasText: "All agents" })
         .evaluate((item) => (item as HTMLElement).click());
       await expect
         .poll(async () => {
-          const requests = await gateway.getRequests("sessions.usage");
+          const requests = await gateway.getRequests("sessions.list");
           return requests
-            .slice(usageRequestsBeforeAll)
+            .slice(sessionRequestsBeforeAll)
             .some((request) => !Object.hasOwn(requestParams(request), "agentId"));
         })
         .toBe(true);
       await expect
-        .poll(async () =>
-          (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+        .poll(() =>
+          pageScope.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
         )
-        .toBe("Writer");
-      await screenshot(page, "02-all-agents-usage.png");
-
-      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
-        .locator('wa-dropdown-item[value="command:agent-settings"]')
-        .click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents");
-      await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("writer");
-      await screenshot(page, "03-writer-settings.png");
+        .toBe("");
+      await expect
+        .poll(async () => (await pageScope.locator(".agent-select__label").textContent())?.trim())
+        .toBe("All agents");
+      await screenshot(page, "06-all-agents-session-scope.png");
     } finally {
       await context.close();
     }

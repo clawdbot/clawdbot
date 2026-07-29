@@ -1,5 +1,6 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { inc as incrementSemver } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -387,10 +388,14 @@ describe("CodexAppServerClient", () => {
   });
 
   it("blocks stable Codex app-server versions newer than generated schemas", async () => {
+    const newerVersion = incrementSemver(MAX_CODEX_APP_SERVER_VERSION, "patch");
+    if (!newerVersion) {
+      throw new Error(`invalid maximum Codex app-server version: ${MAX_CODEX_APP_SERVER_VERSION}`);
+    }
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.145.0 (macOS; test)" },
+      result: { userAgent: `openclaw/${newerVersion} (macOS; test)` },
     });
 
     await expect(initializing).rejects.toThrow(
@@ -545,6 +550,62 @@ describe("CodexAppServerClient", () => {
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
       id: "srv-1",
       result: { contentItems: [{ type: "inputText", text: "ok" }], success: true },
+    });
+  });
+
+  it("interleaves a bounded remote file command with a pending dynamic tool request", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const remotePath = "/remote/codex-workspace/reports/slack-upload.txt";
+    const content = "authoritative remote attachment";
+    harness.client.addRequestHandler(async (request, signal) => {
+      if (request.method !== "item/tool/call") {
+        return undefined;
+      }
+      const response = await harness.client.request(
+        "command/exec",
+        {
+          command: ["node", "-e", "fixed-reader", "--", remotePath, "64", "0", "524288"],
+          env: { NODE_OPTIONS: null, NODE_PATH: null },
+        },
+        { signal, timeoutMs: 10_000 },
+      );
+      return {
+        contentItems: [{ type: "inputText", text: response.stdout }],
+        success: true,
+      };
+    });
+
+    harness.send({ id: "srv-remote-file", method: "item/tool/call", params: { tool: "message" } });
+    await vi.waitFor(() => expect(harness.writes).toHaveLength(1));
+    const fileRequest = JSON.parse(harness.writes[0] ?? "{}") as {
+      id?: number;
+      method?: string;
+      params?: { command?: string[]; env?: Record<string, string | null> };
+    };
+    expect(fileRequest).toMatchObject({
+      method: "command/exec",
+      params: {
+        command: ["node", "-e", "fixed-reader", "--", remotePath, "64", "0", "524288"],
+        env: { NODE_OPTIONS: null, NODE_PATH: null },
+      },
+    });
+
+    harness.send({
+      id: fileRequest.id,
+      result: {
+        exitCode: 0,
+        stdout: content,
+        stderr: "",
+      },
+    });
+    await vi.waitFor(() => expect(harness.writes).toHaveLength(2));
+    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({
+      id: "srv-remote-file",
+      result: {
+        contentItems: [{ type: "inputText", text: content }],
+        success: true,
+      },
     });
   });
 

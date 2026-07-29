@@ -298,6 +298,65 @@ class WearProxyBridgeTest {
   }
 
   @Test
+  fun foreignFinalPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("final")
+  }
+
+  @Test
+  fun foreignAbortPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("aborted")
+  }
+
+  @Test
+  fun foreignErrorPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("error")
+  }
+
+  @Test
+  fun foreignFinalPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("final")
+  }
+
+  @Test
+  fun foreignAbortPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("aborted")
+  }
+
+  @Test
+  fun foreignErrorPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("error")
+  }
+
+  @Test
+  fun identifiedTerminalClearsItsOwnStreamWithoutErasingAnotherRun() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "older-run", text = "Old", message = "Old")
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = "final", runId = "older-run")
+
+    val active = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "lo")
+    val retired = projectStreamEvent(projector, state = "delta", runId = "older-run", text = "new")
+    assertEquals("Hello", active.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", active.getValue("streamTextComplete").jsonPrimitive.content)
+    assertEquals("new", retired.getValue("streamText").jsonPrimitive.content)
+    assertEquals("false", retired.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  @Test
+  fun unidentifiedTerminalClearsEveryStreamInItsSession() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "older-run", text = "old", message = "old")
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "stale", message = "stale")
+
+    projectStreamEvent(projector, state = "final")
+
+    val next = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "fresh")
+    assertEquals("fresh", next.getValue("streamText").jsonPrimitive.content)
+    assertEquals("false", next.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  @Test
   fun runIdLessDeltasUseSessionSnapshotAndKeepExactAppendSemantics() {
     val projector = WearChatStreamProjector()
 
@@ -841,6 +900,55 @@ class WearProxyBridgeTest {
       // The stale send is retried after discovery, then the later offline event also delivers.
       assertEquals(2, sent.count { it.path == WearProtocol.EVENT_PATH })
     }
+
+  private fun assertForeignTerminalPreservesActiveStream(state: String) {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = state, runId = "older-run")
+
+    val continued = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "lo")
+    assertEquals("Hello", continued.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  private fun assertForeignTerminalPreservesAnonymousStream(state: String) {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = state, runId = "older-run")
+
+    val continued = projectStreamEvent(projector, state = "delta", text = "lo")
+    assertEquals("Hello", continued.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  private fun projectStreamEvent(
+    projector: WearChatStreamProjector,
+    state: String,
+    runId: String? = null,
+    text: String? = null,
+    message: String? = null,
+  ): JsonObject =
+    checkNotNull(
+      projector.project(
+        buildJsonObject {
+          put("sessionKey", "main")
+          runId?.let { put("runId", it) }
+          put("state", state)
+          text?.let { put("deltaText", it) }
+          message?.let { fullText ->
+            put(
+              "message",
+              buildJsonObject {
+                put("role", "assistant")
+                put("content", fullText)
+              },
+            )
+          }
+        },
+      ),
+    )
 
   private fun request(requestId: String): WearMessage.Request = WearMessage.Request(requestId = requestId, method = WearRpcMethod.ProxyStatus)
 }

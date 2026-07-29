@@ -24,7 +24,7 @@ import {
   isFailoverError,
 } from "../../agents/failover-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
-import { isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -375,11 +375,7 @@ function supportsChannelCodexLogin(provider: string | null | undefined): boolean
     return false;
   }
   const normalizedProvider = provider.trim().toLowerCase().replace(/_/gu, "-");
-  return (
-    normalizedProvider === "openai" ||
-    normalizedProvider === "codex" ||
-    normalizedProvider === "openai-codex"
-  );
+  return normalizedProvider === "openai" || normalizedProvider === "codex";
 }
 
 export function buildExternalRunFailureReply(

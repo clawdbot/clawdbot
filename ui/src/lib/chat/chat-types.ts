@@ -69,6 +69,7 @@ export type ChatItem =
 export type ChatStreamSegment = {
   text: string;
   ts: number;
+  runId?: string;
   toolCallId?: string;
   itemId?: string;
 };
@@ -118,6 +119,8 @@ export type MessageContentItem =
         label: string;
         mimeType?: string;
         isVoiceNote?: boolean;
+        width?: number;
+        height?: number;
       };
     }
   | {

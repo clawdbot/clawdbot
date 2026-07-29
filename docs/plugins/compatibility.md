@@ -22,6 +22,8 @@ Plugin compatibility contracts are tracked in the core registry at
 - owner: `sdk`, `config`, `setup`, `channel`, `provider`, `plugin-execution`,
   `agent-runtime`, or `core`
 - introduction and deprecation dates when applicable
+- an exact removal date once the owning maintainer approves it; an omitted
+  `removeAfter` keeps a deprecated surface ineligible for removal
 - replacement guidance
 - docs, diagnostics, and tests that cover the old and new behavior
 
@@ -76,10 +78,51 @@ The remaining dated compatibility areas are:
 - embedded Pi agent aliases
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision
+- the October 2026 SDK annotation families listed below
 
 Active, undated registry records cover supported behavior rather than removal
 debt, including activation hints, plugin capture, bundled plugin enablement,
 and the generated channel-config fallback.
+
+The annotation-only compatibility audit added these dated records. Their
+`removeAfter` date is an earliest review date, not permission to remove a
+surface while its stated reader or migration condition remains unmet.
+
+| Compatibility code                        | Removal condition                                                                                       | `removeAfter` |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------- |
+| `plugin-sdk-channel-setup-input-fields`   | Repeat the published-plugin artifact sweep and remove only fields with no reader.                       | 2026-10-01    |
+| `plugin-sdk-broad-runtime-barrels`        | Move bundled and indexed external consumers to focused SDK subpaths.                                    | 2026-10-01    |
+| `plugin-sdk-provider-owned-helper-shims`  | Move each deprecated provider helper to its provider-local API and prove no published reader remains.   | 2026-10-01    |
+| `message-presentation-legacy-bridges`     | Move reply producers and official channel packages to `MessagePresentation`.                            | 2026-10-01    |
+| `plugin-sdk-focused-compat-aliases`       | Prove every enumerated alias has no bundled or published reader.                                        | 2026-10-01    |
+| `agent-harness-terminal-result-aliases`   | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.      | 2026-10-01    |
+| `official-plugin-export-aliases`          | Move users of Google Meet testing, channel presentation, and Discord timeout exports to canonical APIs. | 2026-10-01    |
+| `memory-host-compatibility-aliases`       | Use canonical memory tables and prepared runtime config everywhere.                                     | 2026-10-01    |
+| `plugin-runtime-api-compat-aliases`       | Move flat plugin registration/runtime calls to their namespaced or focused replacements.                | 2026-10-01    |
+| `plugin-provider-manifest-compat-aliases` | Move kind/setup/catalog ownership to manifests and model-catalog registration.                          | 2026-10-01    |
+| `deprecated-session-store-beta5-api`      | End the v2026.7.x whole-store upgrade window, including package-root aliases.                           | 2026-10-12    |
+
+`pnpm plugins:boundary-report` reports `removal-pending` records separately
+from deprecated records. A due `removal-pending` record remains blocked until
+its reported migration condition is satisfied and its reader references are
+cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
+to dated `deprecated` records. Reader references are surface-token matches for
+triage; use the published-artifact sweep before authorizing removal.
+
+### Channel prompt-context identifier aliases
+
+New channel plugins should use `MsgContext.ChannelPromptContext`,
+`MsgContext.ChannelStructuredContext`, `ChannelStructuredContextEntry`, and
+`SupplementalContextFacts.channelStructuredContext`. The older
+`UntrustedContext`, `UntrustedStructuredContext`,
+`UntrustedStructuredContextEntry`, and supplemental `untrustedContext` names
+remain as deprecated SDK aliases until 2026-09-08 (registry record
+`sdk-untrusted-context-identifier-aliases`). Inbound finalization folds those
+deprecated fields into the channel-named fields and removes the old keys from
+runtime context.
+
+The security runtime similarly exports `buildChannelMetadata`; the deprecated
+`buildUntrustedChannelMetadata` alias remains available on the same schedule.
 
 ### WhatsApp inbound callback flat aliases
 
@@ -98,13 +141,13 @@ names its exact nested replacement. Common examples:
 
 - `id`, `timestamp`, and `isBatched` move under `event`.
 - `body`, `mediaPath`, `mediaType`, `mediaFileName`, `mediaUrl`, `location`,
-  and `untrustedStructuredContext` move under `payload`.
+  and `channelStructuredContext` move under `payload`.
 - `to`, `chatId`, sender/self fields, `sendComposing`, `reply(...)`, and
   `sendMedia(...)` move under `platform`.
 - `replyTo*` fields move under `quote`; group subject/participant/mention
   fields move under `group`.
 
-`payload.untrustedStructuredContext` is extracted from inbound provider
+`payload.channelStructuredContext` is extracted from inbound provider
 payloads. Plugins should inspect `label`, `source`, and `type` before
 treating its `payload` as authoritative.
 

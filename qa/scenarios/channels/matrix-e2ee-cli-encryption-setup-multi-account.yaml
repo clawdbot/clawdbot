@@ -6,7 +6,6 @@ scenario:
     primary:
       - matrix.encryption-setup
   execution:
-    profiles: { "matrix:all": 90, "matrix:e2ee-cli": 6 }
     kind: flow
     channel: matrix
     timeoutMs: 120000

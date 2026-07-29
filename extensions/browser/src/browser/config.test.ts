@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -18,18 +19,16 @@ const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 // Isolate the extension relay secret (read from stateDir/credentials) so the
 // extension-token assertions do not pick up a developer's real secret file.
 let isolatedStateDir = "";
-const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-beforeEach(() => {
-  isolatedStateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cfg-")));
-  process.env.OPENCLAW_STATE_DIR = isolatedStateDir;
+let openClawState: OpenClawTestState;
+beforeEach(async () => {
+  openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-cfg-",
+  });
+  isolatedStateDir = openClawState.stateDir;
 });
-afterEach(() => {
-  if (prevStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = prevStateDir;
-  }
-  fs.rmSync(isolatedStateDir, { recursive: true, force: true });
+afterEach(async () => {
+  await openClawState.cleanup();
 });
 
 /** Write a relay secret into the isolated state dir's credentials directory. */
@@ -141,6 +140,39 @@ describe("browser config", () => {
       },
     });
     expect(resolveProfile(resolved, "work")?.cdpPort).toBe(20123);
+  });
+
+  it("does not assign an implicit extension relay an explicitly pinned extension port", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { driver: "extension", cdpPort: 18799, color: "#00AA00" },
+      },
+    });
+
+    expect(resolveProfile(resolved, "work")?.cdpPort).toBe(18799);
+    expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
+  });
+
+  it("does not assign an implicit extension relay an explicitly pinned managed port", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        pinned: { cdpPort: 18799, color: "#00AA00" },
+      },
+    });
+
+    expect(resolveProfile(resolved, "pinned")?.cdpPort).toBe(18799);
+    expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
+  });
+
+  it("rejects implicit extension relays that exhaust the reserved port band", () => {
+    const profiles: NonNullable<BrowserConfig["profiles"]> = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [
+        `extension-${index}`,
+        { driver: "extension" as const, color: "#00AA00" },
+      ]),
+    );
+
+    expect(() => resolveBrowserConfig({ profiles })).toThrow(/extension.*relay.*port/i);
   });
 
   it("embeds the host-local relay secret as Basic auth in the extension cdpUrl", () => {

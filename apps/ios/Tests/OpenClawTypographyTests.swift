@@ -376,17 +376,17 @@ struct OpenClawTypographyTests {
             #expect(source.contains(".font(OpenClawType.body)"))
         }
 
-        #expect(chatMessageViews.contains("font: OpenClawChatTypography.body"))
+        #expect(chatMessageViews.contains("typography: segment.kind.markdownTypography"))
         #expect(chatMessageViews.contains(".font(OpenClawChatTypography.caption)"))
         #expect(chatMessageViews.contains("chat-user-message-disclosure-toggle"))
-        #expect(chatMessageViews.contains("OpenClawChatTypography.callout.italic()"))
+        #expect(chatMarkdownRenderer.contains("OpenClawChatTypography.callout.italic()"))
         #expect(!chatMessageViews.contains("font: .body"))
         #expect(!chatMessageViews.contains("Font.body"))
         #expect(!chatMessageViews.contains("Font.callout"))
         #expect(chatWorkingClawView.contains(".font(OpenClawChatTypography.caption)"))
         #expect(chatWorkingClawView.contains(".font(OpenClawChatTypography.captionSemiBold)"))
         #expect(!chatWorkingClawView.contains(".font(."))
-        #expect(chatMarkdownRenderer.contains(".font(self.font)"))
+        #expect(chatMarkdownRenderer.contains(".font(self.typography.proseFont)"))
         #expect(chatTypography
             .contains("Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle)"))
         #expect(chatTypography.contains(

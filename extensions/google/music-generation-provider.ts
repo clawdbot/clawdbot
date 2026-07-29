@@ -1,5 +1,6 @@
 // Google provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { generatedMusicAssetFromBase64 } from "openclaw/plugin-sdk/music-generation";
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
@@ -94,15 +95,17 @@ function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: st
         normalizeOptionalString(inline?.mimeType) ||
         normalizeOptionalString(inline?.mime_type) ||
         "audio/mpeg";
-      tracks.push({
-        buffer: Buffer.from(data, "base64"),
-        mimeType,
-        fileName: resolveTrackFileName({
-          index: tracks.length,
+      tracks.push(
+        generatedMusicAssetFromBase64({
+          base64: data,
           mimeType,
-          model: params.model,
+          fileName: resolveTrackFileName({
+            index: tracks.length,
+            mimeType,
+            model: params.model,
+          }),
         }),
-      });
+      );
     }
   }
   return { tracks, lyrics };

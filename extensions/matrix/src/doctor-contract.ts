@@ -6,6 +6,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   defineChannelAliasMigration,
+  defineKeyMoveMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
   stripRetiredChannelKeys,
@@ -55,15 +56,18 @@ const streamingAliasMigration = defineChannelAliasMigration<MatrixStreamingMode>
   accountStreamingReplacesRoot: true,
 });
 
-function hasLegacyMatrixRoomAllowAlias(value: unknown): boolean {
-  const room = isRecord(value) ? value : null;
-  return Boolean(room && typeof room.allow === "boolean");
-}
-
-function hasLegacyMatrixRoomMapAllowAliases(value: unknown): boolean {
-  const rooms = isRecord(value) ? value : null;
-  return Boolean(rooms && Object.values(rooms).some((room) => hasLegacyMatrixRoomAllowAlias(room)));
-}
+const roomAllowMigration = defineKeyMoveMigration({
+  scope: ["*"],
+  from: ["allow"],
+  to: ["enabled"],
+  sourceOwn: false,
+  match: (value) => typeof value === "boolean",
+  targetIsSet: (value) => typeof value === "boolean",
+  movedMessage: ({ sourcePath, targetPath, mappedValue }) =>
+    `Moved ${sourcePath} → ${targetPath} (${String(mappedValue)}).`,
+  existingMessage: ({ sourcePath, targetPath, targetValue }) =>
+    `Moved ${sourcePath} → ${targetPath} (${String(targetValue)}).`,
+});
 
 function hasLegacyTrustedDmPolicy(value: unknown): boolean {
   const root = isRecord(value) ? value : null;
@@ -104,32 +108,6 @@ function migrateLegacyTrustedDmPolicy(params: {
   return { entry: { ...params.entry, dm: nextDm }, changed: true };
 }
 
-function normalizeMatrixRoomAllowAliases(params: {
-  rooms: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { rooms: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  const nextRooms: Record<string, unknown> = { ...params.rooms };
-  for (const [roomId, roomValue] of Object.entries(params.rooms)) {
-    const room = isRecord(roomValue) ? roomValue : null;
-    if (!room || typeof room.allow !== "boolean") {
-      continue;
-    }
-    const nextRoom = { ...room };
-    if (typeof nextRoom.enabled !== "boolean") {
-      nextRoom.enabled = room.allow;
-    }
-    delete nextRoom.allow;
-    nextRooms[roomId] = nextRoom;
-    changed = true;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.${roomId}.allow → ${params.pathPrefix}.${roomId}.enabled (${String(nextRoom.enabled)}).`,
-    );
-  }
-  return { rooms: nextRooms, changed };
-}
-
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
   {
@@ -151,13 +129,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "matrix", "groups"],
     message:
       'channels.matrix.groups.<room>.allow is legacy; use channels.matrix.groups.<room>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacyMatrixRoomMapAllowAliases,
+    match: roomAllowMigration.hasLegacy,
   },
   {
     path: ["channels", "matrix", "rooms"],
     message:
       'channels.matrix.rooms.<room>.allow is legacy; use channels.matrix.rooms.<room>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacyMatrixRoomMapAllowAliases,
+    match: roomAllowMigration.hasLegacy,
   },
   {
     path: ["channels", "matrix", "accounts"],
@@ -169,8 +147,8 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
           return false;
         }
         return (
-          hasLegacyMatrixRoomMapAllowAliases(account.groups) ||
-          hasLegacyMatrixRoomMapAllowAliases(account.rooms)
+          roomAllowMigration.hasLegacy(account.groups) ||
+          roomAllowMigration.hasLegacy(account.rooms)
         );
       }),
   },
@@ -197,22 +175,25 @@ function normalizeMatrixEntry(params: {
   const dmPolicy = migrateLegacyTrustedDmPolicy({ ...params, entry: network.entry });
   let entry = dmPolicy.entry;
   let changed = network.changed || dmPolicy.changed;
-  for (const key of ["groups", "rooms"] as const) {
-    const rooms = isRecord(entry[key]) ? entry[key] : null;
-    if (!rooms) {
+  for (const section of ["groups", "rooms"] as const) {
+    const roomMap = isRecord(entry[section]) ? entry[section] : null;
+    if (!roomMap) {
       continue;
     }
-    const normalized = normalizeMatrixRoomAllowAliases({
-      rooms,
-      pathPrefix: `${params.pathPrefix}.${key}`,
+    const normalized = roomAllowMigration.normalize({
+      entry: roomMap,
+      pathPrefix: `${params.pathPrefix}.${section}`,
       changes: params.changes,
     });
     if (normalized.changed) {
-      entry = Object.assign({}, entry, { [key]: normalized.rooms });
+      entry = Object.assign({}, entry, { [section]: normalized.entry });
       changed = true;
     }
   }
-  return { entry, changed };
+  return {
+    entry,
+    changed,
+  };
 }
 
 export function normalizeCompatibilityConfig({

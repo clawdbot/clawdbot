@@ -1,6 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveWorkboardRouteLocation, type WorkboardRouteData } from "./route-location.ts";
 
@@ -22,8 +23,7 @@ async function loadWorkboardRoute(
 }
 
 export const page = definePage({
-  id: "workboard",
-  path: "/workboard",
+  ...routePageSpec("workboard"),
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
     `${location.pathname}\u0000${location.search}`,
   loader: (context: ApplicationContext, { location }) => loadWorkboardRoute(context, location),
