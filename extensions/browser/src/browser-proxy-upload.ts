@@ -434,7 +434,7 @@ async function waitForStagingLock(previous: Promise<void>, signal?: AbortSignal)
       try {
         signal.throwIfAborted();
       } catch (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     };
     signal.addEventListener("abort", onAbort, { once: true });

@@ -484,7 +484,14 @@ describe("runBrowserProxyCommand", () => {
     uploadMocks.stageBrowserProxyUploadRequest.mockImplementationOnce(
       async ({ signal }: { signal?: AbortSignal }) =>
         await new Promise((_, reject) => {
-          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(reason instanceof Error ? reason : new Error(String(reason)));
+            },
+            { once: true },
+          );
         }),
     );
 
