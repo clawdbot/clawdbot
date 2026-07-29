@@ -53,7 +53,7 @@ export async function runStartupMigrations(params?: {
         doctorOnlyStateMigrations: true,
       });
       if (!detected.hasLegacy) {
-        return;
+        return undefined;
       }
       return await migrateLegacyDeviceAuth({ detected, env, stateDir });
     },
@@ -68,7 +68,7 @@ export async function runStartupMigrations(params?: {
         doctorOnlyStateMigrations: true,
       });
       if (!detected.hasLegacy) {
-        return;
+        return undefined;
       }
       return await migrateLegacyDeviceIdentity({
         detected,
@@ -87,7 +87,7 @@ export async function runStartupMigrations(params?: {
         doctorOnlyStateMigrations: true,
       });
       if (!detected.hasLegacy) {
-        return;
+        return undefined;
       }
       return await migrateLegacyExecApprovals({ detected, env, stateDir });
     },
