@@ -3,13 +3,13 @@ import Darwin
 
 enum ProcessSocketListenerInspector {
     private static let initialDescriptorCapacity = 64
-    private static let maximumDescriptorCapacity = 4096
 
     static func isListening(pid: pid_t, port: UInt16) -> Bool {
         guard pid > 0 else { return false }
 
         var capacity = self.initialDescriptorCapacity
-        while capacity <= self.maximumDescriptorCapacity {
+        let capacityLimit = self.descriptorCapacityLimit()
+        while true {
             var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: capacity)
             let populatedBytes = descriptors.withUnsafeMutableBytes { buffer in
                 proc_pidinfo(
@@ -34,9 +34,24 @@ enum ProcessSocketListenerInspector {
             // A full result may be truncated. Grow and rescan so listeners with
             // high-numbered descriptors are not reported as absent.
             guard populatedBytes >= descriptors.count * descriptorStride else { return false }
-            capacity *= 2
+            guard capacity < capacityLimit else { return false }
+            capacity = min(capacity * 2, capacityLimit)
         }
-        return false
+    }
+
+    private static func descriptorCapacityLimit() -> Int {
+        let bufferLimit = Int(Int32.max) / MemoryLayout<proc_fdinfo>.stride
+        var descriptorLimit = rlimit()
+        // The inspected SSH process is our child and inherits this soft limit.
+        // Scanning to that ceiling is exhaustive without an arbitrary allocation cap.
+        guard getrlimit(RLIMIT_NOFILE, &descriptorLimit) == 0,
+              descriptorLimit.rlim_cur != rlim_t(Int64.max)
+        else {
+            return bufferLimit
+        }
+        return max(
+            self.initialDescriptorCapacity,
+            min(Int(clamping: descriptorLimit.rlim_cur), bufferLimit))
     }
 
     private static func isListeningSocket(pid: pid_t, descriptor: Int32, port: UInt16) -> Bool {
